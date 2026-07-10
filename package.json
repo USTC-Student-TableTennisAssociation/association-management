@@ -10,6 +10,7 @@
     "lint": "eslint",
     "prisma:format": "prisma format",
     "prisma:generate": "prisma generate",
+    "prisma:dev": "prisma dev --name association-management --port 51213 --db-port 51214 --shadow-db-port 51215 --detach",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio"
   },
