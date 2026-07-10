@@ -1,0 +1,102 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum GuidelineKind {
+  workflow
+  rule
+  checklist
+  experience
+}
+
+enum GuidelineStatus {
+  draft
+  published
+}
+
+enum GuidelineRelationType {
+  contains
+  triggers
+  requires
+  next
+  exception
+}
+
+/// 指导层的最小单元。一行代表当前可用的一条工作流、规则、检查表或经验。
+model Guideline {
+  /// 稳定的内部标识；标题修改不会破坏 Guideline 之间的关系。
+  id String @id @default(uuid()) @db.Uuid
+
+  /// 面向维护者和用户展示的指导标题。
+  title String @db.Text
+
+  /// 指导的表现形式：工作流、规则、检查表或经验。
+  kind GuidelineKind
+
+  /// 给人阅读的完整说明，可使用 Markdown 描述背景、步骤和注意事项。
+  contentMarkdown String @default("") @map("content_markdown") @db.Text
+
+  /// 是否必须遵守；紧急程度由活动状态动态计算，不在这里固定分级。
+  isMandatory Boolean @default(false) @map("is_mandatory")
+
+  /// 结构化触发条件；为空表示由上层工作流或人工选择加载。
+  appliesWhen Json? @map("applies_when_jsonb") @db.JsonB
+
+  /// 命中指导后可建议的动作数组，不会直接修改活动状态。
+  suggestedActions Json @default("[]") @map("suggested_actions_jsonb") @db.JsonB
+
+  /// 可选形成依据摘要；首版不强制精确回链文件。
+  basisNote String? @map("basis_note") @db.Text
+
+  /// draft 不参与运行时指导；published 可被指导解析器读取。
+  status GuidelineStatus @default(draft)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  outgoingLinks GuidelineLink[] @relation("GuidelineLinkFrom")
+  incomingLinks GuidelineLink[] @relation("GuidelineLinkTo")
+
+  @@index([status])
+  @@index([kind])
+  @@map("guidelines")
+}
+
+/// 指导节点之间的有向连线，用于表达工作流结构、触发、前置和例外路径。
+model GuidelineLink {
+  /// 连线起点：当前 Guideline。
+  fromGuidelineId String @map("from_guideline_id") @db.Uuid
+
+  /// 连线终点：被包含、触发、要求、衔接或作为例外处理的 Guideline。
+  toGuidelineId String @map("to_guideline_id") @db.Uuid
+
+  /// contains、triggers、requires、next 或 exception。
+  relationType GuidelineRelationType @map("relation_type")
+
+  /// 可选维护备注，不作为规则判断条件。
+  note String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  fromGuideline Guideline @relation(
+    "GuidelineLinkFrom",
+    fields: [fromGuidelineId],
+    references: [id],
+    onDelete: Cascade,
+  )
+  toGuideline Guideline @relation(
+    "GuidelineLinkTo",
+    fields: [toGuidelineId],
+    references: [id],
+    onDelete: Cascade,
+  )
+
+  @@id([fromGuidelineId, toGuidelineId, relationType])
+  @@index([toGuidelineId, relationType])
+  @@map("guideline_links")
+}
