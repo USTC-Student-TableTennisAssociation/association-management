@@ -13,6 +13,8 @@ import {
   type GuidanceGraphCanvasHandle,
 } from "./GuidanceGraphCanvas";
 import { GuidanceListPanel } from "./GuidanceListPanel";
+import { GuidanceTreeView } from "./GuidanceTreeView";
+import { buildGuidanceTree } from "./guidance-tree";
 import {
   guidanceRelationLabels,
   type GuidanceGraphSource,
@@ -22,6 +24,8 @@ import {
 type GuidanceLayerInspectorProps = {
   source: GuidanceGraphSource;
 };
+
+type GuidanceViewMode = "tree" | "graph";
 
 function StatCard({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
   return (
@@ -39,6 +43,7 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
   const searchParams = useSearchParams();
   const canvasRef = useRef<GuidanceGraphCanvasHandle | null>(null);
   const graph = useMemo(() => buildGuidanceGraph(source.nodes, source.links), [source.links, source.nodes]);
+  const tree = useMemo(() => buildGuidanceTree(graph), [graph]);
   const analysis = useMemo(() => analyzeGuidanceGraph(graph), [graph]);
   const [filters, setFilters] = useState<GuidanceFilterState>(defaultGuidanceFilters);
   const [selection, setSelection] = useState<InspectorSelection>(null);
@@ -46,6 +51,7 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
   const [isLeftOpen, setIsLeftOpen] = useState(true);
   const [isRightOpen, setIsRightOpen] = useState(true);
   const [isArrangeMode, setIsArrangeMode] = useState(false);
+  const [viewMode, setViewMode] = useState<GuidanceViewMode>("tree");
 
   const filteredNodes = useMemo(() => getFilteredGuidanceNodes(graph, filters), [filters, graph]);
   const matchingNodeIds = useMemo(() => filteredNodes.map((node) => node.id), [filteredNodes]);
@@ -91,16 +97,16 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
   );
 
   const selectionLabel =
-    isArrangeMode
+    viewMode === "graph" && isArrangeMode
       ? "正在整理布局"
       : selectedNode?.title ??
-    (selectedEdge
-      ? `${guidanceRelationLabels[selectedEdge.relationType]}关系`
-      : selectedDiagnostic
-        ? selectedDiagnostic.title
-        : filters.query || filteredNodes.length !== graph.nodes.length
-          ? `筛选结果 ${filteredNodes.length} / ${graph.nodes.length}`
-          : "未选择节点");
+        (selectedEdge
+          ? `${guidanceRelationLabels[selectedEdge.relationType]}关系`
+          : selectedDiagnostic
+            ? selectedDiagnostic.title
+            : filters.query || filteredNodes.length !== graph.nodes.length
+              ? `筛选结果 ${filteredNodes.length} / ${graph.nodes.length}`
+              : "未选择节点");
 
   return (
     <main className="min-h-dvh bg-[#f6f7f4] text-zinc-950">
@@ -115,7 +121,7 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
               <p className="text-xs font-medium uppercase tracking-[0.14em] text-emerald-700">Guidance Layer</p>
             </div>
             <h1 className="mt-2 text-xl font-semibold tracking-tight text-zinc-950 sm:text-2xl">指导层结构观察器</h1>
-            <p className="mt-1 text-sm text-zinc-600">只读浏览《乒协生存手册》指导卡片、关系与结构风险。</p>
+            <p className="mt-1 text-sm text-zinc-600">以树状主干理解《乒协生存手册》指导卡片，并保留关系图与结构诊断。</p>
           </div>
           <p className="max-w-md rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-600 shadow-sm">
             当前数据来源：本地种子草稿；不修改数据库或指导内容。
@@ -167,14 +173,46 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
             <div className="mb-3 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
               <div>
                 <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-semibold text-zinc-900">自由知识图</h2>
-                  <span className="rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[11px] text-zinc-600">有向关系</span>
+                  <h2 className="text-sm font-semibold text-zinc-900">
+                    {viewMode === "tree" ? "树状导航" : "自由关系图"}
+                  </h2>
+                  <span className="rounded-full border border-zinc-200 bg-white px-2 py-0.5 text-[11px] text-zinc-600">
+                    {viewMode === "tree" ? "contains 主干" : "高级视图"}
+                  </span>
                 </div>
                 <p className="mt-1 max-w-2xl text-xs leading-5 text-zinc-500">
-                  节点间距离仅表示当前布局，不表示语义相似度、工作优先级或任务完成顺序。
+                  {viewMode === "tree"
+                    ? "工作流作为第一层入口，contains 决定父子结构；其他关系只在选中节点时展开。"
+                    : "节点间距离仅表示当前布局，不表示语义相似度、工作优先级或任务完成顺序。"}
                 </p>
+                <div className="mt-2 inline-flex rounded-md border border-zinc-200 bg-white p-0.5">
+                  <button
+                    type="button"
+                    aria-pressed={viewMode === "tree"}
+                    onClick={() => {
+                      setViewMode("tree");
+                      setIsArrangeMode(false);
+                    }}
+                    className={`rounded px-3 py-1.5 text-xs font-medium transition ${
+                      viewMode === "tree" ? "bg-emerald-700 text-white" : "text-zinc-600 hover:bg-zinc-100"
+                    }`}
+                  >
+                    树状导航
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={viewMode === "graph"}
+                    onClick={() => setViewMode("graph")}
+                    className={`rounded px-3 py-1.5 text-xs font-medium transition ${
+                      viewMode === "graph" ? "bg-emerald-700 text-white" : "text-zinc-600 hover:bg-zinc-100"
+                    }`}
+                  >
+                    自由关系图
+                  </button>
+                </div>
               </div>
-              <div className="flex flex-wrap gap-2">
+              {viewMode === "graph" ? (
+                <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   aria-pressed={isArrangeMode}
@@ -221,30 +259,55 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
                 >
                   清除选择
                 </button>
+                </div>
+              ) : null}
+            </div>
+
+            {viewMode === "graph" ? (
+              <div className="mb-3 flex flex-wrap gap-2 text-[11px] text-zinc-600">
+                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1">◆ 流程</span>
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1">! 规则</span>
+                <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1">☑ 检查表</span>
+                <span className="rounded-full border border-purple-200 bg-purple-50 px-2 py-1">✦ 经验</span>
+                <span className="rounded-full border border-zinc-200 bg-white px-2 py-1">虚线边：触发 / 例外</span>
+                <span className="rounded-full border border-zinc-200 bg-white px-2 py-1">粗线：前置</span>
               </div>
-            </div>
+            ) : (
+              <div className="mb-3 flex flex-wrap gap-2 text-[11px] text-zinc-600">
+                <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1">缩进与连线：包含</span>
+                <span className="rounded-full border border-orange-200 bg-orange-50 px-2 py-1">前置</span>
+                <span className="rounded-full border border-purple-200 bg-purple-50 px-2 py-1">后续</span>
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1">触发</span>
+                <span className="rounded-full border border-red-200 bg-red-50 px-2 py-1">例外</span>
+              </div>
+            )}
 
-            <div className="mb-3 flex flex-wrap gap-2 text-[11px] text-zinc-600">
-              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-1">◆ 流程</span>
-              <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1">! 规则</span>
-              <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-1">☑ 检查表</span>
-              <span className="rounded-full border border-purple-200 bg-purple-50 px-2 py-1">✦ 经验</span>
-              <span className="rounded-full border border-zinc-200 bg-white px-2 py-1">虚线边：触发 / 例外</span>
-              <span className="rounded-full border border-zinc-200 bg-white px-2 py-1">粗线：前置</span>
-            </div>
-
-            <GuidanceGraphCanvas
-              ref={canvasRef}
-              graph={graph}
-              selection={activeSelection}
-              isArrangeMode={isArrangeMode}
-              matchingNodeIds={matchingNodeIds}
-              onlyShowMatches={filters.onlyShowMatches}
-              hoveredNodeId={hoveredNodeId}
-              diagnosticNodeIds={selectedDiagnostic?.nodeIds ?? []}
-              diagnosticEdgeIds={selectedDiagnostic?.edgeIds ?? []}
-              onSelectionChange={handleSelectionChange}
-            />
+            {viewMode === "tree" ? (
+              <GuidanceTreeView
+                graph={graph}
+                tree={tree}
+                selection={activeSelection}
+                matchingNodeIds={matchingNodeIds}
+                onlyShowMatches={filters.onlyShowMatches}
+                hoveredNodeId={hoveredNodeId}
+                diagnosticNodeIds={selectedDiagnostic?.nodeIds ?? []}
+                onSelectNode={(nodeId) => handleSelectionChange({ type: "node", id: nodeId })}
+                onSelectEdge={(edgeId) => handleSelectionChange({ type: "edge", id: edgeId })}
+              />
+            ) : (
+              <GuidanceGraphCanvas
+                ref={canvasRef}
+                graph={graph}
+                selection={activeSelection}
+                isArrangeMode={isArrangeMode}
+                matchingNodeIds={matchingNodeIds}
+                onlyShowMatches={filters.onlyShowMatches}
+                hoveredNodeId={hoveredNodeId}
+                diagnosticNodeIds={selectedDiagnostic?.nodeIds ?? []}
+                diagnosticEdgeIds={selectedDiagnostic?.edgeIds ?? []}
+                onSelectionChange={handleSelectionChange}
+              />
+            )}
           </section>
 
           <aside
