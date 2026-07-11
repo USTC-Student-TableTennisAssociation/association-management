@@ -44,6 +44,7 @@ export type GuidanceGraphCanvasHandle = {
 type GuidanceGraphCanvasProps = {
   graph: GuidanceGraph;
   selection: InspectorSelection;
+  isArrangeMode: boolean;
   matchingNodeIds: readonly string[];
   onlyShowMatches: boolean;
   hoveredNodeId: string | null;
@@ -58,8 +59,8 @@ const cytoscapeStyles: StylesheetJson = [
     style: {
       label: "data(label)",
       shape: "round-rectangle",
-      width: 170,
-      height: 78,
+      width: 190,
+      height: 72,
       "background-color": "#ffffff",
       "border-width": 2,
       "border-color": "#94a3b8",
@@ -68,13 +69,13 @@ const cytoscapeStyles: StylesheetJson = [
       "font-size": 11,
       "font-weight": 600,
       "text-wrap": "wrap",
-      "text-max-width": "150px",
+      "text-max-width": "170px",
       "text-valign": "center",
       "text-halign": "center",
       "text-outline-color": "#ffffff",
-      "text-outline-width": 2,
+      "text-outline-width": 1,
       "overlay-opacity": 0,
-      "transition-property": "opacity, width, height, border-width, border-color, background-color",
+      "transition-property": "opacity, border-width, border-color, background-color",
       "transition-duration": 180,
     },
   },
@@ -104,7 +105,7 @@ const cytoscapeStyles: StylesheetJson = [
   },
   {
     selector: ".is-mandatory",
-    style: { "border-width": 4 },
+    style: { "border-width": 3 },
   },
   {
     selector: "edge",
@@ -162,44 +163,48 @@ const cytoscapeStyles: StylesheetJson = [
   {
     selector: "node.is-selected",
     style: {
-      width: 198,
-      height: 90,
-      "border-width": 6,
+      "border-width": 5,
       "border-color": "#0f172a",
+      "border-style": "solid",
+      "font-size": 12,
       "z-index": 20,
     },
   },
   {
     selector: "node.is-neighbor, node.is-related, node.is-diagnostic",
     style: {
-      "border-width": 4,
+      "border-width": 3.5,
       "border-color": "#0f766e",
       "z-index": 12,
     },
   },
   {
     selector: "node.is-second-neighbor",
-    style: { opacity: 0.65, "z-index": 8 },
+    style: { opacity: 0.58, "z-index": 8 },
   },
   {
     selector: "node.is-hovered",
     style: { "border-color": "#0f172a", "border-width": 5, "z-index": 18 },
   },
   {
-    selector: "node.is-dimmed, edge.is-dimmed",
-    style: { opacity: 0.18 },
-  },
-  {
-    selector: "node.is-filtered-out, edge.is-filtered-out",
-    style: { opacity: 0.28 },
-  },
-  {
     selector: "node.is-dimmed",
-    style: { width: 138, height: 64 },
+    style: { opacity: 0.32 },
+  },
+  {
+    selector: "edge.is-dimmed",
+    style: { opacity: 0.12 },
+  },
+  {
+    selector: "node.is-filtered-out",
+    style: { opacity: 0.22 },
+  },
+  {
+    selector: "edge.is-filtered-out",
+    style: { opacity: 0.12 },
   },
   {
     selector: "edge.is-active, edge.is-selected, edge.is-diagnostic",
-    style: { width: 4.5, opacity: 1, "z-index": 15 },
+    style: { width: 3.8, opacity: 1, "z-index": 15 },
   },
   {
     selector: ".is-hidden",
@@ -270,6 +275,7 @@ export const GuidanceGraphCanvas = forwardRef<GuidanceGraphCanvasHandle, Guidanc
     {
       graph,
       selection,
+      isArrangeMode,
       matchingNodeIds,
       onlyShowMatches,
       hoveredNodeId,
@@ -283,6 +289,7 @@ export const GuidanceGraphCanvas = forwardRef<GuidanceGraphCanvasHandle, Guidanc
     const cyRef = useRef<Core | null>(null);
     const basePositionsRef = useRef<Record<string, GuidancePosition>>({});
     const onSelectionChangeRef = useRef(onSelectionChange);
+    const isArrangeModeRef = useRef(isArrangeMode);
     const [isLayoutReady, setIsLayoutReady] = useState(false);
     const [edgeTooltip, setEdgeTooltip] = useState<EdgeTooltip | null>(null);
     const defaultPositions = useMemo(() => createDefaultGuidancePositions(graph), [graph]);
@@ -291,6 +298,19 @@ export const GuidanceGraphCanvas = forwardRef<GuidanceGraphCanvasHandle, Guidanc
     useEffect(() => {
       onSelectionChangeRef.current = onSelectionChange;
     }, [onSelectionChange]);
+
+    useEffect(() => {
+      isArrangeModeRef.current = isArrangeMode;
+      const cy = cyRef.current;
+      if (!cy) {
+        return;
+      }
+      cy.userPanningEnabled(!isArrangeMode);
+      cy.userZoomingEnabled(!isArrangeMode);
+      if (containerRef.current) {
+        containerRef.current.style.cursor = "default";
+      }
+    }, [isArrangeMode]);
 
     const savePositions = useCallback(
       (positions: GuidancePositionMap) => {
@@ -358,11 +378,16 @@ export const GuidanceGraphCanvas = forwardRef<GuidanceGraphCanvasHandle, Guidanc
           randomize: false,
           fit: true,
           padding: 68,
-          nodeRepulsion: 7600,
-          idealEdgeLength: 175,
-          edgeElasticity: 0.42,
-          gravity: 0.34,
-          numIter: 900,
+          componentSpacing: 150,
+          nodeRepulsion: 18000,
+          nodeOverlap: 48,
+          idealEdgeLength: 230,
+          edgeElasticity: 0.3,
+          gravity: 0.18,
+          numIter: 1600,
+          initialTemp: 800,
+          coolingFactor: 0.97,
+          minTemp: 1,
         };
         const layout = cy.layout(layoutOptions);
         layout.one("layoutstop", () => {
@@ -417,6 +442,8 @@ export const GuidanceGraphCanvas = forwardRef<GuidanceGraphCanvasHandle, Guidanc
         });
 
         cyRef.current = cy;
+        cy.userPanningEnabled(!isArrangeModeRef.current);
+        cy.userZoomingEnabled(!isArrangeModeRef.current);
         cy.nodes().forEach((node) => {
           const position = defaultPositions[node.id()];
           if (position) {
@@ -425,23 +452,45 @@ export const GuidanceGraphCanvas = forwardRef<GuidanceGraphCanvasHandle, Guidanc
         });
 
         cy.on("tap", "node", (event) => {
+          if (isArrangeModeRef.current) {
+            return;
+          }
           onSelectionChangeRef.current({ type: "node", id: event.target.id() });
         });
         cy.on("tap", "edge", (event) => {
+          if (isArrangeModeRef.current) {
+            return;
+          }
           onSelectionChangeRef.current({ type: "edge", id: event.target.id() });
         });
         cy.on("tap", (event) => {
-          if (event.target === cy) {
+          if (event.target === cy && !isArrangeModeRef.current) {
             onSelectionChangeRef.current(null);
           }
         });
+        cy.on("mouseover", "node", () => {
+          container.style.cursor = isArrangeModeRef.current ? "grab" : "pointer";
+        });
+        cy.on("mouseout", "node", () => {
+          container.style.cursor = "default";
+        });
+        cy.on("grab", "node", () => {
+          container.style.cursor = "grabbing";
+        });
+        cy.on("free", "node", () => {
+          container.style.cursor = isArrangeModeRef.current ? "grab" : "pointer";
+        });
         cy.on("mouseover", "edge", (event) => {
+          if (!isArrangeModeRef.current) {
+            container.style.cursor = "pointer";
+          }
           const edge = graph.edgeById.get(event.target.id());
           if (edge) {
             setEdgeTooltip({ edge, x: event.renderedPosition.x, y: event.renderedPosition.y });
           }
         });
         cy.on("mouseout", "edge", () => {
+          container.style.cursor = "default";
           setEdgeTooltip(null);
         });
         cy.on("dragfree", "node", (event) => {
@@ -604,11 +653,19 @@ export const GuidanceGraphCanvas = forwardRef<GuidanceGraphCanvasHandle, Guidanc
             node.animate({ position }, { duration: 240, easing: "ease-out" });
           }
         });
-        let focusElements = cy.getElementById(neighbors.selectedNodeId);
-        neighbors.firstDegreeNodeIds.forEach((nodeId) => {
-          focusElements = focusElements.union(cy.getElementById(nodeId));
-        });
-        cy.animate({ fit: { eles: focusElements, padding: 84 } }, { duration: 240, easing: "ease-out" });
+        const selectedElement = cy.getElementById(neighbors.selectedNodeId);
+        const renderedPosition = selectedElement.renderedPosition();
+        const container = containerRef.current;
+        const safeMargin = 72;
+        if (
+          container &&
+          (renderedPosition.x < safeMargin ||
+            renderedPosition.y < safeMargin ||
+            renderedPosition.x > container.clientWidth - safeMargin ||
+            renderedPosition.y > container.clientHeight - safeMargin)
+        ) {
+          cy.animate({ center: { eles: selectedElement } }, { duration: 220, easing: "ease-out" });
+        }
       } else if (selectedEdge) {
         cy.nodes().forEach((node) => {
           node.addClass(selectedEdgeNodeIds.has(node.id()) ? "is-related" : "is-dimmed");
@@ -657,6 +714,11 @@ export const GuidanceGraphCanvas = forwardRef<GuidanceGraphCanvasHandle, Guidanc
             aria-label="指导层自由知识图"
           />
         </div>
+        {isArrangeMode ? (
+          <div className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-md border border-emerald-200 bg-emerald-50/95 px-3 py-2 text-xs leading-5 text-emerald-900 shadow-sm backdrop-blur">
+            整理模式：直接拖动卡片调整位置，空白区域不会平移画布，松手后自动保存在本机。
+          </div>
+        ) : null}
         {edgeTooltip ? (
           <div
             className="pointer-events-none absolute z-30 max-w-64 rounded-md border border-zinc-200 bg-white/95 px-3 py-2 text-xs leading-5 text-zinc-700 shadow-lg backdrop-blur"

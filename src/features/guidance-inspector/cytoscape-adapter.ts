@@ -27,7 +27,7 @@ export const relationClassNames: Record<GuidanceRelationType, string> = {
 };
 
 function shortenTitle(title: string): string {
-  return title.length > 18 ? `${title.slice(0, 18)}…` : title;
+  return title.length > 20 ? `${title.slice(0, 20)}…` : title;
 }
 
 export function toCytoscapeElements(graph: GuidanceGraph): ElementDefinition[] {
@@ -40,7 +40,7 @@ export function toCytoscapeElements(graph: GuidanceGraph): ElementDefinition[] {
       group: "nodes",
       data: {
         id: node.id,
-        label: `${visual.symbol} ${shortenTitle(node.title)}\n${guidanceKindLabels[node.kind]} · ${statusLabel} · ${mandatoryLabel}\n${node.directNeighborIds.length} 个直接关联`,
+        label: `${visual.symbol} ${shortenTitle(node.title)}\n${guidanceKindLabels[node.kind]} · ${statusLabel} · ${mandatoryLabel} · 关联 ${node.directNeighborIds.length}`,
         title: node.title,
       },
       classes: `kind-${node.kind} status-${node.status}${node.isMandatory ? " is-mandatory" : ""}`,

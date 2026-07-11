@@ -5,6 +5,7 @@ import {
   handbookGuidelines,
 } from "../../../prisma/handbook-guidance.data";
 import { analyzeGuidanceGraph } from "./guidance-analysis";
+import { getFocusedPositions } from "./guidance-focus";
 import { buildGuidanceGraph, getGuidelineNeighbors } from "./guidance-graph";
 import type { GuidanceGraphLinkInput, GuidanceGraphNodeInput } from "./guidance-types";
 
@@ -71,6 +72,32 @@ describe("指导层图数据适配", () => {
     expect(neighbors?.firstDegreeNodeIds).toHaveLength(6);
     expect(neighbors?.secondDegreeNodeIds).toContain(regularActivity?.id);
     expect(getGuidelineNeighbors(graph, "不存在的节点")).toBeNull();
+  });
+
+  it("聚焦时保持关联节点的基础位置，只轻推无关节点", () => {
+    const graph = buildGuidanceGraph(
+      [createNode("selected"), createNode("first"), createNode("second"), createNode("unrelated")],
+      [createLink("selected", "first"), createLink("first", "second")],
+    );
+    const neighbors = getGuidelineNeighbors(graph, "selected");
+    expect(neighbors).not.toBeNull();
+    if (!neighbors) {
+      return;
+    }
+
+    const basePositions = {
+      selected: { x: 0, y: 0 },
+      first: { x: 100, y: 0 },
+      second: { x: 200, y: 0 },
+      unrelated: { x: 300, y: 0 },
+    };
+    const focusedPositions = getFocusedPositions(graph, basePositions, "selected", neighbors);
+
+    expect(focusedPositions.selected).toEqual(basePositions.selected);
+    expect(focusedPositions.first).toEqual(basePositions.first);
+    expect(focusedPositions.second).toEqual(basePositions.second);
+    expect(focusedPositions.unrelated.x).toBeGreaterThan(basePositions.unrelated.x);
+    expect(focusedPositions.unrelated.x - basePositions.unrelated.x).toBeLessThanOrEqual(18);
   });
 });
 

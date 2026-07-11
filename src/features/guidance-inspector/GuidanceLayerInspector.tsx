@@ -45,6 +45,7 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
   const [isLeftOpen, setIsLeftOpen] = useState(true);
   const [isRightOpen, setIsRightOpen] = useState(true);
+  const [isArrangeMode, setIsArrangeMode] = useState(false);
 
   const filteredNodes = useMemo(() => getFilteredGuidanceNodes(graph, filters), [filters, graph]);
   const matchingNodeIds = useMemo(() => filteredNodes.map((node) => node.id), [filteredNodes]);
@@ -90,7 +91,9 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
   );
 
   const selectionLabel =
-    selectedNode?.title ??
+    isArrangeMode
+      ? "正在整理布局"
+      : selectedNode?.title ??
     (selectedEdge
       ? `${guidanceRelationLabels[selectedEdge.relationType]}关系`
       : selectedDiagnostic
@@ -174,6 +177,24 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
+                  aria-pressed={isArrangeMode}
+                  onClick={() => {
+                    const nextArrangeMode = !isArrangeMode;
+                    setIsArrangeMode(nextArrangeMode);
+                    if (nextArrangeMode) {
+                      handleSelectionChange(null);
+                    }
+                  }}
+                  className={`rounded-md border px-3 py-2 text-xs font-medium transition ${
+                    isArrangeMode
+                      ? "border-emerald-700 bg-emerald-700 text-white hover:bg-emerald-800"
+                      : "border-zinc-200 bg-white text-zinc-700 hover:border-emerald-300 hover:text-emerald-800"
+                  }`}
+                >
+                  {isArrangeMode ? "完成整理" : "整理布局"}
+                </button>
+                <button
+                  type="button"
                   onClick={() => canvasRef.current?.fitGraph()}
                   className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-700 transition hover:border-emerald-300 hover:text-emerald-800"
                 >
@@ -216,6 +237,7 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
               ref={canvasRef}
               graph={graph}
               selection={activeSelection}
+              isArrangeMode={isArrangeMode}
               matchingNodeIds={matchingNodeIds}
               onlyShowMatches={filters.onlyShowMatches}
               hoveredNodeId={hoveredNodeId}

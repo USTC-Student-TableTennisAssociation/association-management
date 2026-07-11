@@ -40,7 +40,7 @@ export function getFocusedPositions(
   return Object.fromEntries(
     graph.nodes.map((node) => {
       const basePosition = basePositions[node.id] ?? defaults[node.id];
-      if (node.id === selectedNodeId || secondDegree.has(node.id)) {
+      if (node.id === selectedNodeId || firstDegree.has(node.id) || secondDegree.has(node.id)) {
         return [node.id, basePosition];
       }
 
@@ -54,18 +54,7 @@ export function getFocusedPositions(
           ? { x: vector.x / distance, y: vector.y / distance }
           : fallbackDirection(`${selectedNodeId}:${node.id}`);
 
-      if (firstDegree.has(node.id)) {
-        const pullDistance = Math.min(distance * 0.16, 58);
-        return [
-          node.id,
-          {
-            x: basePosition.x + direction.x * pullDistance,
-            y: basePosition.y + direction.y * pullDistance,
-          },
-        ];
-      }
-
-      const pushDistance = Math.min(38, 12 + distance * 0.08);
+      const pushDistance = Math.min(18, 6 + distance * 0.02);
       return [
         node.id,
         {
