@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "..",
+    "outDir": "../.prisma-seed-build",
+    "declaration": false,
+    "sourceMap": false,
+    "skipLibCheck": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "types": ["node"]
+  },
+  "include": [
+    "./handbook-guidance.data.ts",
+    "./validate-handbook-guidance.ts",
+    "./seed-handbook-guidance.ts",
+    "./verify-handbook-guidance.ts",
+    "../src/generated/prisma/**/*.ts"
+  ]
+}

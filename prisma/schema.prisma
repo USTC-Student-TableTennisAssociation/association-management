@@ -1,6 +1,7 @@
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  importFileExtension = "js"
 }
 
 datasource db {
@@ -83,18 +84,8 @@ model GuidelineLink {
 
   createdAt DateTime @default(now()) @map("created_at")
 
-  fromGuideline Guideline @relation(
-    "GuidelineLinkFrom",
-    fields: [fromGuidelineId],
-    references: [id],
-    onDelete: Cascade,
-  )
-  toGuideline Guideline @relation(
-    "GuidelineLinkTo",
-    fields: [toGuidelineId],
-    references: [id],
-    onDelete: Cascade,
-  )
+  fromGuideline Guideline @relation("GuidelineLinkFrom", fields: [fromGuidelineId], references: [id], onDelete: Cascade)
+  toGuideline   Guideline @relation("GuidelineLinkTo", fields: [toGuidelineId], references: [id], onDelete: Cascade)
 
   @@id([fromGuidelineId, toGuidelineId, relationType])
   @@index([toGuidelineId, relationType])
