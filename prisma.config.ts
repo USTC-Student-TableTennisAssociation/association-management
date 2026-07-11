@@ -5,6 +5,7 @@ export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {
     path: "prisma/migrations",
+    seed: "pnpm guidance:import",
   },
   datasource: {
     url: env("DATABASE_URL"),
