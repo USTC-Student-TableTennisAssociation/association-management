@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
 
 import { analyzeGuidanceGraph } from "./guidance-analysis";
+import { GuidanceAiPanel } from "./GuidanceAiPanel";
 import { GuidanceDetailsPanel } from "./GuidanceDetailsPanel";
 import { defaultGuidanceFilters, getFilteredGuidanceNodes, type GuidanceFilterState } from "./guidance-filters";
 import { buildGuidanceGraph } from "./guidance-graph";
@@ -26,6 +27,7 @@ type GuidanceLayerInspectorProps = {
 };
 
 type GuidanceViewMode = "tree" | "graph";
+type GuidanceRightPanelMode = "details" | "ai";
 
 function StatCard({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
   return (
@@ -52,6 +54,7 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
   const [isRightOpen, setIsRightOpen] = useState(true);
   const [isArrangeMode, setIsArrangeMode] = useState(false);
   const [viewMode, setViewMode] = useState<GuidanceViewMode>("tree");
+  const [rightPanelMode, setRightPanelMode] = useState<GuidanceRightPanelMode>("details");
 
   const filteredNodes = useMemo(() => getFilteredGuidanceNodes(graph, filters), [filters, graph]);
   const matchingNodeIds = useMemo(() => filteredNodes.map((node) => node.id), [filteredNodes]);
@@ -316,7 +319,34 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
             }`}
           >
             <div className="flex min-h-11 w-full items-center justify-between border-b border-zinc-200 px-3">
-              {isRightOpen ? <h2 className="text-sm font-semibold text-zinc-900">详情与诊断</h2> : null}
+              {isRightOpen ? (
+                <div className="inline-flex rounded-md border border-zinc-200 bg-zinc-50 p-0.5">
+                  <button
+                    type="button"
+                    aria-pressed={rightPanelMode === "details"}
+                    onClick={() => setRightPanelMode("details")}
+                    className={`rounded px-3 py-1.5 text-xs font-medium transition ${
+                      rightPanelMode === "details"
+                        ? "bg-white text-zinc-900 shadow-sm"
+                        : "text-zinc-500 hover:text-zinc-800"
+                    }`}
+                  >
+                    详情与诊断
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={rightPanelMode === "ai"}
+                    onClick={() => setRightPanelMode("ai")}
+                    className={`rounded px-3 py-1.5 text-xs font-medium transition ${
+                      rightPanelMode === "ai"
+                        ? "bg-emerald-700 text-white shadow-sm"
+                        : "text-zinc-500 hover:text-emerald-800"
+                    }`}
+                  >
+                    AI 解读
+                  </button>
+                </div>
+              ) : null}
               <button
                 type="button"
                 onClick={() => setIsRightOpen((open) => !open)}
@@ -326,7 +356,7 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
                 {isRightOpen ? "›" : "‹"}
               </button>
             </div>
-            {isRightOpen ? (
+            {isRightOpen && rightPanelMode === "details" ? (
               <GuidanceDetailsPanel
                 graph={graph}
                 analysis={analysis}
@@ -334,6 +364,13 @@ export function GuidanceLayerInspector({ source }: GuidanceLayerInspectorProps) 
                 onSelectNode={(nodeId) => handleSelectionChange({ type: "node", id: nodeId })}
                 onSelectEdge={(edgeId) => handleSelectionChange({ type: "edge", id: edgeId })}
                 onSelectDiagnostic={(diagnosticId) => handleSelectionChange({ type: "diagnostic", id: diagnosticId })}
+              />
+            ) : null}
+            {isRightOpen && rightPanelMode === "ai" ? (
+              <GuidanceAiPanel
+                graph={graph}
+                selectedNodeId={selectedNode?.id ?? null}
+                onSelectNode={(nodeId) => handleSelectionChange({ type: "node", id: nodeId })}
               />
             ) : null}
           </aside>
