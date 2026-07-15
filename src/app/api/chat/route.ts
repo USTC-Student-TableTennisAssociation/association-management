@@ -35,12 +35,25 @@ type ChatCompletionResponse = {
   };
 };
 
-function isValidMessage(message: unknown): message is ChatMessage {
+const maxAiRequestAttempts = 3;
+const aiRequestTimeoutMs = 90000;
+
+const retryableStatusCodes = new Set([
+  429,
+  502,
+  503,
+  504,
+]);
+
+function isValidMessage(
+  message: unknown,
+): message is ChatMessage {
   if (!message || typeof message !== "object") {
     return false;
   }
 
-  const candidate = message as Record<string, unknown>;
+  const candidate =
+    message as Record<string, unknown>;
 
   return (
     (candidate.role === "user" ||
@@ -54,13 +67,86 @@ function getApiUrl(baseUrl: string): string {
   return `${baseUrl.replace(/\/$/, "")}/chat/completions`;
 }
 
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+function getRetryDelayMs(attempt: number): number {
+  if (process.env.NODE_ENV === "test") {
+    return 0;
+  }
+
+  return attempt === 0 ? 1000 : 2500;
+}
+
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit,
+): Promise<Response> {
+  let lastError: unknown;
+
+  for (
+    let attempt = 0;
+    attempt < maxAiRequestAttempts;
+    attempt += 1
+  ) {
+    const controller = new AbortController();
+
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      aiRequestTimeoutMs,
+    );
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+
+      const shouldRetry =
+        retryableStatusCodes.has(response.status) &&
+        attempt < maxAiRequestAttempts - 1;
+
+      if (!shouldRetry) {
+        return response;
+      }
+
+      await response.text();
+      await wait(getRetryDelayMs(attempt));
+    } catch (error) {
+      lastError = error;
+
+      const isRequestTimeout =
+        error instanceof Error &&
+        error.name === "AbortError";
+
+      if (
+        isRequestTimeout ||
+        attempt >= maxAiRequestAttempts - 1
+      ) {
+        throw error;
+      }
+
+      await wait(getRetryDelayMs(attempt));
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  throw lastError;
+}
+
 async function parseJsonResponse(
   response: Response,
 ): Promise<ChatCompletionResponse | null> {
   const text = await response.text();
 
   try {
-    return JSON.parse(text) as ChatCompletionResponse;
+    return JSON.parse(
+      text,
+    ) as ChatCompletionResponse;
   } catch {
     return null;
   }
@@ -68,15 +154,18 @@ async function parseJsonResponse(
 
 export async function POST(request: Request) {
   const apiKey = process.env.AI_API_KEY;
+
   const apiBaseUrl =
     process.env.AI_API_BASE_URL ??
     "https://api.openai.com/v1";
+
   const model = process.env.AI_MODEL;
 
   if (!apiKey || !model) {
     return NextResponse.json(
       {
-        error: "AI 服务暂不可用，请联系管理员。",
+        error:
+          "AI 服务暂不可用，请联系管理员。",
       },
       {
         status: 500,
@@ -101,7 +190,8 @@ export async function POST(request: Request) {
 
   const messagesInput =
     typeof body === "object" && body !== null
-      ? (body as { messages?: unknown }).messages
+      ? (body as { messages?: unknown })
+          .messages
       : undefined;
 
   if (!Array.isArray(messagesInput)) {
@@ -130,7 +220,9 @@ export async function POST(request: Request) {
     .slice(-20)
     .map((message) => ({
       role: message.role,
-      content: message.content.trim().slice(0, 4000),
+      content: message.content
+        .trim()
+        .slice(0, 4000),
     }));
 
   if (messages.length === 0) {
@@ -144,9 +236,13 @@ export async function POST(request: Request) {
     );
   }
 
-  const latestMessage = messages[messages.length - 1];
+  const latestMessage =
+    messages[messages.length - 1];
 
-  if (!latestMessage || latestMessage.role !== "user") {
+  if (
+    !latestMessage ||
+    latestMessage.role !== "user"
+  ) {
     return NextResponse.json(
       {
         error: "缺少最新的用户问题。",
@@ -157,57 +253,56 @@ export async function POST(request: Request) {
     );
   }
 
-  const guidanceContext = buildGuidanceChatContext(
-    latestMessage.content,
-    handbookGuidelines,
-    handbookGuidelineLinks,
-  );
+  const guidanceContext =
+    buildGuidanceChatContext(
+      latestMessage.content,
+      handbookGuidelines,
+      handbookGuidelineLinks,
+    );
 
-  const guidanceUserPrompt = buildGuidanceAnswerUserPrompt(
-    latestMessage.content,
-    guidanceContext,
-  );
+  const guidanceUserPrompt =
+    buildGuidanceAnswerUserPrompt(
+      latestMessage.content,
+      guidanceContext,
+    );
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(
-    () => controller.abort(),
-    30000,
-  );
+  const requestBody = JSON.stringify({
+    model,
+    messages: [
+      {
+        role: "system",
+        content: guidanceAnswerSystemPrompt,
+      },
+      {
+        role: "user",
+        content: guidanceUserPrompt,
+      },
+    ],
+    temperature: 0.2,
+    max_tokens: 1200,
+  });
 
   try {
-    const response = await fetch(getApiUrl(apiBaseUrl), {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+    const response = await fetchWithRetry(
+      getApiUrl(apiBaseUrl),
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: requestBody,
       },
-      signal: controller.signal,
-      body: JSON.stringify({
-        model,
-        messages: [
-          {
-            role: "system",
-            content: guidanceAnswerSystemPrompt,
-          },
-          ...messages.slice(0, -1),
-          {
-            role: "user",
-            content: guidanceUserPrompt,
-          },
-        ],
-        temperature: 0.2,
-        max_tokens: 1200,
-      }),
-    });
+    );
 
-    clearTimeout(timeoutId);
-
-    const data = await parseJsonResponse(response);
+    const data =
+      await parseJsonResponse(response);
 
     if (!data) {
       return NextResponse.json(
         {
-          error: "AI 服务返回了无法解析的响应。",
+          error:
+            "AI 服务返回了无法解析的响应。",
         },
         {
           status: 502,
@@ -234,7 +329,8 @@ export async function POST(request: Request) {
     if (!rawAssistantMessage) {
       return NextResponse.json(
         {
-          error: "AI 服务没有返回有效回复。",
+          error:
+            "AI 服务没有返回有效回复。",
         },
         {
           status: 502,
@@ -243,13 +339,16 @@ export async function POST(request: Request) {
     }
 
     const allowedGuidelineIds = new Set(
-      guidanceContext.map((item) => item.id),
+      guidanceContext.map(
+        (item) => item.id,
+      ),
     );
 
-    const guidanceAnswer = parseGuidanceAnswer(
-      rawAssistantMessage,
-      allowedGuidelineIds,
-    );
+    const guidanceAnswer =
+      parseGuidanceAnswer(
+        rawAssistantMessage,
+        allowedGuidelineIds,
+      );
 
     if (!guidanceAnswer) {
       return NextResponse.json(
@@ -264,41 +363,53 @@ export async function POST(request: Request) {
     }
 
     const contextById = new Map(
-      guidanceContext.map((item) => [item.id, item]),
+      guidanceContext.map((item) => [
+        item.id,
+        item,
+      ]),
     );
 
-    const citations = guidanceAnswer.citations.map(
-      (citation) => {
-        const contextItem = contextById.get(
-          citation.guidelineId,
-        );
+    const citations =
+      guidanceAnswer.citations.map(
+        (citation) => {
+          const contextItem =
+            contextById.get(
+              citation.guidelineId,
+            );
 
-        return {
-          guidelineId: citation.guidelineId,
-          title: contextItem?.title ?? "未知指导卡片",
-          reason: citation.reason,
-          authority:
-            contextItem?.authority ??
-            "pending_confirmation",
-        };
-      },
-    );
+          return {
+            guidelineId:
+              citation.guidelineId,
+            title:
+              contextItem?.title ??
+              "未知指导卡片",
+            reason: citation.reason,
+            authority:
+              contextItem?.authority ??
+              "pending_confirmation",
+          };
+        },
+      );
 
     return NextResponse.json({
       message: guidanceAnswer.answer,
       citations,
-      unresolved: guidanceAnswer.unresolved,
+      unresolved:
+        guidanceAnswer.unresolved,
       usage: data.usage,
       finishReason:
         data.choices?.[0]?.finish_reason,
     });
-  } catch {
-    clearTimeout(timeoutId);
+  } catch (error) {
+    const isTimeout =
+      error instanceof Error &&
+      error.name === "AbortError";
 
     return NextResponse.json(
       {
-        error:
-          "无法连接 AI 服务，请检查网络或 API 配置。",
+        error: isTimeout
+          ? "学校 AI 服务响应超时，请稍后重试。"
+          : "学校 AI 服务当前连接不稳定，已自动重试，请稍后再试。",
       },
       {
         status: 502,

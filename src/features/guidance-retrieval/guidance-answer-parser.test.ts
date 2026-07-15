@@ -184,4 +184,26 @@ describe("指导层 AI 回答校验", () => {
       unresolved: ["缺少聚餐餐厅选择方面的指导信息。"],
     });
   });
+    it("拒绝在回答正文中显示指导卡片 ID", () => {
+    const guidelineId =
+      "10000000-0000-4000-8000-000000000001";
+
+    const rawText = JSON.stringify({
+      answer: `依据卡片 ${guidelineId}，活动未审批前不得举办。`,
+      citations: [
+        {
+          guidelineId,
+          reason: "该卡片说明未审批不得开展活动。",
+        },
+      ],
+      unresolved: [],
+    });
+
+    const result = parseGuidanceAnswer(
+      rawText,
+      new Set([guidelineId]),
+    );
+
+    expect(result).toBeNull();
+  });
 });

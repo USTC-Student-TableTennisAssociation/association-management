@@ -39,4 +39,9 @@ describe("指导层 AI 回答协议", () => {
     expect(guidanceAnswerSystemPrompt).toContain("待确认");
     expect(guidanceAnswerSystemPrompt).toContain("只返回 JSON");
   });
+    it("禁止在回答正文中显示指导卡片 ID", () => {
+    expect(guidanceAnswerSystemPrompt).toContain(
+      "answer 正文中不得显示指导卡片 ID",
+    );
+  });
 });

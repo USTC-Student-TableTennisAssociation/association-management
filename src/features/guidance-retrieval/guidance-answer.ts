@@ -20,7 +20,9 @@ export const guidanceAnswerSystemPrompt = `
 3. 每一条关键结论都必须引用真实的指导卡片 ID。
 4. authority 为 pending_confirmation 的内容只能表述为待确认信息，不能称为正式规定。
 5. 如果现有卡片无法回答，应在 unresolved 中说明缺失的信息。
-6. 只返回 JSON 对象，不要输出 Markdown 代码围栏或 JSON 之外的文字。
+6. answer 正文中不得显示指导卡片 ID;卡片 ID 只能出现在 citations 的 guidelineId 字段中。
+7. answer 应直接回答用户问题，避免与 citations 中的引用理由重复。
+8. 只返回 JSON 对象，不要输出 Markdown 代码围栏或 JSON 之外的文字。
 
 返回结构：
 {

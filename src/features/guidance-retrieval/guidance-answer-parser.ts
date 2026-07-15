@@ -25,13 +25,22 @@ export function parseGuidanceAnswer(
     return null;
   }
 
-  const candidate = parsed as Record<string, unknown>;
+  const candidate =
+    parsed as Record<string, unknown>;
 
   if (
     typeof candidate.answer !== "string" ||
     candidate.answer.trim().length === 0
   ) {
     return null;
+  }
+
+  const answer = candidate.answer.trim();
+
+  for (const guidelineId of allowedGuidelineIds) {
+    if (answer.includes(guidelineId)) {
+      return null;
+    }
   }
 
   if (!Array.isArray(candidate.citations)) {
@@ -46,18 +55,25 @@ export function parseGuidanceAnswer(
       return null;
     }
 
-    const citation = item as Record<string, unknown>;
+    const citation =
+      item as Record<string, unknown>;
 
     if (
       typeof citation.guidelineId !== "string" ||
-      !allowedGuidelineIds.has(citation.guidelineId) ||
+      !allowedGuidelineIds.has(
+        citation.guidelineId,
+      ) ||
       typeof citation.reason !== "string" ||
       citation.reason.trim().length === 0
     ) {
       return null;
     }
 
-    if (seenGuidelineIds.has(citation.guidelineId)) {
+    if (
+      seenGuidelineIds.has(
+        citation.guidelineId,
+      )
+    ) {
       continue;
     }
 
@@ -66,22 +82,32 @@ export function parseGuidanceAnswer(
       reason: citation.reason.trim(),
     });
 
-    seenGuidelineIds.add(citation.guidelineId);
+    seenGuidelineIds.add(
+      citation.guidelineId,
+    );
   }
 
-  const unresolved = Array.isArray(candidate.unresolved)
+  const unresolved = Array.isArray(
+    candidate.unresolved,
+  )
     ? candidate.unresolved
-        .filter((item): item is string => typeof item === "string")
+        .filter(
+          (item): item is string =>
+            typeof item === "string",
+        )
         .map((item) => item.trim())
         .filter(Boolean)
     : [];
 
-  if (citations.length === 0 && unresolved.length === 0) {
+  if (
+    citations.length === 0 &&
+    unresolved.length === 0
+  ) {
     return null;
   }
 
   return {
-    answer: candidate.answer.trim(),
+    answer,
     citations,
     unresolved,
   };
