@@ -34,7 +34,12 @@ async function main(): Promise<void> {
     const guidelineIds = handbookGuidelines.map((item) => item.id);
     const [storedGuidelines, storedLinks] = await Promise.all([
       prisma.guideline.findMany({ where: { id: { in: guidelineIds } } }),
-      prisma.guidelineLink.findMany({ where: { fromGuidelineId: { in: guidelineIds } } }),
+      prisma.guidelineLink.findMany({
+        where: {
+          fromGuidelineId: { in: guidelineIds },
+          toGuidelineId: { in: guidelineIds },
+        },
+      }),
     ]);
 
     const issues: VerificationIssue[] = [];
@@ -57,6 +62,9 @@ async function main(): Promise<void> {
     const storedLinkMap = new Map(
       storedLinks.map((item) => [linkKey(item.fromGuidelineId, item.toGuidelineId, item.relationType), item]),
     );
+    const expectedLinkKeys = new Set(
+      handbookGuidelineLinks.map((link) => linkKey(link.fromGuidelineId, link.toGuidelineId, link.relationType)),
+    );
     handbookGuidelineLinks.forEach((expected) => {
       const actual = storedLinkMap.get(
         linkKey(expected.fromGuidelineId, expected.toGuidelineId, expected.relationType),
@@ -67,6 +75,16 @@ async function main(): Promise<void> {
       }
       if (actual.note !== expected.note) {
         issues.push({ subject: expected.note, message: "连线备注与当前种子数据不一致" });
+      }
+    });
+
+    storedLinks.forEach((storedLink) => {
+      const key = linkKey(storedLink.fromGuidelineId, storedLink.toGuidelineId, storedLink.relationType);
+      if (!expectedLinkKeys.has(key)) {
+        issues.push({
+          subject: key,
+          message: "数据库中存在未包含在当前种子中的旧连线",
+        });
       }
     });
 

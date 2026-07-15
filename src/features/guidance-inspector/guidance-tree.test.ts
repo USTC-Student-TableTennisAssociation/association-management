@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  handbookGuidelineIds,
   handbookGuidelineLinks,
   handbookGuidelines,
 } from "../../../prisma/handbook-guidance.data";
@@ -31,14 +32,23 @@ function createLink(
 }
 
 describe("指导层树状导航", () => {
-  it("使用 contains 构建当前种子的主树，并让工作流根节点优先", () => {
+  it("使用 contains 构建当前种子的主树，并让活动与持续运营成为两个根节点", () => {
     const graph = buildGuidanceGraph(handbookGuidelines, handbookGuidelineLinks);
     const tree = buildGuidanceTree(graph);
-    const largeWorkflow = graph.nodes.find((node) => node.title === "大型赛事四阶段筹备流程");
+    const activityRoot = graph.nodeById.get(handbookGuidelineIds.activityLifecycle);
+    const operationsRoot = graph.nodeById.get(handbookGuidelineIds.organizationOperations);
+    const largeWorkflow = graph.nodeById.get(handbookGuidelineIds.largeEventWorkflow);
 
+    expect(activityRoot).toBeDefined();
+    expect(operationsRoot).toBeDefined();
     expect(largeWorkflow).toBeDefined();
     expect(tree.rootNodeIds[0] && graph.nodeById.get(tree.rootNodeIds[0])?.kind).toBe("workflow");
-    expect(tree.childrenByNodeId.get(largeWorkflow?.id ?? "")).toHaveLength(5);
+    expect(tree.rootNodeIds).toEqual(
+      expect.arrayContaining([handbookGuidelineIds.activityLifecycle, handbookGuidelineIds.organizationOperations]),
+    );
+    expect(tree.childrenByNodeId.get(activityRoot?.id ?? "")).toHaveLength(6);
+    expect(tree.childrenByNodeId.get(largeWorkflow?.id ?? "")).toHaveLength(4);
+    expect(tree.secondaryContainmentEdgeIds).toHaveLength(0);
 
     const placedNodeIds = new Set([
       ...tree.rootNodeIds,

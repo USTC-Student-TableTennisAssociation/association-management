@@ -19,6 +19,7 @@ type ImportCounts = {
   linksCreated: number;
   linksUpdated: number;
   linksSkipped: number;
+  linksDeleted: number;
 };
 
 function emptyCounts(): ImportCounts {
@@ -29,6 +30,7 @@ function emptyCounts(): ImportCounts {
     linksCreated: 0,
     linksUpdated: 0,
     linksSkipped: 0,
+    linksDeleted: 0,
   };
 }
 
@@ -45,7 +47,9 @@ function guidelineData(seed: GuidelineSeed) {
   };
 }
 
-function linkWhere(link: GuidelineLinkSeed) {
+function linkWhere(
+  link: Pick<GuidelineLinkSeed, "fromGuidelineId" | "toGuidelineId" | "relationType">,
+) {
   return {
     fromGuidelineId_toGuidelineId_relationType: {
       fromGuidelineId: link.fromGuidelineId,
@@ -53,6 +57,12 @@ function linkWhere(link: GuidelineLinkSeed) {
       relationType: link.relationType,
     },
   };
+}
+
+function linkKey(
+  link: Pick<GuidelineLinkSeed, "fromGuidelineId" | "toGuidelineId" | "relationType">,
+): string {
+  return `${link.fromGuidelineId}:${link.toGuidelineId}:${link.relationType}`;
 }
 
 async function runImport(dryRun: boolean): Promise<ImportCounts> {
@@ -104,6 +114,35 @@ async function runImport(dryRun: boolean): Promise<ImportCounts> {
         }
       }
 
+      const managedGuidelineIds = handbookGuidelines.map((guideline) => guideline.id);
+      const desiredLinkKeys = new Set(handbookGuidelineLinks.map(linkKey));
+      const existingManagedLinks = await tx.guidelineLink.findMany({
+        where: {
+          fromGuidelineId: { in: managedGuidelineIds },
+          toGuidelineId: { in: managedGuidelineIds },
+        },
+        include: {
+          fromGuideline: { select: { status: true } },
+          toGuideline: { select: { status: true } },
+        },
+      });
+
+      // 仅同步两个端点均为 draft 的种子连线：已发布的人工审核内容不删除。
+      for (const existingLink of existingManagedLinks) {
+        if (
+          desiredLinkKeys.has(linkKey(existingLink)) ||
+          existingLink.fromGuideline.status !== "draft" ||
+          existingLink.toGuideline.status !== "draft"
+        ) {
+          continue;
+        }
+
+        counts.linksDeleted += 1;
+        if (!dryRun) {
+          await tx.guidelineLink.delete({ where: linkWhere(existingLink) });
+        }
+      }
+
       for (const link of handbookGuidelineLinks) {
         const existing = await tx.guidelineLink.findUnique({ where: linkWhere(link) });
         if (!existing) {
@@ -138,7 +177,9 @@ function printCounts(counts: ImportCounts, dryRun: boolean): void {
   console.log(
     `- Guideline：新建 ${counts.guidelinesCreated}，更新 ${counts.guidelinesUpdated}，跳过 ${counts.guidelinesSkipped}`,
   );
-  console.log(`- 连线：新建 ${counts.linksCreated}，更新 ${counts.linksUpdated}，跳过 ${counts.linksSkipped}`);
+  console.log(
+    `- 连线：新建 ${counts.linksCreated}，更新 ${counts.linksUpdated}，删除 ${counts.linksDeleted}，跳过 ${counts.linksSkipped}`,
+  );
 }
 
 async function main(): Promise<void> {
