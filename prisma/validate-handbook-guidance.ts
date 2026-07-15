@@ -54,14 +54,25 @@ const allowedFactFields = new Set([
   "activity.phase",
   "activity.requires_budget",
   "activity.budget_status",
+  "activity.budget_change_needed",
+  "activity.procurement_status",
   "activity.needs_venue",
   "activity.venue_status",
+  "activity.venue_scale",
+  "activity.venue_type",
+  "activity.venue_policy_confirmed",
+  "activity.on_site_issue",
   "activity.closure_status",
+  "activity.news_status",
+  "activity.second_class_closure_status",
+  "activity.remaining_assets",
+  "activity.reimbursement_issue",
   "activity.needs_core_assets",
   "activity.review_status",
   "handover.in_progress",
   "member.stage",
   "organization.asset_inventory_due",
+  "organization.asset_issue",
 ]);
 const allowedActionTypes = new Set([
   "create_task",
@@ -284,6 +295,24 @@ function validateLinks(ids: Set<string>, links: GuidelineLinkSeed[], issues: Val
   });
 }
 
+function validateCanonicalContainment(links: GuidelineLinkSeed[], issues: ValidationIssue[]): void {
+  const parentLinkByChildId = new Map<string, GuidelineLinkSeed>();
+
+  links
+    .filter((link) => link.relationType === "contains")
+    .forEach((link) => {
+      const existing = parentLinkByChildId.get(link.toGuidelineId);
+      if (existing) {
+        issues.push({
+          path: "links",
+          message: `Guideline ${link.toGuidelineId} 有多个 contains 父级：${existing.fromGuidelineId} 与 ${link.fromGuidelineId}`,
+        });
+        return;
+      }
+      parentLinkByChildId.set(link.toGuidelineId, link);
+    });
+}
+
 function validateAcyclicRelations(links: GuidelineLinkSeed[], issues: ValidationIssue[]): void {
   const relationTypes = new Set(["contains", "next", "requires"]);
   const graph = new Map<string, string[]>();
@@ -337,12 +366,17 @@ const regressionScenarios: Array<{
       },
     },
     expected: [
-      handbookGuidelineIds.noApprovalNoActivity,
+      handbookGuidelineIds.activityLifecycle,
+      handbookGuidelineIds.activityAdministrativeCompliance,
+      handbookGuidelineIds.approvalApplicability,
+      handbookGuidelineIds.approvalMaterials,
+      handbookGuidelineIds.approvalSubmission,
+      handbookGuidelineIds.budgetWorkflow,
       handbookGuidelineIds.budgetBeforeActivity,
-      handbookGuidelineIds.venueApplication,
+      handbookGuidelineIds.venueWorkflow,
       handbookGuidelineIds.largeEventWorkflow,
     ],
-    excluded: [handbookGuidelineIds.largeEventT7Submission],
+    excluded: [handbookGuidelineIds.largeEventT7Submission, handbookGuidelineIds.noApprovalNoActivity],
   },
   {
     name: "临期大型赛事：距活动 7 天仍未提交二课",
@@ -360,11 +394,13 @@ const regressionScenarios: Array<{
       },
     },
     expected: [
-      handbookGuidelineIds.noApprovalNoActivity,
+      handbookGuidelineIds.activityAdministrativeCompliance,
       handbookGuidelineIds.largeEventT7Submission,
+      handbookGuidelineIds.approvalMaterials,
+      handbookGuidelineIds.approvalSubmission,
       handbookGuidelineIds.largeEventWorkflow,
     ],
-    excluded: [handbookGuidelineIds.regularActivityT3Submission],
+    excluded: [handbookGuidelineIds.regularActivityT3Submission, handbookGuidelineIds.noApprovalNoActivity],
   },
   {
     name: "常规活动临期：距活动 3 天内仍未申报",
@@ -379,7 +415,11 @@ const regressionScenarios: Array<{
         needs_venue: false,
       },
     },
-    expected: [handbookGuidelineIds.noApprovalNoActivity, handbookGuidelineIds.regularActivityT3Submission],
+    expected: [
+      handbookGuidelineIds.activityAdministrativeCompliance,
+      handbookGuidelineIds.noApprovalNoActivity,
+      handbookGuidelineIds.regularActivityT3Submission,
+    ],
     excluded: [handbookGuidelineIds.largeEventT7Submission],
   },
   {
@@ -393,11 +433,31 @@ const regressionScenarios: Array<{
       },
     },
     expected: [
+      handbookGuidelineIds.closureWorkflow,
       handbookGuidelineIds.reimbursementClosure,
       handbookGuidelineIds.fundedActivityClosure,
       handbookGuidelineIds.postmortemAndExperience,
     ],
     excluded: [handbookGuidelineIds.largeEventT7Submission],
+  },
+  {
+    name: "审批被退回：进入异常处理，不当作已提交或已通过",
+    context: {
+      activity: {
+        type: "large_tournament",
+        days_until_event: 10,
+        requires_second_class_approval: true,
+        approval_status: "returned",
+        phase: "preparation",
+      },
+    },
+    expected: [
+      handbookGuidelineIds.approvalApplicability,
+      handbookGuidelineIds.approvalMaterials,
+      handbookGuidelineIds.approvalIssue,
+      handbookGuidelineIds.noApprovalNoActivity,
+    ],
+    excluded: [handbookGuidelineIds.approvalTracking],
   },
 ];
 
@@ -441,8 +501,8 @@ export function validateHandbookGuidance(): ValidationResult {
   handbookGuidelines.forEach((guideline, index) => validateGuideline(guideline, index, ids, issues));
 
   const expectedIds = new Set(Object.values(handbookGuidelineIds));
-  if (handbookGuidelines.length !== 12 || ids.size !== expectedIds.size) {
-    issues.push({ path: "guidelines", message: "首批手册导入必须恰好覆盖 12 条 Guideline" });
+  if (handbookGuidelines.length !== expectedIds.size || ids.size !== expectedIds.size) {
+    issues.push({ path: "guidelines", message: "种子数据必须覆盖 handbookGuidelineIds 中声明的全部 Guideline" });
   }
   expectedIds.forEach((id) => {
     if (!ids.has(id)) {
@@ -459,6 +519,7 @@ export function validateHandbookGuidance(): ValidationResult {
   }
 
   validateLinks(ids, handbookGuidelineLinks, issues);
+  validateCanonicalContainment(handbookGuidelineLinks, issues);
   validateAcyclicRelations(handbookGuidelineLinks, issues);
   const scenarioResults = validateRegressionScenarios(issues);
 

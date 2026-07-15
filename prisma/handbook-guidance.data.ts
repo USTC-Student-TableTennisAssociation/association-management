@@ -1,8 +1,8 @@
 /**
- * 《乒协生存手册》的第一批指导层种子数据。
+ * 《乒协生存手册》的指导层种子数据。
  *
- * 这些条目是人工可审阅的草稿，而不是原始手册的替代品。固定 UUID 使导入可重复执行：
- * 再次运行只会补齐或更新尚未发布的草稿，不会产生重复条目。
+ * 每张卡只承担一个稳定职责：工作流编排、硬规则、可验证检查表或经验。
+ * 具体点击、提交、催审等动作仍以 suggestedActions 表示，未来可迁移为 ActionTemplate。
  */
 
 export type JsonPrimitive = string | number | boolean | null;
@@ -10,23 +10,8 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 
 export type GuidelineKind = "workflow" | "rule" | "checklist" | "experience";
 export type GuidelineStatus = "draft" | "published";
-export type GuidelineRelationType =
-  | "contains"
-  | "triggers"
-  | "requires"
-  | "next"
-  | "exception";
-
-export type ConditionOperator =
-  | "eq"
-  | "ne"
-  | "in"
-  | "not_in"
-  | "lt"
-  | "lte"
-  | "gt"
-  | "gte"
-  | "exists";
+export type GuidelineRelationType = "contains" | "triggers" | "requires" | "next" | "exception";
+export type ConditionOperator = "eq" | "ne" | "in" | "not_in" | "lt" | "lte" | "gt" | "gte" | "exists";
 
 export type FactCondition = {
   field: string;
@@ -80,525 +65,912 @@ export const handbookGuidelineIds = {
   handoverChecklist: "10000000-0000-4000-8000-000000000010",
   newOfficerGrowth: "10000000-0000-4000-8000-000000000011",
   postmortemAndExperience: "10000000-0000-4000-8000-000000000012",
+  activityLifecycle: "10000000-0000-4000-8000-000000000013",
+  activityAdministrativeCompliance: "10000000-0000-4000-8000-000000000014",
+  approvalApplicability: "10000000-0000-4000-8000-000000000015",
+  approvalMaterials: "10000000-0000-4000-8000-000000000016",
+  approvalSubmission: "10000000-0000-4000-8000-000000000017",
+  approvalTracking: "10000000-0000-4000-8000-000000000018",
+  approvalIssue: "10000000-0000-4000-8000-000000000019",
+  budgetWorkflow: "10000000-0000-4000-8000-000000000020",
+  expenseEligibility: "10000000-0000-4000-8000-000000000021",
+  budgetDraft: "10000000-0000-4000-8000-000000000022",
+  procurementBoundary: "10000000-0000-4000-8000-000000000023",
+  budgetException: "10000000-0000-4000-8000-000000000024",
+  venueWorkflow: "10000000-0000-4000-8000-000000000025",
+  venueNeeds: "10000000-0000-4000-8000-000000000026",
+  largeVenueRationale: "10000000-0000-4000-8000-000000000027",
+  multiPurposeVenue: "10000000-0000-4000-8000-000000000028",
+  venuePolicyConfirmation: "10000000-0000-4000-8000-000000000029",
+  largeEventAdministration: "10000000-0000-4000-8000-000000000030",
+  largeEventAssets: "10000000-0000-4000-8000-000000000031",
+  largeEventOnSite: "10000000-0000-4000-8000-000000000032",
+  largeEventCloseout: "10000000-0000-4000-8000-000000000033",
+  largeEventMaterials: "10000000-0000-4000-8000-000000000034",
+  largeEventRegistration: "10000000-0000-4000-8000-000000000035",
+  largeEventScheduleException: "10000000-0000-4000-8000-000000000036",
+  closureWorkflow: "10000000-0000-4000-8000-000000000037",
+  reimbursementBudgetGate: "10000000-0000-4000-8000-000000000038",
+  assetQuantityBalance: "10000000-0000-4000-8000-000000000039",
+  remainingAssetInventory: "10000000-0000-4000-8000-000000000040",
+  reimbursementException: "10000000-0000-4000-8000-000000000041",
+  fundedNewsGate: "10000000-0000-4000-8000-000000000042",
+  newsReviewRelease: "10000000-0000-4000-8000-000000000043",
+  secondClassClosure: "10000000-0000-4000-8000-000000000044",
+  organizationOperations: "10000000-0000-4000-8000-000000000045",
+  assetLedger: "10000000-0000-4000-8000-000000000046",
+  assetBorrowReturn: "10000000-0000-4000-8000-000000000047",
+  keyManagement: "10000000-0000-4000-8000-000000000048",
+  semesterInventory: "10000000-0000-4000-8000-000000000049",
+  assetIssue: "10000000-0000-4000-8000-000000000050",
+  handoverWork: "10000000-0000-4000-8000-000000000051",
+  handoverAccounts: "10000000-0000-4000-8000-000000000052",
+  handoverAssets: "10000000-0000-4000-8000-000000000053",
+  handoverRelationships: "10000000-0000-4000-8000-000000000054",
+  handoverAcceptance: "10000000-0000-4000-8000-000000000055",
+  officerOrientation: "10000000-0000-4000-8000-000000000056",
+  officerApprenticeship: "10000000-0000-4000-8000-000000000057",
+  officerReadiness: "10000000-0000-4000-8000-000000000058",
+  officerAuthorityBoundary: "10000000-0000-4000-8000-000000000059",
+  reviewFeedback: "10000000-0000-4000-8000-000000000060",
+  reviewDecisionRecord: "10000000-0000-4000-8000-000000000061",
+  reviewDraft: "10000000-0000-4000-8000-000000000062",
+  reviewHumanApproval: "10000000-0000-4000-8000-000000000063",
+  reviewPublication: "10000000-0000-4000-8000-000000000064",
+} as const;
+
+type GuidelineKey = keyof typeof handbookGuidelineIds;
+type DraftGuideline = Omit<GuidelineSeed, "id" | "status">;
+
+function fact(field: string, operator: ConditionOperator, value?: JsonValue): FactCondition {
+  return value === undefined ? { field, operator } : { field, operator, value };
+}
+
+function all(...conditions: GuidanceCondition[]): GuidanceCondition {
+  return { all: conditions };
+}
+
+function any(...conditions: GuidanceCondition[]): GuidanceCondition {
+  return { any: conditions };
+}
+
+function guideline(key: GuidelineKey, seed: DraftGuideline): GuidelineSeed {
+  return { id: handbookGuidelineIds[key], ...seed, status: "draft" };
+}
+
+function action(type: SuggestedAction["type"], title: string, due?: string): SuggestedAction {
+  return due ? { type, title, due } : { type, title };
+}
+
+function link(
+  from: GuidelineKey,
+  to: GuidelineKey,
+  relationType: GuidelineRelationType,
+  note: string,
+): GuidelineLinkSeed {
+  return {
+    fromGuidelineId: handbookGuidelineIds[from],
+    toGuidelineId: handbookGuidelineIds[to],
+    relationType,
+    note,
+  };
+}
+
+const basis = {
+  activity: "整理自《乒协生存手册》第 15–21 页；具体安排以当年学校通知为准。",
+  approval: "整理自《乒协生存手册》第 15、19 页；手册明确的是提交时限，不是固定审批完成时限。",
+  budget: "整理自《乒协生存手册》第 16–17 页 §6.2；固定金额与细则不作为永久规则导入。",
+  venue: "整理自《乒协生存手册》第 17–18 页 §6.3；常规场馆时限应以当期流程确认。",
+  largeEvent: "整理自《乒协生存手册》第 19–20 页 §7.1；未在手册明确的现场细则不作为硬规则。",
+  closure: "整理自《乒协生存手册》第 16–17、20–21 页；结项与报销细则以当年通知为准。",
+  assets: "整理自《乒协生存手册》第 18 页 §6.3.3。",
+  handover: "整理自《乒协生存手册》第 24–25 页 §9.3。",
+  growth: "整理自《乒协生存手册》第 24、29–30 页 §9.2、§11.2–11.3。",
+  review: "整理自《乒协生存手册》第 20、23–24、30 页 §7.1.4、§9.1、§11.4。",
 } as const;
 
 export const handbookGuidelines: GuidelineSeed[] = [
-  {
-    id: handbookGuidelineIds.noApprovalNoActivity,
-    title: "无二课审批不开展活动",
-    kind: "rule",
+  guideline("activityLifecycle", {
+    title: "活动全生命周期",
+    kind: "workflow",
+    isMandatory: false,
+    appliesWhen: all(fact("activity.type", "exists", true)),
+    contentMarkdown: "## 目标\n以立项合规、筹备、现场、结项和复盘组织活动知识。各阶段只给出应阅读的模块；活动实际状态仍由人确认。",
+    suggestedActions: [action("show_checklist", "按活动阶段查看当前需要处理的模块")],
+    basisNote: basis.activity,
+  }),
+  guideline("activityAdministrativeCompliance", {
+    title: "活动行政合规与二课审批",
+    kind: "workflow",
     isMandatory: true,
-    appliesWhen: {
-      all: [
-        { field: "activity.requires_second_class_approval", operator: "eq", value: true },
-        { field: "activity.approval_status", operator: "not_in", value: ["approved"] },
-      ],
-    },
-    contentMarkdown: `## 规则
-
-需要二课审批的活动，未获审批前不得进入实际开展阶段。二课审批不仅关联活动合规，也关联场地使用、公开宣传、经费申请和后续报销。
-
-## 怎么做
-
-1. 先核实活动是否需要二课审批，以及当前审批状态。
-2. 未获审批时，暂停将活动视为可执行的安排；根据活动类型加载相应的申报时限指导。
-3. 审批状态或学校要求不明确时，先向负责行政的同学或指导老师确认。
-
-## 注意
-
-这条是“开展前的门禁”，不等同于“必须在 T-7 前审批通过”。大型赛事 T-7 的明确要求是**提交申请**。`,
-    suggestedActions: [
-      {
-        type: "show_checklist",
-        title: "先核实二课审批状态，再安排活动执行",
-      },
-      {
-        type: "request_information",
-        title: "补充活动类型、二课审批状态和计划日期",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 15 页 §6.1.1；学校当年流程以官方通知为准。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.largeEventT7Submission,
+    appliesWhen: all(fact("activity.phase", "in", ["planning", "preparation"])),
+    contentMarkdown: "## 目标\n在活动开展前完成审批适用性判断、时限选择、材料提交、审核跟踪和放行检查。\n\n## 完成标准\n审批要求、提交状态和实际开展门禁均可被核对。",
+    suggestedActions: [action("show_checklist", "检查二课审批和活动放行链路")],
+    basisNote: basis.approval,
+  }),
+  guideline("approvalApplicability", {
+    title: "确认活动是否需要二课审批",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: any(
+      fact("activity.requires_second_class_approval", "exists", false),
+      fact("activity.requires_second_class_approval", "eq", true),
+    ),
+    contentMarkdown: "## 检查项\n- 确认活动类型、日期、规模和是否涉及二课要求。\n- 记录是否需要审批；无法确认时不得自行假设为不需要。\n\n## 输出\n将审批适用性标记为需要、不需要或待确认。",
+    suggestedActions: [action("request_information", "确认活动类型、日期与二课审批适用性")],
+    basisNote: basis.approval,
+  }),
+  guideline("largeEventT7Submission", {
     title: "大型赛事：活动前至少 7 天提交二课申请",
     kind: "rule",
     isMandatory: true,
-    appliesWhen: {
-      all: [
-        { field: "activity.type", operator: "eq", value: "large_tournament" },
-        { field: "activity.days_until_event", operator: "lte", value: 7 },
-        {
-          field: "activity.approval_status",
-          operator: "not_in",
-          value: ["submitted", "approved"],
-        },
-      ],
-    },
-    contentMarkdown: `## 规则
-
-大型赛事应在活动前至少 7 天在二课系统**提交申请**。全校性活动还应确认是否需要按当年要求提交纸质策划案。
-
-## 提交前准备
-
-- 策划案，包含必要的安全预案。
-- 预算明细。
-- 活动时间、场地、预计参与规模等基础信息。
-
-## 提交后
-
-沿“提交申请 → 挂靠单位审核 → 管指委审批”跟踪进度，并为可能的催审预留时间。若已临近节点仍未提交，应立即提示风险，而不是把“审批已完成”写成已知事实。`,
-    suggestedActions: [
-      {
-        type: "create_task",
-        title: "提交大型赛事二课申请并附齐策划与预算材料",
-        due: "立即",
-      },
-      {
-        type: "request_information",
-        title: "确认是否需要纸质策划案，以及当前审核卡在哪一环",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 15、19 页；手册明确的是 T-7 提交，不是 T-7 审批完成。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.regularActivityT3Submission,
+    appliesWhen: all(
+      fact("activity.type", "eq", "large_tournament"),
+      fact("activity.days_until_event", "lte", 7),
+      fact("activity.approval_status", "not_in", ["submitted", "pending", "approved"]),
+    ),
+    contentMarkdown: "## 规则\n大型赛事应在活动前至少 7 天在二课系统**提交申请**。这条规则不把 T-7 误写成审批必须完成。",
+    suggestedActions: [action("create_task", "立即提交大型赛事二课申请", "立即")],
+    basisNote: basis.approval,
+  }),
+  guideline("regularActivityT3Submission", {
     title: "常规活动：活动前 3 天完成系统申报",
     kind: "rule",
     isMandatory: true,
-    appliesWhen: {
-      all: [
-        {
-          field: "activity.type",
-          operator: "in",
-          value: ["regular_training", "points_tournament"],
-        },
-        { field: "activity.days_until_event", operator: "lte", value: 3 },
-        {
-          field: "activity.approval_status",
-          operator: "not_in",
-          value: ["submitted", "approved"],
-        },
-      ],
-    },
-    contentMarkdown: `## 规则
-
-周常训练、积分赛等常规活动，须在活动前 3 天完成系统申报。
-
-## 怎么做
-
-1. 确认活动日期、类型与是否需要二课申报。
-2. 在时限内完成系统申报，并记录提交状态。
-3. 如审批尚未推进，及时核实当前审核环节；未获审批前仍适用“无二课审批不开展活动”。`,
-    suggestedActions: [
-      {
-        type: "create_task",
-        title: "完成常规活动的系统申报",
-        due: "活动前 3 天",
-      },
-      {
-        type: "request_information",
-        title: "确认常规活动日期、类型和当前申报状态",
-      },
-    ],
+    appliesWhen: all(
+      fact("activity.type", "in", ["regular_training", "points_tournament"]),
+      fact("activity.days_until_event", "lte", 3),
+      fact("activity.approval_status", "not_in", ["submitted", "pending", "approved"]),
+    ),
+    contentMarkdown: "## 规则\n周常训练、积分赛等常规活动，应在活动前 3 天完成系统申报。提交后仍需按审批状态决定是否能够开展。",
+    suggestedActions: [action("create_task", "完成常规活动系统申报", "活动前 3 天")],
     basisNote: "整理自《乒协生存手册》第 15 页 §6.1.2。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.budgetBeforeActivity,
-    title: "活动前确认预算与支出边界",
+  }),
+  guideline("approvalMaterials", {
+    title: "二课申报材料完整性检查",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.requires_second_class_approval", "eq", true),
+      fact("activity.approval_status", "in", ["not_started", "returned"]),
+    ),
+    contentMarkdown: "## 检查项\n- 策划案及必要安全预案。\n- 预算明细。\n- 活动时间、场地、预计规模等基础信息。\n- 全校性活动是否另有纸质策划案等当年材料要求。\n\n## 通过标准\n材料可用于提交，缺项已有明确补充责任人。",
+    suggestedActions: [action("show_checklist", "核对二课申请材料是否齐全")],
+    basisNote: basis.approval,
+  }),
+  guideline("approvalSubmission", {
+    title: "提交二课申请并留存凭证",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.requires_second_class_approval", "eq", true),
+      fact("activity.approval_status", "eq", "not_started"),
+    ),
+    contentMarkdown: "## 操作结果\n在对应系统提交申请，并记录提交时间、申请编号或可复核截图、当前审核状态。\n\n## 不应假设\n提交成功不等于审批通过。",
+    suggestedActions: [action("create_task", "提交二课申请并记录申请凭证")],
+    basisNote: basis.approval,
+  }),
+  guideline("approvalTracking", {
+    title: "跟踪二课审核进度",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.approval_status", "in", ["submitted", "pending"])),
+    contentMarkdown: "## 检查项\n- 确认申请处于挂靠单位审核、管指委审批或其他当期环节。\n- 为可能的催审和补充材料预留时间。\n- 仅在可核对后记录已通过。",
+    suggestedActions: [action("request_information", "确认二课申请当前审核环节和待补材料")],
+    basisNote: basis.approval,
+  }),
+  guideline("approvalIssue", {
+    title: "二课审批受阻、退回或状态不明处理",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: any(
+      fact("activity.approval_status", "in", ["unknown", "returned", "rejected"]),
+      fact("activity.requires_second_class_approval", "exists", false),
+    ),
+    contentMarkdown: "## 处理顺序\n- 状态不明：先向负责行政的同学或指导老师确认。\n- 被退回：记录退回原因，补齐材料后重新提交。\n- 临近活动仍未提交：标记风险，不能把审批完成当作既成事实。",
+    suggestedActions: [action("request_information", "确认审批受阻原因、负责人和下一步要求")],
+    basisNote: basis.approval,
+  }),
+  guideline("noApprovalNoActivity", {
+    title: "未获二课审批不得进入实际开展",
     kind: "rule",
     isMandatory: true,
-    appliesWhen: {
-      all: [
-        { field: "activity.phase", operator: "in", value: ["planning", "preparation"] },
-        { field: "activity.requires_budget", operator: "eq", value: true },
-        {
-          field: "activity.budget_status",
-          operator: "not_in",
-          value: ["confirmed", "approved"],
-        },
-      ],
-    },
-    contentMarkdown: `## 规则
+    appliesWhen: all(
+      fact("activity.requires_second_class_approval", "eq", true),
+      fact("activity.approval_status", "not_in", ["approved"]),
+      fact("activity.phase", "in", ["preparation", "active"]),
+    ),
+    contentMarkdown: "## 规则\n需要二课审批的活动，在未获审批前不得进入实际开展阶段。该门禁不等同于 T-7 或 T-3 的提交时限规则。",
+    suggestedActions: [action("show_checklist", "暂停将活动视为可执行，并核对审批状态")],
+    basisNote: "整理自《乒协生存手册》第 15 页 §6.1.1。",
+  }),
 
-每一笔与活动有关的支出，都应在活动开始前明确列入预算；经费不得用于聚餐、私人娱乐或其他与社团建设无关的用途。
-
-## 怎么做
-
-1. 将竞赛物资、荣誉物资、必要服务和其他支出逐项写入预算。
-2. 采购奖品或耗材前，确认型号、数量与预算边界。
-3. 发现可能超支时，先补充说明并核对当年财务要求；不要把参考额度写成长期不变的规则。
-
-## 注意
-
-报销原则上不得超过已审批预算。具体额度、报销细则和可报范围应以当年学校/社团财务通知为准。`,
-    suggestedActions: [
-      {
-        type: "draft_document",
-        title: "整理活动预算明细并标注每项支出用途",
-      },
-      {
-        type: "request_information",
-        title: "确认预算状态、拟采购物资与是否存在超支风险",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 16–17 页 §6.2；固定金额与细则不作为永久规则导入。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.reimbursementClosure,
-    title: "报销材料与物资数量闭环检查",
+  guideline("budgetWorkflow", {
+    title: "活动预算与采购控制",
+    kind: "workflow",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.requires_budget", "eq", true)),
+    contentMarkdown: "## 目标\n在活动前形成可核对预算，采购时不突破用途和金额边界；变化与超支进入单独处理。",
+    suggestedActions: [action("show_checklist", "检查预算、采购与变更处理链路")],
+    basisNote: basis.budget,
+  }),
+  guideline("budgetBeforeActivity", {
+    title: "活动支出应在活动前纳入预算",
+    kind: "rule",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.phase", "in", ["planning", "preparation"]),
+      fact("activity.requires_budget", "eq", true),
+      fact("activity.budget_status", "not_in", ["confirmed", "approved"]),
+    ),
+    contentMarkdown: "## 规则\n每一笔与活动有关的支出，都应在活动开始前明确列入预算。报销原则上不应超过已审批预算。",
+    suggestedActions: [action("draft_document", "整理活动预算明细")],
+    basisNote: basis.budget,
+  }),
+  guideline("expenseEligibility", {
+    title: "社团经费不得用于无关私人消费",
+    kind: "rule",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.requires_budget", "eq", true)),
+    contentMarkdown: "## 规则\n经费用途应与活动和社团建设直接相关，不得用于聚餐、私人娱乐或其他无关消费。用途边界不明确时，应先确认当期财务要求。",
+    suggestedActions: [action("request_information", "确认拟支出的活动用途和财务适用性")],
+    basisNote: basis.budget,
+  }),
+  guideline("budgetDraft", {
+    title: "编制活动预算明细",
     kind: "checklist",
     isMandatory: true,
-    appliesWhen: {
-      all: [
-        { field: "activity.phase", operator: "in", value: ["closing", "reimbursement"] },
-      ],
-    },
-    contentMarkdown: `## 报销前检查
-
-- 已有对应的活动预算，且报销金额原则上不超过审批预算。
-- 发票、支付记录、购买明细或签领表能够一一对应。
-- 实物奖品或耗材满足“采购数 = 已签领数 + 库存余数”；有剩余时已单独列入库存。
-- 已完成必要结项材料；若超支或跨期，已按当年要求补充说明并做好原始单据交接。
-
-## 注意
-
-新闻稿、照片、二课结项和财务材料之间存在依赖。具体报销规则会调整，应以当年官方通知为准。`,
-    suggestedActions: [
-      {
-        type: "show_checklist",
-        title: "逐项核对预算、发票、支付记录、购买明细与签领表",
-      },
-      {
-        type: "request_information",
-        title: "补充采购数量、签领数量、库存余数和缺失材料",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 16–17 页 §6.2.3–6.2.4。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.venueApplication,
-    title: "场地申请与大规模占馆说明",
+    appliesWhen: all(
+      fact("activity.requires_budget", "eq", true),
+      fact("activity.budget_status", "in", ["not_started", "draft"]),
+    ),
+    contentMarkdown: "## 检查项\n逐项列出竞赛物资、荣誉物资、必要服务和其他支出，并注明用途、数量、单价、预计金额与负责人。",
+    suggestedActions: [action("draft_document", "起草可核对的预算明细")],
+    basisNote: basis.budget,
+  }),
+  guideline("procurementBoundary", {
+    title: "采购前核对型号、数量与预算边界",
     kind: "checklist",
     isMandatory: true,
-    appliesWhen: {
-      all: [
-        { field: "activity.needs_venue", operator: "eq", value: true },
-        {
-          field: "activity.venue_status",
-          operator: "not_in",
-          value: ["submitted", "approved"],
-        },
-      ],
-    },
-    contentMarkdown: `## 场馆申请
+    appliesWhen: all(
+      fact("activity.requires_budget", "eq", true),
+      fact("activity.procurement_status", "in", ["planned", "pending"]),
+    ),
+    contentMarkdown: "## 检查项\n采购奖品或耗材前，确认型号、数量、用途和预算条目一致；存在替代方案或数量变化时，先处理预算变更。",
+    suggestedActions: [action("show_checklist", "核对采购清单与预算条目")],
+    basisNote: basis.budget,
+  }),
+  guideline("budgetException", {
+    title: "预算变更、超支或当年规则不明确处理",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: any(
+      fact("activity.budget_change_needed", "eq", true),
+      fact("activity.budget_status", "eq", "over_budget"),
+    ),
+    contentMarkdown: "## 处理顺序\n补充用途和变化说明，核对当年额度、可报范围和审批要求。参考额度不得被写成长期不变的规则。",
+    suggestedActions: [action("request_information", "确认预算变更、超支风险与当年财务要求")],
+    basisNote: basis.budget,
+  }),
 
-1. 需要体育场馆时，提前向管指委提出申请并按流程完成相关审批。
-2. 申请全馆或大量球台时，附上赛事参与人数与场馆使用时段说明，说明占用的合理性。
-3. 会议、复盘、观影等多功能场地，按现行安排向指导老师报备并确认设备可用性。
+  guideline("venueWorkflow", {
+    title: "场地申请与使用确认",
+    kind: "workflow",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.needs_venue", "eq", true)),
+    contentMarkdown: "## 目标\n确认场地需求、规模、申请路径、使用条件和当期时限，不把未经证实的提前天数写成硬规则。",
+    suggestedActions: [action("show_checklist", "检查场地申请与使用确认链路")],
+    basisNote: basis.venue,
+  }),
+  guideline("venueNeeds", {
+    title: "确认场地需求、时段与使用规模",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.needs_venue", "eq", true)),
+    contentMarkdown: "## 检查项\n确认场地类型、使用日期和时段、预计人数、球台或区域规模，以及活动是否需要设备支持。",
+    suggestedActions: [action("request_information", "补充场地类型、时段、人数和占用规模")],
+    basisNote: basis.venue,
+  }),
+  guideline("venueApplication", {
+    title: "体育场馆申请",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.needs_venue", "eq", true),
+      fact("activity.venue_status", "not_in", ["submitted", "approved"]),
+    ),
+    contentMarkdown: "## 检查项\n需要体育场馆时，向管指委提出申请并按当期流程完成审批；记录申请状态，避免把意向场地当作已落实场地。",
+    suggestedActions: [action("create_task", "提交体育场馆申请并记录状态")],
+    basisNote: basis.venue,
+  }),
+  guideline("largeVenueRationale", {
+    title: "全馆或大规模占馆合理性说明",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.needs_venue", "eq", true),
+      fact("activity.venue_scale", "eq", "large"),
+    ),
+    contentMarkdown: "## 检查项\n说明赛事参与人数、场馆使用时段、占用范围与必要性，使大规模使用场地的理由可被核对。",
+    suggestedActions: [action("draft_document", "起草大规模占馆说明")],
+    basisNote: basis.venue,
+  }),
+  guideline("multiPurposeVenue", {
+    title: "多功能场地报备与设备可用性确认",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.venue_type", "eq", "multi_purpose")),
+    contentMarkdown: "## 检查项\n会议、复盘、观影等多功能场地使用前，向指导老师报备并确认场地、设备和时段可用。",
+    suggestedActions: [action("request_information", "确认多功能场地报备要求和设备可用性")],
+    basisNote: basis.venue,
+  }),
+  guideline("venuePolicyConfirmation", {
+    title: "场地时限或流程不明确时确认当期要求",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.needs_venue", "eq", true),
+      fact("activity.venue_policy_confirmed", "not_in", [true]),
+    ),
+    contentMarkdown: "## 处理原则\n手册未给出常规体育场馆统一提前天数。时限或流程不明确时，应确认当期要求，而不是自行硬编码期限。",
+    suggestedActions: [action("request_information", "确认当前场地申请时限和审批路径")],
+    basisNote: basis.venue,
+  }),
 
-## 注意
-
-手册没有为常规体育场馆申请给出统一的“提前 N 天”数字，因此首版不硬编码一个未经证实的时限。`,
-    suggestedActions: [
-      {
-        type: "draft_document",
-        title: "准备场地申请说明，写明参与规模和使用时段",
-      },
-      {
-        type: "request_information",
-        title: "确认场地类型、使用时间、占馆规模和申请状态",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 17–18 页 §6.3。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.largeEventWorkflow,
-    title: "大型赛事四阶段筹备流程",
+  guideline("largeEventWorkflow", {
+    title: "大型赛事四阶段筹备",
     kind: "workflow",
     isMandatory: false,
-    appliesWhen: {
-      all: [{ field: "activity.type", operator: "eq", value: "large_tournament" }],
-    },
-    contentMarkdown: `## 用途
+    appliesWhen: all(fact("activity.type", "eq", "large_tournament")),
+    contentMarkdown: "## 四个阶段\n行政合规与通知、核心物资保障、现场执行与秩序维护、收尾与资产沉淀。\n\n## 使用方式\n它保留全局视野；共享的审批、预算和场地规则通过关系复用，不重复写入本流程。",
+    suggestedActions: [action("show_checklist", "按四阶段检查大型赛事筹备缺口")],
+    basisNote: basis.largeEvent,
+  }),
+  guideline("largeEventAdministration", {
+    title: "大型赛事：行政合规与通知",
+    kind: "workflow",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.type", "eq", "large_tournament"),
+      fact("activity.phase", "in", ["planning", "preparation"]),
+    ),
+    contentMarkdown: "## 范围\n二课申请、策划与预算材料、场地审定、通知与报名安排。具体审批与场地知识由通用流程提供。",
+    suggestedActions: [action("show_checklist", "检查大型赛事行政合规与通知准备")],
+    basisNote: basis.largeEvent,
+  }),
+  guideline("largeEventMaterials", {
+    title: "大型赛事：核心物资准备检查",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.type", "eq", "large_tournament"),
+      fact("activity.phase", "in", ["planning", "preparation"]),
+    ),
+    contentMarkdown: "## 检查项\n比赛用球、奖杯奖牌、奖状、奖品、横幅、号码布和签到物资；同时确认必要损耗与制作周期。",
+    suggestedActions: [action("show_checklist", "核对大型赛事核心物资与制作周期")],
+    basisNote: basis.largeEvent,
+  }),
+  guideline("largeEventAssets", {
+    title: "大型赛事：核心物资保障",
+    kind: "workflow",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.type", "eq", "large_tournament"),
+      fact("activity.phase", "eq", "preparation"),
+    ),
+    contentMarkdown: "## 目标\n将已确认的物资需求转为可领取、可清点、可追溯的保障安排，并与通用资产台账衔接。",
+    suggestedActions: [action("create_task", "明确大型赛事物资准备和领取责任人")],
+    basisNote: basis.largeEvent,
+  }),
+  guideline("largeEventOnSite", {
+    title: "大型赛事：现场执行与秩序维护",
+    kind: "workflow",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.type", "eq", "large_tournament"),
+      fact("activity.phase", "eq", "active"),
+    ),
+    contentMarkdown: "## 范围\n前台签到/签领、竞赛区准备、赛程弹性调度与迟到、弃权等现场异常处理。具体裁决应以当届赛事规则为准。",
+    suggestedActions: [action("show_checklist", "检查现场签到、物资和赛程准备")],
+    basisNote: basis.largeEvent,
+  }),
+  guideline("largeEventRegistration", {
+    title: "大型赛事：签到与物资签领记录",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.type", "eq", "large_tournament"),
+      fact("activity.phase", "eq", "active"),
+    ),
+    contentMarkdown: "## 检查项\n确认前台签到方式、奖品或耗材签领记录、竞赛区物资交接责任人。记录应能服务后续物资数量核对。",
+    suggestedActions: [action("show_checklist", "准备签到和物资签领记录")],
+    basisNote: basis.largeEvent,
+  }),
+  guideline("largeEventScheduleException", {
+    title: "大型赛事：赛程、迟到与弃权异常处理",
+    kind: "checklist",
+    isMandatory: false,
+    appliesWhen: all(
+      fact("activity.type", "eq", "large_tournament"),
+      fact("activity.on_site_issue", "eq", true),
+    ),
+    contentMarkdown: "## 处理原则\n记录现场异常、依据当届赛事规则处理迟到或弃权，并保留赛程调整理由。未在手册明确的裁决细则不应由系统自行发明。",
+    suggestedActions: [action("request_information", "确认现场异常、适用赛事规则和处理决定")],
+    basisNote: basis.largeEvent,
+  }),
+  guideline("largeEventCloseout", {
+    title: "大型赛事：收尾与资产沉淀",
+    kind: "workflow",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.type", "eq", "large_tournament"),
+      fact("activity.phase", "in", ["after_event", "closing", "reimbursement"]),
+    ),
+    contentMarkdown: "## 范围\n新闻稿和照片、二课结项、报销材料、反馈收集、复盘与经验草稿。该阶段衔接通用结项和复盘流程。",
+    suggestedActions: [action("show_checklist", "检查大型赛事收尾和经验沉淀事项")],
+    basisNote: basis.largeEvent,
+  }),
 
-将大型赛事组织为四个相互衔接的模块，帮助负责人保留全局视野，而不是拆成没有上下文的微任务。
-
-## 四个阶段
-
-1. **行政合规与通知**：二课申请、策划与预算材料、场地审定、通知与报名安排。
-2. **核心物资保障**：比赛用球、奖杯奖牌、奖状、奖品、横幅、号码布与签到物资，并预留必要损耗和制作周期。
-3. **现场执行与秩序维护**：前台签到/签领、竞赛区准备、赛程弹性调度、迟到或弃权处理。
-4. **收尾与资产沉淀**：新闻稿和照片、二课结项、报销材料、反馈收集、复盘与经验草稿。
-
-## 完成标准
-
-每个阶段的关键事项都已有负责人、可核对材料或待确认动作；实际状态仍需由人确认后写入状态层。`,
-    suggestedActions: [
-      {
-        type: "show_checklist",
-        title: "按四阶段检查大型赛事筹备缺口",
-      },
-      {
-        type: "request_information",
-        title: "补充赛事日期、规模、场地、预算和当前筹备阶段",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 19–20 页 §7.1。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.fundedActivityClosure,
+  guideline("closureWorkflow", {
+    title: "活动结项、报销与复盘衔接",
+    kind: "workflow",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.phase", "in", ["after_event", "closing", "reimbursement"])),
+    contentMarkdown: "## 目标\n按新闻与二课结项、票据核对、物资闭环、报销例外和复盘沉淀处理活动收尾；不同模块各自保留完成标准。",
+    suggestedActions: [action("show_checklist", "检查活动结项、报销和复盘衔接")],
+    basisNote: basis.closure,
+  }),
+  guideline("fundedActivityClosure", {
     title: "经费活动的新闻稿、审核发布与二课结项",
     kind: "workflow",
     isMandatory: true,
-    appliesWhen: {
-      all: [
-        { field: "activity.requires_budget", operator: "eq", value: true },
-        { field: "activity.phase", operator: "in", value: ["after_event", "closing", "reimbursement"] },
-        { field: "activity.closure_status", operator: "ne", value: "completed" },
-      ],
-    },
-    contentMarkdown: `## 行政闭环
-
-申请经费的活动结束后，新闻稿不是可选宣传材料，而是结项和报销链条的一部分。
-
-1. 撰写新闻稿并按当期内部流程完成校对、指导老师审核与发布。
-2. 上传新闻稿和照片，完成二课结项。
-3. 再进入报销材料与物资数量核对。
-
-## 注意
-
-具体新闻稿格式和审核人以当年的校内规定为准。该流程只提出待确认动作，不自动把活动写成“已结项”。`,
-    suggestedActions: [
-      {
-        type: "draft_document",
-        title: "起草活动新闻稿并准备照片材料",
-      },
-      {
-        type: "create_task",
-        title: "按现行流程完成新闻稿审核发布与二课结项",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 20–21 页 §7.1.4、§8.1。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.assetAndKeyManagement,
-    title: "核心物资、钥匙与学期盘点",
+    appliesWhen: all(
+      fact("activity.requires_budget", "eq", true),
+      fact("activity.phase", "in", ["after_event", "closing", "reimbursement"]),
+      fact("activity.closure_status", "ne", "completed"),
+    ),
+    contentMarkdown: "## 目标\n将新闻稿、审核发布、照片材料和二课结项组成经费活动的行政闭环，再进入报销核对。",
+    suggestedActions: [action("show_checklist", "检查经费活动新闻稿和二课结项材料")],
+    basisNote: basis.closure,
+  }),
+  guideline("fundedNewsGate", {
+    title: "经费活动结项前确认新闻稿要求",
+    kind: "rule",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.requires_budget", "eq", true),
+      fact("activity.news_status", "not_in", ["published"]),
+      fact("activity.phase", "in", ["after_event", "closing"]),
+    ),
+    contentMarkdown: "## 规则\n申请经费的活动，新闻稿是结项和报销链条的一部分。具体格式、审核人与发布要求以当年校内规定为准。",
+    suggestedActions: [action("draft_document", "起草活动新闻稿并准备照片材料")],
+    basisNote: basis.closure,
+  }),
+  guideline("newsReviewRelease", {
+    title: "新闻稿校对、审核与发布确认",
     kind: "checklist",
     isMandatory: true,
-    appliesWhen: {
-      any: [
-        { field: "activity.needs_core_assets", operator: "eq", value: true },
-        { field: "handover.in_progress", operator: "eq", value: true },
-        { field: "organization.asset_inventory_due", operator: "eq", value: true },
-      ],
-    },
-    contentMarkdown: `## 管理要求
+    appliesWhen: all(
+      fact("activity.requires_budget", "eq", true),
+      fact("activity.news_status", "in", ["draft", "reviewing"]),
+    ),
+    contentMarkdown: "## 检查项\n按当期内部流程完成校对、指导老师审核和发布；记录当前环节，不能把待审核稿件写成已发布。",
+    suggestedActions: [action("create_task", "完成新闻稿校对、审核和发布确认")],
+    basisNote: basis.closure,
+  }),
+  guideline("secondClassClosure", {
+    title: "上传照片并完成二课结项",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.requires_budget", "eq", true),
+      fact("activity.second_class_closure_status", "not_in", ["completed"]),
+      fact("activity.phase", "in", ["after_event", "closing"]),
+    ),
+    contentMarkdown: "## 检查项\n上传新闻稿和照片，完成二课结项并记录结项状态。结项动作完成后，才进入后续报销材料核对。",
+    suggestedActions: [action("create_task", "上传结项材料并记录二课结项状态")],
+    basisNote: basis.closure,
+  }),
+  guideline("reimbursementBudgetGate", {
+    title: "报销前确认预算与结项前置条件",
+    kind: "rule",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.phase", "in", ["closing", "reimbursement"])),
+    contentMarkdown: "## 规则\n报销前应有对应活动预算，且必要结项材料已完成；报销金额原则上不超过审批预算。",
+    suggestedActions: [action("show_checklist", "核对预算、结项状态和报销前置条件")],
+    basisNote: basis.closure,
+  }),
+  guideline("reimbursementClosure", {
+    title: "票据、支付记录与购买明细对应检查",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.phase", "in", ["closing", "reimbursement"])),
+    contentMarkdown: "## 检查项\n发票、支付记录、购买明细和签领表应能够一一对应。缺失信息要显式记录，不以口头说明替代材料。",
+    suggestedActions: [action("show_checklist", "逐项核对票据、支付记录、购买明细和签领表")],
+    basisNote: basis.closure,
+  }),
+  guideline("assetQuantityBalance", {
+    title: "活动物资数量必须形成闭环",
+    kind: "rule",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.phase", "in", ["closing", "reimbursement"])),
+    contentMarkdown: "## 规则\n实物奖品或耗材应满足：采购数 = 已签领数 + 库存余数。无法平衡时，应进入异常说明而不是直接报销。",
+    suggestedActions: [action("request_information", "补充采购、签领和库存数量")],
+    basisNote: basis.closure,
+  }),
+  guideline("remainingAssetInventory", {
+    title: "剩余奖品与耗材入库登记",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(
+      fact("activity.phase", "in", ["closing", "reimbursement"]),
+      fact("activity.remaining_assets", "eq", true),
+    ),
+    contentMarkdown: "## 检查项\n有剩余奖品或耗材时，单独登记名称、数量、位置和持有人，使其进入后续资产盘点。",
+    suggestedActions: [action("create_task", "登记活动剩余物资并更新库存")],
+    basisNote: basis.closure,
+  }),
+  guideline("reimbursementException", {
+    title: "超支、跨期或单据缺失的报销例外处理",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.reimbursement_issue", "eq", true)),
+    contentMarkdown: "## 处理顺序\n明确异常类别，按当年要求补充说明和原始单据交接；不得把参考做法当作永久财务规则。",
+    suggestedActions: [action("request_information", "确认报销异常类别、缺失材料和补充要求")],
+    basisNote: basis.closure,
+  }),
 
-- 记录核心物资的位置、数量和实际持有人；耗材、奖品与高价值器材应可盘点。
-- 钥匙需要明确当前持有人、备用机制和借用登记；不要把具体个人姓名或密码写成长期指导知识。
-- 每学期末盘点资产；长期闲置或损坏的器材按当期规则处理，避免无效资产积压。
-
-## 适用情形
-
-活动借用核心物资、负责人变更或学期末盘点时加载此清单。`,
-    suggestedActions: [
-      {
-        type: "show_checklist",
-        title: "核对物资位置、数量、持有人与钥匙备用记录",
-      },
-      {
-        type: "request_information",
-        title: "补充当前库存、借用记录、钥匙去向和盘点日期",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 18 页 §6.3.3。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.handoverChecklist,
-    title: "换届四类交接",
+  guideline("organizationOperations", {
+    title: "社团持续运营",
+    kind: "workflow",
+    isMandatory: false,
+    appliesWhen: any(
+      fact("handover.in_progress", "eq", true),
+      fact("organization.asset_inventory_due", "eq", true),
+      fact("member.stage", "in", ["new_officer", "apprentice"]),
+    ),
+    contentMarkdown: "## 范围\n资产与钥匙、换届交接、干事培养三类持续运营工作。它们不依附于单次活动，但会为活动执行提供基础保障。",
+    suggestedActions: [action("show_checklist", "查看当前持续运营事项")],
+    basisNote: "整理自《乒协生存手册》第 18、24–25、29–30 页。",
+  }),
+  guideline("assetAndKeyManagement", {
+    title: "核心物资、钥匙与盘点管理",
     kind: "workflow",
     isMandatory: true,
-    appliesWhen: {
-      all: [{ field: "handover.in_progress", operator: "eq", value: true }],
-    },
-    contentMarkdown: `## 交接目标
+    appliesWhen: any(
+      fact("activity.needs_core_assets", "eq", true),
+      fact("handover.in_progress", "eq", true),
+      fact("organization.asset_inventory_due", "eq", true),
+    ),
+    contentMarkdown: "## 目标\n让核心物资和钥匙的位置、数量、持有人、借用和异常处理可盘点、可交接。",
+    suggestedActions: [action("show_checklist", "检查资产、钥匙和盘点事项")],
+    basisNote: basis.assets,
+  }),
+  guideline("assetLedger", {
+    title: "更新核心物资台账",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: any(
+      fact("activity.needs_core_assets", "eq", true),
+      fact("organization.asset_inventory_due", "eq", true),
+    ),
+    contentMarkdown: "## 检查项\n记录核心物资的位置、数量和实际持有人；高价值器材、耗材和奖品应可盘点。",
+    suggestedActions: [action("show_checklist", "核对并更新核心物资台账")],
+    basisNote: basis.assets,
+  }),
+  guideline("assetBorrowReturn", {
+    title: "活动物资借用与归还核对",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.needs_core_assets", "eq", true)),
+    contentMarkdown: "## 检查项\n明确借用物资、领取人、归还时间和归还后数量；活动结束后将余量回写至库存。",
+    suggestedActions: [action("create_task", "登记活动物资借用与归还情况")],
+    basisNote: basis.assets,
+  }),
+  guideline("keyManagement", {
+    title: "钥匙持有人、备用机制与借用登记",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: any(
+      fact("activity.needs_core_assets", "eq", true),
+      fact("handover.in_progress", "eq", true),
+    ),
+    contentMarkdown: "## 检查项\n确认钥匙当前持有人、备用机制和借用登记。具体个人姓名、密码等受控信息不写入指导层。",
+    suggestedActions: [action("request_information", "确认钥匙持有人、备用安排和借用记录")],
+    basisNote: basis.assets,
+  }),
+  guideline("semesterInventory", {
+    title: "学期末资产盘点",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("organization.asset_inventory_due", "eq", true)),
+    contentMarkdown: "## 检查项\n盘点资产数量、位置、状态和闲置情况；将需要维修、处置或继续保留的项目标记出来。",
+    suggestedActions: [action("create_task", "完成学期末资产盘点")],
+    basisNote: basis.assets,
+  }),
+  guideline("assetIssue", {
+    title: "资产损坏、遗失或长期闲置处理",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("organization.asset_issue", "eq", true)),
+    contentMarkdown: "## 处理原则\n记录问题、影响和现状，按当期规则确认维修、处置或补充方案，避免无效资产长期积压。",
+    suggestedActions: [action("request_information", "确认资产异常、责任人和当期处理要求")],
+    basisNote: basis.assets,
+  }),
 
-在换届或负责人变更时，按工作、线上权限、物资、关系四类内容完成可核对的交接。手册建议在春季学期结束前启动，并以暑假前完成为目标；具体日期应由当届负责人确认。
+  guideline("handoverChecklist", {
+    title: "换届交接流程",
+    kind: "workflow",
+    isMandatory: true,
+    appliesWhen: all(fact("handover.in_progress", "eq", true)),
+    contentMarkdown: "## 目标\n按工作、线上权限、物资、关系和验收五类内容完成可核对交接。建议在春季学期结束前启动，具体日期由当届负责人确认。",
+    suggestedActions: [action("show_checklist", "按五类内容生成换届交接清单")],
+    basisNote: basis.handover,
+  }),
+  guideline("handoverWork", {
+    title: "未结工作、二课与报销材料交接",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("handover.in_progress", "eq", true)),
+    contentMarkdown: "## 检查项\n交接未结二课、未完成报销、原始凭证、策划案、总结和关键决策记录，并明确遗留事项负责人。",
+    suggestedActions: [action("show_checklist", "核对未结工作和原始材料")],
+    basisNote: basis.handover,
+  }),
+  guideline("handoverAccounts", {
+    title: "线上权限管理员转移检查",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("handover.in_progress", "eq", true)),
+    contentMarkdown: "## 检查项\n核对官方群、公众号、媒体账号、知识库等管理员权限是否转移。账号密码不写入指导卡，应通过受控方式交接。",
+    suggestedActions: [action("show_checklist", "核对线上账号管理员权限交接")],
+    basisNote: basis.handover,
+  }),
+  guideline("handoverAssets", {
+    title: "高价值物资与场馆钥匙交接",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("handover.in_progress", "eq", true)),
+    contentMarkdown: "## 检查项\n核对发球机、耗材、高价值物资和全部场馆钥匙的数量、位置与去向，并与资产台账一致。",
+    suggestedActions: [action("show_checklist", "核对物资和钥匙交接")],
+    basisNote: basis.handover,
+  }),
+  guideline("handoverRelationships", {
+    title: "关键校内关系介绍与交接",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("handover.in_progress", "eq", true)),
+    contentMarkdown: "## 检查项\n安排指导老师、场馆负责人等关键校内联系关系的平稳介绍；记录角色和沟通边界，不将私人联系方式固化为指导知识。",
+    suggestedActions: [action("create_task", "安排关键校内联系人交接介绍")],
+    basisNote: basis.handover,
+  }),
+  guideline("handoverAcceptance", {
+    title: "交接验收与遗留事项登记",
+    kind: "checklist",
+    isMandatory: true,
+    appliesWhen: all(fact("handover.in_progress", "eq", true)),
+    contentMarkdown: "## 通过标准\n每类交接都有接收人、可核对材料和遗留事项；未完成项应登记，不以口头承诺替代验收。",
+    suggestedActions: [action("create_task", "完成换届交接验收并登记遗留事项")],
+    basisNote: basis.handover,
+  }),
 
-## 四类交接
-
-1. **工作**：未结二课、未完成报销、原始凭证、策划案、总结和决策记录。
-2. **线上权限**：官方群、公众号、媒体账号、知识库等管理员权限；实际账号信息不写入指导卡。
-3. **物资**：发球机、耗材、高价值物资和全部场馆钥匙的数量与去向。
-4. **关系**：指导老师、场馆负责人等关键校内联系关系的平稳介绍与交接。
-
-## 注意
-
-未完成报销时，应交接全套原始凭证，而不是只口头说明。`,
-    suggestedActions: [
-      {
-        type: "show_checklist",
-        title: "按工作、线上权限、物资、关系四类生成换届交接清单",
-      },
-      {
-        type: "request_information",
-        title: "确认未结工作、账号权限、钥匙物资和关键联系人是否已交接",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 24–25 页 §9.3。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.newOfficerGrowth,
+  guideline("newOfficerGrowth", {
     title: "新干事从见习到项目主理的培养路径",
-    kind: "experience",
-    isMandatory: false,
-    appliesWhen: {
-      all: [
-        { field: "member.stage", operator: "in", value: ["new_officer", "apprentice"] },
-      ],
-    },
-    contentMarkdown: `## 培养路径
-
-1. **入门**：在首次例会说明服务同学的价值观、岗位职责与权限，并完成二课系统、传承库等工具入门。
-2. **见习**：跟随老骨干完成一次完整活动，在清晰边界内承担签到、场务、物资等小范围工作。
-3. **逐步主理**：有能力的干事可独立完成部分工作；权限与责任应在已确认的项目边界内逐步授予。
-
-## 使用方式
-
-这是一条培养经验，不自动授予预算、审批或状态修改权限。具体分工仍应由负责人确认。`,
-    suggestedActions: [
-      {
-        type: "create_task",
-        title: "为新干事安排一次有边界的见习任务和复盘反馈",
-      },
-      {
-        type: "request_information",
-        title: "确认新干事已掌握的工具、见习经历和可承担范围",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 24、29–30 页 §9.2、§11.2–11.3。",
-    status: "draft",
-  },
-  {
-    id: handbookGuidelineIds.postmortemAndExperience,
-    title: "活动后复盘与可交接经验沉淀",
     kind: "workflow",
     isMandatory: false,
-    appliesWhen: {
-      all: [
-        { field: "activity.phase", operator: "in", value: ["after_event", "closing"] },
-        { field: "activity.review_status", operator: "not_in", value: ["completed", "published"] },
-      ],
-    },
-    contentMarkdown: `## 复盘内容
+    appliesWhen: all(fact("member.stage", "in", ["new_officer", "apprentice"])),
+    contentMarkdown: "## 路径\n入门与工具熟悉、跟随完整活动见习、承担有边界工作、评估准备度、在明确责任范围内逐步主理。",
+    suggestedActions: [action("show_checklist", "查看新干事当前培养阶段和下一步")],
+    basisNote: basis.growth,
+  }),
+  guideline("officerOrientation", {
+    title: "新干事入门：职责、价值观与工具熟悉",
+    kind: "checklist",
+    isMandatory: false,
+    appliesWhen: all(fact("member.stage", "eq", "new_officer")),
+    contentMarkdown: "## 检查项\n在首次例会说明服务同学的价值观、岗位职责与权限边界；完成二课系统、传承库等工具的基础入门。",
+    suggestedActions: [action("create_task", "安排新干事职责说明和工具入门")],
+    basisNote: basis.growth,
+  }),
+  guideline("officerApprenticeship", {
+    title: "新干事见习与有边界任务安排",
+    kind: "experience",
+    isMandatory: false,
+    appliesWhen: all(fact("member.stage", "in", ["new_officer", "apprentice"])),
+    contentMarkdown: "## 建议做法\n跟随老骨干完成一次完整活动，并在清晰边界内承担签到、场务或物资等小范围工作；见习后形成反馈。",
+    suggestedActions: [action("create_task", "为新干事安排一次有边界的见习任务")],
+    basisNote: basis.growth,
+  }),
+  guideline("officerReadiness", {
+    title: "评估干事可独立承担的工作范围",
+    kind: "checklist",
+    isMandatory: false,
+    appliesWhen: all(fact("member.stage", "eq", "apprentice")),
+    contentMarkdown: "## 检查项\n结合工具掌握情况、见习经历、反馈和项目风险，确认其可以独立负责的局部工作与仍需支持的部分。",
+    suggestedActions: [action("request_information", "确认新干事见习经历、反馈和可承担范围")],
+    basisNote: basis.growth,
+  }),
+  guideline("officerAuthorityBoundary", {
+    title: "权限与责任必须在已确认边界内逐步授予",
+    kind: "rule",
+    isMandatory: true,
+    appliesWhen: all(fact("member.stage", "in", ["new_officer", "apprentice"])),
+    contentMarkdown: "## 规则\n培养路径不自动授予预算、审批或状态修改权限。权限与责任只能在负责人确认的项目边界内逐步扩大。",
+    suggestedActions: [action("request_information", "确认当前项目边界、负责人和可授予权限")],
+    basisNote: basis.growth,
+  }),
 
-活动结束后，通过参与者反馈和干事复盘，记录下列可传承信息：
-
-- 当时的决策理由与权衡；
-- 踩坑点、行政事故、突发情况和处理办法；
-- 参与人数、预算使用等可量化数据；
-- 适用条件、实际做法、结果和下次建议。
-
-## 发布边界
-
-先形成经验草稿，由人审核、补充上下文后再发布为可复用指导；未经确认的模型总结不能直接覆盖既有经验或状态。`,
-    suggestedActions: [
-      {
-        type: "draft_document",
-        title: "生成活动复盘草稿，区分事实、风险、经验和待确认问题",
-      },
-      {
-        type: "request_information",
-        title: "收集参与者反馈、关键数据和本次踩坑点",
-      },
-    ],
-    basisNote: "整理自《乒协生存手册》第 20、23–24、30 页 §7.1.4、§9.1、§11.4。",
-    status: "draft",
-  },
+  guideline("postmortemAndExperience", {
+    title: "活动复盘与可交接经验沉淀",
+    kind: "workflow",
+    isMandatory: false,
+    appliesWhen: all(
+      fact("activity.phase", "in", ["after_event", "closing"]),
+      fact("activity.review_status", "not_in", ["completed", "published"]),
+    ),
+    contentMarkdown: "## 目标\n收集事实与反馈，形成可审阅经验草稿；经人工补充上下文和审核后，才发布为可复用指导。",
+    suggestedActions: [action("show_checklist", "按复盘与经验发布流程收集信息")],
+    basisNote: basis.review,
+  }),
+  guideline("reviewFeedback", {
+    title: "收集活动反馈与可量化数据",
+    kind: "checklist",
+    isMandatory: false,
+    appliesWhen: all(fact("activity.phase", "in", ["after_event", "closing"])),
+    contentMarkdown: "## 检查项\n收集参与者反馈、参与人数、预算使用和其他可量化数据；标注数据来源和仍待确认的部分。",
+    suggestedActions: [action("request_information", "收集活动反馈、参与人数和预算使用数据")],
+    basisNote: basis.review,
+  }),
+  guideline("reviewDecisionRecord", {
+    title: "记录决策理由、踩坑与实际处理",
+    kind: "checklist",
+    isMandatory: false,
+    appliesWhen: all(fact("activity.phase", "in", ["after_event", "closing"])),
+    contentMarkdown: "## 检查项\n记录关键决策及权衡、行政事故或突发情况、实际处理办法和结果；不要把推测写成既成事实。",
+    suggestedActions: [action("draft_document", "记录活动决策、踩坑和实际处理")],
+    basisNote: basis.review,
+  }),
+  guideline("reviewDraft", {
+    title: "区分事实、经验、风险与待确认问题形成草稿",
+    kind: "checklist",
+    isMandatory: false,
+    appliesWhen: all(fact("activity.review_status", "in", ["not_started", "draft"])),
+    contentMarkdown: "## 输出结构\n分别写明适用条件、实际做法、结果、下次建议，以及尚未确认的问题；这是一份待审经验草稿，不是最终规则。",
+    suggestedActions: [action("draft_document", "生成区分事实与经验的复盘草稿")],
+    basisNote: basis.review,
+  }),
+  guideline("reviewHumanApproval", {
+    title: "未经人工确认的经验不得直接发布或覆盖既有知识",
+    kind: "rule",
+    isMandatory: true,
+    appliesWhen: all(fact("activity.review_status", "in", ["draft", "reviewing"])),
+    contentMarkdown: "## 规则\n模型总结或个人草稿需经人审核、补充上下文后才能发布为可复用经验；不得自动覆盖既有指导或活动状态。",
+    suggestedActions: [action("create_task", "安排复盘草稿的人审与上下文补充")],
+    basisNote: basis.review,
+  }),
+  guideline("reviewPublication", {
+    title: "发布已审核的可交接经验",
+    kind: "checklist",
+    isMandatory: false,
+    appliesWhen: all(fact("activity.review_status", "eq", "approved")),
+    contentMarkdown: "## 通过标准\n经验已保留适用条件、证据边界和审核结论，可以被后续活动和换届交接复用。",
+    suggestedActions: [action("create_task", "将已审核复盘整理为可交接经验")],
+    basisNote: basis.review,
+  }),
 ];
 
 export const handbookGuidelineLinks: GuidelineLinkSeed[] = [
-  {
-    fromGuidelineId: handbookGuidelineIds.largeEventWorkflow,
-    toGuidelineId: handbookGuidelineIds.noApprovalNoActivity,
-    relationType: "contains",
-    note: "大型赛事的行政合规模块首先受活动开展前的审批门禁约束。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.largeEventWorkflow,
-    toGuidelineId: handbookGuidelineIds.largeEventT7Submission,
-    relationType: "contains",
-    note: "大型赛事筹备包含 T-7 二课申请提交节点。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.largeEventWorkflow,
-    toGuidelineId: handbookGuidelineIds.budgetBeforeActivity,
-    relationType: "contains",
-    note: "大型赛事筹备需要在前期确认预算与支出边界。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.largeEventWorkflow,
-    toGuidelineId: handbookGuidelineIds.venueApplication,
-    relationType: "contains",
-    note: "大型赛事筹备包含场地申请与大规模占馆说明。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.largeEventWorkflow,
-    toGuidelineId: handbookGuidelineIds.fundedActivityClosure,
-    relationType: "contains",
-    note: "大型赛事收尾时进入新闻稿、结项与报销的行政闭环。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.noApprovalNoActivity,
-    toGuidelineId: handbookGuidelineIds.largeEventT7Submission,
-    relationType: "triggers",
-    note: "当活动类型为大型赛事时，未审批门禁会引出 T-7 提交检查。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.noApprovalNoActivity,
-    toGuidelineId: handbookGuidelineIds.regularActivityT3Submission,
-    relationType: "triggers",
-    note: "当活动类型为常规训练或积分赛时，未审批门禁会引出 T-3 提交检查。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.fundedActivityClosure,
-    toGuidelineId: handbookGuidelineIds.reimbursementClosure,
-    relationType: "triggers",
-    note: "结项材料准备完成后，进入报销材料与物资数量核对。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.reimbursementClosure,
-    toGuidelineId: handbookGuidelineIds.budgetBeforeActivity,
-    relationType: "requires",
-    note: "报销以活动前确认的预算和支出边界为前提。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.largeEventWorkflow,
-    toGuidelineId: handbookGuidelineIds.postmortemAndExperience,
-    relationType: "next",
-    note: "大型赛事收尾后，应形成复盘与可交接经验草稿。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.handoverChecklist,
-    toGuidelineId: handbookGuidelineIds.assetAndKeyManagement,
-    relationType: "requires",
-    note: "换届前需完成核心物资与钥匙的核对。",
-  },
-  {
-    fromGuidelineId: handbookGuidelineIds.handoverChecklist,
-    toGuidelineId: handbookGuidelineIds.postmortemAndExperience,
-    relationType: "requires",
-    note: "可交接的过程记录与经验草稿能降低换届的信息断层。",
-  },
+  link("activityLifecycle", "activityAdministrativeCompliance", "contains", "活动筹备阶段进入行政合规模块。"),
+  link("activityLifecycle", "budgetWorkflow", "contains", "活动预算与采购作为筹备阶段的独立模块。"),
+  link("activityLifecycle", "venueWorkflow", "contains", "需要场地的活动从生命周期进入场地确认模块。"),
+  link("activityLifecycle", "largeEventWorkflow", "contains", "大型赛事在通用活动生命周期中加载专项筹备流程。"),
+  link("activityLifecycle", "closureWorkflow", "contains", "活动后进入结项、报销与复盘衔接模块。"),
+  link("activityLifecycle", "postmortemAndExperience", "contains", "复盘与经验沉淀是活动生命周期的收尾模块。"),
+
+  link("activityAdministrativeCompliance", "approvalApplicability", "contains", "先判断活动是否适用二课审批。"),
+  link("activityAdministrativeCompliance", "largeEventT7Submission", "contains", "大型赛事适用独立的 T-7 提交规则。"),
+  link("activityAdministrativeCompliance", "regularActivityT3Submission", "contains", "常规活动适用独立的 T-3 申报规则。"),
+  link("activityAdministrativeCompliance", "approvalMaterials", "contains", "二课申请材料完整性需要单独核对。"),
+  link("activityAdministrativeCompliance", "approvalSubmission", "contains", "材料齐全后提交申请并留存凭证。"),
+  link("activityAdministrativeCompliance", "approvalTracking", "contains", "提交后进入审核进度跟踪。"),
+  link("activityAdministrativeCompliance", "approvalIssue", "contains", "审批受阻、退回或不明时进入异常处理。"),
+  link("activityAdministrativeCompliance", "noApprovalNoActivity", "contains", "实际开展前需通过审批门禁检查。"),
+  link("approvalApplicability", "largeEventT7Submission", "triggers", "判断为大型赛事时加载 T-7 提交规则。"),
+  link("approvalApplicability", "regularActivityT3Submission", "triggers", "判断为常规活动时加载 T-3 申报规则。"),
+  link("largeEventT7Submission", "approvalMaterials", "next", "时限规则提示后应先核对申报材料。"),
+  link("regularActivityT3Submission", "approvalMaterials", "next", "常规活动申报也需要核对材料。"),
+  link("approvalSubmission", "approvalMaterials", "requires", "提交申请以前需完成材料完整性检查。"),
+  link("approvalSubmission", "approvalTracking", "next", "提交凭证形成后进入审核跟踪。"),
+  link("approvalTracking", "approvalIssue", "exception", "状态不明、退回或受阻时进入异常处理。"),
+  link("approvalIssue", "approvalSubmission", "next", "补正完成后重新提交申请并更新凭证。"),
+
+  link("budgetWorkflow", "budgetBeforeActivity", "contains", "活动前预算是预算控制的硬门槛。"),
+  link("budgetWorkflow", "expenseEligibility", "contains", "经费用途边界需要独立说明。"),
+  link("budgetWorkflow", "budgetDraft", "contains", "预算明细由独立检查表形成。"),
+  link("budgetWorkflow", "procurementBoundary", "contains", "采购前需核对预算边界。"),
+  link("budgetWorkflow", "budgetException", "contains", "预算变更或超支进入异常处理。"),
+  link("budgetDraft", "procurementBoundary", "next", "预算明细确认后再核对采购边界。"),
+  link("procurementBoundary", "budgetException", "exception", "采购变化或超支风险进入预算异常处理。"),
+
+  link("venueWorkflow", "venueNeeds", "contains", "场地申请从需求、时段和规模确认开始。"),
+  link("venueWorkflow", "venueApplication", "contains", "体育场馆申请独立于场地需求确认。"),
+  link("venueWorkflow", "largeVenueRationale", "contains", "全馆或大规模占馆需说明合理性。"),
+  link("venueWorkflow", "multiPurposeVenue", "contains", "多功能场地需要独立报备与设备确认。"),
+  link("venueWorkflow", "venuePolicyConfirmation", "contains", "时限不明时应确认当期流程。"),
+  link("venueNeeds", "venueApplication", "next", "确认需求后提交相应场地申请。"),
+  link("venueApplication", "largeVenueRationale", "triggers", "大规模场馆使用时补充合理性说明。"),
+  link("venueApplication", "venuePolicyConfirmation", "exception", "流程或时限不明时进入当期要求确认。"),
+
+  link("largeEventWorkflow", "largeEventAdministration", "contains", "第一阶段是行政合规与通知。"),
+  link("largeEventWorkflow", "largeEventAssets", "contains", "第二阶段是核心物资保障。"),
+  link("largeEventWorkflow", "largeEventOnSite", "contains", "第三阶段是现场执行与秩序维护。"),
+  link("largeEventWorkflow", "largeEventCloseout", "contains", "第四阶段是收尾与资产沉淀。"),
+  link("largeEventAdministration", "largeEventMaterials", "contains", "大型赛事行政阶段需要核对专项物资与制作周期。"),
+  link("largeEventOnSite", "largeEventRegistration", "contains", "现场阶段包含签到与物资签领记录。"),
+  link("largeEventOnSite", "largeEventScheduleException", "contains", "现场异常处理作为现场阶段的独立卡片。"),
+  link("largeEventWorkflow", "activityAdministrativeCompliance", "requires", "大型赛事需要复用通用审批与放行流程。"),
+  link("largeEventWorkflow", "budgetWorkflow", "requires", "涉及经费时需要复用通用预算流程。"),
+  link("largeEventWorkflow", "venueWorkflow", "requires", "大型赛事需要复用通用场地申请流程。"),
+  link("largeEventAdministration", "largeEventAssets", "next", "行政合规完成后进入物资保障。"),
+  link("largeEventAssets", "largeEventOnSite", "next", "物资保障后进入现场执行准备。"),
+  link("largeEventOnSite", "largeEventCloseout", "next", "现场结束后进入收尾与资产沉淀。"),
+  link("largeEventOnSite", "largeEventScheduleException", "exception", "赛程、迟到或弃权等异常进入现场处理卡。"),
+  link("largeEventCloseout", "closureWorkflow", "next", "大型赛事收尾进入通用结项与报销流程。"),
+
+  link("closureWorkflow", "fundedActivityClosure", "contains", "经费活动需要额外处理新闻稿与二课结项。"),
+  link("closureWorkflow", "reimbursementBudgetGate", "contains", "报销前置条件以独立规则检查。"),
+  link("closureWorkflow", "reimbursementClosure", "contains", "票据与支付材料以独立检查表核对。"),
+  link("closureWorkflow", "assetQuantityBalance", "contains", "活动物资数量闭环是独立规则。"),
+  link("closureWorkflow", "remainingAssetInventory", "contains", "剩余物资需要入库登记。"),
+  link("closureWorkflow", "reimbursementException", "contains", "超支、跨期或材料缺失进入异常处理。"),
+  link("fundedActivityClosure", "fundedNewsGate", "contains", "新闻稿要求是经费活动行政闭环的门槛。"),
+  link("fundedActivityClosure", "newsReviewRelease", "contains", "新闻稿审核发布由独立检查表确认。"),
+  link("fundedActivityClosure", "secondClassClosure", "contains", "照片上传与二课结项单独核对。"),
+  link("fundedNewsGate", "newsReviewRelease", "next", "确认新闻稿要求后进入审核发布。"),
+  link("newsReviewRelease", "secondClassClosure", "next", "发布和照片材料准备后进入二课结项。"),
+  link("secondClassClosure", "reimbursementClosure", "next", "结项材料完成后进入报销材料核对。"),
+  link("reimbursementClosure", "reimbursementBudgetGate", "requires", "票据核对以前需满足预算和结项前置条件。"),
+  link("assetQuantityBalance", "reimbursementException", "exception", "数量无法平衡时进入异常说明。"),
+  link("reimbursementClosure", "reimbursementException", "exception", "单据缺失、超支或跨期时进入异常处理。"),
+  link("closureWorkflow", "postmortemAndExperience", "next", "结项过程中或完成后应形成复盘与经验草稿。"),
+
+  link("organizationOperations", "assetAndKeyManagement", "contains", "持续运营包含资产与钥匙管理。"),
+  link("organizationOperations", "handoverChecklist", "contains", "持续运营包含换届交接。"),
+  link("organizationOperations", "newOfficerGrowth", "contains", "持续运营包含新干事培养。"),
+  link("assetAndKeyManagement", "assetLedger", "contains", "资产台账是物资管理基础。"),
+  link("assetAndKeyManagement", "assetBorrowReturn", "contains", "活动借用与归还需要单独核对。"),
+  link("assetAndKeyManagement", "keyManagement", "contains", "钥匙管理需要单独维护。"),
+  link("assetAndKeyManagement", "semesterInventory", "contains", "学期末盘点是独立检查表。"),
+  link("assetAndKeyManagement", "assetIssue", "contains", "损坏、遗失和闲置进入异常处理。"),
+  link("assetBorrowReturn", "assetLedger", "requires", "借还记录应回写至资产台账。"),
+  link("semesterInventory", "assetIssue", "exception", "盘点发现问题时进入资产异常处理。"),
+
+  link("handoverChecklist", "handoverWork", "contains", "换届交接首先核对未结工作与材料。"),
+  link("handoverChecklist", "handoverAccounts", "contains", "线上权限由独立检查表交接。"),
+  link("handoverChecklist", "handoverAssets", "contains", "物资和钥匙由独立检查表交接。"),
+  link("handoverChecklist", "handoverRelationships", "contains", "关键关系通过介绍与边界说明交接。"),
+  link("handoverChecklist", "handoverAcceptance", "contains", "最终以验收和遗留登记确认交接。"),
+  link("handoverChecklist", "assetAndKeyManagement", "requires", "交接前需核对资产与钥匙台账。"),
+  link("handoverChecklist", "postmortemAndExperience", "requires", "已审核经验可降低换届信息断层。"),
+  link("handoverWork", "handoverAccounts", "next", "未结工作梳理后依次完成权限、物资和关系交接。"),
+  link("handoverAccounts", "handoverAssets", "next", "线上权限交接后继续核对物资与钥匙。"),
+  link("handoverAssets", "handoverRelationships", "next", "物资交接后安排关键关系介绍。"),
+  link("handoverRelationships", "handoverAcceptance", "next", "四类交接完成后进行验收和遗留登记。"),
+
+  link("newOfficerGrowth", "officerOrientation", "contains", "培养路径从职责和工具入门开始。"),
+  link("newOfficerGrowth", "officerApprenticeship", "contains", "入门后通过完整活动见习积累经验。"),
+  link("newOfficerGrowth", "officerReadiness", "contains", "见习后评估可独立承担的工作范围。"),
+  link("newOfficerGrowth", "officerAuthorityBoundary", "contains", "权限边界始终作为培养路径的硬规则。"),
+  link("officerOrientation", "officerApprenticeship", "next", "完成职责和工具入门后进入见习。"),
+  link("officerApprenticeship", "officerReadiness", "next", "见习反馈用于评估下一步承担范围。"),
+  link("officerReadiness", "officerAuthorityBoundary", "requires", "范围评估不等于自动授予权限。"),
+
+  link("postmortemAndExperience", "reviewFeedback", "contains", "复盘从反馈和数据收集开始。"),
+  link("postmortemAndExperience", "reviewDecisionRecord", "contains", "决策理由和踩坑处理应单独记录。"),
+  link("postmortemAndExperience", "reviewDraft", "contains", "事实、经验和待确认问题应先形成草稿。"),
+  link("postmortemAndExperience", "reviewHumanApproval", "contains", "经验发布前必须完成人工确认。"),
+  link("postmortemAndExperience", "reviewPublication", "contains", "已审核经验才进入可交接知识。"),
+  link("reviewFeedback", "reviewDecisionRecord", "next", "收集数据后补充决策与异常记录。"),
+  link("reviewDecisionRecord", "reviewDraft", "next", "记录完成后形成区分事实与经验的草稿。"),
+  link("reviewDraft", "reviewHumanApproval", "next", "草稿需要人工审核和上下文补充。"),
+  link("reviewHumanApproval", "reviewPublication", "next", "审核通过后才发布为可复用经验。"),
 ];

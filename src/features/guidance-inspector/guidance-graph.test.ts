@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  handbookGuidelineIds,
   handbookGuidelineLinks,
   handbookGuidelines,
 } from "../../../prisma/handbook-guidance.data";
@@ -46,30 +47,32 @@ function createLink(
 }
 
 describe("指导层图数据适配", () => {
-  it("从当前种子构建全部节点、关系和去重后的直接邻居", () => {
+  it("从细化后的当前种子构建全部节点、关系和去重后的直接邻居", () => {
     const graph = buildGuidanceGraph(handbookGuidelines, handbookGuidelineLinks);
-    const largeWorkflow = handbookGuidelines.find((node) => node.title === "大型赛事四阶段筹备流程");
+    const largeWorkflow = handbookGuidelines.find((node) => node.id === handbookGuidelineIds.largeEventWorkflow);
 
-    expect(graph.nodes).toHaveLength(12);
-    expect(graph.edges).toHaveLength(12);
-    expect(graph.renderableEdges).toHaveLength(12);
+    expect(graph.nodes).toHaveLength(Object.values(handbookGuidelineIds).length);
+    expect(graph.nodes.length).toBeGreaterThanOrEqual(60);
+    expect(graph.edges).toHaveLength(handbookGuidelineLinks.length);
+    expect(graph.edges.length).toBeGreaterThanOrEqual(100);
+    expect(graph.renderableEdges).toHaveLength(handbookGuidelineLinks.length);
     expect(largeWorkflow).toBeDefined();
 
     const workflowNode = graph.nodeById.get(largeWorkflow?.id ?? "");
-    expect(workflowNode?.outgoingEdgeIds).toHaveLength(6);
-    expect(workflowNode?.directNeighborIds).toHaveLength(6);
+    expect(workflowNode?.outgoingEdgeIds).toHaveLength(7);
+    expect(workflowNode?.directNeighborIds).toHaveLength(8);
   });
 
   it("能查询节点的一度和二度邻居，同时安全处理未知节点", () => {
     const graph = buildGuidanceGraph(handbookGuidelines, handbookGuidelineLinks);
-    const largeWorkflow = handbookGuidelines.find((node) => node.title === "大型赛事四阶段筹备流程");
-    const regularActivity = handbookGuidelines.find((node) => node.title.includes("常规活动"));
+    const largeWorkflow = handbookGuidelines.find((node) => node.id === handbookGuidelineIds.largeEventWorkflow);
+    const regularActivity = handbookGuidelines.find((node) => node.id === handbookGuidelineIds.regularActivityT3Submission);
 
     expect(largeWorkflow).toBeDefined();
     expect(regularActivity).toBeDefined();
 
     const neighbors = getGuidelineNeighbors(graph, largeWorkflow?.id ?? "");
-    expect(neighbors?.firstDegreeNodeIds).toHaveLength(6);
+    expect(neighbors?.firstDegreeNodeIds).toHaveLength(8);
     expect(neighbors?.secondDegreeNodeIds).toContain(regularActivity?.id);
     expect(getGuidelineNeighbors(graph, "不存在的节点")).toBeNull();
   });
@@ -102,12 +105,14 @@ describe("指导层图数据适配", () => {
 });
 
 describe("指导层结构诊断", () => {
-  it("对当前种子报告孤立卡片和无出边流程", () => {
+  it("细化后的当前种子没有孤立卡片、无出边流程或结构错误", () => {
     const graph = buildGuidanceGraph(handbookGuidelines, handbookGuidelineLinks);
     const codes = analyzeGuidanceGraph(graph).diagnostics.map((diagnostic) => diagnostic.code);
 
-    expect(codes).toContain("isolated-node");
-    expect(codes).toContain("workflow-without-outgoing");
+    expect(codes).not.toContain("isolated-node");
+    expect(codes).not.toContain("workflow-without-outgoing");
+    expect(codes).not.toContain("requires-cycle");
+    expect(codes).not.toContain("dangling-edge");
   });
 
   it("覆盖异常边、缺失内容、发布依赖草稿和 requires 循环", () => {

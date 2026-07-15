@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  handbookGuidelineIds,
   handbookGuidelineLinks,
   handbookGuidelines,
 } from "../../../prisma/handbook-guidance.data";
@@ -15,7 +16,7 @@ describe("指导层 AI 上下文", () => {
   it("聚焦节点时只收集树路径、直接子节点和直接关系端点", () => {
     const graph = buildGuidanceGraph(handbookGuidelines, handbookGuidelineLinks);
     const tree = buildGuidanceTree(graph);
-    const workflow = graph.nodes.find((node) => node.title === "大型赛事四阶段筹备流程");
+    const workflow = graph.nodeById.get(handbookGuidelineIds.largeEventWorkflow);
     const unrelated = graph.nodes.find((node) => node.title.includes("新干事"));
 
     expect(workflow).toBeDefined();
