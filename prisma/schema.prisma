@@ -28,6 +28,61 @@ enum GuidelineRelationType {
   exception
 }
 
+enum OrganizationTermPhase {
+  planned
+  active
+  closing
+}
+
+/// 跨届期存在的运营成员；不包含普通参赛者、训练参与者或群成员。
+model Member {
+  /// 系统内部身份，不使用学号等外部标识。
+  id String @id @default(uuid()) @db.Uuid
+
+  /// 成员姓名允许重名，由 id 区分具体人员。
+  name String @db.Text
+
+  /// 入学年份允许未知；不保存会随时间变化的年级描述。
+  enrollmentYear Int? @map("enrollment_year") @db.SmallInt
+
+  /// 停止参与社团运营的自然日；为空表示仍在参与。
+  leftOn DateTime? @map("left_on") @db.Date
+
+  /// 创建时间即成员加入本系统的时间。
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  presidentOfTerms OrganizationTerm[] @relation("OrganizationTermPresident")
+
+  @@map("members")
+}
+
+/// 由实际换届划分的责任周期；全库至多一个届期处于 active。
+model OrganizationTerm {
+  id   String @id @default(uuid()) @db.Uuid
+  name String @unique(map: "organization_terms_name_key") @db.Text
+
+  /// 实际开始承担责任的自然日，不保存预计日期。
+  startsOn DateTime? @map("starts_on") @db.Date
+
+  /// 实际完成换届交接的责任边界自然日。
+  endsOn DateTime? @map("ends_on") @db.Date
+
+  phase OrganizationTermPhase @default(planned)
+
+  /// planned 届期可以暂时没有会长；active 和 closing 必须有会长。
+  presidentMemberId String? @map("president_member_id") @db.Uuid
+  president         Member? @relation("OrganizationTermPresident", fields: [presidentMemberId], references: [id], onDelete: Restrict)
+
+  archivedAt DateTime? @map("archived_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([phase, archivedAt])
+  @@index([presidentMemberId])
+  @@map("organization_terms")
+}
+
 /// 指导层的最小单元。一行代表当前可用的一条工作流、规则、检查表或经验。
 model Guideline {
   /// 稳定的内部标识；标题修改不会破坏 Guideline 之间的关系。
