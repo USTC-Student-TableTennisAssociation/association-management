@@ -57,8 +57,8 @@ model Guideline {
   /// draft 不参与运行时指导；published 可被指导解析器读取。
   status GuidelineStatus @default(draft)
 
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   outgoingLinks GuidelineLink[] @relation("GuidelineLinkFrom")
   incomingLinks GuidelineLink[] @relation("GuidelineLinkTo")
@@ -82,7 +82,7 @@ model GuidelineLink {
   /// 可选维护备注，不作为规则判断条件。
   note String? @db.Text
 
-  createdAt DateTime @default(now()) @map("created_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   fromGuideline Guideline @relation("GuidelineLinkFrom", fields: [fromGuidelineId], references: [id], onDelete: Cascade)
   toGuideline   Guideline @relation("GuidelineLinkTo", fields: [toGuidelineId], references: [id], onDelete: Cascade)
