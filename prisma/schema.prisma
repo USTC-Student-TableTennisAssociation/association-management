@@ -34,6 +34,16 @@ enum OrganizationTermPhase {
   closing
 }
 
+enum ProjectPhase {
+  draft
+  planning
+  preparation
+  active
+  closing
+  completed
+  cancelled
+}
+
 /// 跨届期存在的运营成员；不包含普通参赛者、训练参与者或群成员。
 model Member {
   /// 系统内部身份，不使用学号等外部标识。
@@ -53,6 +63,8 @@ model Member {
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   presidentOfTerms OrganizationTerm[] @relation("OrganizationTermPresident")
+  ownedProjects    Project[]          @relation("ProjectOwner")
+  assignedTasks    Task[]             @relation("TaskAssignee")
 
   @@map("members")
 }
@@ -78,9 +90,71 @@ model OrganizationTerm {
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  projects Project[]
+
   @@index([phase, archivedAt])
   @@index([presidentMemberId])
   @@map("organization_terms")
+}
+
+/// 属于一个届期的完整事项；标题与人工确认摘要共同表达项目目标和范围。
+model Project {
+  id String @id @default(uuid()) @db.Uuid
+
+  organizationTermId String       @map("organization_term_id") @db.Uuid
+  title              String       @db.Text
+  summary            String?      @db.Text
+  phase              ProjectPhase @default(draft)
+
+  /// draft 阶段可以暂时没有负责人，其他阶段必须保留负责人。
+  ownerMemberId String? @map("owner_member_id") @db.Uuid
+
+  plannedStartOn DateTime? @map("planned_start_on") @db.Date
+  plannedEndOn   DateTime? @map("planned_end_on") @db.Date
+  actualStartOn  DateTime? @map("actual_start_on") @db.Date
+  actualEndOn    DateTime? @map("actual_end_on") @db.Date
+  completedOn    DateTime? @map("completed_on") @db.Date
+  cancelledOn    DateTime? @map("cancelled_on") @db.Date
+
+  archivedAt DateTime? @map("archived_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  organizationTerm OrganizationTerm @relation(fields: [organizationTermId], references: [id], onDelete: Restrict)
+  owner            Member?          @relation("ProjectOwner", fields: [ownerMemberId], references: [id], onDelete: Restrict)
+  tasks            Task[]
+
+  @@index([organizationTermId, phase])
+  @@index([ownerMemberId])
+  @@map("projects")
+}
+
+/// 实现项目目标的具体行动；完成、取消和逾期状态由日期字段派生。
+model Task {
+  id String @id @default(uuid()) @db.Uuid
+
+  projectId String @map("project_id") @db.Uuid
+  title     String @db.Text
+
+  assigneeMemberId   String? @map("assignee_member_id") @db.Uuid
+  description        String? @db.Text
+  acceptanceCriteria String? @map("acceptance_criteria") @db.Text
+  currentProgress    String? @map("current_progress") @db.Text
+
+  dueOn       DateTime? @map("due_on") @db.Date
+  completedOn DateTime? @map("completed_on") @db.Date
+  cancelledOn DateTime? @map("cancelled_on") @db.Date
+
+  archivedAt DateTime? @map("archived_at") @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  project  Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  assignee Member? @relation("TaskAssignee", fields: [assigneeMemberId], references: [id], onDelete: Restrict)
+
+  @@index([projectId])
+  @@index([assigneeMemberId])
+  @@map("tasks")
 }
 
 /// 指导层的最小单元。一行代表当前可用的一条工作流、规则、检查表或经验。
