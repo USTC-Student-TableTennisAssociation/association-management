@@ -52,3 +52,9 @@ pnpm dev
 ```
 
 当前第一版 AI 入口使用 OpenAI-compatible 的 `/chat/completions` 接口。前端聊天记录暂存在浏览器页面状态中，刷新后不会保留。
+
+---
+
+## 报销材料识别工具
+
+本项目集成了社团报销材料智能识别工具，支持从图片/PDF 报销材料中提取结构化信息，自动检查社团报销材料是否齐全完备。详细文档参见 [docs/reimbursement-parser.md](docs/reimbursement-parser.md)。
