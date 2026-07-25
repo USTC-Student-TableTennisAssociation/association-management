@@ -463,6 +463,7 @@ class GlobalExplorationRunner:
         output = await self._model.complete(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
+            request_label=stage,
         )
         self._progress.report(
             stage,

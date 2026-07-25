@@ -46,6 +46,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="交叉校验与定向回看最多轮数",
     )
+    explore.add_argument(
+        "--read-timeout-seconds",
+        type=float,
+        help="覆盖 AI_READ_TIMEOUT_SECONDS，表示流中断后最多等待秒数",
+    )
+    explore.add_argument(
+        "--max-model-retries",
+        type=int,
+        help="覆盖 AI_MAX_RETRIES，表示流式请求最大尝试次数",
+    )
     return parser
 
 
@@ -61,13 +71,19 @@ async def _run_explore(args: argparse.Namespace) -> int:
         model=args.model,
         api_base_url=args.api_base_url,
         api_key=args.api_key,
+        read_timeout_seconds=args.read_timeout_seconds,
+        max_retries=args.max_model_retries,
     )
     exploration_settings = ExplorationSettings(
         max_review_rounds=args.max_review_rounds,
     )
     progress.report(
         "模型",
-        f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}",
+        (
+            f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
+            f"纯流式，读取超时 {model_settings.read_timeout_seconds:g} 秒，"
+            f"最多尝试 {model_settings.max_retries} 次"
+        ),
     )
 
     progress.report("PDF", f"开始解析 {args.pdf}")

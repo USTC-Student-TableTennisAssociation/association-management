@@ -23,7 +23,11 @@ async def complete_json(
     progress_stage: str = "模型",
 ) -> ModelT:
     reporter = progress or NullProgressReporter()
-    raw = await model.complete(system_prompt=system_prompt, user_prompt=user_prompt)
+    raw = await model.complete(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        request_label=progress_stage,
+    )
     try:
         return schema.model_validate(_decode_json_object(raw))
     except (json.JSONDecodeError, ValidationError, ValueError) as first_error:
@@ -41,6 +45,7 @@ async def complete_json(
         repaired = await model.complete(
             system_prompt=system_prompt,
             user_prompt=repair_prompt,
+            request_label=progress_stage,
         )
         return schema.model_validate(_decode_json_object(repaired))
 

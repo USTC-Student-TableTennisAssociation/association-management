@@ -28,7 +28,9 @@ class AcceptingFakeModel:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.0,
+        request_label: str = "模型",
     ) -> str:
+        del request_label
         self.prompts.append(user_prompt)
         if "[ROUTE: summary]" in user_prompt:
             return "# 总结\n这是面向协会成员的手册。〔第 1 页〕"
@@ -78,7 +80,9 @@ class RevisingFakeModel(AcceptingFakeModel):
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.0,
+        request_label: str = "模型",
     ) -> str:
+        del request_label
         if "[ROUTE: reconciliation]" in user_prompt:
             self.prompts.append(user_prompt)
             self.review_calls += 1
@@ -119,6 +123,7 @@ class RevisingFakeModel(AcceptingFakeModel):
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
+            request_label="模型",
         )
 
 

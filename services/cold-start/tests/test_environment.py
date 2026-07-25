@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from cold_start.config import ModelSettings
 from cold_start.environment import find_environment_file, load_environment_file
 
 
@@ -15,18 +16,34 @@ def test_finds_parent_env_and_preserves_system_environment(
     working_directory.mkdir(parents=True)
     environment_file = repository / ".env"
     environment_file.write_text(
-        "AI_MODEL=file-model\nAI_API_BASE_URL=http://model.test/v1\n",
+        (
+            "AI_MODEL=file-model\n"
+            "AI_API_BASE_URL=http://model.test/v1\n"
+            "AI_READ_TIMEOUT_SECONDS=720\n"
+            "AI_MAX_RETRIES=1\n"
+            "AI_STREAM_PROGRESS_INTERVAL_SECONDS=7\n"
+        ),
         encoding="utf-8",
     )
     monkeypatch.setenv("AI_MODEL", "system-model")
-    monkeypatch.delenv("AI_API_BASE_URL", raising=False)
+    for variable in (
+        "AI_API_BASE_URL",
+        "AI_READ_TIMEOUT_SECONDS",
+        "AI_MAX_RETRIES",
+        "AI_STREAM_PROGRESS_INTERVAL_SECONDS",
+    ):
+        monkeypatch.delenv(variable, raising=False)
 
     loaded = load_environment_file(search_starts=(working_directory,))
+    model_settings = ModelSettings.from_environment()
 
     assert loaded == environment_file
     assert find_environment_file((working_directory,)) == environment_file
     assert os.environ["AI_MODEL"] == "system-model"
     assert os.environ["AI_API_BASE_URL"] == "http://model.test/v1"
+    assert model_settings.read_timeout_seconds == 720
+    assert model_settings.max_retries == 1
+    assert model_settings.stream_progress_interval_seconds == 7
 
 
 def test_explicit_missing_env_file_fails(tmp_path: Path) -> None:

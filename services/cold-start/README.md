@@ -43,9 +43,20 @@ uv sync
 export AI_API_BASE_URL="https://example.com/v1"
 export AI_API_KEY="..."
 export AI_MODEL="..."
+export AI_READ_TIMEOUT_SECONDS="600"
+export AI_MAX_RETRIES="2"
+export AI_STREAM_PROGRESS_INTERVAL_SECONDS="5"
 ```
 
 `AI_API_KEY` 对不要求鉴权的本地接口可以省略。
+
+模型请求固定使用 `stream: true`。Worker 只接受 SSE `data:` 事件，并要求流以
+`[DONE]` 正常结束；不会回退到普通 JSON 响应。流式片段会先完整累积，Markdown
+直接使用完整文本，JSON 则在流结束后执行 Schema 校验。
+
+`AI_READ_TIMEOUT_SECONDS` 表示连续多久没有收到新的流式数据才超时，不是整个请求的
+总时限。默认 600 秒。`AI_STREAM_PROGRESS_INTERVAL_SECONDS` 控制终端报告已接收字符数
+的频率，默认 5 秒。
 
 CLI 会从当前目录和服务代码位置向上查找第一个 `.env`，因此从仓库或
 `services/cold-start` 目录运行时会自动复用仓库根目录的 `.env`。系统环境变量不会
@@ -74,8 +85,9 @@ uv run cold-start explore \
 ```
 
 运行期间会输出相对耗时和语义进度，包括 PDF 解析、三条阅读路径各自的单元进度、
-交叉校验轮次、定向回看的路径与页码、模型重试以及最终产物目录。三条阅读路径并行
-运行，因此终端中的总结、结构和概念进度可能交错出现。
+流式首片等待时间、已接收字符数、交叉校验轮次、定向回看的路径与页码、模型重试
+以及最终产物目录。三条阅读路径并行运行，因此终端中的总结、结构和概念进度可能
+交错出现。
 
 ## 验证
 

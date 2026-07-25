@@ -33,8 +33,9 @@ class FakeChatModel:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.0,
+        request_label: str = "模型",
     ) -> str:
-        del system_prompt, temperature
+        del system_prompt, temperature, request_label
         if "[ROUTE: summary]" in user_prompt:
             return "# 总结\n测试"
         if "[ROUTE: structure]" in user_prompt:
@@ -95,6 +96,8 @@ async def test_cli_auto_loads_env_and_prints_detailed_progress(
             api_key=None,
             env_file=None,
             max_review_rounds=2,
+            read_timeout_seconds=None,
+            max_model_retries=None,
         )
     )
 

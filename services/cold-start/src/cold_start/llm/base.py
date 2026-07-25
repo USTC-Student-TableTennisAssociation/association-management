@@ -14,4 +14,5 @@ class ChatModel(Protocol):
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.0,
+        request_label: str = "模型",
     ) -> str: ...
