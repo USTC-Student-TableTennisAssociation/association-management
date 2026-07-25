@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from datetime import UTC, datetime
 from typing import Literal, TypedDict
 
@@ -29,6 +30,7 @@ from cold_start.global_exploration.prompts import (
 )
 from cold_start.global_exploration.units import ReadingUnit, build_reading_units
 from cold_start.llm.base import ChatModel
+from cold_start.progress import NullProgressReporter, ProgressReporter
 
 RouteName = Literal["summary", "structure", "concept"]
 
@@ -60,9 +62,11 @@ class GlobalExplorationRunner:
         *,
         model: ChatModel,
         settings: ExplorationSettings | None = None,
+        progress: ProgressReporter | None = None,
     ) -> None:
         self._model = model
         self._settings = settings or ExplorationSettings()
+        self._progress = progress or NullProgressReporter()
         self._graph = self._build_graph()
 
     async def run(self, document: ParsedDocument) -> GlobalExplorationSnapshot:
@@ -138,21 +142,32 @@ class GlobalExplorationRunner:
 
     def _plan_reading_routes(self, state: ExplorationState) -> ExplorationState:
         document = state["document"]
+        summary_units = build_reading_units(
+            document.pages,
+            target_chars=self._settings.summary_unit_chars,
+        )
+        structure_units = build_reading_units(
+            document.pages,
+            target_chars=self._settings.structure_unit_chars,
+            overlap_pages=self._settings.structure_overlap_pages,
+        )
+        concept_units = build_reading_units(
+            document.pages,
+            target_chars=self._settings.concept_unit_chars,
+            overlap_pages=self._settings.concept_overlap_pages,
+        )
+        self._progress.report(
+            "规划",
+            (
+                f"阅读路径已生成：总结 {len(summary_units)} 个单元，"
+                f"结构 {len(structure_units)} 个单元，"
+                f"概念 {len(concept_units)} 个单元"
+            ),
+        )
         return {
-            "summary_units": build_reading_units(
-                document.pages,
-                target_chars=self._settings.summary_unit_chars,
-            ),
-            "structure_units": build_reading_units(
-                document.pages,
-                target_chars=self._settings.structure_unit_chars,
-                overlap_pages=self._settings.structure_overlap_pages,
-            ),
-            "concept_units": build_reading_units(
-                document.pages,
-                target_chars=self._settings.concept_unit_chars,
-                overlap_pages=self._settings.concept_overlap_pages,
-            ),
+            "summary_units": summary_units,
+            "structure_units": structure_units,
+            "concept_units": concept_units,
             "summary_cursor": 0,
             "structure_cursor": 0,
             "concept_cursor": 0,
@@ -167,7 +182,10 @@ class GlobalExplorationRunner:
     async def _summary_read_next(self, state: ExplorationState) -> ExplorationState:
         cursor = state["summary_cursor"]
         unit = state["summary_units"][cursor]
-        output = await self._model.complete(
+        total = len(state["summary_units"])
+        output = await self._complete_text(
+            stage="总结",
+            action=f"阅读单元 {cursor + 1}/{total}（{unit.page_label}）",
             system_prompt=BASE_SYSTEM_PROMPT,
             user_prompt=summary_prompt(
                 title=state["document"].title,
@@ -180,7 +198,10 @@ class GlobalExplorationRunner:
     async def _structure_read_next(self, state: ExplorationState) -> ExplorationState:
         cursor = state["structure_cursor"]
         unit = state["structure_units"][cursor]
-        output = await self._model.complete(
+        total = len(state["structure_units"])
+        output = await self._complete_text(
+            stage="结构",
+            action=f"阅读单元 {cursor + 1}/{total}（{unit.page_label}）",
             system_prompt=BASE_SYSTEM_PROMPT,
             user_prompt=structure_prompt(
                 title=state["document"].title,
@@ -193,6 +214,10 @@ class GlobalExplorationRunner:
     async def _concept_read_next(self, state: ExplorationState) -> ExplorationState:
         cursor = state["concept_cursor"]
         unit = state["concept_units"][cursor]
+        total = len(state["concept_units"])
+        action = f"阅读单元 {cursor + 1}/{total}（{unit.page_label}）"
+        self._progress.report("概念", f"开始{action}")
+        started_at = time.perf_counter()
         output = await complete_json(
             self._model,
             schema=ConceptSketch,
@@ -202,6 +227,12 @@ class GlobalExplorationRunner:
                 unit=unit,
                 current=state["concept_sketch"],
             ),
+            progress=self._progress,
+            progress_stage="概念",
+        )
+        self._progress.report(
+            "概念",
+            f"完成{action}，耗时 {time.perf_counter() - started_at:.1f} 秒",
         )
         return {"concept_sketch": output, "concept_cursor": cursor + 1}
 
@@ -236,6 +267,10 @@ class GlobalExplorationRunner:
         return {"concept_finished": True}
 
     async def _reconcile(self, state: ExplorationState) -> ExplorationState:
+        review_round = state["review_rounds"] + 1
+        action = f"第 {review_round}/{self._settings.max_review_rounds} 轮交叉校验"
+        self._progress.report("校验", f"开始{action}")
+        started_at = time.perf_counter()
         review = await complete_json(
             self._model,
             schema=ReconciliationReview,
@@ -247,10 +282,21 @@ class GlobalExplorationRunner:
                 concept_sketch=state["concept_sketch"],
                 source_index=self._source_index(state["document"]),
             ),
+            progress=self._progress,
+            progress_stage="校验",
+        )
+        status = (
+            "接受为低权威初步印象"
+            if review.accepted_as_initial_impression
+            else f"发现 {len(review.issues)} 个待处理问题"
+        )
+        self._progress.report(
+            "校验",
+            f"完成{action}：{status}，耗时 {time.perf_counter() - started_at:.1f} 秒",
         )
         return {
             "review_history": [*state["review_history"], review],
-            "review_rounds": state["review_rounds"] + 1,
+            "review_rounds": review_round,
         }
 
     def _review_route(self, state: ExplorationState) -> Literal["revise", "freeze"]:
@@ -268,6 +314,21 @@ class GlobalExplorationRunner:
         requested_routes = {
             route for issue in latest_review.issues for route in issue.routes
         }
+        evidence_pages = sorted(
+            {page for issue in latest_review.issues for page in issue.evidence_pages}
+        )
+        pages_label = (
+            "、".join(str(page) for page in evidence_pages)
+            if evidence_pages
+            else "未指定，使用文档索引"
+        )
+        self._progress.report(
+            "回看",
+            (
+                f"准备修订路径：{self._route_labels(requested_routes)}；"
+                f"证据页：{pages_label}"
+            ),
+        )
         tasks = [
             self._revise_route(route, state, latest_review)
             for route in ("summary", "structure", "concept")
@@ -302,7 +363,9 @@ class GlobalExplorationRunner:
 
         if route == "summary":
             current = state["summary_markdown"]
-            output = await self._model.complete(
+            output = await self._complete_text(
+                stage="回看·总结",
+                action=f"根据 {self._issue_pages_label(relevant_issues)} 修订",
                 system_prompt=BASE_SYSTEM_PROMPT,
                 user_prompt=revision_prompt(
                     route=route,
@@ -316,7 +379,9 @@ class GlobalExplorationRunner:
 
         if route == "structure":
             current = state["structure_markdown"]
-            output = await self._model.complete(
+            output = await self._complete_text(
+                stage="回看·结构",
+                action=f"根据 {self._issue_pages_label(relevant_issues)} 修订",
                 system_prompt=BASE_SYSTEM_PROMPT,
                 user_prompt=revision_prompt(
                     route=route,
@@ -329,6 +394,9 @@ class GlobalExplorationRunner:
             return route, output.strip()
 
         schema = json.dumps(ConceptSketch.model_json_schema(), ensure_ascii=False)
+        action = f"根据 {self._issue_pages_label(relevant_issues)} 修订"
+        self._progress.report("回看·概念", f"开始{action}")
+        started_at = time.perf_counter()
         output = await complete_json(
             self._model,
             schema=ConceptSketch,
@@ -341,17 +409,23 @@ class GlobalExplorationRunner:
                 source_excerpt=source_excerpt,
                 concept_schema=schema,
             ),
+            progress=self._progress,
+            progress_stage="回看·概念",
+        )
+        self._progress.report(
+            "回看·概念",
+            f"完成{action}，耗时 {time.perf_counter() - started_at:.1f} 秒",
         )
         return route, output
 
-    @staticmethod
-    def _freeze(state: ExplorationState) -> ExplorationState:
+    def _freeze(self, state: ExplorationState) -> ExplorationState:
         latest_review = state["review_history"][-1]
-        return {
-            "frozen_with_unresolved_issues": (
-                not latest_review.accepted_as_initial_impression
-            )
-        }
+        unresolved = not latest_review.accepted_as_initial_impression
+        if unresolved:
+            self._progress.report("冻结", "达到校验上限，快照将保留未解决问题")
+        else:
+            self._progress.report("冻结", "初步印象已通过校验，正在冻结快照")
+        return {"frozen_with_unresolved_issues": unresolved}
 
     @staticmethod
     def _source_index(document: ParsedDocument, max_chars: int = 18_000) -> str:
@@ -375,3 +449,35 @@ class GlobalExplorationRunner:
             f"〔第 {page.page_number} 页〕\n{page.markdown}" for page in selected
         )
         return body[: self._settings.revision_source_chars]
+
+    async def _complete_text(
+        self,
+        *,
+        stage: str,
+        action: str,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> str:
+        self._progress.report(stage, f"开始{action}")
+        started_at = time.perf_counter()
+        output = await self._model.complete(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        self._progress.report(
+            stage,
+            f"完成{action}，耗时 {time.perf_counter() - started_at:.1f} 秒",
+        )
+        return output
+
+    @staticmethod
+    def _route_labels(routes: set[str]) -> str:
+        labels = {"summary": "总结", "structure": "结构", "concept": "概念"}
+        return "、".join(labels[route] for route in sorted(routes))
+
+    @staticmethod
+    def _issue_pages_label(issues: list) -> str:
+        pages = sorted({page for issue in issues for page in issue.evidence_pages})
+        if not pages:
+            return "文档索引"
+        return f"第 {'、'.join(str(page) for page in pages)} 页"

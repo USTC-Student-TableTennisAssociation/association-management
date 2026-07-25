@@ -10,6 +10,14 @@ from cold_start.document.models import ParsedDocument, ParsedPage
 from cold_start.global_exploration.graph import GlobalExplorationRunner
 
 
+class RecordingProgressReporter:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str]] = []
+
+    def report(self, stage: str, message: str) -> None:
+        self.events.append((stage, message))
+
+
 class AcceptingFakeModel:
     def __init__(self) -> None:
         self.prompts: list[str] = []
@@ -138,8 +146,10 @@ def make_document() -> ParsedDocument:
 @pytest.mark.asyncio
 async def test_three_routes_read_original_document_independently() -> None:
     model = AcceptingFakeModel()
+    progress = RecordingProgressReporter()
     snapshot = await GlobalExplorationRunner(
         model=model,
+        progress=progress,
         settings=ExplorationSettings(
             summary_unit_chars=15,
             structure_unit_chars=15,
@@ -159,13 +169,18 @@ async def test_three_routes_read_original_document_independently() -> None:
     assert snapshot.route_statistics.summary_units == 3
     assert snapshot.review_history[-1].accepted_as_initial_impression is True
     assert snapshot.frozen_with_unresolved_issues is False
+    stages = [stage for stage, _ in progress.events]
+    assert {"规划", "总结", "结构", "概念", "校验", "冻结"} <= set(stages)
+    assert any("1/3" in message for stage, message in progress.events if stage == "总结")
 
 
 @pytest.mark.asyncio
 async def test_review_can_trigger_targeted_reread_before_freeze() -> None:
     model = RevisingFakeModel()
+    progress = RecordingProgressReporter()
     snapshot = await GlobalExplorationRunner(
         model=model,
+        progress=progress,
         settings=ExplorationSettings(
             summary_unit_chars=100,
             structure_unit_chars=100,
@@ -180,3 +195,5 @@ async def test_review_can_trigger_targeted_reread_before_freeze() -> None:
     assert "历史实践，不是制度" in snapshot.global_summary_markdown
     assert snapshot.route_statistics.review_rounds == 2
     assert snapshot.frozen_with_unresolved_issues is False
+    assert any(stage == "回看" for stage, _ in progress.events)
+    assert any(stage == "回看·总结" for stage, _ in progress.events)

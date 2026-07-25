@@ -47,6 +47,14 @@ export AI_MODEL="..."
 
 `AI_API_KEY` 对不要求鉴权的本地接口可以省略。
 
+CLI 会从当前目录和服务代码位置向上查找第一个 `.env`，因此从仓库或
+`services/cold-start` 目录运行时会自动复用仓库根目录的 `.env`。系统环境变量不会
+被 `.env` 覆盖，命令行参数的优先级最高。也可以显式指定：
+
+```bash
+uv run cold-start explore --env-file ../../.env --pdf "/data/手册.pdf"
+```
+
 ## 运行
 
 ```bash
@@ -64,6 +72,10 @@ uv run cold-start explore \
 ├── parsed-document.md        # Docling 全文
 └── parsed-pages.json         # 带页码的解析结果
 ```
+
+运行期间会输出相对耗时和语义进度，包括 PDF 解析、三条阅读路径各自的单元进度、
+交叉校验轮次、定向回看的路径与页码、模型重试以及最终产物目录。三条阅读路径并行
+运行，因此终端中的总结、结构和概念进度可能交错出现。
 
 ## 验证
 

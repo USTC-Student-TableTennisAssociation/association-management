@@ -8,6 +8,7 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 
 from cold_start.llm.base import ChatModel
+from cold_start.progress import NullProgressReporter, ProgressReporter
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -18,11 +19,18 @@ async def complete_json(
     schema: type[ModelT],
     system_prompt: str,
     user_prompt: str,
+    progress: ProgressReporter | None = None,
+    progress_stage: str = "模型",
 ) -> ModelT:
+    reporter = progress or NullProgressReporter()
     raw = await model.complete(system_prompt=system_prompt, user_prompt=user_prompt)
     try:
         return schema.model_validate(_decode_json_object(raw))
     except (json.JSONDecodeError, ValidationError, ValueError) as first_error:
+        reporter.report(
+            progress_stage,
+            "结构化输出校验失败，正在请求模型修复 JSON",
+        )
         repair_prompt = (
             f"{user_prompt}\n\n"
             "你上一次的输出未通过 JSON Schema 校验。请只输出修正后的完整 JSON 对象，"

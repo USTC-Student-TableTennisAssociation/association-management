@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from cold_start.config import ModelSettings
+from cold_start.progress import NullProgressReporter, ProgressReporter
 
 
 class OpenAICompatibleChatModel:
@@ -19,10 +20,12 @@ class OpenAICompatibleChatModel:
         settings: ModelSettings,
         *,
         client: httpx.AsyncClient | None = None,
+        progress: ProgressReporter | None = None,
     ) -> None:
         self._settings = settings
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=settings.timeout_seconds)
+        self._progress = progress or NullProgressReporter()
 
     async def complete(
         self,
@@ -55,7 +58,16 @@ class OpenAICompatibleChatModel:
                 last_error = error
                 if attempt + 1 >= self._settings.max_retries:
                     break
-                await asyncio.sleep(2**attempt)
+                delay_seconds = 2**attempt
+                self._progress.report(
+                    "模型",
+                    (
+                        f"请求失败（{self._error_label(error)}），"
+                        f"{delay_seconds} 秒后重试 "
+                        f"{attempt + 2}/{self._settings.max_retries}"
+                    ),
+                )
+                await asyncio.sleep(delay_seconds)
 
         raise RuntimeError("模型接口连续调用失败") from last_error
 
@@ -94,3 +106,9 @@ class OpenAICompatibleChatModel:
             if combined:
                 return combined
         raise ValueError("模型响应缺少可用文本")
+
+    @staticmethod
+    def _error_label(error: Exception) -> str:
+        if isinstance(error, httpx.HTTPStatusError):
+            return f"HTTP {error.response.status_code}"
+        return type(error).__name__

@@ -9,11 +9,13 @@ from pathlib import Path
 
 from cold_start.config import ExplorationSettings, ModelSettings
 from cold_start.document import DoclingPdfLoader
+from cold_start.environment import load_environment_file
 from cold_start.global_exploration import (
     GlobalExplorationRunner,
     write_exploration_artifacts,
 )
 from cold_start.llm import OpenAICompatibleChatModel
+from cold_start.progress import ConsoleProgressReporter
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +36,11 @@ def build_parser() -> argparse.ArgumentParser:
     explore.add_argument("--api-base-url", help="覆盖 AI_API_BASE_URL")
     explore.add_argument("--api-key", help="覆盖 AI_API_KEY")
     explore.add_argument(
+        "--env-file",
+        type=Path,
+        help="显式指定环境文件；不指定时从当前目录向上查找 .env",
+    )
+    explore.add_argument(
         "--max-review-rounds",
         type=int,
         default=2,
@@ -43,6 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _run_explore(args: argparse.Namespace) -> int:
+    progress = ConsoleProgressReporter()
+    environment_file = load_environment_file(args.env_file)
+    if environment_file:
+        progress.report("环境", f"已加载 {environment_file}（不覆盖系统环境变量）")
+    else:
+        progress.report("环境", "未找到 .env，使用系统环境变量和命令行参数")
+
     model_settings = ModelSettings.from_environment(
         model=args.model,
         api_base_url=args.api_base_url,
@@ -51,28 +65,41 @@ async def _run_explore(args: argparse.Namespace) -> int:
     exploration_settings = ExplorationSettings(
         max_review_rounds=args.max_review_rounds,
     )
+    progress.report(
+        "模型",
+        f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}",
+    )
 
-    print(f"正在解析 PDF：{args.pdf}", flush=True)
+    progress.report("PDF", f"开始解析 {args.pdf}")
     document = await asyncio.to_thread(DoclingPdfLoader().load, args.pdf)
-    print(f"已解析 {document.page_count} 页，开始三路全局勘探。", flush=True)
+    nonempty_pages = sum(bool(page.markdown.strip()) for page in document.pages)
+    progress.report(
+        "PDF",
+        (
+            f"解析完成：{nonempty_pages}/{document.page_count} 页非空，"
+            f"全文 {len(document.markdown)} 字符"
+        ),
+    )
 
-    model = OpenAICompatibleChatModel(model_settings)
+    model = OpenAICompatibleChatModel(model_settings, progress=progress)
     try:
         snapshot = await GlobalExplorationRunner(
             model=model,
             settings=exploration_settings,
+            progress=progress,
         ).run(document)
     finally:
         await model.aclose()
 
+    progress.report("产物", f"正在写入 {args.output}")
     paths = write_exploration_artifacts(
         output_root=args.output,
         document=document,
         snapshot=snapshot,
     )
-    print(f"全局勘探完成：{paths.run_directory}", flush=True)
+    progress.report("完成", f"全局勘探产物：{paths.run_directory}")
     if snapshot.frozen_with_unresolved_issues:
-        print("注意：快照因达到回看上限而带未解决问题冻结。", flush=True)
+        progress.report("注意", "快照因达到回看上限而带未解决问题冻结")
     return 0
 
 
