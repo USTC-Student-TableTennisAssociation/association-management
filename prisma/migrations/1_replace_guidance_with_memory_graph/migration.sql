@@ -25,6 +25,27 @@ CREATE TYPE "MemorySourceRole" AS ENUM ('basis', 'example', 'counterexample', 'c
 -- CreateEnum
 CREATE TYPE "MemoryEmbeddingPurpose" AS ENUM ('routing', 'semantic_retrieval');
 
+-- DropForeignKey
+ALTER TABLE "guideline_links" DROP CONSTRAINT "guideline_links_from_guideline_id_fkey";
+
+-- DropForeignKey
+ALTER TABLE "guideline_links" DROP CONSTRAINT "guideline_links_to_guideline_id_fkey";
+
+-- DropTable
+DROP TABLE "guidelines";
+
+-- DropTable
+DROP TABLE "guideline_links";
+
+-- DropEnum
+DROP TYPE "GuidelineKind";
+
+-- DropEnum
+DROP TYPE "GuidelineStatus";
+
+-- DropEnum
+DROP TYPE "GuidelineRelationType";
+
 -- CreateTable
 CREATE TABLE "memory_nodes" (
     "id" UUID NOT NULL,
