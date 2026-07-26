@@ -1,0 +1,43 @@
+##目标
+实现一个可被后续 AI Agent 调用的报销材料识别工具，用于从图片或 PDF 报销材料中提取结构化信息。
+
+本任务不需要实现用户页面，只需要完成工具函数和基本测试入口。
+
+##输入
+一份报销材料文件，类型包括：
+
+图片：png / jpg / jpeg
+PDF：pdf
+##输出
+识别结果以结构化 JSON 返回（字段仅作为参考）：
+
+type ReimbursementParseResult = {
+  documentType: string;
+  merchantName: string;
+  totalAmount: string;
+  date: string;
+  invoiceNumber: string;
+  buyerName: string;
+  sellerName: string;
+  items: string[];
+  rawText: string;
+  warnings: string[];
+};
+##建议实现位置
+###核心工具函数：
+src/lib/tools/reimbursementParser.ts
+###测试入口：
+scripts/test-reimbursement-parser.ts
+
+##报销材料要求：
+###报销材料应包括：
+1.二课审批单：
+2.新闻稿：截图带有青春科大网页标题
+3.商品发票和对应购买截图：购买截图应包含购买物品和数量、实付款、收货地址（应在中国科学技术大学校内）
+4.签领表：奖品签领数量应与审批单上购买数量一致
+
+##输出要求
+###输出信息至少要包括以下内容
+1.报销材料是否齐全完备
+2.若不齐全，指出具体需要补充材料
+3.若不完备，指出具体需要补充点

@@ -44,3 +44,7 @@ next-env.d.ts
 # Prisma Client is generated from prisma/schema.prisma.
 /src/generated/prisma
 /.prisma-seed-build
+
+# Reimbursement tool - large OCR traineddata files
+chi_sim.traineddata
+eng.traineddata
