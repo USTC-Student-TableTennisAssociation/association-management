@@ -7,16 +7,14 @@ from cold_start.global_exploration.artifacts import (
     write_exploration_artifacts,
 )
 from cold_start.global_exploration.models import (
-    DocumentMemoryLandscape,
-    ExplorationBoundaryReview,
     GlobalExplorationSnapshot,
-    LandscapeObservationBatch,
+    MacroSection,
     RouteStatistics,
     SourceMetadata,
 )
 
 
-def test_artifact_writer_keeps_machine_and_human_readable_outputs(tmp_path: Path) -> None:
+def test_artifact_writer_keeps_two_routes_and_debug_outputs(tmp_path: Path) -> None:
     document = ParsedDocument(
         source_path=Path("/tmp/handbook.pdf"),
         title="手册",
@@ -34,27 +32,13 @@ def test_artifact_writer_keeps_machine_and_human_readable_outputs(tmp_path: Path
             parser=document.parser_name,
             page_count=1,
         ),
-        document_profile_markdown="文档画像",
-        document_structure_markdown="结构",
-        document_memory_landscape=DocumentMemoryLandscape(
-            scope_note="只用于定位后续阅读区域。"
-        ),
-        review_history=[
-            ExplorationBoundaryReview(
-                acceptable_as_global_exploration=True,
-                overall_assessment="可冻结",
-            )
+        document_context_markdown="这是一份协会内部手册。",
+        macro_sections=[
+            MacroSection(label="手册内容", start_page=1, end_page=1),
         ],
-        frozen_with_boundary_issues=False,
         route_statistics=RouteStatistics(
-            profile_units=1,
-            structure_scans=1,
-            landscape_units=1,
-            landscape_merge_calls=1,
-            review_rounds=1,
-        ),
-        landscape_observations=(
-            LandscapeObservationBatch(unit_pages=[1]),
+            context_units=1,
+            macro_section_calls=1,
         ),
     )
 
@@ -70,13 +54,14 @@ def test_artifact_writer_keeps_machine_and_human_readable_outputs(tmp_path: Path
 
     assert paths.snapshot_json.exists()
     assert paths.report_markdown.exists()
-    assert paths.landscape_observations_json.exists()
+    assert paths.document_context_markdown.read_text(encoding="utf-8") == (
+        "这是一份协会内部手册。"
+    )
+    assert paths.macro_sections_json.exists()
     assert paths.parsed_document_markdown.read_text(encoding="utf-8") == "# 全文"
     snapshot_text = paths.snapshot_json.read_text(encoding="utf-8").replace(" ", "")
     assert '"authority":"preliminary-low-authority"' in snapshot_text
-    assert '"schema_version":"global-exploration.v3"' in snapshot_text
-    assert "landscape_observations" not in snapshot_text
-    assert "低权威初步观察" in paths.report_markdown.read_text(encoding="utf-8")
-    assert '"unit_pages": [' in paths.landscape_observations_json.read_text(
-        encoding="utf-8"
-    )
+    assert '"schema_version":"global-exploration.v4"' in snapshot_text
+    report = paths.report_markdown.read_text(encoding="utf-8")
+    assert "文档上下文" in report
+    assert "宏观阅读分区" in report

@@ -22,7 +22,7 @@ from cold_start.progress import ConsoleProgressReporter
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cold-start",
-        description="将单份协会手册 PDF 做成低权威全局阅读地图",
+        description="并行生成单份协会手册的文档上下文和宏观分区",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     explore = subparsers.add_parser("explore", help="运行单 PDF 全局勘探")
@@ -40,12 +40,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--env-file",
         type=Path,
         help="显式指定环境文件；不指定时从当前目录向上查找 .env",
-    )
-    explore.add_argument(
-        "--max-review-rounds",
-        type=int,
-        default=2,
-        help="全局勘探边界校验与定向回看最多轮数",
     )
     explore.add_argument(
         "--read-timeout-seconds",
@@ -80,9 +74,7 @@ async def _run_explore(args: argparse.Namespace) -> int:
         read_timeout_seconds=args.read_timeout_seconds,
         max_retries=args.max_model_retries,
     )
-    exploration_settings = ExplorationSettings(
-        max_review_rounds=args.max_review_rounds,
-    )
+    exploration_settings = ExplorationSettings()
     progress.report(
         "模型",
         (
@@ -133,8 +125,6 @@ async def _run_explore(args: argparse.Namespace) -> int:
         snapshot=snapshot,
     )
     progress.report("完成", f"全局勘探产物：{paths.run_directory}")
-    if snapshot.frozen_with_boundary_issues:
-        progress.report("注意", "快照达到回看上限，但仍有全局勘探边界问题")
     return 0
 
 

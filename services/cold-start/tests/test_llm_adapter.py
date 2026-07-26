@@ -71,7 +71,7 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
         result = await model.complete(
             system_prompt="系统",
             user_prompt="用户",
-            request_label="概念",
+            request_label="测试",
         )
 
     assert result == "勘探结果"
@@ -83,21 +83,28 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
     assert body["model"] == "test-model"
     assert body["stream"] is True
     assert any(
-        stage == "概念" and "收到首个正文片段" in message
+        stage == "测试" and "收到首个正文片段" in message
         for stage, message in progress.events
     )
     assert any(
-        stage == "概念" and "流式接收完成" in message
+        stage == "测试" and "流式接收完成" in message
         for stage, message in progress.events
     )
-    assert any(stage == "概念·思考" for stage, _ in progress.events)
-    assert any(stage == "概念·正文" for stage, _ in progress.events)
+    assert any(stage == "测试·思考" for stage, _ in progress.events)
+    assert any(stage == "测试·正文" for stage, _ in progress.events)
     assert "先理解问题。" in next(tmp_path.glob("*.reasoning.partial.txt")).read_text(
         encoding="utf-8"
     )
     assert "勘探结果" in next(tmp_path.glob("*.content.partial.txt")).read_text(
         encoding="utf-8"
     )
+    request_trace = json.loads(next(tmp_path.glob("*.request.json")).read_text())
+    assert request_trace["payload"]["messages"] == [
+        {"role": "system", "content": "系统"},
+        {"role": "user", "content": "用户"},
+    ]
+    assert "Authorization" not in request_trace
+    assert "secret" not in json.dumps(request_trace)
     events = next(tmp_path.glob("*.events.jsonl")).read_text(encoding="utf-8")
     assert '"kind": "comment"' in events
     assert '"status": "complete"' in events
@@ -151,11 +158,11 @@ async def test_adapter_keeps_partial_trace_when_remote_stream_breaks(tmp_path) -
             client=client,
             trace_directory=tmp_path,
         )
-        with pytest.raises(RuntimeError, match="概念流式请求连续失败"):
+        with pytest.raises(RuntimeError, match="测试流式请求连续失败"):
             await model.complete(
                 system_prompt="系统",
                 user_prompt="用户",
-                request_label="概念",
+                request_label="测试",
             )
 
     assert "尚未完成的思考" in next(

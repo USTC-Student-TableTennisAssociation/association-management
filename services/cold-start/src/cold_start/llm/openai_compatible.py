@@ -70,6 +70,12 @@ class OpenAICompatibleChatModel:
         endpoint = self._endpoint(self._settings.api_base_url)
         self._request_sequence += 1
         request_sequence = self._request_sequence
+        self._write_request_trace(
+            request_sequence=request_sequence,
+            request_label=request_label,
+            endpoint=endpoint,
+            payload=payload,
+        )
 
         last_error: Exception | None = None
         for attempt in range(self._settings.max_retries):
@@ -108,6 +114,36 @@ class OpenAICompatibleChatModel:
     async def aclose(self) -> None:
         if self._owns_client:
             await self._client.aclose()
+
+    def _write_request_trace(
+        self,
+        *,
+        request_sequence: int,
+        request_label: str,
+        endpoint: str,
+        payload: Mapping[str, Any],
+    ) -> None:
+        """在发送前保存不含鉴权信息的完整模型输入。"""
+
+        if self._trace_directory is None:
+            return
+        self._trace_directory.mkdir(parents=True, exist_ok=True)
+        safe_label = _safe_request_label(request_label)
+        path = self._trace_directory / (
+            f"{request_sequence:03d}-{safe_label}.request.json"
+        )
+        path.write_text(
+            json.dumps(
+                {
+                    "endpoint": endpoint,
+                    "request_label": request_label,
+                    "payload": payload,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     @staticmethod
     def _endpoint(api_base_url: str) -> str:
@@ -371,6 +407,10 @@ class _ModelDelta:
     reasoning: str = ""
 
 
+def _safe_request_label(request_label: str) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff-]+", "-", request_label).strip("-")
+
+
 class _StreamTrace:
     """把单次模型尝试的原始事件和部分输出持续写入本地。"""
 
@@ -400,7 +440,7 @@ class _StreamTrace:
         if directory is None:
             return _NullStreamTrace()
         directory.mkdir(parents=True, exist_ok=True)
-        safe_label = re.sub(r"[^\w\u4e00-\u9fff-]+", "-", request_label).strip("-")
+        safe_label = _safe_request_label(request_label)
         stem = f"{request_sequence:03d}-{safe_label}-attempt-{attempt}"
         return cls(
             events_file=(directory / f"{stem}.events.jsonl").open(
