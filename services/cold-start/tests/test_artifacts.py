@@ -2,11 +2,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from cold_start.document.models import ParsedDocument, ParsedPage
-from cold_start.global_exploration.artifacts import write_exploration_artifacts
+from cold_start.global_exploration.artifacts import (
+    create_exploration_run_directory,
+    write_exploration_artifacts,
+)
 from cold_start.global_exploration.models import (
-    ConceptSketch,
+    DocumentMemoryLandscape,
+    ExplorationBoundaryReview,
     GlobalExplorationSnapshot,
-    ReconciliationReview,
+    LandscapeObservationBatch,
     RouteStatistics,
     SourceMetadata,
 )
@@ -30,34 +34,49 @@ def test_artifact_writer_keeps_machine_and_human_readable_outputs(tmp_path: Path
             parser=document.parser_name,
             page_count=1,
         ),
-        global_summary_markdown="总结",
+        document_profile_markdown="文档画像",
         document_structure_markdown="结构",
-        concept_sketch=ConceptSketch(document_level_observation="观察"),
+        document_memory_landscape=DocumentMemoryLandscape(
+            scope_note="只用于定位后续阅读区域。"
+        ),
         review_history=[
-            ReconciliationReview(
-                accepted_as_initial_impression=True,
+            ExplorationBoundaryReview(
+                acceptable_as_global_exploration=True,
                 overall_assessment="可冻结",
             )
         ],
-        frozen_with_unresolved_issues=False,
+        frozen_with_boundary_issues=False,
         route_statistics=RouteStatistics(
-            summary_units=1,
-            structure_units=1,
-            concept_units=1,
+            profile_units=1,
+            structure_scans=1,
+            landscape_units=1,
+            landscape_merge_calls=1,
             review_rounds=1,
+        ),
+        landscape_observations=(
+            LandscapeObservationBatch(unit_pages=[1]),
         ),
     )
 
-    paths = write_exploration_artifacts(
+    run_directory = create_exploration_run_directory(
         output_root=tmp_path,
+        document=document,
+    )
+    paths = write_exploration_artifacts(
+        run_directory=run_directory,
         document=document,
         snapshot=snapshot,
     )
 
     assert paths.snapshot_json.exists()
     assert paths.report_markdown.exists()
+    assert paths.landscape_observations_json.exists()
     assert paths.parsed_document_markdown.read_text(encoding="utf-8") == "# 全文"
-    assert '"authority":"preliminary-low-authority"' in paths.snapshot_json.read_text(
+    snapshot_text = paths.snapshot_json.read_text(encoding="utf-8").replace(" ", "")
+    assert '"authority":"preliminary-low-authority"' in snapshot_text
+    assert '"schema_version":"global-exploration.v3"' in snapshot_text
+    assert "landscape_observations" not in snapshot_text
+    assert "低权威初步观察" in paths.report_markdown.read_text(encoding="utf-8")
+    assert '"unit_pages": [' in paths.landscape_observations_json.read_text(
         encoding="utf-8"
-    ).replace(" ", "")
-    assert "低权威初步印象" in paths.report_markdown.read_text(encoding="utf-8")
+    )

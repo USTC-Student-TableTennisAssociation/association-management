@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from cold_start.document.models import ParsedPage
+
+MARKDOWN_HEADING_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+\S.*$")
 
 
 @dataclass(frozen=True)
@@ -64,3 +67,37 @@ def build_reading_units(
 
     append_current()
     return tuple(units)
+
+
+def build_structure_scan_unit(
+    pages: tuple[ParsedPage, ...],
+    *,
+    preview_chars_per_page: int,
+) -> ReadingUnit:
+    """汇集标题和逐页短预览，供结构路径进行一次轻量导航扫描。"""
+
+    if preview_chars_per_page < 1:
+        raise ValueError("preview_chars_per_page 必须大于 0")
+    if not pages:
+        raise ValueError("结构扫描至少需要一页文档")
+
+    page_previews: list[str] = []
+    for page in pages:
+        headings = [
+            line.strip()
+            for line in page.markdown.splitlines()
+            if MARKDOWN_HEADING_PATTERN.match(line)
+        ]
+        heading_block = "\n".join(headings) if headings else "（未检测到 Markdown 标题）"
+        preview = page.markdown.strip()[:preview_chars_per_page]
+        page_previews.append(
+            f"〔第 {page.page_number} 页〕\n"
+            f"检测到的标题：\n{heading_block}\n"
+            f"页面开头预览：\n{preview or '（本页无可用文本）'}"
+        )
+
+    return ReadingUnit(
+        index=0,
+        page_numbers=tuple(page.page_number for page in pages),
+        content="\n\n".join(page_previews),
+    )

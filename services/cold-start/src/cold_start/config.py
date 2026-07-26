@@ -76,26 +76,29 @@ class ModelSettings:
 class ExplorationSettings:
     """全局勘探三条阅读路径及校验回路的边界。"""
 
-    summary_unit_chars: int = 18_000
-    structure_unit_chars: int = 12_000
-    concept_unit_chars: int = 10_000
-    structure_overlap_pages: int = 1
-    concept_overlap_pages: int = 1
+    profile_unit_chars: int = 18_000
+    structure_preview_chars_per_page: int = 400
+    landscape_unit_chars: int = 9_000
+    landscape_overlap_pages: int = 1
+    landscape_parallelism: int = 3
+    review_source_chars: int = 32_000
     revision_source_chars: int = 24_000
     max_review_rounds: int = 2
 
     def __post_init__(self) -> None:
         positive_values = {
-            "summary_unit_chars": self.summary_unit_chars,
-            "structure_unit_chars": self.structure_unit_chars,
-            "concept_unit_chars": self.concept_unit_chars,
+            "profile_unit_chars": self.profile_unit_chars,
+            "structure_preview_chars_per_page": self.structure_preview_chars_per_page,
+            "landscape_unit_chars": self.landscape_unit_chars,
+            "landscape_parallelism": self.landscape_parallelism,
+            "review_source_chars": self.review_source_chars,
             "revision_source_chars": self.revision_source_chars,
             "max_review_rounds": self.max_review_rounds,
         }
         for name, value in positive_values.items():
             if value < 1:
                 raise ValueError(f"{name} 必须大于 0")
-        if self.structure_overlap_pages < 0 or self.concept_overlap_pages < 0:
+        if self.landscape_overlap_pages < 0:
             raise ValueError("重叠页数不能为负数")
 
 

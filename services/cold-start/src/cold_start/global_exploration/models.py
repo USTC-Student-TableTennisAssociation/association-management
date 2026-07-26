@@ -7,23 +7,25 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+SignalBasis = Literal[
+    "heading",
+    "repeated",
+    "explicit_emphasis",
+    "explicit_cross_reference",
+]
+RouteName = Literal["profile", "structure", "landscape"]
+
 
 class StrictOutputModel(BaseModel):
-    """拒绝模型擅自扩展字段，避免悄悄丢失语义。"""
+    """拒绝模型擅自扩展字段，避免悄悄改变勘探边界。"""
 
     model_config = ConfigDict(extra="forbid")
 
 
-class GlobalSignal(StrictOutputModel):
-    """跨文档反复出现或对后续解析有提示作用的全局信号。"""
+class SourcedOutputModel(StrictOutputModel):
+    """带有页码证据的受控输出。"""
 
-    label: str
-    observation: str
-    importance: str
-    importance_reason: str
     source_pages: list[int] = Field(default_factory=list)
-    occurrence_count: int = Field(default=1, ge=1)
-    uncertainty: str | None = None
 
     @field_validator("source_pages")
     @classmethod
@@ -31,57 +33,71 @@ class GlobalSignal(StrictOutputModel):
         return sorted({page for page in pages if page >= 1})
 
 
-class CandidateConcept(StrictOutputModel):
-    """尚未成为记忆节点的候选概念。"""
+class MemoryArea(SourcedOutputModel):
+    """文档中承载某一粗略组织记忆方向的区域。"""
 
-    label: str
-    aliases: list[str] = Field(default_factory=list)
-    initial_understanding: str
-    importance: str
-    importance_reason: str
-    source_pages: list[int] = Field(default_factory=list)
-    uncertainties: list[str] = Field(default_factory=list)
+    label: str = Field(min_length=1, max_length=80)
+    coverage: str = Field(min_length=1, max_length=160)
 
-    @field_validator("source_pages")
+
+class GlobalSignal(SourcedOutputModel):
+    """值得后续阅读持续留意的文档级名称或主题信号。"""
+
+    label: str = Field(min_length=1, max_length=80)
+    context: str = Field(min_length=1, max_length=160)
+    basis: list[SignalBasis] = Field(min_length=1, max_length=4)
+
+    @field_validator("basis")
     @classmethod
-    def normalize_pages(cls, pages: list[int]) -> list[int]:
+    def normalize_basis(cls, values: list[SignalBasis]) -> list[SignalBasis]:
+        return list(dict.fromkeys(values))
+
+
+class ExplicitDocumentRelation(SourcedOutputModel):
+    """原文明示的章节承接、包含或交叉引用关系。"""
+
+    source_area: str = Field(min_length=1, max_length=80)
+    target_area: str = Field(min_length=1, max_length=80)
+    observation: str = Field(min_length=1, max_length=180)
+
+
+class LandscapeObservationBatch(StrictOutputModel):
+    """一个阅读单元新增的粗略记忆地形观察。"""
+
+    unit_pages: list[int] = Field(min_length=1)
+    memory_areas: list[MemoryArea] = Field(default_factory=list, max_length=6)
+    global_signals: list[GlobalSignal] = Field(default_factory=list, max_length=8)
+    explicit_relations: list[ExplicitDocumentRelation] = Field(
+        default_factory=list,
+        max_length=4,
+    )
+
+    @field_validator("unit_pages")
+    @classmethod
+    def normalize_unit_pages(cls, pages: list[int]) -> list[int]:
         return sorted({page for page in pages if page >= 1})
 
 
-class CoarseRelation(StrictOutputModel):
-    """只描述大概念之间的初步关系，不等同于最终图连线。"""
+class DocumentMemoryLandscape(StrictOutputModel):
+    """只用于后续定位阅读区域的文档级记忆地形。"""
 
-    source: str
-    target: str
-    relation: str
-    rationale: str
-    source_pages: list[int] = Field(default_factory=list)
-    uncertainty: str | None = None
-
-    @field_validator("source_pages")
-    @classmethod
-    def normalize_pages(cls, pages: list[int]) -> list[int]:
-        return sorted({page for page in pages if page >= 1})
-
-
-class ConceptSketch(StrictOutputModel):
-    """概念阅读路径从文档开头持续累积的初步印象。"""
-
-    document_level_observation: str = ""
-    global_signals: list[GlobalSignal] = Field(default_factory=list)
-    candidate_concepts: list[CandidateConcept] = Field(default_factory=list)
-    coarse_relations: list[CoarseRelation] = Field(default_factory=list)
-    open_questions: list[str] = Field(default_factory=list)
+    scope_note: str = Field(min_length=1, max_length=320)
+    memory_areas: list[MemoryArea] = Field(default_factory=list, max_length=20)
+    global_signals: list[GlobalSignal] = Field(default_factory=list, max_length=24)
+    explicit_relations: list[ExplicitDocumentRelation] = Field(
+        default_factory=list,
+        max_length=12,
+    )
 
 
 class ReviewIssue(StrictOutputModel):
-    """交叉校验发现的、可触发定向回看的问题。"""
+    """全局勘探边界校验发现的可修复问题。"""
 
     severity: Literal["low", "medium", "high"]
-    routes: list[Literal["summary", "structure", "concept"]] = Field(min_length=1)
-    description: str
+    routes: list[RouteName] = Field(min_length=1)
+    description: str = Field(min_length=1, max_length=240)
     evidence_pages: list[int] = Field(default_factory=list)
-    revision_instruction: str
+    revision_instruction: str = Field(min_length=1, max_length=240)
 
     @field_validator("evidence_pages")
     @classmethod
@@ -90,28 +106,26 @@ class ReviewIssue(StrictOutputModel):
 
     @field_validator("routes")
     @classmethod
-    def normalize_routes(
-        cls,
-        routes: list[Literal["summary", "structure", "concept"]],
-    ) -> list[Literal["summary", "structure", "concept"]]:
+    def normalize_routes(cls, routes: list[RouteName]) -> list[RouteName]:
         return list(dict.fromkeys(routes))
 
 
-class ReconciliationReview(StrictOutputModel):
-    """三条独立阅读路径的交叉校验结果。"""
+class ExplorationBoundaryReview(StrictOutputModel):
+    """三份产物能否作为低权威全局阅读地图冻结。"""
 
-    accepted_as_initial_impression: bool
-    overall_assessment: str
-    issues: list[ReviewIssue] = Field(default_factory=list)
-    unresolved_uncertainties: list[str] = Field(default_factory=list)
+    acceptable_as_global_exploration: bool
+    overall_assessment: str = Field(min_length=1, max_length=500)
+    issues: list[ReviewIssue] = Field(default_factory=list, max_length=10)
+    non_blocking_notes: list[str] = Field(default_factory=list, max_length=10)
 
 
 class RouteStatistics(StrictOutputModel):
     """用于审计阅读覆盖范围，不表达知识结论。"""
 
-    summary_units: int
-    structure_units: int
-    concept_units: int
+    profile_units: int
+    structure_scans: int
+    landscape_units: int
+    landscape_merge_calls: int
     review_rounds: int
 
 
@@ -126,17 +140,21 @@ class SourceMetadata(StrictOutputModel):
 
 
 class GlobalExplorationSnapshot(StrictOutputModel):
-    """冻结后的低权威全局勘探快照。"""
+    """冻结后的低权威文档级阅读地图。"""
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["global-exploration.v1"] = "global-exploration.v1"
+    schema_version: Literal["global-exploration.v3"] = "global-exploration.v3"
     authority: Literal["preliminary-low-authority"] = "preliminary-low-authority"
     created_at: datetime
     source: SourceMetadata
-    global_summary_markdown: str
+    document_profile_markdown: str
     document_structure_markdown: str
-    concept_sketch: ConceptSketch
-    review_history: list[ReconciliationReview]
-    frozen_with_unresolved_issues: bool
+    document_memory_landscape: DocumentMemoryLandscape
+    review_history: list[ExplorationBoundaryReview]
+    frozen_with_boundary_issues: bool
     route_statistics: RouteStatistics
+    landscape_observations: tuple[LandscapeObservationBatch, ...] = Field(
+        default_factory=tuple,
+        exclude=True,
+    )

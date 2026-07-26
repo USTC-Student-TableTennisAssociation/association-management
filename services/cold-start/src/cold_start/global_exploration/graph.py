@@ -1,4 +1,4 @@
-"""用 LangGraph 编排三条独立阅读路径与有界校验回路。"""
+"""用 LangGraph 编排文档级全局勘探。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime
-from typing import Literal, TypedDict
+from typing import TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -14,48 +14,48 @@ from cold_start.config import ExplorationSettings
 from cold_start.document.models import ParsedDocument
 from cold_start.global_exploration.json_output import complete_json
 from cold_start.global_exploration.models import (
-    ConceptSketch,
+    DocumentMemoryLandscape,
+    ExplorationBoundaryReview,
     GlobalExplorationSnapshot,
-    ReconciliationReview,
+    LandscapeObservationBatch,
+    RouteName,
     RouteStatistics,
     SourceMetadata,
 )
 from cold_start.global_exploration.prompts import (
     BASE_SYSTEM_PROMPT,
-    concept_prompt,
+    landscape_merge_prompt,
+    landscape_observation_prompt,
+    profile_prompt,
     reconciliation_prompt,
     revision_prompt,
     structure_prompt,
-    summary_prompt,
 )
-from cold_start.global_exploration.units import ReadingUnit, build_reading_units
+from cold_start.global_exploration.units import (
+    ReadingUnit,
+    build_reading_units,
+    build_structure_scan_unit,
+)
 from cold_start.llm.base import ChatModel
 from cold_start.progress import NullProgressReporter, ProgressReporter
-
-RouteName = Literal["summary", "structure", "concept"]
 
 
 class ExplorationState(TypedDict, total=False):
     document: ParsedDocument
-    summary_units: tuple[ReadingUnit, ...]
-    structure_units: tuple[ReadingUnit, ...]
-    concept_units: tuple[ReadingUnit, ...]
-    summary_cursor: int
-    structure_cursor: int
-    concept_cursor: int
-    summary_markdown: str
+    profile_units: tuple[ReadingUnit, ...]
+    structure_scan_unit: ReadingUnit
+    landscape_units: tuple[ReadingUnit, ...]
+    profile_markdown: str
     structure_markdown: str
-    concept_sketch: ConceptSketch
-    summary_finished: bool
-    structure_finished: bool
-    concept_finished: bool
-    review_history: list[ReconciliationReview]
+    landscape_observations: tuple[LandscapeObservationBatch, ...]
+    memory_landscape: DocumentMemoryLandscape
+    review_history: list[ExplorationBoundaryReview]
     review_rounds: int
-    frozen_with_unresolved_issues: bool
+    frozen_with_boundary_issues: bool
 
 
 class GlobalExplorationRunner:
-    """运行全局勘探并冻结可审计快照。"""
+    """运行全局勘探并冻结低权威文档级阅读地图。"""
 
     def __init__(
         self,
@@ -71,7 +71,6 @@ class GlobalExplorationRunner:
 
     async def run(self, document: ParsedDocument) -> GlobalExplorationSnapshot:
         state = await self._graph.ainvoke({"document": document})
-        review_history = state["review_history"]
         return GlobalExplorationSnapshot(
             created_at=datetime.now(UTC),
             source=SourceMetadata(
@@ -81,214 +80,237 @@ class GlobalExplorationRunner:
                 parser=document.parser_name,
                 page_count=document.page_count,
             ),
-            global_summary_markdown=state["summary_markdown"],
+            document_profile_markdown=state["profile_markdown"],
             document_structure_markdown=state["structure_markdown"],
-            concept_sketch=state["concept_sketch"],
-            review_history=review_history,
-            frozen_with_unresolved_issues=state["frozen_with_unresolved_issues"],
+            document_memory_landscape=state["memory_landscape"],
+            review_history=state["review_history"],
+            frozen_with_boundary_issues=state["frozen_with_boundary_issues"],
             route_statistics=RouteStatistics(
-                summary_units=len(state["summary_units"]),
-                structure_units=len(state["structure_units"]),
-                concept_units=len(state["concept_units"]),
+                profile_units=len(state["profile_units"]),
+                structure_scans=1,
+                landscape_units=len(state["landscape_units"]),
+                landscape_merge_calls=1,
                 review_rounds=state["review_rounds"],
             ),
+            landscape_observations=state["landscape_observations"],
         )
 
     def _build_graph(self):
         builder = StateGraph(ExplorationState)
-        builder.add_node("plan_reading_routes", self._plan_reading_routes)
-        builder.add_node("summary_read_next", self._summary_read_next)
-        builder.add_node("structure_read_next", self._structure_read_next)
-        builder.add_node("concept_read_next", self._concept_read_next)
-        builder.add_node("summary_complete", self._summary_complete)
-        builder.add_node("structure_complete", self._structure_complete)
-        builder.add_node("concept_complete", self._concept_complete)
-        builder.add_node("reconcile_initial_impression", self._reconcile)
+        builder.add_node("plan_exploration", self._plan_exploration)
+        builder.add_node("scan_document_structure", self._scan_document_structure)
+        builder.add_node("build_document_profile", self._build_document_profile)
+        builder.add_node("build_memory_landscape", self._build_memory_landscape)
+        builder.add_node("review_exploration_boundary", self._review_boundary)
         builder.add_node("targeted_reread", self._targeted_reread)
-        builder.add_node("freeze_initial_snapshot", self._freeze)
+        builder.add_node("freeze_exploration_snapshot", self._freeze)
 
-        builder.add_edge(START, "plan_reading_routes")
-        builder.add_edge("plan_reading_routes", "summary_read_next")
-        builder.add_edge("plan_reading_routes", "structure_read_next")
-        builder.add_edge("plan_reading_routes", "concept_read_next")
-
-        builder.add_conditional_edges(
-            "summary_read_next",
-            self._summary_route,
-            {"continue": "summary_read_next", "complete": "summary_complete"},
-        )
-        builder.add_conditional_edges(
-            "structure_read_next",
-            self._structure_route,
-            {"continue": "structure_read_next", "complete": "structure_complete"},
-        )
-        builder.add_conditional_edges(
-            "concept_read_next",
-            self._concept_route,
-            {"continue": "concept_read_next", "complete": "concept_complete"},
-        )
+        builder.add_edge(START, "plan_exploration")
+        builder.add_edge("plan_exploration", "scan_document_structure")
+        builder.add_edge("scan_document_structure", "build_document_profile")
+        builder.add_edge("scan_document_structure", "build_memory_landscape")
         builder.add_edge(
-            ["summary_complete", "structure_complete", "concept_complete"],
-            "reconcile_initial_impression",
+            ["build_document_profile", "build_memory_landscape"],
+            "review_exploration_boundary",
         )
         builder.add_conditional_edges(
-            "reconcile_initial_impression",
+            "review_exploration_boundary",
             self._review_route,
-            {"revise": "targeted_reread", "freeze": "freeze_initial_snapshot"},
+            {"revise": "targeted_reread", "freeze": "freeze_exploration_snapshot"},
         )
-        builder.add_edge("targeted_reread", "reconcile_initial_impression")
-        builder.add_edge("freeze_initial_snapshot", END)
+        builder.add_edge("targeted_reread", "review_exploration_boundary")
+        builder.add_edge("freeze_exploration_snapshot", END)
         return builder.compile()
 
-    def _plan_reading_routes(self, state: ExplorationState) -> ExplorationState:
+    def _plan_exploration(self, state: ExplorationState) -> ExplorationState:
         document = state["document"]
-        summary_units = build_reading_units(
+        profile_units = build_reading_units(
             document.pages,
-            target_chars=self._settings.summary_unit_chars,
+            target_chars=self._settings.profile_unit_chars,
         )
-        structure_units = build_reading_units(
+        structure_scan_unit = build_structure_scan_unit(
             document.pages,
-            target_chars=self._settings.structure_unit_chars,
-            overlap_pages=self._settings.structure_overlap_pages,
+            preview_chars_per_page=self._settings.structure_preview_chars_per_page,
         )
-        concept_units = build_reading_units(
+        landscape_units = build_reading_units(
             document.pages,
-            target_chars=self._settings.concept_unit_chars,
-            overlap_pages=self._settings.concept_overlap_pages,
+            target_chars=self._settings.landscape_unit_chars,
+            overlap_pages=self._settings.landscape_overlap_pages,
         )
         self._progress.report(
             "规划",
             (
-                f"阅读路径已生成：总结 {len(summary_units)} 个单元，"
-                f"结构 {len(structure_units)} 个单元，"
-                f"概念 {len(concept_units)} 个单元"
+                f"勘探路径已生成：画像 {len(profile_units)} 个单元，"
+                "结构 1 次快速扫描，"
+                f"地形观察 {len(landscape_units)} 个单元，"
+                f"最多并发 {self._settings.landscape_parallelism} 个"
             ),
         )
         return {
-            "summary_units": summary_units,
-            "structure_units": structure_units,
-            "concept_units": concept_units,
-            "summary_cursor": 0,
-            "structure_cursor": 0,
-            "concept_cursor": 0,
-            "summary_markdown": "",
+            "profile_units": profile_units,
+            "structure_scan_unit": structure_scan_unit,
+            "landscape_units": landscape_units,
+            "profile_markdown": "",
             "structure_markdown": "",
-            "concept_sketch": ConceptSketch(),
+            "landscape_observations": (),
             "review_history": [],
             "review_rounds": 0,
-            "frozen_with_unresolved_issues": False,
+            "frozen_with_boundary_issues": False,
         }
 
-    async def _summary_read_next(self, state: ExplorationState) -> ExplorationState:
-        cursor = state["summary_cursor"]
-        unit = state["summary_units"][cursor]
-        total = len(state["summary_units"])
-        output = await self._complete_text(
-            stage="总结",
-            action=f"阅读单元 {cursor + 1}/{total}（{unit.page_label}）",
-            system_prompt=BASE_SYSTEM_PROMPT,
-            user_prompt=summary_prompt(
-                title=state["document"].title,
-                unit=unit,
-                current_draft=state["summary_markdown"],
-            ),
-        )
-        return {"summary_markdown": output.strip(), "summary_cursor": cursor + 1}
-
-    async def _structure_read_next(self, state: ExplorationState) -> ExplorationState:
-        cursor = state["structure_cursor"]
-        unit = state["structure_units"][cursor]
-        total = len(state["structure_units"])
+    async def _scan_document_structure(
+        self,
+        state: ExplorationState,
+    ) -> ExplorationState:
         output = await self._complete_text(
             stage="结构",
-            action=f"阅读单元 {cursor + 1}/{total}（{unit.page_label}）",
+            action="快速扫描目录、标题与逐页短预览",
             system_prompt=BASE_SYSTEM_PROMPT,
             user_prompt=structure_prompt(
                 title=state["document"].title,
-                unit=unit,
-                current_draft=state["structure_markdown"],
+                unit=state["structure_scan_unit"],
             ),
         )
-        return {"structure_markdown": output.strip(), "structure_cursor": cursor + 1}
+        return {"structure_markdown": output.strip()}
 
-    async def _concept_read_next(self, state: ExplorationState) -> ExplorationState:
-        cursor = state["concept_cursor"]
-        unit = state["concept_units"][cursor]
-        total = len(state["concept_units"])
-        action = f"阅读单元 {cursor + 1}/{total}（{unit.page_label}）"
-        self._progress.report("概念", f"开始{action}")
-        started_at = time.perf_counter()
-        output = await complete_json(
-            self._model,
-            schema=ConceptSketch,
-            system_prompt=BASE_SYSTEM_PROMPT,
-            user_prompt=concept_prompt(
-                title=state["document"].title,
-                unit=unit,
-                current=state["concept_sketch"],
-            ),
-            progress=self._progress,
-            progress_stage="概念",
+    async def _build_document_profile(
+        self,
+        state: ExplorationState,
+    ) -> ExplorationState:
+        draft = ""
+        units = state["profile_units"]
+        for cursor, unit in enumerate(units):
+            draft = (
+                await self._complete_text(
+                    stage="画像",
+                    action=(
+                        f"浏览单元 {cursor + 1}/{len(units)}"
+                        f"（{unit.page_label}）"
+                    ),
+                    system_prompt=BASE_SYSTEM_PROMPT,
+                    user_prompt=profile_prompt(
+                        title=state["document"].title,
+                        unit=unit,
+                        current_draft=draft,
+                        structure_markdown=state["structure_markdown"],
+                    ),
+                )
+            ).strip()
+        return {"profile_markdown": draft}
+
+    async def _build_memory_landscape(
+        self,
+        state: ExplorationState,
+    ) -> ExplorationState:
+        units = state["landscape_units"]
+        semaphore = asyncio.Semaphore(self._settings.landscape_parallelism)
+
+        async def observe(
+            cursor: int,
+            unit: ReadingUnit,
+        ) -> LandscapeObservationBatch:
+            async with semaphore:
+                return await self._observe_landscape_unit(
+                    title=state["document"].title,
+                    structure_markdown=state["structure_markdown"],
+                    unit=unit,
+                    cursor=cursor,
+                    total=len(units),
+                )
+
+        observations = tuple(
+            await asyncio.gather(
+                *(observe(cursor, unit) for cursor, unit in enumerate(units))
+            )
         )
         self._progress.report(
-            "概念",
-            f"完成{action}，耗时 {time.perf_counter() - started_at:.1f} 秒",
+            "地形合并",
+            f"开始合并 {len(observations)} 份区域观察并执行去重压缩",
         )
-        return {"concept_sketch": output, "concept_cursor": cursor + 1}
+        started_at = time.perf_counter()
+        memory_landscape = await complete_json(
+            self._model,
+            schema=DocumentMemoryLandscape,
+            system_prompt=BASE_SYSTEM_PROMPT,
+            user_prompt=landscape_merge_prompt(
+                title=state["document"].title,
+                observations=observations,
+                structure_markdown=state["structure_markdown"],
+            ),
+            progress=self._progress,
+            progress_stage="地形合并",
+        )
+        self._progress.report(
+            "地形合并",
+            (
+                f"完成文档记忆地形，耗时 "
+                f"{time.perf_counter() - started_at:.1f} 秒"
+            ),
+        )
+        return {
+            "landscape_observations": observations,
+            "memory_landscape": memory_landscape,
+        }
 
-    @staticmethod
-    def _summary_route(state: ExplorationState) -> Literal["continue", "complete"]:
-        if state["summary_cursor"] < len(state["summary_units"]):
-            return "continue"
-        return "complete"
+    async def _observe_landscape_unit(
+        self,
+        *,
+        title: str,
+        structure_markdown: str,
+        unit: ReadingUnit,
+        cursor: int,
+        total: int,
+    ) -> LandscapeObservationBatch:
+        stage = f"地形勘探·{cursor + 1}/{total}"
+        self._progress.report(stage, f"开始浏览{unit.page_label}")
+        started_at = time.perf_counter()
+        observation = await complete_json(
+            self._model,
+            schema=LandscapeObservationBatch,
+            system_prompt=BASE_SYSTEM_PROMPT,
+            user_prompt=landscape_observation_prompt(
+                title=title,
+                unit=unit,
+                structure_markdown=structure_markdown,
+            ),
+            progress=self._progress,
+            progress_stage=stage,
+        )
+        observation = observation.model_copy(
+            update={"unit_pages": list(unit.page_numbers)}
+        )
+        self._progress.report(
+            stage,
+            f"完成区域观察，耗时 {time.perf_counter() - started_at:.1f} 秒",
+        )
+        return observation
 
-    @staticmethod
-    def _structure_route(state: ExplorationState) -> Literal["continue", "complete"]:
-        if state["structure_cursor"] < len(state["structure_units"]):
-            return "continue"
-        return "complete"
-
-    @staticmethod
-    def _concept_route(state: ExplorationState) -> Literal["continue", "complete"]:
-        if state["concept_cursor"] < len(state["concept_units"]):
-            return "continue"
-        return "complete"
-
-    @staticmethod
-    def _summary_complete(_: ExplorationState) -> ExplorationState:
-        return {"summary_finished": True}
-
-    @staticmethod
-    def _structure_complete(_: ExplorationState) -> ExplorationState:
-        return {"structure_finished": True}
-
-    @staticmethod
-    def _concept_complete(_: ExplorationState) -> ExplorationState:
-        return {"concept_finished": True}
-
-    async def _reconcile(self, state: ExplorationState) -> ExplorationState:
+    async def _review_boundary(
+        self,
+        state: ExplorationState,
+    ) -> ExplorationState:
         review_round = state["review_rounds"] + 1
-        action = f"第 {review_round}/{self._settings.max_review_rounds} 轮交叉校验"
+        action = f"第 {review_round}/{self._settings.max_review_rounds} 轮边界校验"
         self._progress.report("校验", f"开始{action}")
         started_at = time.perf_counter()
         review = await complete_json(
             self._model,
-            schema=ReconciliationReview,
+            schema=ExplorationBoundaryReview,
             system_prompt=BASE_SYSTEM_PROMPT,
             user_prompt=reconciliation_prompt(
                 title=state["document"].title,
-                summary_markdown=state["summary_markdown"],
+                profile_markdown=state["profile_markdown"],
                 structure_markdown=state["structure_markdown"],
-                concept_sketch=state["concept_sketch"],
-                source_index=self._source_index(state["document"]),
+                memory_landscape=state["memory_landscape"],
+                source_evidence=self._source_evidence(state["document"]),
             ),
             progress=self._progress,
             progress_stage="校验",
         )
         status = (
-            "接受为低权威初步印象"
-            if review.accepted_as_initial_impression
-            else f"发现 {len(review.issues)} 个待处理问题"
+            "可以冻结为全局阅读地图"
+            if review.acceptable_as_global_exploration
+            else f"发现 {len(review.issues)} 个需要回看的问题"
         )
         self._progress.report(
             "校验",
@@ -299,9 +321,9 @@ class GlobalExplorationRunner:
             "review_rounds": review_round,
         }
 
-    def _review_route(self, state: ExplorationState) -> Literal["revise", "freeze"]:
+    def _review_route(self, state: ExplorationState) -> str:
         latest_review = state["review_history"][-1]
-        if latest_review.accepted_as_initial_impression:
+        if latest_review.acceptable_as_global_exploration:
             return "freeze"
         if state["review_rounds"] >= self._settings.max_review_rounds:
             return "freeze"
@@ -320,37 +342,38 @@ class GlobalExplorationRunner:
         pages_label = (
             "、".join(str(page) for page in evidence_pages)
             if evidence_pages
-            else "未指定，使用文档索引"
+            else "未指定，使用完整证据范围"
         )
         self._progress.report(
             "回看",
             (
-                f"准备修订路径：{self._route_labels(requested_routes)}；"
+                f"准备修订产物：{self._route_labels(requested_routes)}；"
                 f"证据页：{pages_label}"
             ),
         )
-        tasks = [
-            self._revise_route(route, state, latest_review)
-            for route in ("summary", "structure", "concept")
-            if route in requested_routes
-        ]
-        revisions = await asyncio.gather(*tasks)
+        revisions = await asyncio.gather(
+            *(
+                self._revise_route(route, state, latest_review)
+                for route in ("profile", "structure", "landscape")
+                if route in requested_routes
+            )
+        )
         update: ExplorationState = {}
         for route, value in revisions:
-            if route == "summary":
-                update["summary_markdown"] = value
+            if route == "profile":
+                update["profile_markdown"] = value
             elif route == "structure":
                 update["structure_markdown"] = value
             else:
-                update["concept_sketch"] = value
+                update["memory_landscape"] = value
         return update
 
     async def _revise_route(
         self,
         route: RouteName,
         state: ExplorationState,
-        review: ReconciliationReview,
-    ) -> tuple[RouteName, str | ConceptSketch]:
+        review: ExplorationBoundaryReview,
+    ) -> tuple[RouteName, str | DocumentMemoryLandscape]:
         relevant_issues = [issue for issue in review.issues if route in issue.routes]
         instructions = "\n".join(
             f"- {issue.description}；指令：{issue.revision_instruction}"
@@ -361,10 +384,15 @@ class GlobalExplorationRunner:
         )
         source_excerpt = self._source_excerpt(state["document"], evidence_pages)
 
-        if route == "summary":
-            current = state["summary_markdown"]
+        if route in {"profile", "structure"}:
+            current = (
+                state["profile_markdown"]
+                if route == "profile"
+                else state["structure_markdown"]
+            )
+            label = "画像" if route == "profile" else "结构"
             output = await self._complete_text(
-                stage="回看·总结",
+                stage=f"回看·{label}",
                 action=f"根据 {self._issue_pages_label(relevant_issues)} 修订",
                 system_prompt=BASE_SYSTEM_PROMPT,
                 user_prompt=revision_prompt(
@@ -377,63 +405,52 @@ class GlobalExplorationRunner:
             )
             return route, output.strip()
 
-        if route == "structure":
-            current = state["structure_markdown"]
-            output = await self._complete_text(
-                stage="回看·结构",
-                action=f"根据 {self._issue_pages_label(relevant_issues)} 修订",
-                system_prompt=BASE_SYSTEM_PROMPT,
-                user_prompt=revision_prompt(
-                    route=route,
-                    title=state["document"].title,
-                    current_output=current,
-                    issue_instructions=instructions,
-                    source_excerpt=source_excerpt,
-                ),
-            )
-            return route, output.strip()
-
-        schema = json.dumps(ConceptSketch.model_json_schema(), ensure_ascii=False)
+        schema = json.dumps(
+            DocumentMemoryLandscape.model_json_schema(),
+            ensure_ascii=False,
+        )
         action = f"根据 {self._issue_pages_label(relevant_issues)} 修订"
-        self._progress.report("回看·概念", f"开始{action}")
+        self._progress.report("回看·地形", f"开始{action}")
         started_at = time.perf_counter()
         output = await complete_json(
             self._model,
-            schema=ConceptSketch,
+            schema=DocumentMemoryLandscape,
             system_prompt=BASE_SYSTEM_PROMPT,
             user_prompt=revision_prompt(
                 route=route,
                 title=state["document"].title,
-                current_output=state["concept_sketch"].model_dump_json(indent=2),
+                current_output=state["memory_landscape"].model_dump_json(indent=2),
                 issue_instructions=instructions,
                 source_excerpt=source_excerpt,
-                concept_schema=schema,
+                landscape_schema=schema,
             ),
             progress=self._progress,
-            progress_stage="回看·概念",
+            progress_stage="回看·地形",
         )
         self._progress.report(
-            "回看·概念",
+            "回看·地形",
             f"完成{action}，耗时 {time.perf_counter() - started_at:.1f} 秒",
         )
         return route, output
 
     def _freeze(self, state: ExplorationState) -> ExplorationState:
         latest_review = state["review_history"][-1]
-        unresolved = not latest_review.accepted_as_initial_impression
-        if unresolved:
-            self._progress.report("冻结", "达到校验上限，快照将保留未解决问题")
+        blocking = not latest_review.acceptable_as_global_exploration
+        if blocking:
+            self._progress.report("冻结", "达到校验上限，阅读地图仍带边界问题")
         else:
-            self._progress.report("冻结", "初步印象已通过校验，正在冻结快照")
-        return {"frozen_with_unresolved_issues": unresolved}
+            self._progress.report("冻结", "全局勘探边界通过，正在冻结阅读地图")
+        return {"frozen_with_boundary_issues": blocking}
 
-    @staticmethod
-    def _source_index(document: ParsedDocument, max_chars: int = 18_000) -> str:
-        per_page = max(120, min(500, max_chars // max(document.page_count, 1)))
-        return "\n\n".join(
-            f"〔第 {page.page_number} 页〕\n{page.markdown[:per_page]}"
+    def _source_evidence(self, document: ParsedDocument) -> str:
+        body = "\n\n".join(
+            f"〔第 {page.page_number} 页〕\n{page.markdown}"
             for page in document.pages
-        )[:max_chars]
+        )
+        return self._bounded_source(
+            body,
+            max_chars=self._settings.review_source_chars,
+        )
 
     def _source_excerpt(
         self,
@@ -448,7 +465,17 @@ class GlobalExplorationRunner:
         body = "\n\n".join(
             f"〔第 {page.page_number} 页〕\n{page.markdown}" for page in selected
         )
-        return body[: self._settings.revision_source_chars]
+        return self._bounded_source(
+            body,
+            max_chars=self._settings.revision_source_chars,
+        )
+
+    @staticmethod
+    def _bounded_source(body: str, *, max_chars: int) -> str:
+        if len(body) <= max_chars:
+            return body
+        marker = "\n\n〔证据包因长度上限被截断，不得据此宣称未覆盖部分不存在〕"
+        return body[: max_chars - len(marker)] + marker
 
     async def _complete_text(
         self,
@@ -473,12 +500,12 @@ class GlobalExplorationRunner:
 
     @staticmethod
     def _route_labels(routes: set[str]) -> str:
-        labels = {"summary": "总结", "structure": "结构", "concept": "概念"}
+        labels = {"profile": "画像", "structure": "结构", "landscape": "地形"}
         return "、".join(labels[route] for route in sorted(routes))
 
     @staticmethod
     def _issue_pages_label(issues: list) -> str:
         pages = sorted({page for issue in issues for page in issue.evidence_pages})
         if not pages:
-            return "文档索引"
+            return "完整证据范围"
         return f"第 {'、'.join(str(page) for page in pages)} 页"

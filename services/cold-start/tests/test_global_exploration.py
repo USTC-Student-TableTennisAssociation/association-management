@@ -18,9 +18,54 @@ class RecordingProgressReporter:
         self.events.append((stage, message))
 
 
+def landscape_observation_payload() -> dict:
+    return {
+        "unit_pages": [1],
+        "memory_areas": [
+            {
+                "label": "活动申报与行政工作",
+                "coverage": "活动申报及相关行政事项",
+                "source_pages": [1],
+            }
+        ],
+        "global_signals": [
+            {
+                "label": "二课申请",
+                "context": "在行政工作章节中作为明确主题出现",
+                "basis": ["heading"],
+                "source_pages": [1],
+            }
+        ],
+        "explicit_relations": [],
+    }
+
+
+def memory_landscape_payload() -> dict:
+    return {
+        "scope_note": "只用于定位后续阅读区域，不是记忆内容或节点地图。",
+        "memory_areas": [
+            {
+                "label": "活动申报与行政工作",
+                "coverage": "活动申报、经费、场地和物资等行政工作",
+                "source_pages": [2, 3],
+            }
+        ],
+        "global_signals": [
+            {
+                "label": "二课申请",
+                "context": "在行政工作和活动材料中出现",
+                "basis": ["heading", "repeated"],
+                "source_pages": [2, 3],
+            }
+        ],
+        "explicit_relations": [],
+    }
+
+
 class AcceptingFakeModel:
     def __init__(self) -> None:
         self.prompts: list[str] = []
+        self.system_prompts: list[str] = []
 
     async def complete(
         self,
@@ -30,39 +75,24 @@ class AcceptingFakeModel:
         temperature: float = 0.0,
         request_label: str = "模型",
     ) -> str:
-        del request_label
+        del temperature, request_label
+        self.system_prompts.append(system_prompt)
         self.prompts.append(user_prompt)
-        if "[ROUTE: summary]" in user_prompt:
-            return "# 总结\n这是面向协会成员的手册。〔第 1 页〕"
         if "[ROUTE: structure]" in user_prompt:
-            return "# 结构\n先介绍活动，再介绍公共流程。〔第 1 页〕"
-        if "[ROUTE: concept]" in user_prompt:
-            return json.dumps(
-                {
-                    "document_level_observation": "文档沉淀了活动和公共流程。",
-                    "global_signals": [
-                        {
-                            "label": "二课申请",
-                            "observation": "多个活动可能复用",
-                            "importance": "较高",
-                            "importance_reason": "跨活动出现",
-                            "source_pages": [2, 3],
-                            "occurrence_count": 2,
-                        }
-                    ],
-                    "candidate_concepts": [],
-                    "coarse_relations": [],
-                    "open_questions": ["其是否适用于所有比赛仍需局部编译确认"],
-                },
-                ensure_ascii=False,
-            )
+            return "# 结构\n先介绍活动，再介绍行政工作。〔第 1 页〕"
+        if "[ROUTE: profile]" in user_prompt:
+            return "# 文档画像\n这是面向协会成员的历史与工作手册。〔第 1 页〕"
+        if "[ROUTE: landscape_observation]" in user_prompt:
+            return json.dumps(landscape_observation_payload(), ensure_ascii=False)
+        if "[ROUTE: landscape_merge]" in user_prompt:
+            return json.dumps(memory_landscape_payload(), ensure_ascii=False)
         if "[ROUTE: reconciliation]" in user_prompt:
             return json.dumps(
                 {
-                    "accepted_as_initial_impression": True,
-                    "overall_assessment": "三条路径关注点不同但没有实质冲突。",
+                    "acceptable_as_global_exploration": True,
+                    "overall_assessment": "三份产物保持了文档级和区域级粒度。",
                     "issues": [],
-                    "unresolved_uncertainties": ["公共流程的适用边界尚未确认"],
+                    "non_blocking_notes": ["具体内容留待后续局部阅读。"],
                 },
                 ensure_ascii=False,
             )
@@ -82,48 +112,49 @@ class RevisingFakeModel(AcceptingFakeModel):
         temperature: float = 0.0,
         request_label: str = "模型",
     ) -> str:
-        del request_label
         if "[ROUTE: reconciliation]" in user_prompt:
+            self.system_prompts.append(system_prompt)
             self.prompts.append(user_prompt)
             self.review_calls += 1
             if self.review_calls == 1:
                 return json.dumps(
                     {
-                        "accepted_as_initial_impression": False,
-                        "overall_assessment": "总结漏掉实践不是制度。",
+                        "acceptable_as_global_exploration": False,
+                        "overall_assessment": "画像展开了不必要的局部事实。",
                         "issues": [
                             {
                                 "severity": "high",
-                                "routes": ["summary"],
-                                "description": "总结把历史做法写成硬性要求",
+                                "routes": ["profile"],
+                                "description": "画像展开了第 2 页的具体历史实践",
                                 "evidence_pages": [2],
-                                "revision_instruction": "回看第 2 页并降低断言强度",
+                                "revision_instruction": "上收为文档级材料类型说明",
                             }
                         ],
-                        "unresolved_uncertainties": [],
+                        "non_blocking_notes": [],
                     },
                     ensure_ascii=False,
                 )
             return json.dumps(
                 {
-                    "accepted_as_initial_impression": True,
-                    "overall_assessment": "定向回看已修复问题。",
+                    "acceptable_as_global_exploration": True,
+                    "overall_assessment": "定向回看已恢复全局粒度。",
                     "issues": [],
-                    "unresolved_uncertainties": [],
+                    "non_blocking_notes": [],
                 },
                 ensure_ascii=False,
             )
-        if "[ROUTE: revision:summary]" in user_prompt:
+        if "[ROUTE: revision:profile]" in user_prompt:
+            self.system_prompts.append(system_prompt)
             self.prompts.append(user_prompt)
-            source_excerpt = user_prompt.split("定向回看的原文：", maxsplit=1)[1]
+            source_excerpt = user_prompt.split("定向回看的完整原文：", maxsplit=1)[1]
             assert "〔第 2 页〕" in source_excerpt
             assert "〔第 1 页〕" not in source_excerpt
-            return "# 总结\n第 2 页描述的是历史实践，不是制度。〔第 2 页〕"
+            return "# 文档画像\n文档混合了历史叙述与工作说明。〔第 2 页〕"
         return await super().complete(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             temperature=temperature,
-            request_label="模型",
+            request_label=request_label,
         )
 
 
@@ -149,34 +180,68 @@ def make_document() -> ParsedDocument:
 
 
 @pytest.mark.asyncio
-async def test_three_routes_read_original_document_independently() -> None:
+async def test_routes_build_a_document_level_exploration_map() -> None:
     model = AcceptingFakeModel()
     progress = RecordingProgressReporter()
     snapshot = await GlobalExplorationRunner(
         model=model,
         progress=progress,
         settings=ExplorationSettings(
-            summary_unit_chars=15,
-            structure_unit_chars=15,
-            concept_unit_chars=15,
-            structure_overlap_pages=0,
-            concept_overlap_pages=0,
+            profile_unit_chars=15,
+            structure_preview_chars_per_page=15,
+            landscape_unit_chars=15,
+            landscape_overlap_pages=0,
+            landscape_parallelism=2,
         ),
     ).run(make_document())
 
-    for route in ("summary", "structure", "concept"):
-        route_prompts = [prompt for prompt in model.prompts if f"[ROUTE: {route}]" in prompt]
-        assert route_prompts
-        assert any("source-page: 1" in prompt for prompt in route_prompts)
-        assert any("source-page: 3" in prompt for prompt in route_prompts)
+    structure_prompts = [
+        prompt for prompt in model.prompts if "[ROUTE: structure]" in prompt
+    ]
+    profile_prompts = [
+        prompt for prompt in model.prompts if "[ROUTE: profile]" in prompt
+    ]
+    observation_prompts = [
+        prompt
+        for prompt in model.prompts
+        if "[ROUTE: landscape_observation]" in prompt
+    ]
+    merge_prompts = [
+        prompt for prompt in model.prompts if "[ROUTE: landscape_merge]" in prompt
+    ]
 
+    assert len(structure_prompts) == 1
+    assert "〔第 1 页〕" in structure_prompts[0]
+    assert "〔第 3 页〕" in structure_prompts[0]
+    assert any("source-page: 1" in prompt for prompt in profile_prompts)
+    assert any("source-page: 3" in prompt for prompt in profile_prompts)
+    assert len(observation_prompts) == 3
+    assert all("先介绍活动，再介绍行政工作" in p for p in observation_prompts)
+    assert all("候选节点" in p and "禁止" in p for p in observation_prompts)
+    assert len(merge_prompts) == 1
+    assert model.prompts.index(structure_prompts[0]) < model.prompts.index(
+        profile_prompts[0]
+    )
+    assert model.prompts.index(structure_prompts[0]) < model.prompts.index(
+        observation_prompts[0]
+    )
+    assert all(
+        "本阶段不是记忆提取或记忆编译" in system_prompt
+        for system_prompt in model.system_prompts
+    )
+
+    assert snapshot.schema_version == "global-exploration.v3"
     assert snapshot.authority == "preliminary-low-authority"
-    assert snapshot.route_statistics.summary_units == 3
-    assert snapshot.review_history[-1].accepted_as_initial_impression is True
-    assert snapshot.frozen_with_unresolved_issues is False
+    assert snapshot.route_statistics.profile_units == 3
+    assert snapshot.route_statistics.landscape_units == 3
+    assert snapshot.route_statistics.landscape_merge_calls == 1
+    assert len(snapshot.landscape_observations) == 3
+    assert snapshot.document_memory_landscape.global_signals[0].label == "二课申请"
+    assert snapshot.review_history[-1].acceptable_as_global_exploration is True
+    assert snapshot.frozen_with_boundary_issues is False
     stages = [stage for stage, _ in progress.events]
-    assert {"规划", "总结", "结构", "概念", "校验", "冻结"} <= set(stages)
-    assert any("1/3" in message for stage, message in progress.events if stage == "总结")
+    assert {"规划", "画像", "结构", "地形合并", "校验", "冻结"} <= set(stages)
+    assert any(stage.startswith("地形勘探·") for stage in stages)
 
 
 @pytest.mark.asyncio
@@ -187,18 +252,17 @@ async def test_review_can_trigger_targeted_reread_before_freeze() -> None:
         model=model,
         progress=progress,
         settings=ExplorationSettings(
-            summary_unit_chars=100,
-            structure_unit_chars=100,
-            concept_unit_chars=100,
-            structure_overlap_pages=0,
-            concept_overlap_pages=0,
+            profile_unit_chars=100,
+            structure_preview_chars_per_page=100,
+            landscape_unit_chars=100,
+            landscape_overlap_pages=0,
             max_review_rounds=2,
         ),
     ).run(make_document())
 
     assert model.review_calls == 2
-    assert "历史实践，不是制度" in snapshot.global_summary_markdown
+    assert "历史叙述与工作说明" in snapshot.document_profile_markdown
     assert snapshot.route_statistics.review_rounds == 2
-    assert snapshot.frozen_with_unresolved_issues is False
+    assert snapshot.frozen_with_boundary_issues is False
     assert any(stage == "回看" for stage, _ in progress.events)
-    assert any(stage == "回看·总结" for stage, _ in progress.events)
+    assert any(stage == "回看·画像" for stage, _ in progress.events)

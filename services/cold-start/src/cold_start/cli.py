@@ -12,6 +12,7 @@ from cold_start.document import DoclingPdfLoader
 from cold_start.environment import load_environment_file
 from cold_start.global_exploration import (
     GlobalExplorationRunner,
+    create_exploration_run_directory,
     write_exploration_artifacts,
 )
 from cold_start.llm import OpenAICompatibleChatModel
@@ -21,7 +22,7 @@ from cold_start.progress import ConsoleProgressReporter
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cold-start",
-        description="将单份协会手册 PDF 做成低权威全局勘探快照",
+        description="将单份协会手册 PDF 做成低权威全局阅读地图",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     explore = subparsers.add_parser("explore", help="运行单 PDF 全局勘探")
@@ -44,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-review-rounds",
         type=int,
         default=2,
-        help="交叉校验与定向回看最多轮数",
+        help="全局勘探边界校验与定向回看最多轮数",
     )
     explore.add_argument(
         "--read-timeout-seconds",
@@ -55,6 +56,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-model-retries",
         type=int,
         help="覆盖 AI_MAX_RETRIES，表示流式请求最大尝试次数",
+    )
+    explore.add_argument(
+        "--show-model-stream",
+        action="store_true",
+        help="在终端分段显示接口返回的正文和思考内容",
     )
     return parser
 
@@ -97,7 +103,20 @@ async def _run_explore(args: argparse.Namespace) -> int:
         ),
     )
 
-    model = OpenAICompatibleChatModel(model_settings, progress=progress)
+    run_directory = create_exploration_run_directory(
+        output_root=args.output,
+        document=document,
+    )
+    model_stream_directory = run_directory / "model-streams"
+    progress.report("产物", f"已创建运行目录 {run_directory}")
+    progress.report("模型", f"原始流与部分响应将实时保存到 {model_stream_directory}")
+
+    model = OpenAICompatibleChatModel(
+        model_settings,
+        progress=progress,
+        trace_directory=model_stream_directory,
+        show_model_stream=args.show_model_stream,
+    )
     try:
         snapshot = await GlobalExplorationRunner(
             model=model,
@@ -107,15 +126,15 @@ async def _run_explore(args: argparse.Namespace) -> int:
     finally:
         await model.aclose()
 
-    progress.report("产物", f"正在写入 {args.output}")
+    progress.report("产物", f"正在写入 {run_directory}")
     paths = write_exploration_artifacts(
-        output_root=args.output,
+        run_directory=run_directory,
         document=document,
         snapshot=snapshot,
     )
     progress.report("完成", f"全局勘探产物：{paths.run_directory}")
-    if snapshot.frozen_with_unresolved_issues:
-        progress.report("注意", "快照因达到回看上限而带未解决问题冻结")
+    if snapshot.frozen_with_boundary_issues:
+        progress.report("注意", "快照达到回看上限，但仍有全局勘探边界问题")
     return 0
 
 
