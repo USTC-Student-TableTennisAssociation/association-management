@@ -44,3 +44,16 @@ next-env.d.ts
 # Prisma Client is generated from prisma/schema.prisma.
 /src/generated/prisma
 /.prisma-seed-build
+
+# Python cold-start worker
+/services/cold-start/.venv
+/services/cold-start/.pytest_cache
+/services/cold-start/.ruff_cache
+/services/cold-start/**/__pycache__
+/services/cold-start/**/*.py[cod]
+/.cold-start
+
+# Local Syncthing configuration
+.stignore
+.syncignore
+.stfolder
