@@ -26,7 +26,7 @@ class SourceMetadata(StrictModel):
 class GlobalExplorationSnapshot(StrictModel):
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal["global-exploration.v7"] = "global-exploration.v7"
+    schema_version: Literal["global-exploration.v8"] = "global-exploration.v8"
     authority: Literal["preliminary-low-authority"] = "preliminary-low-authority"
     created_at: datetime
     source: SourceMetadata

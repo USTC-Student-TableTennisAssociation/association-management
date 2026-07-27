@@ -69,15 +69,13 @@ class FakeChatModel:
                 content=json.dumps(
                     {
                         "action": "stop",
-                        "leaf_role": "content_source",
+                        "owned_source_role": "content_source",
                         "introduction": "一页测试手册。",
                         "reason": "内容无需继续分区。",
                     },
                     ensure_ascii=False,
                 )
             )
-        if "[STAGE: region_tree_audit]" in prompt:
-            return ModelTurn(content='{"issues":[]}')
         raise AssertionError("出现未预期的区域模型调用")
 
     async def aclose(self) -> None:

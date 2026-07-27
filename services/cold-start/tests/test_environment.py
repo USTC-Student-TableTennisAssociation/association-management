@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from cold_start.config import ModelSettings
+from cold_start.config import ExplorationSettings, ModelSettings
 from cold_start.environment import find_environment_file, load_environment_file
 
 
@@ -49,3 +49,13 @@ def test_finds_parent_env_and_preserves_system_environment(
 def test_explicit_missing_env_file_fails(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="指定的环境文件不存在"):
         load_environment_file(tmp_path / "missing.env")
+
+
+def test_reads_region_parallelism_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COLD_START_MAX_PARALLEL_REGIONS", "6")
+
+    settings = ExplorationSettings.from_environment()
+
+    assert settings.max_parallel_regions == 6

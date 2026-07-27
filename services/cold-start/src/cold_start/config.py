@@ -92,6 +92,11 @@ class ExplorationSettings:
         embedding_model: str | None = None,
     ) -> ExplorationSettings:
         return cls(
+            max_parallel_regions=_environment_int(
+                "COLD_START_MAX_PARALLEL_REGIONS",
+                explicit=None,
+                default=3,
+            ),
             embedding_model=embedding_model
             or os.getenv("COLD_START_EMBEDDING_MODEL")
             or "BAAI/bge-m3"

@@ -66,6 +66,7 @@ class TreeFakeModel:
                 content=json.dumps(
                     {
                         "action": "split",
+                        "owned_source_role": None,
                         "introduction": "完整手册由前言、行政工作和活动工作组成。",
                         "reason": "三个标题形成连续的宏观区域。",
                         "children": [
@@ -86,19 +87,12 @@ class TreeFakeModel:
                     ensure_ascii=False,
                 )
             )
-        if "[STAGE: region_tree_audit]" in prompt:
-            return ModelTurn(
-                content=json.dumps(
-                    {"issues": []},
-                    ensure_ascii=False,
-                )
-            )
         if "节点 region-0002" in prompt:
             return ModelTurn(
                 content=json.dumps(
                     {
                         "action": "stop",
-                        "leaf_role": "content_source",
+                        "owned_source_role": "content_source",
                         "introduction": "说明文档目标和使用对象。",
                         "reason": "前言是一个连续说明。",
                     },
@@ -110,6 +104,7 @@ class TreeFakeModel:
                 content=json.dumps(
                     {
                         "action": "split",
+                        "owned_source_role": None,
                         "introduction": "协会工作由行政和活动两部分组成。",
                         "reason": "两个显式标题是直接边界。",
                         "children": [
@@ -135,7 +130,7 @@ class TreeFakeModel:
                 content=json.dumps(
                     {
                         "action": "stop",
-                        "leaf_role": "content_source",
+                        "owned_source_role": "content_source",
                         "introduction": "说明协会的行政事项。",
                         "reason": "当前区域只有一项连续行政说明。",
                     },
@@ -147,7 +142,7 @@ class TreeFakeModel:
                 content=json.dumps(
                     {
                         "action": "stop",
-                        "leaf_role": "content_source",
+                        "owned_source_role": "content_source",
                         "introduction": "说明协会的活动事项。",
                         "reason": "当前区域只有一项连续活动说明。",
                     },
@@ -155,86 +150,6 @@ class TreeFakeModel:
                 )
             )
         raise AssertionError(f"未处理的区域模型调用：{prompt[:200]}")
-
-
-class RepairingTreeFakeModel(TreeFakeModel):
-    async def complete_turn(
-        self,
-        *,
-        messages: Sequence[Mapping[str, Any]],
-        tools: Sequence[Mapping[str, Any]] = (),
-        tool_choice: object | None = None,
-        temperature: float = 0.0,
-        request_label: str = "模型",
-        thinking: ThinkingMode | None = None,
-    ) -> ModelTurn:
-        prompt = str(messages[1]["content"])
-        if "[STAGE: region_tree_node]" in prompt and "节点 region-0003" in prompt:
-            self.prompts.append(prompt)
-            self.turn_calls += 1
-            return ModelTurn(
-                content=json.dumps(
-                    {
-                        "action": "stop",
-                        "leaf_role": "content_source",
-                        "introduction": "协会工作包含行政和活动事项。",
-                        "reason": "第一次判断暂时整体保留。",
-                    },
-                    ensure_ascii=False,
-                )
-            )
-        if "[STAGE: region_tree_audit]" in prompt:
-            self.prompts.append(prompt)
-            self.turn_calls += 1
-            return ModelTurn(
-                content=json.dumps(
-                    {
-                        "issues": [
-                            {
-                                "kind": "under_split",
-                                "target_node_id": "region-0003",
-                                "reason": "行政工作和活动工作承担不同表达任务。",
-                            }
-                        ],
-                    },
-                    ensure_ascii=False,
-                )
-            )
-        if "[STAGE: region_tree_repair]" in prompt:
-            self.prompts.append(prompt)
-            self.turn_calls += 1
-            return ModelTurn(
-                content=json.dumps(
-                    {
-                        "action": "split",
-                        "introduction": "协会工作由行政和活动两部分组成。",
-                        "reason": "两个显式章节可以分别处理。",
-                        "children": [
-                            {
-                                "label": "行政工作",
-                                "introduction": "说明协会的行政事项。",
-                                "start_block_id": "p0002-b0001",
-                                "end_block_id": "p0002-b0002",
-                            },
-                            {
-                                "label": "活动工作",
-                                "introduction": "说明协会的活动事项。",
-                                "start_block_id": "p0003-b0001",
-                                "end_block_id": "p0003-b0002",
-                            },
-                        ],
-                    },
-                    ensure_ascii=False,
-                )
-            )
-        return await super().complete_turn(
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            temperature=temperature,
-            request_label=request_label,
-            thinking=thinking,
-        )
 
 
 def make_document() -> ParsedDocument:
@@ -283,15 +198,15 @@ async def test_context_and_root_start_as_parallel_routes_then_tree_recurses() ->
     assert len(node_prompts) == 4
     assert all("根节点到直接父节点" in prompt for prompt in node_prompts)
 
-    assert snapshot.schema_version == "global-exploration.v7"
+    assert snapshot.schema_version == "global-exploration.v8"
     assert snapshot.authority == "preliminary-low-authority"
     assert snapshot.region_tree.status == "frozen"
     assert max(node.depth for node in snapshot.region_tree.nodes) == 2
     assert len(snapshot.region_tree.leaf_node_ids) == 3
     assert snapshot.context_model_calls == 3
-    assert snapshot.region_tree.model_calls == 6
-    assert snapshot.region_tree.audit is not None
-    assert snapshot.region_tree.audit.issues == []
+    assert snapshot.region_tree.model_calls == 5
+    assert snapshot.region_tree.structure_check.initial_issues == []
+    assert snapshot.region_tree.structure_check.remaining_issues == []
 
     leaves = {
         node.label
@@ -301,27 +216,3 @@ async def test_context_and_root_start_as_parallel_routes_then_tree_recurses() ->
     assert leaves == {"前言", "行政工作", "活动工作"}
     stages = [stage for stage, _ in progress.events]
     assert {"规划", "文档上下文", "区域树", "汇总"} <= set(stages)
-
-
-@pytest.mark.asyncio
-async def test_global_audit_reopens_only_the_flagged_subtree() -> None:
-    model = RepairingTreeFakeModel()
-    progress = RecordingProgressReporter()
-    snapshot = await GlobalExplorationRunner(
-        model=model,
-        progress=progress,
-        embedder=FakeEmbedder(),
-        settings=ExplorationSettings(context_unit_chars=20_000),
-    ).run(make_document())
-
-    assert snapshot.region_tree.status == "frozen"
-    assert snapshot.region_tree.audit is not None
-    assert len(snapshot.region_tree.audit.issues) == 1
-    assert snapshot.region_tree.model_calls == 7
-    leaves = {
-        node.label
-        for node in snapshot.region_tree.nodes
-        if node.status == "leaf"
-    }
-    assert leaves == {"前言", "行政工作", "活动工作"}
-    assert any(stage == "区域树·定点修复" for stage, _ in progress.events)

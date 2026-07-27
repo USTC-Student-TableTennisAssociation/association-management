@@ -89,7 +89,8 @@ async def _run_explore(args: argparse.Namespace) -> int:
         (
             f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
             f"纯流式，读取超时 {model_settings.read_timeout_seconds:g} 秒，"
-            f"最多尝试 {model_settings.max_retries} 次"
+            f"最多尝试 {model_settings.max_retries} 次；"
+            f"区域树并发上限 {exploration_settings.max_parallel_regions}"
         ),
     )
 

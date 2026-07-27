@@ -1,4 +1,4 @@
-"""区域树的最小结构化协议。"""
+"""区域树的结构化协议。"""
 
 from __future__ import annotations
 
@@ -11,6 +11,11 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class SourceSegment(StrictModel):
+    start_block_id: str = Field(pattern=r"^p\d{4}-b\d{4}$")
+    end_block_id: str = Field(pattern=r"^p\d{4}-b\d{4}$")
+
+
 class RegionChild(StrictModel):
     label: str = Field(min_length=1, max_length=80)
     introduction: str = Field(min_length=1, max_length=300)
@@ -18,21 +23,22 @@ class RegionChild(StrictModel):
     end_block_id: str = Field(pattern=r"^p\d{4}-b\d{4}$")
 
 
-LeafRole = Literal["content_source", "structural_context"]
+SourceRole = Literal["content_source", "structural_context"]
 
 
 class StopDecision(StrictModel):
     action: Literal["stop"]
-    leaf_role: LeafRole
+    owned_source_role: SourceRole
     introduction: str = Field(min_length=1, max_length=300)
     reason: str = Field(min_length=1, max_length=500)
 
 
 class SplitDecision(StrictModel):
     action: Literal["split"]
+    owned_source_role: SourceRole | None
     introduction: str = Field(min_length=1, max_length=300)
     reason: str = Field(min_length=1, max_length=500)
-    children: list[RegionChild] = Field(min_length=2, max_length=8)
+    children: list[RegionChild] = Field(min_length=1, max_length=8)
 
 
 class ParentPartitionError(StrictModel):
@@ -67,20 +73,15 @@ class RepairDecisionOutput(RootModel[RepairDecision]):
     pass
 
 
-class TreeAuditIssue(StrictModel):
-    kind: Literal[
-        "under_split",
-        "over_split",
-        "missing_intermediate",
-        "boundary_mismatch",
-        "leaf_role_mismatch",
-    ]
+class StructureIssue(StrictModel):
+    kind: Literal["heading_hierarchy"]
     target_node_id: str = Field(pattern=r"^region-\d{4,}$")
     reason: str = Field(min_length=1, max_length=500)
 
 
-class TreeAudit(StrictModel):
-    issues: list[TreeAuditIssue] = Field(max_length=8)
+class StructureCheckReport(StrictModel):
+    initial_issues: list[StructureIssue] = Field(default_factory=list)
+    remaining_issues: list[StructureIssue] = Field(default_factory=list)
 
 
 class RegionNode(StrictModel):
@@ -93,21 +94,24 @@ class RegionNode(StrictModel):
     end_block_id: str
     source_pages: list[int]
     status: Literal["pending", "branch", "leaf", "failed", "needs_review"]
-    leaf_role: LeafRole | None = None
+    owned_segments: list[SourceSegment] = Field(default_factory=list)
+    owned_source_role: SourceRole | None = None
     decision_reason: str = ""
     child_ids: list[str] = Field(default_factory=list)
     revised: bool = False
 
 
 class RegionTreeSnapshot(StrictModel):
-    schema_version: Literal["region-tree.v3"] = "region-tree.v3"
+    schema_version: Literal["region-tree.v4"] = "region-tree.v4"
     status: Literal["frozen", "needs_review"]
     root_node_id: str
     nodes: list[RegionNode]
     leaf_node_ids: list[str]
-    content_leaf_ids: list[str]
-    structural_context_leaf_ids: list[str]
-    audit: TreeAudit | None = None
+    content_node_ids: list[str]
+    structural_context_node_ids: list[str]
+    structure_check: StructureCheckReport = Field(
+        default_factory=StructureCheckReport
+    )
     issues: list[str] = Field(default_factory=list)
     model_calls: int = 0
     tool_calls: int = 0

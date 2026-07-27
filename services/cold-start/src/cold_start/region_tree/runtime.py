@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -27,25 +28,28 @@ from cold_start.region_tree.models import (
     RegionTreeSnapshot,
     RepairDecision,
     RepairDecisionOutput,
+    SourceRole,
+    SourceSegment,
     SplitDecision,
     StopDecision,
-    TreeAudit,
-    TreeAuditIssue,
+    StructureCheckReport,
+    StructureIssue,
 )
 from cold_start.region_tree.prompts import (
-    REGION_REPAIR_SYSTEM_PROMPT,
     REGION_TREE_SYSTEM_PROMPT,
-    TREE_AUDIT_SYSTEM_PROMPT,
+    STRUCTURE_REPAIR_SYSTEM_PROMPT,
     reconsider_parent_prompt,
     region_prompt,
     repair_decision_prompt,
-    repair_region_prompt,
     root_region_prompt,
-    tree_audit_prompt,
+    structure_repair_prompt,
 )
 
 WorkGroup = tuple[str, tuple[str, ...]]
 DecisionT = TypeVar("DecisionT")
+HEADING_NUMBER_PATTERN = re.compile(
+    r"^\s*#{1,6}\s+(\d+(?:\.\d+)*)\.?(?=\s|[^\d.]|$)"
+)
 
 SEARCH_TOOL: tuple[dict[str, object], ...] = (
     {
@@ -110,31 +114,83 @@ class BlockIndex:
     def pages(self, start: str, end: str) -> list[int]:
         return sorted({page for block in self.slice(start, end) for page in block.source_pages})
 
-    def validate_children(
+    def partition(
         self,
         start: str,
         end: str,
         children: list[RegionChild],
-    ) -> None:
-        expected, final = self.position(start), self.position(end)
+    ) -> list[SourceSegment]:
+        parent_left, parent_right = self.position(start), self.position(end)
+        cursor = parent_left
         labels: set[str] = set()
+        owned: list[SourceSegment] = []
         for child in children:
             left, right = self.position(child.start_block_id), self.position(
                 child.end_block_id
             )
-            if left != expected:
-                raise ValueError(
-                    f"子区域“{child.label}”应从 {self.blocks[expected].block_id} 开始"
-                )
-            if right < left or right > final:
+            if left < parent_left or right < left or right > parent_right:
                 raise ValueError(f"子区域“{child.label}”范围非法")
+            if left < cursor:
+                raise ValueError(f"子区域“{child.label}”与前一个孩子重叠或乱序")
+            if cursor < left:
+                owned.append(self._segment(cursor, left - 1))
             label = "".join(child.label.split()).casefold()
             if label in labels:
                 raise ValueError(f"同一父节点下标签重复：{child.label}")
             labels.add(label)
-            expected = right + 1
-        if expected != final + 1:
-            raise ValueError("子区域没有完整覆盖父区域")
+            cursor = right + 1
+        if cursor <= parent_right:
+            owned.append(self._segment(cursor, parent_right))
+        if (
+            len(children) == 1
+            and not owned
+            and children[0].start_block_id == start
+            and children[0].end_block_id == end
+        ):
+            raise ValueError("单个孩子不能完整复制父区域")
+        return owned
+
+    def validate_owned_role(
+        self,
+        segments: list[SourceSegment],
+        role: SourceRole | None,
+    ) -> None:
+        if bool(segments) != bool(role):
+            raise ValueError(
+                "存在自有原文时必须填写 owned_source_role，"
+                "没有自有原文时必须填写 null"
+            )
+        if role != "structural_context":
+            return
+        substantive = {
+            block.block_type
+            for segment in segments
+            for block in self.slice(segment.start_block_id, segment.end_block_id)
+        } & {"paragraph", "list", "quote", "other"}
+        if substantive:
+            raise ValueError(
+                "含段落、列表、引用或其他正文的自有原文不能标为 structural_context"
+            )
+
+    def resolve_ownership(
+        self,
+        start: str,
+        end: str,
+        decision: StopDecision | SplitDecision,
+    ) -> list[SourceSegment]:
+        owned = (
+            self.partition(start, end, decision.children)
+            if isinstance(decision, SplitDecision)
+            else [SourceSegment(start_block_id=start, end_block_id=end)]
+        )
+        self.validate_owned_role(owned, decision.owned_source_role)
+        return owned
+
+    def _segment(self, left: int, right: int) -> SourceSegment:
+        return SourceSegment(
+            start_block_id=self.blocks[left].block_id,
+            end_block_id=self.blocks[right].block_id,
+        )
 
 
 class RegionTree:
@@ -146,6 +202,7 @@ class RegionTree:
         self.nodes: dict[str, RegionNode] = {}
         self.root_node_id = ""
         self.issues: list[str] = []
+        self.structure_check = StructureCheckReport()
         self.model_calls = 0
         self.tool_calls = 0
         self.next_id = 1
@@ -174,10 +231,14 @@ class RegionTree:
     ) -> list[WorkGroup]:
         node = self.nodes[node_id]
         if isinstance(decision, StopDecision):
+            owned = self.index.resolve_ownership(
+                node.start_block_id, node.end_block_id, decision
+            )
             self.nodes[node_id] = node.model_copy(
                 update={
                     "introduction": decision.introduction,
-                    "leaf_role": decision.leaf_role,
+                    "owned_segments": owned,
+                    "owned_source_role": decision.owned_source_role,
                     "decision_reason": decision.reason,
                     "status": "leaf",
                     "child_ids": [],
@@ -188,8 +249,8 @@ class RegionTree:
             self.review(node_id, f"{node_id} 达到最大深度后仍要求切分")
             return []
 
-        self.index.validate_children(
-            node.start_block_id, node.end_block_id, decision.children
+        owned = self.index.resolve_ownership(
+            node.start_block_id, node.end_block_id, decision
         )
         children = [
             self._create(
@@ -206,7 +267,8 @@ class RegionTree:
         self.nodes[node_id] = node.model_copy(
             update={
                 "introduction": decision.introduction,
-                "leaf_role": None,
+                "owned_segments": owned,
+                "owned_source_role": decision.owned_source_role,
                 "decision_reason": decision.reason,
                 "status": "branch",
                 "child_ids": child_ids,
@@ -246,7 +308,13 @@ class RegionTree:
         for child_id in parent.child_ids:
             self._drop(child_id)
         self.nodes[parent_id] = parent.model_copy(
-            update={"status": "pending", "child_ids": [], "revised": True}
+            update={
+                "status": "pending",
+                "owned_segments": [],
+                "owned_source_role": None,
+                "child_ids": [],
+                "revised": True,
+            }
         )
         return self.apply(parent_id, decision)
 
@@ -266,7 +334,8 @@ class RegionTree:
         self.nodes[node_id] = node.model_copy(
             update={
                 "status": "pending",
-                "leaf_role": None,
+                "owned_segments": [],
+                "owned_source_role": None,
                 "child_ids": [],
                 "revised": True,
             }
@@ -293,6 +362,94 @@ class RegionTree:
             return [node]
         return [self.nodes[item] for item in self.nodes[node.parent_id].child_ids]
 
+    def detect_structure_issues(self) -> list[StructureIssue]:
+        owners: dict[str, str] = {}
+        for node in self.nodes.values():
+            for segment in node.owned_segments:
+                left = self.index.position(segment.start_block_id)
+                right = self.index.position(segment.end_block_id)
+                for block in self.index.blocks[left : right + 1]:
+                    owners[block.block_id] = node.node_id
+
+        headings: dict[tuple[int, ...], set[str]] = {}
+        for block in self.index.blocks:
+            if block.block_type != "heading":
+                continue
+            match = HEADING_NUMBER_PATTERN.match(block.markdown)
+            owner = owners.get(block.block_id)
+            if not match or owner is None:
+                continue
+            number = tuple(int(part) for part in match.group(1).split("."))
+            headings.setdefault(number, set()).add(owner)
+
+        problems: dict[str, list[str]] = {}
+        for number, child_owners in headings.items():
+            if len(number) < 2 or number[:-1] not in headings:
+                continue
+            parent_owners = headings[number[:-1]]
+            for child_owner in child_owners:
+                if any(
+                    self._is_descendant(child_owner, parent_owner)
+                    for parent_owner in parent_owners
+                ):
+                    continue
+                target = self._lowest_common_ancestor(
+                    [child_owner, *sorted(parent_owners)]
+                )
+                child_label = ".".join(map(str, number))
+                parent_label = ".".join(map(str, number[:-1]))
+                problems.setdefault(target, []).append(
+                    f"标题 {child_label} 不在拥有标题 {parent_label} 的节点子树内"
+                )
+
+        return [
+            StructureIssue(
+                kind="heading_hierarchy",
+                target_node_id=node_id,
+                reason="；".join(dict.fromkeys(reasons))[:500],
+            )
+            for node_id, reasons in sorted(
+                problems.items(),
+                key=lambda item: self.index.position(
+                    self.nodes[item[0]].start_block_id
+                ),
+            )
+        ]
+
+    def set_structure_check(
+        self,
+        initial: list[StructureIssue],
+        remaining: list[StructureIssue],
+    ) -> None:
+        self.structure_check = StructureCheckReport(
+            initial_issues=initial,
+            remaining_issues=remaining,
+        )
+
+    def _is_descendant(self, node_id: str, ancestor_id: str) -> bool:
+        current: str | None = node_id
+        while current is not None:
+            if current == ancestor_id:
+                return True
+            current = self.nodes[current].parent_id
+        return False
+
+    def _lowest_common_ancestor(self, node_ids: list[str]) -> str:
+        paths: list[list[str]] = []
+        for node_id in node_ids:
+            path = [node_id]
+            current = self.nodes[node_id]
+            while current.parent_id:
+                path.append(current.parent_id)
+                current = self.nodes[current.parent_id]
+            paths.append(path[::-1])
+        common = self.root_node_id
+        for items in zip(*paths, strict=False):
+            if len(set(items)) != 1:
+                break
+            common = items[0]
+        return common
+
     def snapshot(self) -> RegionTreeSnapshot:
         unfinished = {"pending", "failed", "needs_review"}
         status = (
@@ -305,30 +462,51 @@ class RegionTree:
             key=lambda node: self.index.position(node.start_block_id),
         )
         if status == "frozen":
+            ownership = sorted(
+                (
+                    self.index.position(segment.start_block_id),
+                    self.index.position(segment.end_block_id),
+                    node.node_id,
+                )
+                for node in self.nodes.values()
+                for segment in node.owned_segments
+            )
             expected = 0
-            for leaf in leaves:
-                if self.index.position(leaf.start_block_id) != expected:
-                    raise ValueError("最终叶子存在遗漏或重叠")
-                expected = self.index.position(leaf.end_block_id) + 1
+            for left, right, node_id in ownership:
+                if left != expected:
+                    raise ValueError(f"{node_id} 的自有原文与前序节点遗漏或重叠")
+                expected = right + 1
             if expected != len(self.index.blocks):
-                raise ValueError("最终叶子没有覆盖完整文档")
-            if any(node.leaf_role is None for node in leaves):
-                raise ValueError("最终叶子缺少结构作用")
-        content_leaves = [
-            node.node_id for node in leaves if node.leaf_role == "content_source"
-        ]
-        structural_leaves = [
+                raise ValueError("所有节点的自有原文没有完整覆盖文档")
+            if any(
+                bool(node.owned_segments) != bool(node.owned_source_role)
+                for node in self.nodes.values()
+            ):
+                raise ValueError("节点自有原文与角色不一致")
+        owned_nodes = sorted(
+            (node for node in self.nodes.values() if node.owned_segments),
+            key=lambda node: self.index.position(
+                node.owned_segments[0].start_block_id
+            ),
+        )
+        content_nodes = [
             node.node_id
-            for node in leaves
-            if node.leaf_role == "structural_context"
+            for node in owned_nodes
+            if node.owned_source_role == "content_source"
+        ]
+        structural_nodes = [
+            node.node_id
+            for node in owned_nodes
+            if node.owned_source_role == "structural_context"
         ]
         return RegionTreeSnapshot(
             status=status,
             root_node_id=self.root_node_id,
             nodes=sorted(self.nodes.values(), key=lambda node: node.node_id),
             leaf_node_ids=[node.node_id for node in leaves],
-            content_leaf_ids=content_leaves,
-            structural_context_leaf_ids=structural_leaves,
+            content_node_ids=content_nodes,
+            structural_context_node_ids=structural_nodes,
+            structure_check=self.structure_check,
             issues=self.issues.copy(),
             model_calls=self.model_calls,
             tool_calls=self.tool_calls,
@@ -509,52 +687,55 @@ class RegionRuntime:
         await self._process_groups(groups)
         return self.tree.snapshot()
 
-    async def audit(self) -> TreeAudit | None:
+    async def calibrate_structure(self) -> None:
         if self.tree.snapshot().status != "frozen":
-            return None
-        try:
-            result = await _ask(
-                model=self.model,
-                system_prompt=TREE_AUDIT_SYSTEM_PROMPT,
-                prompt=tree_audit_prompt(
-                    document_context=self.context,
-                    tree_outline=self._outline(self.tree.root_node_id),
-                ),
-                label="区域树·全树校准",
-                max_tool_calls=0,
-                search=None,
-                parser=_parse_audit,
-                validator=self._validate_audit,
-                describe=lambda audit: (
-                    f"{len(audit.issues)} 个问题" if audit.issues else "通过"
-                ),
-                progress=self.progress,
-            )
-            self.tree.model_calls += result.model_calls
-            return result.decision
-        except DecisionFailure as error:
-            self.tree.model_calls += error.model_calls
-            self.tree.review(self.tree.root_node_id, f"全树校准失败：{error}")
-            return None
-
-    async def repair(self, audit: TreeAudit) -> None:
-        targets = self._repair_targets(audit)
-        if not targets:
             return
+        initial = self.tree.detect_structure_issues()
+        if initial:
+            self.progress.report(
+                "区域树·结构检查",
+                f"发现 {len(initial)} 个显式标题层级问题",
+            )
+            dismissed_targets = await self._repair_structure_issues(initial)
+        else:
+            dismissed_targets = set()
+        if self.tree.snapshot().status == "frozen":
+            remaining = [
+                issue
+                for issue in self.tree.detect_structure_issues()
+                if issue.target_node_id not in dismissed_targets
+            ]
+        else:
+            remaining = initial
+        self.tree.set_structure_check(initial, remaining)
+        for issue in remaining:
+            self.tree.review(
+                issue.target_node_id,
+                f"结构检查未解决：{issue.reason}",
+            )
+
+    async def _repair_structure_issues(
+        self,
+        issues: list[StructureIssue],
+    ) -> set[str]:
+        targets = self._repair_targets(issues)
+        if not targets:
+            return set()
         self.progress.report("区域树·定点修复", f"开始复核 {len(targets)} 个子树")
         semaphore = asyncio.Semaphore(self.settings.max_parallel_regions)
 
         async def evaluate(
-            target: tuple[str, list[TreeAuditIssue]],
+            target: tuple[str, list[StructureIssue]],
         ) -> DecisionResult[RepairDecision]:
             async with semaphore:
-                return await self._evaluate_repair(*target)
+                return await self._evaluate_structure_repair(*target)
 
         raw = await asyncio.gather(
             *(evaluate(target) for target in targets),
             return_exceptions=True,
         )
         groups: list[WorkGroup] = []
+        dismissed: set[str] = set()
         for (node_id, _), result in zip(targets, raw, strict=True):
             if isinstance(result, (DecisionResult, DecisionFailure)):
                 self.tree.model_calls += result.model_calls
@@ -563,11 +744,14 @@ class RegionRuntime:
                 self.tree.review(node_id, f"{node_id} 定点修复失败：{result}")
                 continue
             try:
+                if isinstance(result.decision, KeepDecision):
+                    dismissed.add(node_id)
                 groups.extend(self.tree.calibrate(node_id, result.decision))
             except Exception as error:
                 self.tree.review(node_id, f"{node_id} 应用定点修复失败：{error}")
         self._save(groups)
         await self._process_groups(groups)
+        return dismissed
 
     async def _process_groups(self, groups: list[WorkGroup]) -> None:
         semaphore = asyncio.Semaphore(self.settings.max_parallel_regions)
@@ -645,10 +829,10 @@ class RegionRuntime:
             progress=self.progress,
         )
 
-    async def _evaluate_repair(
+    async def _evaluate_structure_repair(
         self,
         node_id: str,
-        issues: list[TreeAuditIssue],
+        issues: list[StructureIssue],
     ) -> DecisionResult[RepairDecision]:
         node = self.tree.nodes[node_id]
         left = self.index.position(node.start_block_id)
@@ -656,8 +840,8 @@ class RegionRuntime:
         boundary = self.settings.boundary_context_blocks
         return await _ask(
             model=self.model,
-            system_prompt=REGION_REPAIR_SYSTEM_PROMPT,
-            prompt=repair_region_prompt(
+            system_prompt=STRUCTURE_REPAIR_SYSTEM_PROMPT,
+            prompt=structure_repair_prompt(
                 document_context=self.context,
                 node=node,
                 lineage=self.tree.lineage(node_id),
@@ -669,10 +853,8 @@ class RegionRuntime:
                 issues=issues,
             ),
             label=f"区域树·修复-{node_id}",
-            max_tool_calls=self.settings.max_tool_calls_per_region,
-            search=lambda query: self.search.search(
-                query, node, self.settings.retrieval_top_k
-            ),
+            max_tool_calls=0,
+            search=None,
             parser=_parse_repair,
             validator=lambda decision: self._validate_repair(node, decision),
             describe=lambda decision: decision.action,
@@ -734,9 +916,11 @@ class RegionRuntime:
         *,
         reconsidering: bool = False,
     ) -> None:
-        if isinstance(decision, SplitDecision):
-            self.index.validate_children(
-                node.start_block_id, node.end_block_id, decision.children
+        if isinstance(decision, (StopDecision, SplitDecision)):
+            self.index.resolve_ownership(
+                node.start_block_id,
+                node.end_block_id,
+                decision,
             )
         elif isinstance(decision, ParentPartitionError):
             if reconsidering:
@@ -748,22 +932,19 @@ class RegionRuntime:
         node: RegionNode,
         decision: RepairDecision,
     ) -> None:
-        if isinstance(decision, SplitDecision):
-            self.index.validate_children(
-                node.start_block_id, node.end_block_id, decision.children
+        if isinstance(decision, (StopDecision, SplitDecision)):
+            self.index.resolve_ownership(
+                node.start_block_id,
+                node.end_block_id,
+                decision,
             )
-
-    def _validate_audit(self, audit: TreeAudit) -> None:
-        for issue in audit.issues:
-            if issue.target_node_id not in self.tree.nodes:
-                raise ValueError(f"校准引用不存在的目标 {issue.target_node_id}")
 
     def _repair_targets(
         self,
-        audit: TreeAudit,
-    ) -> list[tuple[str, list[TreeAuditIssue]]]:
+        issues: list[StructureIssue],
+    ) -> list[tuple[str, list[StructureIssue]]]:
         ordered = sorted(
-            audit.issues,
+            issues,
             key=lambda issue: (
                 self.tree.nodes[issue.target_node_id].depth,
                 self.index.position(
@@ -771,7 +952,7 @@ class RegionRuntime:
                 ),
             ),
         )
-        targets: list[tuple[str, list[TreeAuditIssue]]] = []
+        targets: list[tuple[str, list[StructureIssue]]] = []
         for issue in ordered:
             ancestors = {
                 issue.target_node_id,
@@ -790,7 +971,15 @@ class RegionRuntime:
         def visit(node_id: str, relative_depth: int) -> None:
             node = self.tree.nodes[node_id]
             blocks = self.index.slice(node.start_block_id, node.end_block_id)
-            role = f"，角色={node.leaf_role}" if node.leaf_role else ""
+            role = (
+                f"，自有原文={node.owned_source_role}"
+                if node.owned_source_role
+                else ""
+            )
+            owned = "、".join(
+                f"{segment.start_block_id}～{segment.end_block_id}"
+                for segment in node.owned_segments
+            )
             lines.append(
                 f"{'  ' * relative_depth}- {node.node_id}｜深度={node.depth}｜"
                 f"{node.status}{role}｜第 {'、'.join(map(str, node.source_pages))} 页｜"
@@ -798,6 +987,8 @@ class RegionRuntime:
                 f"{node.start_block_id}～{node.end_block_id}｜{node.label}"
             )
             lines.append(f"{'  ' * relative_depth}  介绍：{node.introduction}")
+            if owned:
+                lines.append(f"{'  ' * relative_depth}  自有范围：{owned}")
             if node.decision_reason:
                 lines.append(
                     f"{'  ' * relative_depth}  判断理由：{node.decision_reason}"
@@ -830,10 +1021,11 @@ async def decide_root(
     def validate(decision: RegionDecision) -> None:
         if isinstance(decision, ParentPartitionError):
             raise ValueError("根节点不能报告父分割错误")
-        if isinstance(decision, SplitDecision):
-            index.validate_children(
-                blocks[0].block_id, blocks[-1].block_id, decision.children
-            )
+        index.resolve_ownership(
+            blocks[0].block_id,
+            blocks[-1].block_id,
+            decision,
+        )
 
     return await _ask(
         model=model,
@@ -961,10 +1153,6 @@ def _parse_region(raw: str) -> RegionDecision:
 
 def _parse_repair(raw: str) -> RepairDecision:
     return RepairDecisionOutput.model_validate_json(_json_object(raw)).root
-
-
-def _parse_audit(raw: str) -> TreeAudit:
-    return TreeAudit.model_validate_json(_json_object(raw))
 
 
 def _tree_decision(decision: RegionDecision) -> StopDecision | SplitDecision:

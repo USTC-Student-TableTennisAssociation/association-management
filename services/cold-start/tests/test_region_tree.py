@@ -16,6 +16,10 @@ from cold_start.region_tree.models import (
     SplitDecision,
     StopDecision,
 )
+from cold_start.region_tree.prompts import (
+    REGION_TREE_SYSTEM_PROMPT,
+    STRUCTURE_REPAIR_SYSTEM_PROMPT,
+)
 from cold_start.region_tree.runtime import BlockIndex, RegionRuntime, RegionTree
 
 
@@ -134,12 +138,32 @@ class ReasoningOnlyThenRepairModel(ToolModel):
         return _stop("其他工作可以整体处理。")
 
 
+class KeepStructureRepairModel(ToolModel):
+    async def complete_turn(
+        self,
+        *,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[Mapping[str, Any]] = (),
+        tool_choice: object | None = None,
+        temperature: float = 0.0,
+        request_label: str = "模型",
+        thinking: ThinkingMode | None = None,
+    ) -> ModelTurn:
+        del tools, tool_choice, temperature, request_label, thinking
+        prompt = str(messages[1]["content"])
+        if "[STAGE: region_tree_structure_repair]" in prompt:
+            return ModelTurn(
+                content='{"action":"keep","reason":"编号来自文档排版，现有区域关系正确。"}'
+            )
+        return _stop("当前区域可以整体处理。")
+
+
 def _stop(introduction: str) -> ModelTurn:
     return ModelTurn(
         content=json.dumps(
             {
                 "action": "stop",
-                "leaf_role": "content_source",
+                "owned_source_role": "content_source",
                 "introduction": introduction,
                 "reason": "没有更多可独立阅读的连续区域。",
             },
@@ -162,6 +186,7 @@ def split_plan() -> SplitDecision:
     return SplitDecision.model_validate(
         {
             "action": "split",
+            "owned_source_role": None,
             "introduction": "手册由比赛和其他工作组成。",
             "reason": "按标题切分。",
             "children": [
@@ -278,39 +303,249 @@ def test_parent_can_reopen_once_then_keeps_revised_children_for_review() -> None
     assert "已自动重切一次" in snapshot.issues[0]
 
 
-def test_program_rejects_child_range_gap() -> None:
-    invalid = split_plan().model_copy(
-        update={
+def test_parent_owns_blocks_not_delegated_to_children() -> None:
+    decision = SplitDecision.model_validate(
+        {
+            "action": "split",
+            "owned_source_role": "content_source",
+            "introduction": "手册以比赛原则统领两个工作领域。",
+            "reason": "第一页由父节点保留，行政和宣传分别成为孩子。",
             "children": [
-                split_plan().children[0].model_copy(
-                    update={"end_block_id": "p0001-b0001"}
-                ),
-                split_plan().children[1],
-            ]
+                {
+                    "label": "行政工作",
+                    "introduction": "行政事项。",
+                    "start_block_id": "p0002-b0001",
+                    "end_block_id": "p0002-b0002",
+                },
+                {
+                    "label": "宣传工作",
+                    "introduction": "宣传事项。",
+                    "start_block_id": "p0003-b0001",
+                    "end_block_id": "p0003-b0002",
+                },
+            ],
         }
     )
-    with pytest.raises(ValueError, match="应从 p0001-b0002 开始"):
-        RegionTree(BlockIndex(blocks()), max_depth=5).initialize(
+    tree = RegionTree(BlockIndex(blocks()), max_depth=5)
+    tree.initialize(title="测试手册", decision=decision)
+    for child_id in tree.nodes["region-0001"].child_ids:
+        tree.apply(
+            child_id,
+            StopDecision(
+                action="stop",
+                owned_source_role="content_source",
+                introduction="完整内容。",
+                reason="无需再分。",
+            ),
+        )
+
+    snapshot = tree.snapshot()
+    root = tree.nodes["region-0001"]
+    assert root.status == "branch"
+    assert [
+        (item.start_block_id, item.end_block_id) for item in root.owned_segments
+    ] == [("p0001-b0001", "p0001-b0002")]
+    assert snapshot.content_node_ids == [
+        "region-0001",
+        "region-0002",
+        "region-0003",
+    ]
+
+
+def test_structural_context_rejects_substantive_paragraphs() -> None:
+    tree = RegionTree(BlockIndex(blocks()), max_depth=5)
+    with pytest.raises(ValueError, match="不能标为 structural_context"):
+        tree.initialize(
             title="测试手册",
-            decision=invalid,
+            decision=StopDecision(
+                action="stop",
+                owned_source_role="structural_context",
+                introduction="错误地把正文当成结构。",
+                reason="测试校验。",
+            ),
         )
 
 
-def test_structural_context_leaf_is_kept_but_routed_separately() -> None:
-    tree = RegionTree(BlockIndex(blocks()), max_depth=5)
+def test_structural_heading_can_be_owned_by_branch_without_becoming_leaf() -> None:
+    source = build_document_blocks(
+        (
+            ParsedPage(page_number=1, markdown="# 工作分类"),
+            ParsedPage(page_number=2, markdown="# 行政工作\n\n二课申请。"),
+            ParsedPage(page_number=3, markdown="# 宣传工作\n\n海报审核。"),
+        )
+    )
+    tree = RegionTree(BlockIndex(source), max_depth=5)
     tree.initialize(
         title="测试手册",
-        decision=StopDecision(
-            action="stop",
-            leaf_role="structural_context",
-            introduction="这段原文只负责导航。",
-            reason="它仅列出后续章节入口。",
+        decision=SplitDecision.model_validate(
+            {
+                "action": "split",
+                "owned_source_role": "structural_context",
+                "introduction": "工作分类包含行政和宣传。",
+                "reason": "父标题留在当前节点。",
+                "children": [
+                    {
+                        "label": "行政工作",
+                        "introduction": "行政事项。",
+                        "start_block_id": "p0002-b0001",
+                        "end_block_id": "p0002-b0002",
+                    },
+                    {
+                        "label": "宣传工作",
+                        "introduction": "宣传事项。",
+                        "start_block_id": "p0003-b0001",
+                        "end_block_id": "p0003-b0002",
+                    },
+                ],
+            }
         ),
     )
+    for child_id in tree.nodes["region-0001"].child_ids:
+        tree.apply(
+            child_id,
+            StopDecision(
+                action="stop",
+                owned_source_role="content_source",
+                introduction="完整内容。",
+                reason="无需再分。",
+            ),
+        )
 
     snapshot = tree.snapshot()
-    assert snapshot.content_leaf_ids == []
-    assert snapshot.structural_context_leaf_ids == ["region-0001"]
+    assert snapshot.structural_context_node_ids == ["region-0001"]
+    assert "region-0001" not in snapshot.leaf_node_ids
+
+
+def test_numbered_heading_check_only_flags_broken_ancestry() -> None:
+    source = build_document_blocks(
+        (
+            ParsedPage(page_number=1, markdown="## 7.1 大型赛事\n\n总体说明。"),
+            ParsedPage(page_number=2, markdown="### 7.1.1行政\n\n申请流程。"),
+        )
+    )
+    index = BlockIndex(source)
+    incorrect = RegionTree(index, max_depth=5)
+    incorrect.initialize(
+        title="测试手册",
+        decision=SplitDecision.model_validate(
+            {
+                "action": "split",
+                "owned_source_role": None,
+                "introduction": "大型赛事与行政被错误拆成兄弟。",
+                "reason": "构造结构检查样例。",
+                "children": [
+                    {
+                        "label": "大型赛事",
+                        "introduction": "总体说明。",
+                        "start_block_id": "p0001-b0001",
+                        "end_block_id": "p0001-b0002",
+                    },
+                    {
+                        "label": "行政",
+                        "introduction": "申请流程。",
+                        "start_block_id": "p0002-b0001",
+                        "end_block_id": "p0002-b0002",
+                    },
+                ],
+            }
+        ),
+    )
+    for child_id in incorrect.nodes["region-0001"].child_ids:
+        incorrect.apply(
+            child_id,
+            StopDecision(
+                action="stop",
+                owned_source_role="content_source",
+                introduction="完整内容。",
+                reason="无需再分。",
+            ),
+        )
+
+    issues = incorrect.detect_structure_issues()
+    assert len(issues) == 1
+    assert issues[0].target_node_id == "region-0001"
+    assert "标题 7.1.1" in issues[0].reason
+
+    correct = RegionTree(index, max_depth=5)
+    groups = correct.initialize(
+        title="测试手册",
+        decision=SplitDecision.model_validate(
+            {
+                "action": "split",
+                "owned_source_role": "content_source",
+                "introduction": "大型赛事统领行政子节。",
+                "reason": "7.1 留在父节点，7.1.1 成为孩子。",
+                "children": [
+                    {
+                        "label": "行政",
+                        "introduction": "申请流程。",
+                        "start_block_id": "p0002-b0001",
+                        "end_block_id": "p0002-b0002",
+                    }
+                ],
+            }
+        ),
+    )
+    correct.apply(
+        groups[0][1][0],
+        StopDecision(
+            action="stop",
+            owned_source_role="content_source",
+            introduction="完整内容。",
+            reason="无需再分。",
+        ),
+    )
+    assert correct.detect_structure_issues() == []
+
+
+@pytest.mark.asyncio
+async def test_structure_check_can_dismiss_a_confirmed_false_positive() -> None:
+    source = build_document_blocks(
+        (
+            ParsedPage(page_number=1, markdown="## 7.1 大型赛事\n\n总体说明。"),
+            ParsedPage(page_number=2, markdown="### 7.1.1行政\n\n申请流程。"),
+        )
+    )
+    runtime = RegionRuntime(
+        model=KeepStructureRepairModel(),
+        blocks=source,
+        context="协会内部手册。",
+        settings=ExplorationSettings(),
+        embedder=FakeEmbedder(),
+    )
+    await runtime.run(
+        title="测试手册",
+        root_decision=SplitDecision.model_validate(
+            {
+                "action": "split",
+                "owned_source_role": None,
+                "introduction": "两个区域暂时作为兄弟。",
+                "reason": "构造待复核样例。",
+                "children": [
+                    {
+                        "label": "大型赛事",
+                        "introduction": "总体说明。",
+                        "start_block_id": "p0001-b0001",
+                        "end_block_id": "p0001-b0002",
+                    },
+                    {
+                        "label": "行政",
+                        "introduction": "申请流程。",
+                        "start_block_id": "p0002-b0001",
+                        "end_block_id": "p0002-b0002",
+                    },
+                ],
+            }
+        ),
+        root_model_calls=1,
+    )
+    await runtime.calibrate_structure()
+
+    snapshot = runtime.tree.snapshot()
+    assert snapshot.status == "frozen"
+    assert len(snapshot.structure_check.initial_issues) == 1
+    assert snapshot.structure_check.remaining_issues == []
+    assert snapshot.model_calls == 4
 
 
 def test_calibration_can_reject_a_false_positive_without_changing_tree() -> None:
@@ -326,3 +561,12 @@ def test_calibration_can_reject_a_false_positive_without_changing_tree() -> None
     assert groups == []
     assert tree.nodes["region-0001"].child_ids == original_children
     assert tree.nodes["region-0001"].decision_reason == "两个直接孩子的边界已经正确。"
+
+
+def test_all_tree_prompts_preserve_workflow_parent_without_forcing_merge() -> None:
+    tree_prompt = "".join(REGION_TREE_SYSTEM_PROMPT.split())
+    repair_prompt = "".join(STRUCTURE_REPAIR_SYSTEM_PROMPT.split())
+
+    assert "所有未被孩子覆盖的块自动成为当前节点直接拥有的原文" in tree_prompt
+    assert "同属工作流、清单、论证或知识体系不是停止切分的理由" in tree_prompt
+    assert "标题和引言" in repair_prompt
