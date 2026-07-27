@@ -1,10 +1,7 @@
 from pathlib import Path
 
 from cold_start.document.models import ParsedDocument, ParsedPage
-from cold_start.global_exploration.units import (
-    build_full_document_unit,
-    build_reading_units,
-)
+from cold_start.global_exploration.units import build_reading_units
 
 
 def make_document() -> ParsedDocument:
@@ -35,18 +32,3 @@ def test_build_reading_units_preserves_page_boundaries_and_overlap() -> None:
 
 def test_page_count_comes_from_parsed_pages() -> None:
     assert make_document().page_count == 4
-
-
-def test_full_document_unit_keeps_every_page_and_all_content() -> None:
-    pages = (
-        ParsedPage(page_number=1, markdown="# 目录\n第一章 基本情况\n第二章 比赛"),
-        ParsedPage(page_number=2, markdown="## 第一章 基本情况\n" + "协会介绍" * 20),
-    )
-
-    unit = build_full_document_unit(pages)
-
-    assert unit.page_numbers == (1, 2)
-    assert "〔第 1 页〕" in unit.content
-    assert "# 目录" in unit.content
-    assert "## 第一章 基本情况" in unit.content
-    assert ("协会介绍" * 20) in unit.content

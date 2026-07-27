@@ -10,6 +10,8 @@ dependencies = [
   "langgraph>=1.2.9,<2",
   "pydantic>=2.12.5,<3",
   "python-dotenv>=1.2.2,<2",
+  "torch>=2,<3",
+  "transformers>=4.45,<6",
 ]
 
 [project.scripts]

@@ -1,10 +1,14 @@
 import json
+from collections.abc import Mapping
 
 import httpx
 import pytest
 
 from cold_start.config import ModelSettings
-from cold_start.llm.openai_compatible import OpenAICompatibleChatModel
+from cold_start.llm.openai_compatible import (
+    ModelProtocolError,
+    OpenAICompatibleChatModel,
+)
 
 
 class RecordingProgressReporter:
@@ -60,7 +64,7 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
         model = OpenAICompatibleChatModel(
             ModelSettings(
                 model="test-model",
-                api_base_url="http://model.test/v1/",
+                api_base_url="http://model.test//v1/",
                 api_key="secret",
             ),
             client=client,
@@ -105,9 +109,6 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
     ]
     assert "Authorization" not in request_trace
     assert "secret" not in json.dumps(request_trace)
-    events = next(tmp_path.glob("*.events.jsonl")).read_text(encoding="utf-8")
-    assert '"kind": "comment"' in events
-    assert '"status": "complete"' in events
 
 
 @pytest.mark.asyncio
@@ -129,7 +130,7 @@ async def test_adapter_rejects_non_stream_json_response() -> None:
             ),
             client=client,
         )
-        with pytest.raises(RuntimeError, match="结构流式请求连续失败"):
+        with pytest.raises(ModelProtocolError, match="未收到 data 事件"):
             await model.complete(
                 system_prompt="系统",
                 user_prompt="用户",
@@ -158,7 +159,7 @@ async def test_adapter_keeps_partial_trace_when_remote_stream_breaks(tmp_path) -
             client=client,
             trace_directory=tmp_path,
         )
-        with pytest.raises(RuntimeError, match="测试流式请求连续失败"):
+        with pytest.raises(RuntimeError, match="测试流式传输连续失败"):
             await model.complete(
                 system_prompt="系统",
                 user_prompt="用户",
@@ -171,6 +172,202 @@ async def test_adapter_keeps_partial_trace_when_remote_stream_breaks(tmp_path) -
     assert '{"partial": true' in next(
         tmp_path.glob("*.content.partial.txt")
     ).read_text(encoding="utf-8")
-    events = next(tmp_path.glob("*.events.jsonl")).read_text(encoding="utf-8")
-    assert '"status": "error"' in events
-    assert "RemoteProtocolError" in events
+
+
+@pytest.mark.asyncio
+async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages() -> None:
+    request_bodies: list[dict[str, object]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        request_bodies.append(body)
+        if len(request_bodies) == 1:
+            stream_body = "".join(
+                (
+                    sse_event(
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "reasoning_content": "需要调用文档检索。"
+                                    }
+                                }
+                            ]
+                        }
+                    ),
+                    sse_event(
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "tool_calls": [
+                                            {
+                                                "index": 0,
+                                                "id": "call_",
+                                                "type": "function",
+                                                "function": {
+                                                    "name": "search_",
+                                                    "arguments": '{"query":"',
+                                                },
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    ),
+                    sse_event(
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "tool_calls": [
+                                            {
+                                                "index": 0,
+                                                "id": "001",
+                                                "function": {
+                                                    "name": "document",
+                                                    "arguments": '二课"}',
+                                                },
+                                            }
+                                        ]
+                                    },
+                                    "finish_reason": "tool_calls",
+                                }
+                            ]
+                        }
+                    ),
+                    sse_event("[DONE]"),
+                )
+            )
+        else:
+            stream_body = "".join(
+                (
+                    sse_event({"choices": [{"delta": {"content": "已使用工具结果"}}]}),
+                    sse_event("[DONE]"),
+                )
+            )
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text=stream_body,
+        )
+
+    tool: Mapping[str, object] = {
+        "type": "function",
+        "function": {
+            "name": "search_document",
+            "parameters": {"type": "object"},
+        },
+    }
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        model = OpenAICompatibleChatModel(
+            ModelSettings(
+                model="test-model",
+                api_base_url="http://model.test/v1",
+                api_key=None,
+            ),
+            client=client,
+        )
+        first = await model.complete_turn(
+            messages=[{"role": "user", "content": "查找二课"}],
+            tools=[tool],
+            tool_choice={
+                "type": "function",
+                "function": {"name": "search_document"},
+            },
+            thinking="enabled",
+        )
+        second = await model.complete_turn(
+            messages=[
+                {"role": "user", "content": "查找二课"},
+                first.as_assistant_message(),
+                {
+                    "role": "tool",
+                    "tool_call_id": first.tool_calls[0].id,
+                    "content": "二课申请位于第 2 页",
+                },
+            ],
+            thinking="enabled",
+        )
+
+    assert first.content == ""
+    assert first.reasoning_content == "需要调用文档检索。"
+    assert first.tool_calls[0].id == "call_001"
+    assert first.tool_calls[0].name == "search_document"
+    assert json.loads(first.tool_calls[0].arguments) == {"query": "二课"}
+    assert second.content == "已使用工具结果"
+    assert request_bodies[0]["tools"] == [tool]
+    assert request_bodies[0]["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "search_document"},
+    }
+    assert request_bodies[0]["thinking"] == {
+        "type": "enabled",
+        "clear_thinking": False,
+    }
+    second_messages = request_bodies[1]["messages"]
+    assert isinstance(second_messages, list)
+    assert second_messages[-2]["reasoning_content"] == "需要调用文档检索。"
+    assert second_messages[-1]["role"] == "tool"
+    assert second_messages[-1]["tool_call_id"] == "call_001"
+    assert request_bodies[1]["thinking"] == {
+        "type": "enabled",
+        "clear_thinking": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_adapter_returns_reasoning_only_turn_without_transport_retry() -> None:
+    requests = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        del request
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text="".join(
+                (
+                    sse_event(
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "reasoning_content": "已经完成判断。"
+                                    }
+                                }
+                            ]
+                        }
+                    ),
+                    sse_event(
+                        {
+                            "choices": [
+                                {"delta": {}, "finish_reason": "stop"}
+                            ]
+                        }
+                    ),
+                    sse_event("[DONE]"),
+                )
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        model = OpenAICompatibleChatModel(
+            ModelSettings(
+                model="test-model",
+                api_base_url="http://model.test/v1",
+                api_key=None,
+                max_retries=2,
+            ),
+            client=client,
+        )
+        turn = await model.complete_turn(
+            messages=[{"role": "user", "content": "输出 JSON"}],
+            thinking="enabled",
+        )
+
+    assert requests == 1
+    assert turn.content == ""
+    assert turn.reasoning_content == "已经完成判断。"

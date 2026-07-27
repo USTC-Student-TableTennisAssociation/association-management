@@ -74,17 +74,44 @@ class ModelSettings:
 
 @dataclass(frozen=True)
 class ExplorationSettings:
-    """全局勘探两条并行阅读线路的切片边界。"""
+    """文档上下文线路和递归区域树的运行边界。"""
 
-    context_unit_chars: int = 18_000
+    context_unit_chars: int = 12_000
+    max_tree_depth: int = 6
+    max_parallel_regions: int = 3
+    max_tool_calls_per_region: int = 2
+    boundary_context_blocks: int = 2
+    retrieval_unit_chars: int = 1_200
+    retrieval_top_k: int = 5
+    embedding_model: str = "BAAI/bge-m3"
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        embedding_model: str | None = None,
+    ) -> ExplorationSettings:
+        return cls(
+            embedding_model=embedding_model
+            or os.getenv("COLD_START_EMBEDDING_MODEL")
+            or "BAAI/bge-m3"
+        )
 
     def __post_init__(self) -> None:
         positive_values = {
             "context_unit_chars": self.context_unit_chars,
+            "max_tree_depth": self.max_tree_depth,
+            "max_parallel_regions": self.max_parallel_regions,
+            "max_tool_calls_per_region": self.max_tool_calls_per_region,
+            "boundary_context_blocks": self.boundary_context_blocks,
+            "retrieval_unit_chars": self.retrieval_unit_chars,
+            "retrieval_top_k": self.retrieval_top_k,
         }
         for name, value in positive_values.items():
             if value < 1:
                 raise ValueError(f"{name} 必须大于 0")
+        if not self.embedding_model.strip():
+            raise ValueError("embedding_model 不能为空")
 
 
 def _environment_float(

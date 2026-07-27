@@ -22,7 +22,7 @@ from cold_start.progress import ConsoleProgressReporter
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cold-start",
-        description="并行生成单份协会手册的文档上下文和宏观分区",
+        description="生成单份协会手册的文档背景和递归连续区域树",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     explore = subparsers.add_parser("explore", help="运行单 PDF 全局勘探")
@@ -56,6 +56,13 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="在终端分段显示接口返回的正文和思考内容",
     )
+    explore.add_argument(
+        "--embedding-model",
+        help=(
+            "本地 BGE-M3 目录或 Hugging Face 模型名；"
+            "覆盖 COLD_START_EMBEDDING_MODEL"
+        ),
+    )
     return parser
 
 
@@ -74,7 +81,9 @@ async def _run_explore(args: argparse.Namespace) -> int:
         read_timeout_seconds=args.read_timeout_seconds,
         max_retries=args.max_model_retries,
     )
-    exploration_settings = ExplorationSettings()
+    exploration_settings = ExplorationSettings.from_environment(
+        embedding_model=args.embedding_model,
+    )
     progress.report(
         "模型",
         (
@@ -91,7 +100,7 @@ async def _run_explore(args: argparse.Namespace) -> int:
         "PDF",
         (
             f"解析完成：{nonempty_pages}/{document.page_count} 页非空，"
-            f"全文 {len(document.markdown)} 字符"
+            f"全文 {len(document.markdown)} 字符，{len(document.blocks)} 个稳定块"
         ),
     )
 
@@ -101,7 +110,14 @@ async def _run_explore(args: argparse.Namespace) -> int:
     )
     model_stream_directory = run_directory / "model-streams"
     progress.report("产物", f"已创建运行目录 {run_directory}")
-    progress.report("模型", f"原始流与部分响应将实时保存到 {model_stream_directory}")
+    progress.report("模型", f"模型输入、正文和思考将实时保存到 {model_stream_directory}")
+    progress.report(
+        "检索",
+        (
+            f"按需使用 BGE-M3（{exploration_settings.embedding_model}）；"
+            "只有模型调用 search_document 时才加载向量模型"
+        ),
+    )
 
     model = OpenAICompatibleChatModel(
         model_settings,
@@ -114,6 +130,7 @@ async def _run_explore(args: argparse.Namespace) -> int:
             model=model,
             settings=exploration_settings,
             progress=progress,
+            run_directory=run_directory,
         ).run(document)
     finally:
         await model.aclose()

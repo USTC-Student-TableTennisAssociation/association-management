@@ -1,4 +1,4 @@
-"""为两条阅读线路生成保留页码的原文单元。"""
+"""为文档背景线路生成保留页码的顺序阅读单元。"""
 
 from __future__ import annotations
 
@@ -64,18 +64,3 @@ def build_reading_units(
 
     append_current()
     return tuple(units)
-
-
-def build_full_document_unit(pages: tuple[ParsedPage, ...]) -> ReadingUnit:
-    """把完整逐页原文交给只负责宏观切分的线路。"""
-
-    if not pages:
-        raise ValueError("完整文档阅读单元至少需要一页")
-
-    return ReadingUnit(
-        index=0,
-        page_numbers=tuple(page.page_number for page in pages),
-        content="\n\n".join(
-            f"〔第 {page.page_number} 页〕\n{page.markdown}" for page in pages
-        ),
-    )

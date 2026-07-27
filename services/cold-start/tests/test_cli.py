@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import cold_start.cli as cli
 from cold_start.document.models import ParsedDocument, ParsedPage
+from cold_start.llm.base import ModelTurn, ThinkingMode
 
 
 class FakePdfLoader:
@@ -47,19 +50,32 @@ class FakeChatModel:
         del system_prompt, temperature, request_label
         if "[ROUTE: document_context]" in user_prompt:
             return "这是一份测试手册。"
-        if "[ROUTE: macro_sections]" in user_prompt:
-            return json.dumps(
-                {
-                    "sections": [
-                        {
-                            "label": "测试内容",
-                            "start_page": 1,
-                            "end_page": 1,
-                        }
-                    ]
-                }
-            )
         raise AssertionError("出现未预期的模型调用")
+
+    async def complete_turn(
+        self,
+        *,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[Mapping[str, Any]] = (),
+        tool_choice: object | None = None,
+        temperature: float = 0.0,
+        request_label: str = "模型",
+        thinking: ThinkingMode | None = None,
+    ) -> ModelTurn:
+        del tools, tool_choice, temperature, request_label, thinking
+        prompt = str(messages[-1]["content"])
+        if "[STAGE: region_tree_root]" not in prompt:
+            raise AssertionError("出现未预期的区域模型调用")
+        return ModelTurn(
+            content=json.dumps(
+                {
+                    "action": "stop",
+                    "introduction": "一页测试手册。",
+                    "reason": "内容无需继续分区。",
+                },
+                ensure_ascii=False,
+            )
+        )
 
     async def aclose(self) -> None:
         return None
@@ -98,15 +114,16 @@ async def test_cli_auto_loads_env_and_prints_detailed_progress(
             read_timeout_seconds=None,
             max_model_retries=None,
             show_model_stream=False,
+            embedding_model="fake-bge-m3",
         )
     )
 
     output = capsys.readouterr().out
     assert result == 0
     assert f"已加载 {tmp_path / '.env'}" in output
-    assert "[规划] 两条线路已生成" in output
-    assert "[文档上下文] 开始顺序阅读单元 1/1" in output
-    assert "[宏观切分] 开始阅读完整文档并划分后续阅读区域" in output
-    assert "[汇总] 两条线路已汇合" in output
+    assert "[规划] 文档背景 1 个阅读单元" in output
+    assert "[文档上下文] 开始 1/1" in output
+    assert "[区域树·根节点] 完成判断" in output
+    assert "[汇总] 区域树状态 frozen" in output
     assert "[完成] 全局勘探产物" in output
     assert list((tmp_path / "runs").glob("*/global-exploration.json"))

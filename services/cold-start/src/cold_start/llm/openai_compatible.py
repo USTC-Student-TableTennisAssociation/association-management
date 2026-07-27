@@ -1,4 +1,4 @@
-"""OpenAI 兼容聊天完成接口。"""
+"""学校 OpenAI 兼容接口的流式适配器。"""
 
 from __future__ import annotations
 
@@ -10,15 +10,74 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TextIO
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 from cold_start.config import ModelSettings
+from cold_start.llm.base import ModelTurn, ThinkingMode, ToolCall
 from cold_start.progress import NullProgressReporter, ProgressReporter
 
 
+class ModelProtocolError(RuntimeError):
+    """接口已响应，但没有形成完整的 SSE 结果。"""
+
+
+@dataclass
+class _ToolParts:
+    call_id: str = ""
+    name: str = ""
+    arguments: str = ""
+
+    def append(self, fragment: Mapping[str, object]) -> None:
+        function = fragment.get("function")
+        function = function if isinstance(function, Mapping) else {}
+        self.call_id += _text(fragment.get("id"))
+        self.name += _text(function.get("name"))
+        self.arguments += _text(function.get("arguments"))
+
+    def build(self) -> ToolCall:
+        if not self.call_id or not self.name:
+            raise ModelProtocolError("流式工具调用缺少 id 或 function.name")
+        return ToolCall(id=self.call_id, name=self.name, arguments=self.arguments)
+
+
+class _Trace:
+    """持续保存正文和思考，进程中断时仍可检查。"""
+
+    def __init__(
+        self,
+        directory: Path | None,
+        *,
+        sequence: int,
+        label: str,
+        attempt: int,
+    ) -> None:
+        self.files: dict[str, TextIO] = {}
+        if directory is None:
+            return
+        directory.mkdir(parents=True, exist_ok=True)
+        stem = f"{sequence:03d}-{_safe_label(label)}-attempt-{attempt}"
+        for kind in ("content", "reasoning"):
+            self.files[kind] = (directory / f"{stem}.{kind}.partial.txt").open(
+                "w", encoding="utf-8"
+            )
+
+    def text(self, kind: str, value: str) -> None:
+        if file := self.files.get(kind):
+            file.write(value)
+
+    def flush(self) -> None:
+        for file in self.files.values():
+            file.flush()
+
+    def close(self) -> None:
+        for file in self.files.values():
+            file.close()
+
+
 class OpenAICompatibleChatModel:
-    """通过标准 chat/completions 协议调用远程或本地模型。"""
+    """只实现本模块实际使用的 chat/completions 流式协议。"""
 
     def __init__(
         self,
@@ -29,19 +88,20 @@ class OpenAICompatibleChatModel:
         trace_directory: Path | None = None,
         show_model_stream: bool = False,
     ) -> None:
-        self._settings = settings
-        self._owns_client = client is None
-        timeout = httpx.Timeout(
-            connect=settings.connect_timeout_seconds,
-            read=settings.read_timeout_seconds,
-            write=settings.write_timeout_seconds,
-            pool=settings.pool_timeout_seconds,
+        self.settings = settings
+        self.owns_client = client is None
+        self.client = client or httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=settings.connect_timeout_seconds,
+                read=settings.read_timeout_seconds,
+                write=settings.write_timeout_seconds,
+                pool=settings.pool_timeout_seconds,
+            )
         )
-        self._client = client or httpx.AsyncClient(timeout=timeout)
-        self._progress = progress or NullProgressReporter()
-        self._trace_directory = trace_directory
-        self._show_model_stream = show_model_stream
-        self._request_sequence = 0
+        self.progress = progress or NullProgressReporter()
+        self.trace_directory = trace_directory
+        self.show_model_stream = show_model_stream
+        self.sequence = 0
 
     async def complete(
         self,
@@ -51,480 +111,309 @@ class OpenAICompatibleChatModel:
         temperature: float = 0.0,
         request_label: str = "模型",
     ) -> str:
-        headers = {
-            "Accept": "text/event-stream",
-            "Content-Type": "application/json",
-        }
-        if self._settings.api_key:
-            headers["Authorization"] = f"Bearer {self._settings.api_key}"
-
-        payload = {
-            "model": self._settings.model,
-            "messages": [
+        turn = await self.complete_turn(
+            messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
+            temperature=temperature,
+            request_label=request_label,
+        )
+        if turn.tool_calls or not turn.content:
+            raise ModelProtocolError(f"{request_label}没有返回正式正文")
+        return turn.content
+
+    async def complete_turn(
+        self,
+        *,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[Mapping[str, Any]] = (),
+        tool_choice: object | None = None,
+        temperature: float = 0.0,
+        request_label: str = "模型",
+        thinking: ThinkingMode | None = None,
+    ) -> ModelTurn:
+        payload: dict[str, object] = {
+            "model": self.settings.model,
+            "messages": list(messages),
             "temperature": temperature,
             "stream": True,
         }
-        endpoint = self._endpoint(self._settings.api_base_url)
-        self._request_sequence += 1
-        request_sequence = self._request_sequence
-        self._write_request_trace(
-            request_sequence=request_sequence,
-            request_label=request_label,
-            endpoint=endpoint,
-            payload=payload,
-        )
+        if tools:
+            payload.update(tools=list(tools), tool_choice=tool_choice or "auto")
+        if thinking:
+            payload["thinking"] = {
+                "type": thinking,
+                **({"clear_thinking": False} if thinking == "enabled" else {}),
+            }
+        headers = {"Accept": "text/event-stream", "Content-Type": "application/json"}
+        if self.settings.api_key:
+            headers["Authorization"] = f"Bearer {self.settings.api_key}"
 
+        self.sequence += 1
+        self._save_request(request_label, payload)
+        endpoint = _endpoint(self.settings.api_base_url)
         last_error: Exception | None = None
-        for attempt in range(self._settings.max_retries):
+        for attempt in range(1, self.settings.max_retries + 1):
             try:
-                return await self._receive_stream(
-                    endpoint=endpoint,
-                    headers=headers,
-                    payload=payload,
-                    request_label=request_label,
-                    request_sequence=request_sequence,
-                    attempt=attempt + 1,
+                return await self._stream(
+                    endpoint,
+                    headers,
+                    payload,
+                    label=request_label,
+                    attempt=attempt,
                 )
-            except (
-                httpx.HTTPError,
-                json.JSONDecodeError,
-                ValueError,
-                KeyError,
-                TypeError,
-            ) as error:
+            except Exception as error:
+                if not _retryable(error) or attempt == self.settings.max_retries:
+                    if _retryable(error):
+                        raise RuntimeError(f"{request_label}流式传输连续失败") from error
+                    raise
                 last_error = error
-                if attempt + 1 >= self._settings.max_retries:
-                    break
-                delay_seconds = 2**attempt
-                self._progress.report(
+                delay = 2 ** (attempt - 1)
+                self.progress.report(
                     request_label,
-                    (
-                        f"流式请求失败（{self._error_label(error)}），"
-                        f"{delay_seconds} 秒后重试 "
-                        f"{attempt + 2}/{self._settings.max_retries}"
-                    ),
+                    f"流式请求失败（{_error_label(error)}），{delay} 秒后重试 "
+                    f"{attempt + 1}/{self.settings.max_retries}",
                 )
-                await asyncio.sleep(delay_seconds)
-
-        raise RuntimeError(f"{request_label}流式请求连续失败") from last_error
+                await asyncio.sleep(delay)
+        raise RuntimeError(f"{request_label}流式传输连续失败") from last_error
 
     async def aclose(self) -> None:
-        if self._owns_client:
-            await self._client.aclose()
+        if self.owns_client:
+            await self.client.aclose()
 
-    def _write_request_trace(
+    async def _stream(
         self,
-        *,
-        request_sequence: int,
-        request_label: str,
         endpoint: str,
-        payload: Mapping[str, Any],
-    ) -> None:
-        """在发送前保存不含鉴权信息的完整模型输入。"""
-
-        if self._trace_directory is None:
-            return
-        self._trace_directory.mkdir(parents=True, exist_ok=True)
-        safe_label = _safe_request_label(request_label)
-        path = self._trace_directory / (
-            f"{request_sequence:03d}-{safe_label}.request.json"
+        headers: Mapping[str, str],
+        payload: Mapping[str, object],
+        *,
+        label: str,
+        attempt: int,
+    ) -> ModelTurn:
+        started = last_report = time.perf_counter()
+        trace = _Trace(
+            self.trace_directory,
+            sequence=self.sequence,
+            label=label,
+            attempt=attempt,
         )
+        content: list[str] = []
+        reasoning: list[str] = []
+        pending_content: list[str] = []
+        pending_reasoning: list[str] = []
+        calls: dict[int, _ToolParts] = {}
+        events = comments = 0
+        got_data = got_done = False
+        first: set[str] = set()
+
+        try:
+            async with self.client.stream(
+                "POST", endpoint, headers=headers, json=payload
+            ) as response:
+                if response.is_error:
+                    await response.aread()
+                response.raise_for_status()
+                async for kind, data in _sse_events(response):
+                    now = time.perf_counter()
+                    events += 1
+                    if "event" not in first:
+                        first.add("event")
+                        self.progress.report(
+                            label,
+                            f"收到首个 SSE 事件，等待 {now - started:.1f} 秒，类型 {kind}",
+                        )
+                    if kind == "comment":
+                        comments += 1
+                        continue
+                    got_data = True
+                    if data == "[DONE]":
+                        got_done = True
+                        break
+
+                    choice = _first_choice(json.loads(data))
+                    if choice is not None:
+                        delta = choice.get("delta")
+                        if not isinstance(delta, Mapping):
+                            raise ModelProtocolError("模型流事件缺少 delta")
+                        self._consume_delta(
+                            delta,
+                            content,
+                            reasoning,
+                            pending_content,
+                            pending_reasoning,
+                            calls,
+                            trace,
+                            label,
+                            started,
+                            first,
+                        )
+
+                    if now - last_report >= self.settings.stream_progress_interval_seconds:
+                        self._show_pending(label, pending_content, pending_reasoning)
+                        self.progress.report(
+                            label,
+                            f"SSE 活跃：事件 {events} 个，心跳 {comments} 个，"
+                            f"正文 {sum(map(len, content))} 字符，"
+                            f"思考 {sum(map(len, reasoning))} 字符，"
+                            f"已用 {now - started:.1f} 秒",
+                        )
+                        trace.flush()
+                        last_report = now
+
+            if not got_data:
+                raise ModelProtocolError("模型响应不是 SSE 流：未收到 data 事件")
+            if not got_done:
+                raise ModelProtocolError("模型 SSE 流未以 [DONE] 正常结束")
+            result = ModelTurn(
+                content="".join(content).strip(),
+                reasoning_content="".join(reasoning).strip(),
+                tool_calls=tuple(calls[index].build() for index in sorted(calls)),
+            )
+            if not result.content and not result.reasoning_content and not result.tool_calls:
+                raise ModelProtocolError("模型 SSE 流没有返回任何内容")
+            trace.flush()
+            self.progress.report(
+                label,
+                f"流式接收完成：正文 {sum(map(len, content))} 字符，"
+                f"思考 {sum(map(len, reasoning))} 字符，事件 {events} 个，"
+                f"工具调用 {len(result.tool_calls)} 个，"
+                f"耗时 {time.perf_counter() - started:.1f} 秒",
+            )
+            return result
+        finally:
+            self._show_pending(label, pending_content, pending_reasoning)
+            trace.close()
+
+    def _consume_delta(
+        self,
+        delta: Mapping[str, object],
+        content: list[str],
+        reasoning: list[str],
+        pending_content: list[str],
+        pending_reasoning: list[str],
+        calls: dict[int, _ToolParts],
+        trace: _Trace,
+        label: str,
+        started: float,
+        first: set[str],
+    ) -> None:
+        for kind, value, target, pending in (
+            ("reasoning", _text(delta.get("reasoning_content")), reasoning, pending_reasoning),
+            ("content", _text(delta.get("content")), content, pending_content),
+        ):
+            if not value:
+                continue
+            target.append(value)
+            pending.append(value)
+            trace.text(kind, value)
+            if kind not in first:
+                first.add(kind)
+                display = "思考" if kind == "reasoning" else "正文"
+                self.progress.report(
+                    label,
+                    f"收到首个{display}片段，等待 {time.perf_counter() - started:.1f} 秒",
+                )
+
+        fragments = delta.get("tool_calls")
+        if isinstance(fragments, Sequence):
+            for fragment in fragments:
+                if not isinstance(fragment, Mapping):
+                    continue
+                index = fragment.get("index", 0)
+                index = index if isinstance(index, int) else 0
+                calls.setdefault(index, _ToolParts()).append(fragment)
+                if "tool" not in first:
+                    first.add("tool")
+                    self.progress.report(
+                        label,
+                        f"收到首个工具调用片段，等待 "
+                        f"{time.perf_counter() - started:.1f} 秒",
+                    )
+
+    def _show_pending(
+        self,
+        label: str,
+        content: list[str],
+        reasoning: list[str],
+    ) -> None:
+        if self.show_model_stream:
+            if reasoning:
+                self.progress.report(f"{label}·思考", "".join(reasoning))
+            if content:
+                self.progress.report(f"{label}·正文", "".join(content))
+        reasoning.clear()
+        content.clear()
+
+    def _save_request(self, label: str, payload: Mapping[str, object]) -> None:
+        if self.trace_directory is None:
+            return
+        self.trace_directory.mkdir(parents=True, exist_ok=True)
+        path = self.trace_directory / f"{self.sequence:03d}-{_safe_label(label)}.request.json"
         path.write_text(
             json.dumps(
-                {
-                    "endpoint": endpoint,
-                    "request_label": request_label,
-                    "payload": payload,
-                },
+                {"endpoint": _endpoint(self.settings.api_base_url), "payload": payload},
                 ensure_ascii=False,
                 indent=2,
             ),
             encoding="utf-8",
         )
 
-    @staticmethod
-    def _endpoint(api_base_url: str) -> str:
-        normalized = api_base_url.rstrip("/")
-        if normalized.endswith("/chat/completions"):
-            return normalized
-        return f"{normalized}/chat/completions"
 
-    async def _receive_stream(
-        self,
-        *,
-        endpoint: str,
-        headers: Mapping[str, str],
-        payload: Mapping[str, Any],
-        request_label: str,
-        request_sequence: int,
-        attempt: int,
-    ) -> str:
-        started_at = time.perf_counter()
-        last_progress_at = started_at
-        content_chars = 0
-        reasoning_chars = 0
-        event_count = 0
-        comment_count = 0
-        received_any_event = False
-        received_data_event = False
-        received_done = False
-        received_content = False
-        received_reasoning = False
-        content_parts: list[str] = []
-        pending_content_parts: list[str] = []
-        pending_reasoning_parts: list[str] = []
-        trace = _StreamTrace.create(
-            directory=self._trace_directory,
-            request_sequence=request_sequence,
-            request_label=request_label,
-            attempt=attempt,
-            started_at=started_at,
-        )
-
-        try:
-            async with self._client.stream(
-                "POST",
-                endpoint,
-                headers=headers,
-                json=payload,
-            ) as response:
-                response.raise_for_status()
-                async for sse_event in self._iter_sse_events(response):
-                    now = time.perf_counter()
-                    event_count += 1
-                    trace.record_event(sse_event, now=now)
-
-                    if not received_any_event:
-                        received_any_event = True
-                        self._progress.report(
-                            request_label,
-                            (
-                                f"收到首个 SSE 事件，等待 "
-                                f"{now - started_at:.1f} 秒，类型 {sse_event.kind}"
-                            ),
-                        )
-
-                    if sse_event.kind == "comment":
-                        comment_count += 1
-                    else:
-                        received_data_event = True
-                        if sse_event.data == "[DONE]":
-                            received_done = True
-                            break
-                        event = json.loads(sse_event.data)
-                        if isinstance(event, Mapping) and event.get("error"):
-                            raise ValueError(f"模型流返回错误事件：{event['error']}")
-                        delta = self._extract_delta(event)
-                        if delta.reasoning:
-                            trace.append_reasoning(delta.reasoning)
-                            pending_reasoning_parts.append(delta.reasoning)
-                            reasoning_chars += len(delta.reasoning)
-                            if not received_reasoning:
-                                received_reasoning = True
-                                self._progress.report(
-                                    request_label,
-                                    (
-                                        "收到首个思考片段，等待 "
-                                        f"{now - started_at:.1f} 秒"
-                                    ),
-                                )
-                        if delta.content:
-                            trace.append_content(delta.content)
-                            content_parts.append(delta.content)
-                            pending_content_parts.append(delta.content)
-                            content_chars += len(delta.content)
-                            if not received_content:
-                                received_content = True
-                                self._progress.report(
-                                    request_label,
-                                    (
-                                        "收到首个正文片段，等待 "
-                                        f"{now - started_at:.1f} 秒"
-                                    ),
-                                )
-
-                    if (
-                        now - last_progress_at
-                        >= self._settings.stream_progress_interval_seconds
-                    ):
-                        self._report_stream_activity(
-                            request_label=request_label,
-                            event_count=event_count,
-                            comment_count=comment_count,
-                            content_chars=content_chars,
-                            reasoning_chars=reasoning_chars,
-                            elapsed_seconds=now - started_at,
-                            pending_content_parts=pending_content_parts,
-                            pending_reasoning_parts=pending_reasoning_parts,
-                        )
-                        trace.flush()
-                        last_progress_at = now
-
-            if not received_data_event:
-                raise ValueError("模型响应不是 SSE 流：未收到 data 事件")
-            if not received_done:
-                raise ValueError("模型 SSE 流未以 [DONE] 正常结束")
-            content = "".join(content_parts).strip()
-            if not content:
-                raise ValueError("模型 SSE 流没有返回 content")
-            trace.record_status("complete")
-            self._progress.report(
-                request_label,
-                (
-                    f"流式接收完成：正文 {content_chars} 字符，"
-                    f"思考 {reasoning_chars} 字符，事件 {event_count} 个，"
-                    f"耗时 {time.perf_counter() - started_at:.1f} 秒"
-                ),
-            )
-            return content
-        except BaseException as error:
-            trace.record_status("error", detail=type(error).__name__)
-            raise
-        finally:
-            self._flush_model_text(
-                request_label=request_label,
-                pending_content_parts=pending_content_parts,
-                pending_reasoning_parts=pending_reasoning_parts,
-            )
-            trace.close()
-
-    @staticmethod
-    async def _iter_sse_events(response: httpx.Response) -> AsyncIterator[_SseEvent]:
-        data_lines: list[str] = []
-        async for line in response.aiter_lines():
-            if not line:
-                if data_lines:
-                    yield _SseEvent(kind="data", data="\n".join(data_lines))
-                    data_lines = []
-                continue
-            if line.startswith(":"):
-                yield _SseEvent(kind="comment", data=line[1:].lstrip())
-                continue
-            if line.startswith("data:"):
-                data_lines.append(line[5:].lstrip())
-        if data_lines:
-            yield _SseEvent(kind="data", data="\n".join(data_lines))
-
-    @staticmethod
-    def _extract_delta(payload: object) -> _ModelDelta:
-        if not isinstance(payload, Mapping):
-            raise ValueError("模型流事件不是 JSON 对象")
-        choices = payload.get("choices")
-        if not isinstance(choices, Sequence) or not choices:
-            return _ModelDelta()
-        first_choice = choices[0]
-        if not isinstance(first_choice, Mapping):
-            raise ValueError("模型流 choices[0] 格式错误")
-        delta = first_choice.get("delta")
-        if not isinstance(delta, Mapping):
-            raise ValueError("模型流事件缺少 delta")
-        content = OpenAICompatibleChatModel._extract_text(delta.get("content"))
-        reasoning = "".join(
-            OpenAICompatibleChatModel._extract_text(delta.get(field))
-            for field in ("reasoning_content", "reasoning", "thinking")
-        )
-        return _ModelDelta(content=content, reasoning=reasoning)
-
-    @staticmethod
-    def _extract_text(value: object) -> str:
-        if isinstance(value, str):
-            return value
-        if isinstance(value, Sequence):
-            text_parts = [
-                item["text"]
-                for item in value
-                if isinstance(item, Mapping) and isinstance(item.get("text"), str)
-            ]
-            return "".join(text_parts)
-        return ""
-
-    def _report_stream_activity(
-        self,
-        *,
-        request_label: str,
-        event_count: int,
-        comment_count: int,
-        content_chars: int,
-        reasoning_chars: int,
-        elapsed_seconds: float,
-        pending_content_parts: list[str],
-        pending_reasoning_parts: list[str],
-    ) -> None:
-        self._flush_model_text(
-            request_label=request_label,
-            pending_content_parts=pending_content_parts,
-            pending_reasoning_parts=pending_reasoning_parts,
-        )
-        self._progress.report(
-            request_label,
-            (
-                f"SSE 活跃：事件 {event_count} 个，心跳 {comment_count} 个，"
-                f"正文 {content_chars} 字符，思考 {reasoning_chars} 字符，"
-                f"已用 {elapsed_seconds:.1f} 秒"
-            ),
-        )
-
-    def _flush_model_text(
-        self,
-        *,
-        request_label: str,
-        pending_content_parts: list[str],
-        pending_reasoning_parts: list[str],
-    ) -> None:
-        if self._show_model_stream:
-            if pending_reasoning_parts:
-                self._progress.report(
-                    f"{request_label}·思考",
-                    "".join(pending_reasoning_parts),
-                )
-            if pending_content_parts:
-                self._progress.report(
-                    f"{request_label}·正文",
-                    "".join(pending_content_parts),
-                )
-        pending_reasoning_parts.clear()
-        pending_content_parts.clear()
-
-    @staticmethod
-    def _error_label(error: Exception) -> str:
-        if isinstance(error, httpx.HTTPStatusError):
-            return f"HTTP {error.response.status_code}"
-        return type(error).__name__
+async def _sse_events(response: httpx.Response) -> AsyncIterator[tuple[str, str]]:
+    data_lines: list[str] = []
+    async for line in response.aiter_lines():
+        if not line:
+            if data_lines:
+                yield "data", "\n".join(data_lines)
+                data_lines.clear()
+        elif line.startswith(":"):
+            yield "comment", line[1:].lstrip()
+        elif line.startswith("data:"):
+            data_lines.append(line[5:].lstrip())
+    if data_lines:
+        yield "data", "\n".join(data_lines)
 
 
-@dataclass(frozen=True)
-class _SseEvent:
-    kind: str
-    data: str
+def _first_choice(payload: object) -> Mapping[str, object] | None:
+    if not isinstance(payload, Mapping):
+        raise ModelProtocolError("模型流事件不是 JSON 对象")
+    if payload.get("error"):
+        raise ModelProtocolError(f"模型流返回错误事件：{payload['error']}")
+    choices = payload.get("choices")
+    if not isinstance(choices, Sequence) or not choices:
+        return None
+    choice = choices[0]
+    if not isinstance(choice, Mapping):
+        raise ModelProtocolError("模型流 choices[0] 格式错误")
+    return choice
 
 
-@dataclass(frozen=True)
-class _ModelDelta:
-    content: str = ""
-    reasoning: str = ""
+def _text(value: object) -> str:
+    return value if isinstance(value, str) else ""
 
 
-def _safe_request_label(request_label: str) -> str:
-    return re.sub(r"[^\w\u4e00-\u9fff-]+", "-", request_label).strip("-")
+def _endpoint(base_url: str) -> str:
+    parts = urlsplit(base_url)
+    path = re.sub(r"/+", "/", parts.path).rstrip("/")
+    normalized = urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+    if normalized.endswith("/chat/completions"):
+        return normalized
+    return f"{normalized}/chat/completions"
 
 
-class _StreamTrace:
-    """把单次模型尝试的原始事件和部分输出持续写入本地。"""
-
-    def __init__(
-        self,
-        *,
-        events_file: TextIO,
-        content_file: TextIO,
-        reasoning_file: TextIO,
-        started_at: float,
-    ) -> None:
-        self._events_file = events_file
-        self._content_file = content_file
-        self._reasoning_file = reasoning_file
-        self._started_at = started_at
-
-    @classmethod
-    def create(
-        cls,
-        *,
-        directory: Path | None,
-        request_sequence: int,
-        request_label: str,
-        attempt: int,
-        started_at: float,
-    ) -> _StreamTrace:
-        if directory is None:
-            return _NullStreamTrace()
-        directory.mkdir(parents=True, exist_ok=True)
-        safe_label = _safe_request_label(request_label)
-        stem = f"{request_sequence:03d}-{safe_label}-attempt-{attempt}"
-        return cls(
-            events_file=(directory / f"{stem}.events.jsonl").open(
-                "w",
-                encoding="utf-8",
-            ),
-            content_file=(directory / f"{stem}.content.partial.txt").open(
-                "w",
-                encoding="utf-8",
-            ),
-            reasoning_file=(directory / f"{stem}.reasoning.partial.txt").open(
-                "w",
-                encoding="utf-8",
-            ),
-            started_at=started_at,
-        )
-
-    def record_event(self, event: _SseEvent, *, now: float) -> None:
-        self._events_file.write(
-            json.dumps(
-                {
-                    "elapsed_seconds": round(now - self._started_at, 3),
-                    "kind": event.kind,
-                    "data": event.data,
-                },
-                ensure_ascii=False,
-            )
-            + "\n"
-        )
-
-    def append_content(self, text: str) -> None:
-        self._content_file.write(text)
-
-    def append_reasoning(self, text: str) -> None:
-        self._reasoning_file.write(text)
-
-    def record_status(self, status: str, *, detail: str | None = None) -> None:
-        self._events_file.write(
-            json.dumps(
-                {
-                    "elapsed_seconds": round(
-                        time.perf_counter() - self._started_at,
-                        3,
-                    ),
-                    "kind": "status",
-                    "status": status,
-                    "detail": detail,
-                },
-                ensure_ascii=False,
-            )
-            + "\n"
-        )
-        self.flush()
-
-    def flush(self) -> None:
-        self._events_file.flush()
-        self._content_file.flush()
-        self._reasoning_file.flush()
-
-    def close(self) -> None:
-        self.flush()
-        self._events_file.close()
-        self._content_file.close()
-        self._reasoning_file.close()
+def _safe_label(label: str) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff-]+", "-", label).strip("-")
 
 
-class _NullStreamTrace(_StreamTrace):
-    def __init__(self) -> None:
-        pass
+def _retryable(error: Exception) -> bool:
+    if isinstance(error, httpx.HTTPStatusError):
+        status = error.response.status_code
+        return status in {408, 429} or status >= 500
+    return isinstance(error, httpx.TransportError)
 
-    def record_event(self, event: _SseEvent, *, now: float) -> None:
-        del event, now
 
-    def append_content(self, text: str) -> None:
-        del text
-
-    def append_reasoning(self, text: str) -> None:
-        del text
-
-    def record_status(self, status: str, *, detail: str | None = None) -> None:
-        del status, detail
-
-    def flush(self) -> None:
-        pass
-
-    def close(self) -> None:
-        pass
+def _error_label(error: Exception) -> str:
+    if isinstance(error, httpx.HTTPStatusError):
+        return f"HTTP {error.response.status_code}"
+    return type(error).__name__

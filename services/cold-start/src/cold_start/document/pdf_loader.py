@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+from io import BytesIO
 from pathlib import Path
-from typing import Protocol
 
+from cold_start.document.blocks import build_document_blocks
 from cold_start.document.models import ParsedDocument, ParsedPage
-
-
-class PdfLoader(Protocol):
-    """PDF 解析器边界，便于测试和替换底层实现。"""
-
-    def load(self, source_path: Path) -> ParsedDocument: ...
 
 
 class DoclingPdfLoader:
@@ -25,9 +20,17 @@ class DoclingPdfLoader:
         self._validate_path(path)
 
         # 延迟导入，令不需要真实解析器的单元测试无需加载模型依赖。
+        from docling.datamodel.base_models import DocumentStream
         from docling.document_converter import DocumentConverter
 
-        result = DocumentConverter().convert(path)
+        source_bytes = path.read_bytes()
+        file_sha256 = hashlib.sha256(source_bytes).hexdigest()
+        result = DocumentConverter().convert(
+            DocumentStream(
+                name=f"{file_sha256}.pdf",
+                stream=BytesIO(source_bytes),
+            )
+        )
         document = result.document
         page_numbers = sorted(int(page_number) for page_number in document.pages)
 
@@ -43,16 +46,19 @@ class DoclingPdfLoader:
         if not any(page.markdown.strip() for page in pages):
             raise ValueError(f"PDF 未解析出可用文本：{path}")
 
-        return ParsedDocument(
+        parsed_document = ParsedDocument(
             source_path=path,
             title=path.stem,
-            file_sha256=self._sha256(path),
+            file_sha256=file_sha256,
             parser_name=self.parser_name,
             pages=pages,
             markdown=document.export_to_markdown(
                 page_break_placeholder="\n\n<!-- page-break -->\n\n",
                 traverse_pictures=True,
             ).strip(),
+        )
+        return parsed_document.model_copy(
+            update={"blocks": build_document_blocks(parsed_document.pages)}
         )
 
     @staticmethod
@@ -76,11 +82,3 @@ class DoclingPdfLoader:
             raise ValueError(f"输入不是文件：{path}")
         if path.suffix.lower() != ".pdf":
             raise ValueError(f"当前只接受单个 PDF 文件：{path}")
-
-    @staticmethod
-    def _sha256(path: Path) -> str:
-        digest = hashlib.sha256()
-        with path.open("rb") as source:
-            for block in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(block)
-        return digest.hexdigest()
