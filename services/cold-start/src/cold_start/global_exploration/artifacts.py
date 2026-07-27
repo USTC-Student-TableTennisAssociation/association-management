@@ -66,7 +66,16 @@ def write_exploration_artifacts(
         encoding="utf-8",
     )
     paths.region_tree_checks_json.write_text(
-        snapshot.region_tree.structure_check.model_dump_json(indent=2),
+        json.dumps(
+            {
+                "structure_check": snapshot.region_tree.structure_check.model_dump(),
+                "source_issues": [
+                    issue.model_dump() for issue in snapshot.region_tree.source_issues
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
     paths.region_tree_markdown.write_text(_tree(snapshot), encoding="utf-8")
@@ -93,6 +102,13 @@ def write_exploration_artifacts(
 def _report(snapshot: GlobalExplorationSnapshot) -> str:
     tree = snapshot.region_tree
     issues = "\n".join(f"- {item}" for item in tree.issues) or "无。"
+    source_issues = (
+        "\n".join(
+            f"- `{', '.join(item.block_ids)}`：{item.reason}"
+            for item in tree.source_issues
+        )
+        or "无。"
+    )
     return f"""# 全局勘探结果
 
 > 输入：{snapshot.source.title}（{snapshot.source.page_count} 页，
@@ -111,8 +127,13 @@ def _report(snapshot: GlobalExplorationSnapshot) -> str:
 - 仅含结构原文的节点：{len(tree.structural_context_node_ids)}
 - 初次结构问题：{len(tree.structure_check.initial_issues)}
 - 未解决结构问题：{len(tree.structure_check.remaining_issues)}
+- 来源解析警告：{len(tree.source_issues)}
 - 模型调用：{tree.model_calls}
 - 工具调用：{tree.tool_calls}
+
+## 来源解析警告
+
+{source_issues}
 
 ## 待人工检查
 

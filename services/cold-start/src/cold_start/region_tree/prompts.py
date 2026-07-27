@@ -22,7 +22,11 @@ REGION_TREE_SYSTEM_PROMPT = """
 每次只处理当前区域，只能返回：
 - stop：当前区域可以整体交给下一阶段；
 - split：只输出当前区域的一层直接孩子；
-- parent_partition_error：直接父节点切断了内容或跳过了有意义的中间区域。
+- parent_partition_error：移动完整原文块或增加中间节点可以修复的父节点错误。
+
+PDF 解析可能产生错误编号、跨页残片，或者把两节文字混进同一个 block。此类问题不能
+靠区域树修复：将相关 block_id 和原因写入 source_issues，同时继续返回语义上正确的
+stop 或 split。单个 block 内混有别节文字时，不能返回 parent_partition_error。
 
 split 时，孩子只覆盖真正属于孩子的连续原文，可以在开头、中间或结尾留下空隙。
 所有未被孩子覆盖的块自动成为当前节点直接拥有的原文。章节标题、统领全部孩子的
@@ -129,7 +133,9 @@ def region_prompt(
 
 当前区域已经完整给出，严禁调用工具重复搜索其中的文字或 block_id。只有确实需要查看
 当前区域之外的内容时才调用工具。若问题属于父节点，引用连续兄弟 node_id 返回
-parent_partition_error；一般不确定性不能算父分割错误。
+parent_partition_error；只有重新分配完整 block 或增加中间节点能够解决时才属于父
+分割错误。编号异常、跨页残片、同一 block 混入多节内容应记录在 source_issues，
+不能要求父节点重切。
 
 JSON Schema：
 {_schema()}
@@ -180,10 +186,11 @@ JSON Schema：
 
 STRUCTURE_REPAIR_SYSTEM_PROMPT = """
 你在复核程序通过显式编号发现的局部标题层级问题，不做全树校准，不提取记忆。
-若问题成立，返回 split，只重建目标节点的一层孩子，并允许目标节点直接拥有统领
-孩子的标题和引言；若编号来自解析错误或现有结构已经正确，返回 keep。也可以在目标
-确实不应继续分区时返回 stop。遵守区域树的原文归属、角色和单层切分规则。只输出
-符合 JSON Schema 的 JSON。
+先判断异常标题所在的原文是否已经归入语义正确的节点。若已经正确，只是原文编号、
+跨页排版或解析结果有误，必须返回 keep，并把异常写入 source_issues；即使程序之后
+仍能从字面编号看见冲突，也不能为了迎合编号而重切。只有现有树确实把完整原文块放在
+错误分支下时才返回 split。也可以在目标确实不应继续分区时返回 stop。遵守区域树的
+原文归属、角色和单层切分规则，只输出符合 JSON Schema 的 JSON。
 """.strip()
 
 
@@ -220,7 +227,7 @@ def structure_repair_prompt(
 程序发现的标题层级问题：
 {issue_text}
 
-旧子树：
+旧子树（只列真实树节点；原文中的标题不会在这里伪装成孩子）：
 {current_subtree}
 
 目标区域完整原文：
@@ -229,7 +236,8 @@ def structure_repair_prompt(
 相邻原文：
 {format_blocks(before_blocks + after_blocks) if before_blocks or after_blocks else "（无）"}
 
-若重切，父级标题和统领全部孩子的引言应留给当前节点直接拥有。不要创建纯标题孩子。
+若异常编号已经处在语义正确的节点内，返回 keep 并记录 source_issues。若重切，父级
+标题和统领全部孩子的引言应留给当前节点直接拥有。不要创建纯标题孩子。
 
 JSON Schema：
 {json.dumps(RepairDecisionOutput.model_json_schema(), ensure_ascii=False, separators=(",", ":"))}

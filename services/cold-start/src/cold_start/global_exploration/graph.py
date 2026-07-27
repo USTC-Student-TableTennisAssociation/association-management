@@ -183,7 +183,8 @@ class GlobalExplorationRunner:
             "汇总",
             (
                 f"区域树状态 {tree.status}，内容节点 {len(tree.content_node_ids)} 个，"
-                f"纯结构节点 {len(tree.structural_context_node_ids)} 个"
+                f"纯结构节点 {len(tree.structural_context_node_ids)} 个，"
+                f"来源解析警告 {len(tree.source_issues)} 个"
             ),
         )
         return {"snapshot": snapshot}
@@ -200,6 +201,7 @@ class GlobalExplorationRunner:
             "nodes": [node.model_dump() for node in tree.nodes.values()],
             "pending_groups": groups,
             "issues": tree.issues,
+            "source_issues": [issue.model_dump() for issue in tree.source_issues],
             "model_calls": tree.model_calls,
             "tool_calls": tree.tool_calls,
         }

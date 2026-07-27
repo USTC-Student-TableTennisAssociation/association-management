@@ -13,6 +13,7 @@ from cold_start.llm.base import ModelTurn, ThinkingMode, ToolCall
 from cold_start.region_tree.models import (
     KeepDecision,
     ParentPartitionError,
+    SourceIssue,
     SplitDecision,
     StopDecision,
 )
@@ -139,6 +140,10 @@ class ReasoningOnlyThenRepairModel(ToolModel):
 
 
 class KeepStructureRepairModel(ToolModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.structure_calls = 0
+
     async def complete_turn(
         self,
         *,
@@ -152,8 +157,22 @@ class KeepStructureRepairModel(ToolModel):
         del tools, tool_choice, temperature, request_label, thinking
         prompt = str(messages[1]["content"])
         if "[STAGE: region_tree_structure_repair]" in prompt:
+            self.structure_calls += 1
+            assert "内部标题" not in prompt
             return ModelTurn(
-                content='{"action":"keep","reason":"编号来自文档排版，现有区域关系正确。"}'
+                content=json.dumps(
+                    {
+                        "action": "keep",
+                        "reason": "编号来自文档排版，现有区域关系正确。",
+                        "source_issues": [
+                            {
+                                "block_ids": ["p0002-b0001"],
+                                "reason": "标题编号与实际语义位置不一致。",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
             )
         return _stop("当前区域可以整体处理。")
 
@@ -352,18 +371,21 @@ def test_parent_owns_blocks_not_delegated_to_children() -> None:
     ]
 
 
-def test_structural_context_rejects_substantive_paragraphs() -> None:
+def test_source_role_is_semantic_instead_of_inferred_from_block_type() -> None:
     tree = RegionTree(BlockIndex(blocks()), max_depth=5)
-    with pytest.raises(ValueError, match="不能标为 structural_context"):
-        tree.initialize(
-            title="测试手册",
-            decision=StopDecision(
-                action="stop",
-                owned_source_role="structural_context",
-                introduction="错误地把正文当成结构。",
-                reason="测试校验。",
-            ),
-        )
+    tree.initialize(
+        title="测试手册",
+        decision=StopDecision(
+            action="stop",
+            owned_source_role="structural_context",
+            introduction="由模型根据语义判定来源角色。",
+            reason="块类型本身不能替代语义判断。",
+        ),
+    )
+
+    snapshot = tree.snapshot()
+    assert snapshot.status == "frozen"
+    assert snapshot.structural_context_node_ids == ["region-0001"]
 
 
 def test_structural_heading_can_be_owned_by_branch_without_becoming_leaf() -> None:
@@ -464,6 +486,7 @@ def test_numbered_heading_check_only_flags_broken_ancestry() -> None:
     issues = incorrect.detect_structure_issues()
     assert len(issues) == 1
     assert issues[0].target_node_id == "region-0001"
+    assert issues[0].block_ids == ["p0002-b0001"]
     assert "标题 7.1.1" in issues[0].reason
 
     correct = RegionTree(index, max_depth=5)
@@ -502,12 +525,36 @@ def test_numbered_heading_check_only_flags_broken_ancestry() -> None:
 async def test_structure_check_can_dismiss_a_confirmed_false_positive() -> None:
     source = build_document_blocks(
         (
-            ParsedPage(page_number=1, markdown="## 7.1 大型赛事\n\n总体说明。"),
-            ParsedPage(page_number=2, markdown="### 7.1.1行政\n\n申请流程。"),
+            ParsedPage(page_number=1, markdown="## 9.1.2 隐性知识\n\n决策逻辑。"),
+            ParsedPage(page_number=2, markdown="## 9.3.1\n\n事故复盘。"),
+            ParsedPage(page_number=3, markdown="## 9.3 交接\n\n换届交接。"),
         )
     )
+    decision = SplitDecision.model_validate(
+        {
+            "action": "split",
+            "owned_source_role": None,
+            "introduction": "隐性知识与交接是两个区域。",
+            "reason": "异常标题按实际语义归入隐性知识。",
+            "children": [
+                {
+                    "label": "9.1.2 隐性知识",
+                    "introduction": "包括决策逻辑和事故复盘。",
+                    "start_block_id": "p0001-b0001",
+                    "end_block_id": "p0002-b0002",
+                },
+                {
+                    "label": "9.3 交接",
+                    "introduction": "换届交接。",
+                    "start_block_id": "p0003-b0001",
+                    "end_block_id": "p0003-b0002",
+                },
+            ],
+        }
+    )
+    model = KeepStructureRepairModel()
     runtime = RegionRuntime(
-        model=KeepStructureRepairModel(),
+        model=model,
         blocks=source,
         context="协会内部手册。",
         settings=ExplorationSettings(),
@@ -515,28 +562,7 @@ async def test_structure_check_can_dismiss_a_confirmed_false_positive() -> None:
     )
     await runtime.run(
         title="测试手册",
-        root_decision=SplitDecision.model_validate(
-            {
-                "action": "split",
-                "owned_source_role": None,
-                "introduction": "两个区域暂时作为兄弟。",
-                "reason": "构造待复核样例。",
-                "children": [
-                    {
-                        "label": "大型赛事",
-                        "introduction": "总体说明。",
-                        "start_block_id": "p0001-b0001",
-                        "end_block_id": "p0001-b0002",
-                    },
-                    {
-                        "label": "行政",
-                        "introduction": "申请流程。",
-                        "start_block_id": "p0002-b0001",
-                        "end_block_id": "p0002-b0002",
-                    },
-                ],
-            }
-        ),
+        root_decision=decision,
         root_model_calls=1,
     )
     await runtime.calibrate_structure()
@@ -545,7 +571,39 @@ async def test_structure_check_can_dismiss_a_confirmed_false_positive() -> None:
     assert snapshot.status == "frozen"
     assert len(snapshot.structure_check.initial_issues) == 1
     assert snapshot.structure_check.remaining_issues == []
+    assert snapshot.source_issues[0].block_ids == ["p0002-b0001"]
     assert snapshot.model_calls == 4
+    assert model.structure_calls == 1
+
+    known_model = KeepStructureRepairModel()
+    known_runtime = RegionRuntime(
+        model=known_model,
+        blocks=source,
+        context="协会内部手册。",
+        settings=ExplorationSettings(),
+        embedder=FakeEmbedder(),
+    )
+    await known_runtime.run(
+        title="测试手册",
+        root_decision=decision.model_copy(
+            update={
+                "source_issues": [
+                    SourceIssue(
+                        block_ids=["p0002-b0001"],
+                        reason="标题编号与实际语义位置不一致。",
+                    )
+                ]
+            }
+        ),
+        root_model_calls=1,
+    )
+    await known_runtime.calibrate_structure()
+
+    known_snapshot = known_runtime.tree.snapshot()
+    assert known_snapshot.status == "frozen"
+    assert len(known_snapshot.structure_check.initial_issues) == 1
+    assert known_snapshot.structure_check.remaining_issues == []
+    assert known_model.structure_calls == 0
 
 
 def test_calibration_can_reject_a_false_positive_without_changing_tree() -> None:
@@ -569,4 +627,5 @@ def test_all_tree_prompts_preserve_workflow_parent_without_forcing_merge() -> No
 
     assert "所有未被孩子覆盖的块自动成为当前节点直接拥有的原文" in tree_prompt
     assert "同属工作流、清单、论证或知识体系不是停止切分的理由" in tree_prompt
-    assert "标题和引言" in repair_prompt
+    assert "单个block内混有别节文字时，不能返回parent_partition_error" in tree_prompt
+    assert "必须返回keep，并把异常写入source_issues" in repair_prompt

@@ -14,7 +14,6 @@ from typing import Any, Generic, Protocol, TypeVar, cast
 from pydantic import ValidationError
 
 from cold_start.config import ExplorationSettings
-from cold_start.document.blocks import render_heading_outline
 from cold_start.document.models import ParsedBlock
 from cold_start.llm.base import ChatModel
 from cold_start.progress import NullProgressReporter, ProgressReporter
@@ -28,6 +27,7 @@ from cold_start.region_tree.models import (
     RegionTreeSnapshot,
     RepairDecision,
     RepairDecisionOutput,
+    SourceIssue,
     SourceRole,
     SourceSegment,
     SplitDecision,
@@ -160,17 +160,6 @@ class BlockIndex:
                 "存在自有原文时必须填写 owned_source_role，"
                 "没有自有原文时必须填写 null"
             )
-        if role != "structural_context":
-            return
-        substantive = {
-            block.block_type
-            for segment in segments
-            for block in self.slice(segment.start_block_id, segment.end_block_id)
-        } & {"paragraph", "list", "quote", "other"}
-        if substantive:
-            raise ValueError(
-                "含段落、列表、引用或其他正文的自有原文不能标为 structural_context"
-            )
 
     def resolve_ownership(
         self,
@@ -185,6 +174,11 @@ class BlockIndex:
         )
         self.validate_owned_role(owned, decision.owned_source_role)
         return owned
+
+    def validate_source_issues(self, issues: list[SourceIssue]) -> None:
+        for issue in issues:
+            for block_id in issue.block_ids:
+                self.position(block_id)
 
     def _segment(self, left: int, right: int) -> SourceSegment:
         return SourceSegment(
@@ -202,6 +196,7 @@ class RegionTree:
         self.nodes: dict[str, RegionNode] = {}
         self.root_node_id = ""
         self.issues: list[str] = []
+        self.source_issues: list[SourceIssue] = []
         self.structure_check = StructureCheckReport()
         self.model_calls = 0
         self.tool_calls = 0
@@ -230,6 +225,7 @@ class RegionTree:
         decision: StopDecision | SplitDecision,
     ) -> list[WorkGroup]:
         node = self.nodes[node_id]
+        self._record_source_issues(decision.source_issues)
         if isinstance(decision, StopDecision):
             owned = self.index.resolve_ownership(
                 node.start_block_id, node.end_block_id, decision
@@ -325,6 +321,7 @@ class RegionTree:
     ) -> list[WorkGroup]:
         node = self.nodes[node_id]
         if isinstance(decision, KeepDecision):
+            self._record_source_issues(decision.source_issues)
             self.nodes[node_id] = node.model_copy(
                 update={"decision_reason": decision.reason}
             )
@@ -371,7 +368,7 @@ class RegionTree:
                 for block in self.index.blocks[left : right + 1]:
                     owners[block.block_id] = node.node_id
 
-        headings: dict[tuple[int, ...], set[str]] = {}
+        headings: dict[tuple[int, ...], list[tuple[str, str]]] = {}
         for block in self.index.blocks:
             if block.block_type != "heading":
                 continue
@@ -380,14 +377,14 @@ class RegionTree:
             if not match or owner is None:
                 continue
             number = tuple(int(part) for part in match.group(1).split("."))
-            headings.setdefault(number, set()).add(owner)
+            headings.setdefault(number, []).append((owner, block.block_id))
 
-        problems: dict[str, list[str]] = {}
-        for number, child_owners in headings.items():
+        problems: dict[str, list[tuple[str, str]]] = {}
+        for number, children in headings.items():
             if len(number) < 2 or number[:-1] not in headings:
                 continue
-            parent_owners = headings[number[:-1]]
-            for child_owner in child_owners:
+            parent_owners = {owner for owner, _ in headings[number[:-1]]}
+            for child_owner, child_block_id in children:
                 if any(
                     self._is_descendant(child_owner, parent_owner)
                     for parent_owner in parent_owners
@@ -399,16 +396,20 @@ class RegionTree:
                 child_label = ".".join(map(str, number))
                 parent_label = ".".join(map(str, number[:-1]))
                 problems.setdefault(target, []).append(
-                    f"标题 {child_label} 不在拥有标题 {parent_label} 的节点子树内"
+                    (
+                        f"标题 {child_label} 不在拥有标题 {parent_label} 的节点子树内",
+                        child_block_id,
+                    )
                 )
 
         return [
             StructureIssue(
                 kind="heading_hierarchy",
                 target_node_id=node_id,
-                reason="；".join(dict.fromkeys(reasons))[:500],
+                block_ids=list(dict.fromkeys(block_id for _, block_id in details)),
+                reason="；".join(dict.fromkeys(reason for reason, _ in details))[:500],
             )
-            for node_id, reasons in sorted(
+            for node_id, details in sorted(
                 problems.items(),
                 key=lambda item: self.index.position(
                     self.nodes[item[0]].start_block_id
@@ -507,6 +508,7 @@ class RegionTree:
             content_node_ids=content_nodes,
             structural_context_node_ids=structural_nodes,
             structure_check=self.structure_check,
+            source_issues=self.source_issues.copy(),
             issues=self.issues.copy(),
             model_calls=self.model_calls,
             tool_calls=self.tool_calls,
@@ -545,6 +547,13 @@ class RegionTree:
     def _mark(self, node_id: str, status: str, issue: str) -> None:
         self.nodes[node_id] = self.nodes[node_id].model_copy(update={"status": status})
         self.issues.append(issue)
+
+    def _record_source_issues(self, issues: list[SourceIssue]) -> None:
+        self.index.validate_source_issues(issues)
+        for issue in issues:
+            key = tuple(issue.block_ids)
+            if all(tuple(item.block_ids) != key for item in self.source_issues):
+                self.source_issues.append(issue)
 
 
 class BgeM3Embedder:
@@ -691,22 +700,42 @@ class RegionRuntime:
         if self.tree.snapshot().status != "frozen":
             return
         initial = self.tree.detect_structure_issues()
-        if initial:
+        known_source_blocks = {
+            block_id
+            for issue in self.tree.source_issues
+            for block_id in issue.block_ids
+        }
+        repairable = [
+            issue
+            for issue in initial
+            if not set(issue.block_ids) <= known_source_blocks
+        ]
+        if repairable:
             self.progress.report(
                 "区域树·结构检查",
-                f"发现 {len(initial)} 个显式标题层级问题",
+                f"发现 {len(repairable)} 个待复核的显式标题层级问题",
             )
-            dismissed_targets = await self._repair_structure_issues(initial)
+            dismissed_targets = await self._repair_structure_issues(repairable)
         else:
             dismissed_targets = set()
         if self.tree.snapshot().status == "frozen":
+            known_source_blocks = {
+                block_id
+                for issue in self.tree.source_issues
+                for block_id in issue.block_ids
+            }
             remaining = [
                 issue
                 for issue in self.tree.detect_structure_issues()
                 if issue.target_node_id not in dismissed_targets
+                and not set(issue.block_ids) <= known_source_blocks
             ]
         else:
-            remaining = initial
+            remaining = [
+                issue
+                for issue in initial
+                if not set(issue.block_ids) <= known_source_blocks
+            ]
         self.tree.set_structure_check(initial, remaining)
         for issue in remaining:
             self.tree.review(
@@ -917,6 +946,7 @@ class RegionRuntime:
         reconsidering: bool = False,
     ) -> None:
         if isinstance(decision, (StopDecision, SplitDecision)):
+            self.index.validate_source_issues(decision.source_issues)
             self.index.resolve_ownership(
                 node.start_block_id,
                 node.end_block_id,
@@ -932,6 +962,7 @@ class RegionRuntime:
         node: RegionNode,
         decision: RepairDecision,
     ) -> None:
+        self.index.validate_source_issues(decision.source_issues)
         if isinstance(decision, (StopDecision, SplitDecision)):
             self.index.resolve_ownership(
                 node.start_block_id,
@@ -993,11 +1024,6 @@ class RegionRuntime:
                 lines.append(
                     f"{'  ' * relative_depth}  判断理由：{node.decision_reason}"
                 )
-            if node.status == "leaf":
-                headings = render_heading_outline(blocks)
-                lines.append(
-                    f"{'  ' * relative_depth}  内部标题：{headings or '（无）'}"
-                )
             for child_id in node.child_ids:
                 visit(child_id, relative_depth + 1)
 
@@ -1021,6 +1047,7 @@ async def decide_root(
     def validate(decision: RegionDecision) -> None:
         if isinstance(decision, ParentPartitionError):
             raise ValueError("根节点不能报告父分割错误")
+        index.validate_source_issues(decision.source_issues)
         index.resolve_ownership(
             blocks[0].block_id,
             blocks[-1].block_id,

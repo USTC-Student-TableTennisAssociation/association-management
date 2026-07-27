@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from cold_start.global_exploration.models import (
 from cold_start.region_tree.models import (
     RegionNode,
     RegionTreeSnapshot,
+    SourceIssue,
     SourceSegment,
 )
 
@@ -68,6 +70,12 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
             leaf_node_ids=[root.node_id],
             content_node_ids=[root.node_id],
             structural_context_node_ids=[],
+            source_issues=[
+                SourceIssue(
+                    block_ids=[blocks[-1].block_id],
+                    reason="测试来源解析警告。",
+                )
+            ],
             model_calls=1,
         ),
     )
@@ -84,7 +92,10 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
     assert paths.snapshot_json.exists()
     assert paths.region_tree_json.exists()
     assert paths.region_tree_checks_json.exists()
+    checks = json.loads(paths.region_tree_checks_json.read_text())
+    assert checks["source_issues"][0]["reason"] == "测试来源解析警告。"
     assert paths.parsed_blocks_json.exists()
     assert paths.document_context_markdown.read_text() == "这是一份协会内部手册。"
     assert "region-0001" in paths.region_tree_markdown.read_text()
     assert "区域树" in paths.report_markdown.read_text()
+    assert "来源解析警告" in paths.report_markdown.read_text()

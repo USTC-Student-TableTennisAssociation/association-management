@@ -11,29 +11,41 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+BlockId = Annotated[str, Field(pattern=r"^p\d{4}-b\d{4}$")]
+
+
 class SourceSegment(StrictModel):
-    start_block_id: str = Field(pattern=r"^p\d{4}-b\d{4}$")
-    end_block_id: str = Field(pattern=r"^p\d{4}-b\d{4}$")
+    start_block_id: BlockId
+    end_block_id: BlockId
 
 
 class RegionChild(StrictModel):
     label: str = Field(min_length=1, max_length=80)
     introduction: str = Field(min_length=1, max_length=300)
-    start_block_id: str = Field(pattern=r"^p\d{4}-b\d{4}$")
-    end_block_id: str = Field(pattern=r"^p\d{4}-b\d{4}$")
+    start_block_id: BlockId
+    end_block_id: BlockId
 
 
 SourceRole = Literal["content_source", "structural_context"]
 
 
-class StopDecision(StrictModel):
+class SourceIssue(StrictModel):
+    block_ids: list[BlockId] = Field(min_length=1, max_length=8)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class DecisionWithSourceIssues(StrictModel):
+    source_issues: list[SourceIssue] = Field(default_factory=list, max_length=4)
+
+
+class StopDecision(DecisionWithSourceIssues):
     action: Literal["stop"]
     owned_source_role: SourceRole
     introduction: str = Field(min_length=1, max_length=300)
     reason: str = Field(min_length=1, max_length=500)
 
 
-class SplitDecision(StrictModel):
+class SplitDecision(DecisionWithSourceIssues):
     action: Literal["split"]
     owned_source_role: SourceRole | None
     introduction: str = Field(min_length=1, max_length=300)
@@ -58,7 +70,7 @@ class RegionDecisionOutput(RootModel[RegionDecision]):
     pass
 
 
-class KeepDecision(StrictModel):
+class KeepDecision(DecisionWithSourceIssues):
     action: Literal["keep"]
     reason: str = Field(min_length=1, max_length=500)
 
@@ -76,6 +88,7 @@ class RepairDecisionOutput(RootModel[RepairDecision]):
 class StructureIssue(StrictModel):
     kind: Literal["heading_hierarchy"]
     target_node_id: str = Field(pattern=r"^region-\d{4,}$")
+    block_ids: list[BlockId]
     reason: str = Field(min_length=1, max_length=500)
 
 
@@ -102,7 +115,7 @@ class RegionNode(StrictModel):
 
 
 class RegionTreeSnapshot(StrictModel):
-    schema_version: Literal["region-tree.v4"] = "region-tree.v4"
+    schema_version: Literal["region-tree.v5"] = "region-tree.v5"
     status: Literal["frozen", "needs_review"]
     root_node_id: str
     nodes: list[RegionNode]
@@ -112,6 +125,7 @@ class RegionTreeSnapshot(StrictModel):
     structure_check: StructureCheckReport = Field(
         default_factory=StructureCheckReport
     )
+    source_issues: list[SourceIssue] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
     model_calls: int = 0
     tool_calls: int = 0
