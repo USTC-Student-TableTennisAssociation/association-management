@@ -1,4 +1,4 @@
-"""用 LangGraph 并行形成文档背景，再运行递归区域树。"""
+"""用 LangGraph 并行形成文档背景，再构建并校准递归区域树。"""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ from cold_start.region_tree.models import (
     ParentPartitionError,
     SplitDecision,
     StopDecision,
+    TreeAudit,
 )
 from cold_start.region_tree.runtime import (
     DecisionResult,
@@ -45,6 +46,8 @@ class State(TypedDict, total=False):
     document_context: str
     context_calls: int
     root_result: DecisionResult
+    region_runtime: RegionRuntime
+    tree_audit: TreeAudit | None
     snapshot: GlobalExplorationSnapshot
 
 
@@ -73,12 +76,32 @@ class GlobalExplorationRunner:
         graph.add_node("prepare", self._prepare)
         graph.add_node("document_context", self._document_context)
         graph.add_node("root_partition", self._root_partition)
-        graph.add_node("compile_tree", self._compile_tree)
+        graph.add_node("build_region_tree", self._build_region_tree)
+        graph.add_node("audit_region_tree", self._audit_region_tree)
+        graph.add_node("repair_flagged_subtrees", self._repair_flagged_subtrees)
+        graph.add_node("finalize_exploration", self._finalize_exploration)
         graph.add_edge(START, "prepare")
         graph.add_edge("prepare", "document_context")
         graph.add_edge("prepare", "root_partition")
-        graph.add_edge(["document_context", "root_partition"], "compile_tree")
-        graph.add_edge("compile_tree", END)
+        graph.add_edge(["document_context", "root_partition"], "build_region_tree")
+        graph.add_conditional_edges(
+            "build_region_tree",
+            self._route_after_build,
+            {
+                "audit": "audit_region_tree",
+                "finalize": "finalize_exploration",
+            },
+        )
+        graph.add_conditional_edges(
+            "audit_region_tree",
+            self._route_after_audit,
+            {
+                "repair": "repair_flagged_subtrees",
+                "finalize": "finalize_exploration",
+            },
+        )
+        graph.add_edge("repair_flagged_subtrees", "finalize_exploration")
+        graph.add_edge("finalize_exploration", END)
         return graph.compile()
 
     def _prepare(self, state: State) -> State:
@@ -134,7 +157,7 @@ class GlobalExplorationRunner:
             )
         }
 
-    async def _compile_tree(self, state: State) -> State:
+    async def _build_region_tree(self, state: State) -> State:
         document = state["document"]
         root = state["root_result"]
         runtime = RegionRuntime(
@@ -146,10 +169,37 @@ class GlobalExplorationRunner:
             embedder=self.embedder,
             checkpoint=self._checkpoint,
         )
-        tree = await runtime.run(
+        await runtime.run(
             title=document.title,
             root_decision=_tree_decision(root),
             root_model_calls=root.model_calls,
+        )
+        return {"region_runtime": runtime}
+
+    def _route_after_build(self, state: State) -> str:
+        return (
+            "audit"
+            if state["region_runtime"].tree.snapshot().status == "frozen"
+            else "finalize"
+        )
+
+    async def _audit_region_tree(self, state: State) -> State:
+        return {"tree_audit": await state["region_runtime"].audit()}
+
+    def _route_after_audit(self, state: State) -> str:
+        audit = state.get("tree_audit")
+        return "repair" if audit and audit.issues else "finalize"
+
+    async def _repair_flagged_subtrees(self, state: State) -> State:
+        audit = state.get("tree_audit")
+        if audit:
+            await state["region_runtime"].repair(audit)
+        return {}
+
+    def _finalize_exploration(self, state: State) -> State:
+        document = state["document"]
+        tree = state["region_runtime"].tree.snapshot().model_copy(
+            update={"audit": state.get("tree_audit")}
         )
         snapshot = GlobalExplorationSnapshot(
             created_at=datetime.now(UTC),
@@ -167,7 +217,10 @@ class GlobalExplorationRunner:
         )
         self.progress.report(
             "汇总",
-            f"区域树状态 {tree.status}，叶子 {len(tree.leaf_node_ids)} 个",
+            (
+                f"区域树状态 {tree.status}，内容叶子 {len(tree.content_leaf_ids)} 个，"
+                f"结构上下文叶子 {len(tree.structural_context_leaf_ids)} 个"
+            ),
         )
         return {"snapshot": snapshot}
 

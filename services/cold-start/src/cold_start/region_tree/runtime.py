@@ -8,33 +8,44 @@ import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from typing import Any, Generic, Protocol, TypeVar, cast
 
 from pydantic import ValidationError
 
 from cold_start.config import ExplorationSettings
+from cold_start.document.blocks import render_heading_outline
 from cold_start.document.models import ParsedBlock
 from cold_start.llm.base import ChatModel
 from cold_start.progress import NullProgressReporter, ProgressReporter
 from cold_start.region_tree.models import (
+    KeepDecision,
     ParentPartitionError,
     RegionChild,
     RegionDecision,
     RegionDecisionOutput,
     RegionNode,
     RegionTreeSnapshot,
+    RepairDecision,
+    RepairDecisionOutput,
     SplitDecision,
     StopDecision,
+    TreeAudit,
+    TreeAuditIssue,
 )
 from cold_start.region_tree.prompts import (
+    REGION_REPAIR_SYSTEM_PROMPT,
     REGION_TREE_SYSTEM_PROMPT,
+    TREE_AUDIT_SYSTEM_PROMPT,
     reconsider_parent_prompt,
     region_prompt,
     repair_decision_prompt,
+    repair_region_prompt,
     root_region_prompt,
+    tree_audit_prompt,
 )
 
 WorkGroup = tuple[str, tuple[str, ...]]
+DecisionT = TypeVar("DecisionT")
 
 SEARCH_TOOL: tuple[dict[str, object], ...] = (
     {
@@ -54,8 +65,8 @@ SEARCH_TOOL: tuple[dict[str, object], ...] = (
 
 
 @dataclass(frozen=True)
-class DecisionResult:
-    decision: RegionDecision
+class DecisionResult(Generic[DecisionT]):
+    decision: DecisionT
     model_calls: int
     tool_calls: int
 
@@ -166,6 +177,8 @@ class RegionTree:
             self.nodes[node_id] = node.model_copy(
                 update={
                     "introduction": decision.introduction,
+                    "leaf_role": decision.leaf_role,
+                    "decision_reason": decision.reason,
                     "status": "leaf",
                     "child_ids": [],
                 }
@@ -193,6 +206,8 @@ class RegionTree:
         self.nodes[node_id] = node.model_copy(
             update={
                 "introduction": decision.introduction,
+                "leaf_role": None,
+                "decision_reason": decision.reason,
                 "status": "branch",
                 "child_ids": child_ids,
             }
@@ -235,6 +250,29 @@ class RegionTree:
         )
         return self.apply(parent_id, decision)
 
+    def calibrate(
+        self,
+        node_id: str,
+        decision: KeepDecision | StopDecision | SplitDecision,
+    ) -> list[WorkGroup]:
+        node = self.nodes[node_id]
+        if isinstance(decision, KeepDecision):
+            self.nodes[node_id] = node.model_copy(
+                update={"decision_reason": decision.reason}
+            )
+            return []
+        for child_id in node.child_ids:
+            self._drop(child_id)
+        self.nodes[node_id] = node.model_copy(
+            update={
+                "status": "pending",
+                "leaf_role": None,
+                "child_ids": [],
+                "revised": True,
+            }
+        )
+        return self.apply(node_id, decision)
+
     def review(self, node_id: str, issue: str) -> None:
         self._mark(node_id, "needs_review", issue)
 
@@ -274,11 +312,23 @@ class RegionTree:
                 expected = self.index.position(leaf.end_block_id) + 1
             if expected != len(self.index.blocks):
                 raise ValueError("最终叶子没有覆盖完整文档")
+            if any(node.leaf_role is None for node in leaves):
+                raise ValueError("最终叶子缺少结构作用")
+        content_leaves = [
+            node.node_id for node in leaves if node.leaf_role == "content_source"
+        ]
+        structural_leaves = [
+            node.node_id
+            for node in leaves
+            if node.leaf_role == "structural_context"
+        ]
         return RegionTreeSnapshot(
             status=status,
             root_node_id=self.root_node_id,
             nodes=sorted(self.nodes.values(), key=lambda node: node.node_id),
             leaf_node_ids=[node.node_id for node in leaves],
+            content_leaf_ids=content_leaves,
+            structural_context_leaf_ids=structural_leaves,
             issues=self.issues.copy(),
             model_calls=self.model_calls,
             tool_calls=self.tool_calls,
@@ -456,13 +506,76 @@ class RegionRuntime:
         groups = self.tree.initialize(title=title, decision=root_decision)
         self.tree.model_calls = root_model_calls
         self._save(groups)
+        await self._process_groups(groups)
+        return self.tree.snapshot()
+
+    async def audit(self) -> TreeAudit | None:
+        if self.tree.snapshot().status != "frozen":
+            return None
+        try:
+            result = await _ask(
+                model=self.model,
+                system_prompt=TREE_AUDIT_SYSTEM_PROMPT,
+                prompt=tree_audit_prompt(
+                    document_context=self.context,
+                    tree_outline=self._outline(self.tree.root_node_id),
+                ),
+                label="区域树·全树校准",
+                max_tool_calls=0,
+                search=None,
+                parser=_parse_audit,
+                validator=self._validate_audit,
+                describe=lambda audit: (
+                    f"{len(audit.issues)} 个问题" if audit.issues else "通过"
+                ),
+                progress=self.progress,
+            )
+            self.tree.model_calls += result.model_calls
+            return result.decision
+        except DecisionFailure as error:
+            self.tree.model_calls += error.model_calls
+            self.tree.review(self.tree.root_node_id, f"全树校准失败：{error}")
+            return None
+
+    async def repair(self, audit: TreeAudit) -> None:
+        targets = self._repair_targets(audit)
+        if not targets:
+            return
+        self.progress.report("区域树·定点修复", f"开始复核 {len(targets)} 个子树")
         semaphore = asyncio.Semaphore(self.settings.max_parallel_regions)
 
+        async def evaluate(
+            target: tuple[str, list[TreeAuditIssue]],
+        ) -> DecisionResult[RepairDecision]:
+            async with semaphore:
+                return await self._evaluate_repair(*target)
+
+        raw = await asyncio.gather(
+            *(evaluate(target) for target in targets),
+            return_exceptions=True,
+        )
+        groups: list[WorkGroup] = []
+        for (node_id, _), result in zip(targets, raw, strict=True):
+            if isinstance(result, (DecisionResult, DecisionFailure)):
+                self.tree.model_calls += result.model_calls
+                self.tree.tool_calls += result.tool_calls
+            if isinstance(result, BaseException):
+                self.tree.review(node_id, f"{node_id} 定点修复失败：{result}")
+                continue
+            try:
+                groups.extend(self.tree.calibrate(node_id, result.decision))
+            except Exception as error:
+                self.tree.review(node_id, f"{node_id} 应用定点修复失败：{error}")
+        self._save(groups)
+        await self._process_groups(groups)
+
+    async def _process_groups(self, groups: list[WorkGroup]) -> None:
+        semaphore = asyncio.Semaphore(self.settings.max_parallel_regions)
         while groups:
             node_ids = [node_id for _, siblings in groups for node_id in siblings]
             self.progress.report("区域树", f"开始判断 {len(node_ids)} 个区域")
 
-            async def evaluate(node_id: str) -> DecisionResult:
+            async def evaluate(node_id: str) -> DecisionResult[RegionDecision]:
                 async with semaphore:
                     return await self._evaluate(node_id)
 
@@ -503,9 +616,8 @@ class RegionRuntime:
                             self.tree.fail(node_id, f"{node_id} 应用判断失败：{error}")
                 self._save(groups[offset + 1 :] + next_groups)
             groups = next_groups
-        return self.tree.snapshot()
 
-    async def _evaluate(self, node_id: str) -> DecisionResult:
+    async def _evaluate(self, node_id: str) -> DecisionResult[RegionDecision]:
         node = self.tree.nodes[node_id]
         left = self.index.position(node.start_block_id)
         right = self.index.position(node.end_block_id)
@@ -526,7 +638,44 @@ class RegionRuntime:
             search=lambda query: self.search.search(
                 query, node, self.settings.retrieval_top_k
             ),
+            parser=_parse_region,
             validator=lambda decision: self._validate(node, decision),
+            describe=lambda decision: decision.action,
+            system_prompt=REGION_TREE_SYSTEM_PROMPT,
+            progress=self.progress,
+        )
+
+    async def _evaluate_repair(
+        self,
+        node_id: str,
+        issues: list[TreeAuditIssue],
+    ) -> DecisionResult[RepairDecision]:
+        node = self.tree.nodes[node_id]
+        left = self.index.position(node.start_block_id)
+        right = self.index.position(node.end_block_id)
+        boundary = self.settings.boundary_context_blocks
+        return await _ask(
+            model=self.model,
+            system_prompt=REGION_REPAIR_SYSTEM_PROMPT,
+            prompt=repair_region_prompt(
+                document_context=self.context,
+                node=node,
+                lineage=self.tree.lineage(node_id),
+                siblings=self.tree.siblings(node_id),
+                current_subtree=self._outline(node_id),
+                current_blocks=self.index.blocks[left : right + 1],
+                before_blocks=self.index.blocks[max(0, left - boundary) : left],
+                after_blocks=self.index.blocks[right + 1 : right + 1 + boundary],
+                issues=issues,
+            ),
+            label=f"区域树·修复-{node_id}",
+            max_tool_calls=self.settings.max_tool_calls_per_region,
+            search=lambda query: self.search.search(
+                query, node, self.settings.retrieval_top_k
+            ),
+            parser=_parse_repair,
+            validator=lambda decision: self._validate_repair(node, decision),
+            describe=lambda decision: decision.action,
             progress=self.progress,
         )
 
@@ -544,6 +693,7 @@ class RegionRuntime:
             parent = self.tree.nodes[parent_id]
             result = await _ask(
                 model=self.model,
+                system_prompt=REGION_TREE_SYSTEM_PROMPT,
                 prompt=reconsider_parent_prompt(
                     document_context=self.context,
                     parent=parent,
@@ -559,9 +709,11 @@ class RegionRuntime:
                 search=lambda query: self.search.search(
                     query, parent, self.settings.retrieval_top_k
                 ),
+                parser=_parse_region,
                 validator=lambda decision: self._validate(
                     parent, decision, reconsidering=True
                 ),
+                describe=lambda decision: decision.action,
                 progress=self.progress,
             )
             self.tree.model_calls += result.model_calls
@@ -591,6 +743,76 @@ class RegionRuntime:
                 raise ValueError("重切父节点时不能再次报告父分割错误")
             self.tree.check_parent_error(node.node_id, decision)
 
+    def _validate_repair(
+        self,
+        node: RegionNode,
+        decision: RepairDecision,
+    ) -> None:
+        if isinstance(decision, SplitDecision):
+            self.index.validate_children(
+                node.start_block_id, node.end_block_id, decision.children
+            )
+
+    def _validate_audit(self, audit: TreeAudit) -> None:
+        for issue in audit.issues:
+            if issue.target_node_id not in self.tree.nodes:
+                raise ValueError(f"校准引用不存在的目标 {issue.target_node_id}")
+
+    def _repair_targets(
+        self,
+        audit: TreeAudit,
+    ) -> list[tuple[str, list[TreeAuditIssue]]]:
+        ordered = sorted(
+            audit.issues,
+            key=lambda issue: (
+                self.tree.nodes[issue.target_node_id].depth,
+                self.index.position(
+                    self.tree.nodes[issue.target_node_id].start_block_id
+                ),
+            ),
+        )
+        targets: list[tuple[str, list[TreeAuditIssue]]] = []
+        for issue in ordered:
+            ancestors = {
+                issue.target_node_id,
+                *(node.node_id for node in self.tree.lineage(issue.target_node_id)),
+            }
+            existing = next((item for item in targets if item[0] in ancestors), None)
+            if existing:
+                existing[1].append(issue)
+            else:
+                targets.append((issue.target_node_id, [issue]))
+        return targets
+
+    def _outline(self, root_id: str) -> str:
+        lines: list[str] = []
+
+        def visit(node_id: str, relative_depth: int) -> None:
+            node = self.tree.nodes[node_id]
+            blocks = self.index.slice(node.start_block_id, node.end_block_id)
+            role = f"，角色={node.leaf_role}" if node.leaf_role else ""
+            lines.append(
+                f"{'  ' * relative_depth}- {node.node_id}｜深度={node.depth}｜"
+                f"{node.status}{role}｜第 {'、'.join(map(str, node.source_pages))} 页｜"
+                f"{len(blocks)} 块｜{sum(len(block.markdown) for block in blocks)} 字符｜"
+                f"{node.start_block_id}～{node.end_block_id}｜{node.label}"
+            )
+            lines.append(f"{'  ' * relative_depth}  介绍：{node.introduction}")
+            if node.decision_reason:
+                lines.append(
+                    f"{'  ' * relative_depth}  判断理由：{node.decision_reason}"
+                )
+            if node.status == "leaf":
+                headings = render_heading_outline(blocks)
+                lines.append(
+                    f"{'  ' * relative_depth}  内部标题：{headings or '（无）'}"
+                )
+            for child_id in node.child_ids:
+                visit(child_id, relative_depth + 1)
+
+        visit(root_id, 0)
+        return "\n".join(lines)
+
     def _save(self, groups: list[WorkGroup]) -> None:
         if self.checkpoint:
             self.checkpoint(self.tree, groups)
@@ -602,7 +824,7 @@ async def decide_root(
     title: str,
     blocks: tuple[ParsedBlock, ...],
     progress: ProgressReporter,
-) -> DecisionResult:
+) -> DecisionResult[RegionDecision]:
     index = BlockIndex(blocks)
 
     def validate(decision: RegionDecision) -> None:
@@ -615,15 +837,17 @@ async def decide_root(
 
     return await _ask(
         model=model,
+        system_prompt=REGION_TREE_SYSTEM_PROMPT,
         prompt=root_region_prompt(
             title=title,
-            document_context="（文档背景线路正在并行生成。）",
             blocks=blocks,
         ),
         label="区域树·根节点",
         max_tool_calls=0,
         search=None,
+        parser=_parse_region,
         validator=validate,
+        describe=lambda decision: decision.action,
         progress=progress,
     )
 
@@ -631,15 +855,18 @@ async def decide_root(
 async def _ask(
     *,
     model: ChatModel,
+    system_prompt: str,
     prompt: str,
     label: str,
     max_tool_calls: int,
     search: Callable[[str], Awaitable[str]] | None,
-    validator: Callable[[RegionDecision], None],
+    parser: Callable[[str], DecisionT],
+    validator: Callable[[DecisionT], None],
+    describe: Callable[[DecisionT], str],
     progress: ProgressReporter,
-) -> DecisionResult:
+) -> DecisionResult[DecisionT]:
     messages: list[Mapping[str, Any]] = [
-        {"role": "system", "content": REGION_TREE_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
     ]
     model_calls = tool_calls = 0
@@ -687,7 +914,7 @@ async def _ask(
         try:
             if not turn.content:
                 raise ValueError("模型正常结束但没有正式 JSON")
-            decision = _parse(turn.content)
+            decision = parser(turn.content)
             validator(decision)
         except (ValidationError, ValueError, json.JSONDecodeError) as error:
             model_calls += 1
@@ -708,9 +935,9 @@ async def _ask(
             )
             if not repair.content:
                 raise ValueError("修复请求仍未返回正式正文") from error
-            decision = _parse(repair.content)
+            decision = parser(repair.content)
             validator(decision)
-        progress.report(label, f"完成判断：{decision.action}")
+        progress.report(label, f"完成判断：{describe(decision)}")
         return DecisionResult(decision, model_calls, tool_calls)
     except Exception as error:
         raise DecisionFailure(
@@ -721,11 +948,23 @@ async def _ask(
         ) from error
 
 
-def _parse(raw: str) -> RegionDecision:
+def _json_object(raw: str) -> str:
     start, end = raw.find("{"), raw.rfind("}")
     if start < 0 or end < start:
         raise ValueError("模型输出中不存在 JSON 对象")
-    return RegionDecisionOutput.model_validate_json(raw[start : end + 1]).root
+    return raw[start : end + 1]
+
+
+def _parse_region(raw: str) -> RegionDecision:
+    return RegionDecisionOutput.model_validate_json(_json_object(raw)).root
+
+
+def _parse_repair(raw: str) -> RepairDecision:
+    return RepairDecisionOutput.model_validate_json(_json_object(raw)).root
+
+
+def _parse_audit(raw: str) -> TreeAudit:
+    return TreeAudit.model_validate_json(_json_object(raw))
 
 
 def _tree_decision(decision: RegionDecision) -> StopDecision | SplitDecision:

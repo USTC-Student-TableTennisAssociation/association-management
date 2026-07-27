@@ -19,6 +19,7 @@ class ArtifactPaths:
     report_markdown: Path
     document_context_markdown: Path
     region_tree_json: Path
+    region_tree_audit_json: Path
     region_tree_markdown: Path
     parsed_document_markdown: Path
     parsed_pages_json: Path
@@ -48,6 +49,7 @@ def write_exploration_artifacts(
         report_markdown=run_directory / "global-exploration.md",
         document_context_markdown=run_directory / "document-context.md",
         region_tree_json=run_directory / "region-tree.json",
+        region_tree_audit_json=run_directory / "region-tree-audit.json",
         region_tree_markdown=run_directory / "region-tree.md",
         parsed_document_markdown=run_directory / "parsed-document.md",
         parsed_pages_json=run_directory / "parsed-pages.json",
@@ -61,6 +63,14 @@ def write_exploration_artifacts(
     )
     paths.region_tree_json.write_text(
         snapshot.region_tree.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    paths.region_tree_audit_json.write_text(
+        (
+            snapshot.region_tree.audit.model_dump_json(indent=2)
+            if snapshot.region_tree.audit
+            else "null"
+        ),
         encoding="utf-8",
     )
     paths.region_tree_markdown.write_text(_tree(snapshot), encoding="utf-8")
@@ -101,6 +111,8 @@ def _report(snapshot: GlobalExplorationSnapshot) -> str:
 
 - 节点：{len(tree.nodes)}
 - 叶子：{len(tree.leaf_node_ids)}
+- 内容叶子：{len(tree.content_leaf_ids)}
+- 结构上下文叶子：{len(tree.structural_context_leaf_ids)}
 - 模型调用：{tree.model_calls}
 - 工具调用：{tree.tool_calls}
 
@@ -116,9 +128,10 @@ def _tree(snapshot: GlobalExplorationSnapshot) -> str:
 
     def visit(node: RegionNode) -> None:
         prefix = "  " * node.depth
+        role = f"，{node.leaf_role}" if node.leaf_role else ""
         lines.append(
             f"{prefix}- **{node.label}** (`{node.node_id}`，"
-            f"`{node.start_block_id}` → `{node.end_block_id}`，{node.status})"
+            f"`{node.start_block_id}` → `{node.end_block_id}`，{node.status}{role})"
         )
         lines.append(f"{prefix}  {node.introduction}")
         for child_id in node.child_ids:

@@ -36,6 +36,8 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
         end_block_id=blocks[-1].block_id,
         source_pages=[1],
         status="leaf",
+        leaf_role="content_source",
+        decision_reason="完整手册无需继续分区。",
     )
     snapshot = GlobalExplorationSnapshot(
         created_at=datetime(2026, 7, 25, tzinfo=UTC),
@@ -54,6 +56,8 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
             root_node_id=root.node_id,
             nodes=[root],
             leaf_node_ids=[root.node_id],
+            content_leaf_ids=[root.node_id],
+            structural_context_leaf_ids=[],
             model_calls=1,
         ),
     )
@@ -69,6 +73,7 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
 
     assert paths.snapshot_json.exists()
     assert paths.region_tree_json.exists()
+    assert paths.region_tree_audit_json.exists()
     assert paths.parsed_blocks_json.exists()
     assert paths.document_context_markdown.read_text() == "这是一份协会内部手册。"
     assert "region-0001" in paths.region_tree_markdown.read_text()

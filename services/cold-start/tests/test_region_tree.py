@@ -10,7 +10,12 @@ from cold_start.config import ExplorationSettings
 from cold_start.document.blocks import build_document_blocks
 from cold_start.document.models import ParsedPage
 from cold_start.llm.base import ModelTurn, ThinkingMode, ToolCall
-from cold_start.region_tree.models import ParentPartitionError, SplitDecision
+from cold_start.region_tree.models import (
+    KeepDecision,
+    ParentPartitionError,
+    SplitDecision,
+    StopDecision,
+)
 from cold_start.region_tree.runtime import BlockIndex, RegionRuntime, RegionTree
 
 
@@ -134,6 +139,7 @@ def _stop(introduction: str) -> ModelTurn:
         content=json.dumps(
             {
                 "action": "stop",
+                "leaf_role": "content_source",
                 "introduction": introduction,
                 "reason": "没有更多可独立阅读的连续区域。",
             },
@@ -288,3 +294,35 @@ def test_program_rejects_child_range_gap() -> None:
             title="测试手册",
             decision=invalid,
         )
+
+
+def test_structural_context_leaf_is_kept_but_routed_separately() -> None:
+    tree = RegionTree(BlockIndex(blocks()), max_depth=5)
+    tree.initialize(
+        title="测试手册",
+        decision=StopDecision(
+            action="stop",
+            leaf_role="structural_context",
+            introduction="这段原文只负责导航。",
+            reason="它仅列出后续章节入口。",
+        ),
+    )
+
+    snapshot = tree.snapshot()
+    assert snapshot.content_leaf_ids == []
+    assert snapshot.structural_context_leaf_ids == ["region-0001"]
+
+
+def test_calibration_can_reject_a_false_positive_without_changing_tree() -> None:
+    tree = RegionTree(BlockIndex(blocks()), max_depth=5)
+    tree.initialize(title="测试手册", decision=split_plan())
+    original_children = tree.nodes["region-0001"].child_ids.copy()
+
+    groups = tree.calibrate(
+        "region-0001",
+        KeepDecision(action="keep", reason="两个直接孩子的边界已经正确。"),
+    )
+
+    assert groups == []
+    assert tree.nodes["region-0001"].child_ids == original_children
+    assert tree.nodes["region-0001"].decision_reason == "两个直接孩子的边界已经正确。"
