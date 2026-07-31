@@ -4,7 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "rootDir": "..",
-    "outDir": "../.prisma-seed-build",
+    "outDir": "../.prisma-cold-start-build",
     "declaration": false,
     "sourceMap": false,
     "skipLibCheck": true,
@@ -13,10 +13,7 @@
     "types": ["node"]
   },
   "include": [
-    "./handbook-guidance.data.ts",
-    "./validate-handbook-guidance.ts",
-    "./seed-handbook-guidance.ts",
-    "./verify-handbook-guidance.ts",
+    "./import-cold-start.ts",
     "../src/generated/prisma/**/*.ts"
   ]
 }

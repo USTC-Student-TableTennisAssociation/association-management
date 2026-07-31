@@ -12,11 +12,15 @@ enum MemoryNodeKind {
   search_card
   activity_pattern
   activity_trait
+  person
+  role
+  historical_event
   workflow
   work_step
   rule
   principle
   practice
+  archive_record
 }
 
 enum MemoryStatus {
@@ -61,12 +65,16 @@ enum MemoryRelationType {
   requires
   exception_to
   applies_to
+  relevant_at
   informs
   constrains
-  supports
   deviates_from
-  reveals_risk
-  challenges
+  establishes
+  changes
+  held_role
+  responsible_for
+  participated_in
+  authored
 }
 
 enum MemorySourceRole {
@@ -98,14 +106,19 @@ model MemoryNode {
   searchCard      MemorySearchCard?
   activityPattern MemoryActivityPattern?
   activityTrait   MemoryActivityTrait?
+  person          MemoryPerson?
+  role            MemoryRole?
+  historicalEvent MemoryHistoricalEvent?
   workflow        MemoryWorkflow?
   workStep        MemoryWorkStep?
   rule            MemoryRule?
   principle       MemoryPrinciple?
   practice        MemoryPractice?
+  archiveRecord   MemoryArchiveRecord?
 
   outgoingEdges MemoryEdge[]       @relation("MemoryEdgeFrom")
   incomingEdges MemoryEdge[]       @relation("MemoryEdgeTo")
+  contextEdges  MemoryEdge[]       @relation("MemoryEdgeContext")
   sources       MemoryNodeSource[]
   embeddings    MemoryEmbedding[]
 
@@ -173,6 +186,44 @@ model MemoryActivityTrait {
   @@map("memory_activity_traits")
 }
 
+/// 需要在组织记忆图中稳定识别的人物身份；不保存联系方式、账号或当前权限。
+model MemoryPerson {
+  nodeId                 String  @id @map("node_id") @db.Uuid
+  identityMarkdown       String  @map("identity_markdown") @db.Text
+  disambiguationMarkdown String? @map("disambiguation_markdown") @db.Text
+
+  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@map("memory_people")
+}
+
+/// 跨届可能持续存在的组织角色；具体职责和任职关系由图关系表达。
+model MemoryRole {
+  nodeId              String  @id @map("node_id") @db.Uuid
+  definitionMarkdown  String  @map("definition_markdown") @db.Text
+  boundaryMarkdown    String? @map("boundary_markdown") @db.Text
+  uncertaintyMarkdown String? @map("uncertainty_markdown") @db.Text
+
+  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@map("memory_roles")
+}
+
+/// 在某个时间点或时间范围内发生的一次重要事情或变化。
+model MemoryHistoricalEvent {
+  nodeId               String  @id @map("node_id") @db.Uuid
+  eventMarkdown        String  @map("event_markdown") @db.Text
+  timeMarkdown         String? @map("time_markdown") @db.Text
+  backgroundMarkdown   String? @map("background_markdown") @db.Text
+  outcomeMarkdown      String? @map("outcome_markdown") @db.Text
+  significanceMarkdown String? @map("significance_markdown") @db.Text
+  uncertaintyMarkdown  String? @map("uncertainty_markdown") @db.Text
+
+  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@map("memory_historical_events")
+}
+
 /// 一组连续、分支、共享或可回退工作的组织节点。
 /// Workflow 自身不保存完成条件；是否结束由后续工作节点和运行状态判断。
 model MemoryWorkflow {
@@ -222,7 +273,7 @@ model MemoryPrinciple {
 }
 
 /// 从过去实际工作中提炼出的情境、做法、结果和认识。
-/// 是否支持、偏离或挑战其他知识由 MemoryEdge 的关系语义表达。
+/// 它与规则、原则和活动的关系由 MemoryEdge 表达。
 model MemoryPractice {
   nodeId              String  @id @map("node_id") @db.Uuid
   situationMarkdown   String  @map("situation_markdown") @db.Text
@@ -236,28 +287,47 @@ model MemoryPractice {
   @@map("memory_practices")
 }
 
+/// 组织需要长期知道其存在的重要档案；普通来源文件仍只进入原始文件层。
+model MemoryArchiveRecord {
+  nodeId                  String  @id @map("node_id") @db.Uuid
+  contentOverviewMarkdown String  @map("content_overview_markdown") @db.Text
+  provenanceMarkdown      String? @map("provenance_markdown") @db.Text
+  integrityMarkdown       String? @map("integrity_markdown") @db.Text
+
+  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+
+  @@map("memory_archive_records")
+}
+
 /// 长期记忆节点之间带方向、带类型的语义关系。
+/// contextNode 使同一关系能够限定在某个 Activity、ActivityTrait 或 Workflow 中：
+/// 例如“在继往开来杯中，到达申请场地 WorkStep 时加载两个场地的 Practice”，
+/// 或“在大型赛事 Workflow 中，WorkStep A 的下一步是 WorkStep B”。
 model MemoryEdge {
-  id           String             @id @default(uuid()) @db.Uuid
-  fromNodeId   String             @map("from_node_id") @db.Uuid
-  toNodeId     String             @map("to_node_id") @db.Uuid
-  relationType MemoryRelationType @map("relation_type")
-  sequence     Int?
-  noteMarkdown String?            @map("note_markdown") @db.Text
-  status       MemoryStatus       @default(draft)
+  id                    String             @id @default(uuid()) @db.Uuid
+  fromNodeId            String             @map("from_node_id") @db.Uuid
+  toNodeId              String             @map("to_node_id") @db.Uuid
+  contextNodeId         String?            @map("context_node_id") @db.Uuid
+  relationType          MemoryRelationType @map("relation_type")
+  sequence              Int?
+  temporalScopeMarkdown String?            @map("temporal_scope_markdown") @db.Text
+  noteMarkdown          String?            @map("note_markdown") @db.Text
+  status                MemoryStatus       @default(draft)
 
   createdAt   DateTime  @default(now()) @map("created_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
   publishedAt DateTime? @map("published_at")
   retiredAt   DateTime? @map("retired_at")
 
-  fromNode MemoryNode         @relation("MemoryEdgeFrom", fields: [fromNodeId], references: [id], onDelete: Cascade)
-  toNode   MemoryNode         @relation("MemoryEdgeTo", fields: [toNodeId], references: [id], onDelete: Cascade)
-  sources  MemoryEdgeSource[]
+  fromNode    MemoryNode         @relation("MemoryEdgeFrom", fields: [fromNodeId], references: [id], onDelete: Cascade)
+  toNode      MemoryNode         @relation("MemoryEdgeTo", fields: [toNodeId], references: [id], onDelete: Cascade)
+  contextNode MemoryNode?        @relation("MemoryEdgeContext", fields: [contextNodeId], references: [id], onDelete: Cascade)
+  sources     MemoryEdgeSource[]
 
-  @@unique([fromNodeId, toNodeId, relationType])
+  @@unique([fromNodeId, toNodeId, relationType, contextNodeId], map: "memory_edges_relation_context_key")
   @@index([fromNodeId, relationType, status])
   @@index([toNodeId, relationType, status])
+  @@index([contextNodeId, relationType, status])
   @@map("memory_edges")
 }
 
@@ -269,6 +339,8 @@ model MemorySourceAnchor {
   pageStart      Int?     @map("page_start")
   pageEnd        Int?     @map("page_end")
   sectionPath    String?  @map("section_path") @db.Text
+  startBlockId   String?  @map("start_block_id") @db.Text
+  endBlockId     String?  @map("end_block_id") @db.Text
   startOffset    Int?     @map("start_offset")
   endOffset      Int?     @map("end_offset")
   excerpt        String?  @db.Text
@@ -279,6 +351,7 @@ model MemorySourceAnchor {
   edgeSources MemoryEdgeSource[]
 
   @@index([sourceAssetRef])
+  @@index([sourceAssetRef, startBlockId, endBlockId], map: "memory_source_anchors_block_range_idx")
   @@map("memory_source_anchors")
 }
 

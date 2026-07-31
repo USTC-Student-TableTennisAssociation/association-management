@@ -621,11 +621,17 @@ def test_calibration_can_reject_a_false_positive_without_changing_tree() -> None
     assert tree.nodes["region-0001"].decision_reason == "两个直接孩子的边界已经正确。"
 
 
-def test_all_tree_prompts_preserve_workflow_parent_without_forcing_merge() -> None:
+def test_all_tree_prompts_share_local_compilation_stop_condition() -> None:
     tree_prompt = "".join(REGION_TREE_SYSTEM_PROMPT.split())
     repair_prompt = "".join(STRUCTURE_REPAIR_SYSTEM_PROMPT.split())
 
     assert "所有未被孩子覆盖的块自动成为当前节点直接拥有的原文" in tree_prompt
-    assert "同属工作流、清单、论证或知识体系不是停止切分的理由" in tree_prompt
+    assert "一次局部子图编译所需的最小连续原文区域" in tree_prompt
+    assert "一张叶子后续可以生成多张记忆卡片及其连线" in tree_prompt
+    assert "多个独立活动、多个职责对象不同的角色" in tree_prompt
+    assert "表头、字段说明与依赖它们解释的表体" in tree_prompt
+    assert "同一对象的标题与依赖该标题才能确定主体" in tree_prompt
+    assert "完整且有实质内容的章节或小节" in tree_prompt
     assert "单个block内混有别节文字时，不能返回parent_partition_error" in tree_prompt
+    assert "一次局部子图编译所需的最小连续原文区域" in repair_prompt
     assert "必须返回keep，并把异常写入source_issues" in repair_prompt
