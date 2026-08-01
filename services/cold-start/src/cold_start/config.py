@@ -119,42 +119,6 @@ class ExplorationSettings:
             raise ValueError("embedding_model 不能为空")
 
 
-@dataclass(frozen=True)
-class CompilationSettings:
-    """叶子局部编译和父节点整合的运行边界。"""
-
-    max_parallel_leaves: int = 3
-    max_parallel_parents: int = 3
-
-    @classmethod
-    def from_environment(
-        cls,
-        *,
-        max_parallel_leaves: int | None = None,
-        max_parallel_parents: int | None = None,
-    ) -> CompilationSettings:
-        return cls(
-            max_parallel_leaves=_environment_int(
-                "COLD_START_MAX_PARALLEL_COMPILATIONS",
-                explicit=max_parallel_leaves,
-                default=3,
-            ),
-            max_parallel_parents=_environment_int(
-                "COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS",
-                explicit=max_parallel_parents,
-                default=3,
-            ),
-        )
-
-    def __post_init__(self) -> None:
-        for name, value in {
-            "max_parallel_leaves": self.max_parallel_leaves,
-            "max_parallel_parents": self.max_parallel_parents,
-        }.items():
-            if value < 1:
-                raise ValueError(f"{name} 必须大于 0")
-
-
 def _environment_float(
     name: str,
     *,

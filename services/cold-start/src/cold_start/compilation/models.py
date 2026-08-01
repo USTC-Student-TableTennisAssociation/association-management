@@ -1,4 +1,4 @@
-"""叶子局部编译的结构化协议。"""
+"""对象—陈述—关系—依据的文档局部记忆协议。"""
 
 from __future__ import annotations
 
@@ -15,234 +15,254 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-MemoryCardKind = Literal[
-    "activity_pattern",
+ObjectKindHint = Literal[
+    "organization",
+    "activity",
     "activity_trait",
     "person",
     "role",
-    "historical_event",
-    "workflow",
-    "work_step",
-    "rule",
-    "principle",
+    "work_unit",
+    "archive",
+    "document",
+    "concept",
+    "unknown",
+]
+
+AssertionMode = Literal["record", "viewpoint"]
+
+AssertionKindHint = Literal[
+    "existence",
+    "state",
+    "event",
     "practice",
-    "archive_record",
+    "outcome",
+    "formal_norm",
+    "interpretation",
+    "causal_explanation",
+    "evaluation",
+    "guidance",
+    "goal",
+    "proposal",
+    "prediction",
+    "other",
 ]
 
-MemoryRelationType = Literal[
-    "has_trait",
-    "uses",
-    "contains",
-    "next",
-    "requires",
-    "exception_to",
-    "applies_to",
-    "relevant_at",
-    "informs",
-    "constrains",
-    "deviates_from",
-    "establishes",
-    "changes",
-    "held_role",
-    "responsible_for",
-    "participated_in",
-    "authored",
+AuthorityStatus = Literal[
+    "personal_view",
+    "role_based_view",
+    "team_consensus",
+    "organization_adopted",
+    "formal_authority",
+    "unknown",
 ]
 
-CARD_CONTENT_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
-    "activity_pattern": (
-        frozenset({"description_markdown", "recurrence_kind"}),
-        frozenset(
-            {
-                "purpose_markdown",
-                "typical_timing_markdown",
-                "identity_boundary_markdown",
-            }
-        ),
-    ),
-    "activity_trait": (
-        frozenset({"dimension", "code", "definition_markdown"}),
-        frozenset(),
-    ),
-    "person": (
-        frozenset({"identity_markdown"}),
-        frozenset({"disambiguation_markdown"}),
-    ),
-    "role": (
-        frozenset({"definition_markdown"}),
-        frozenset({"boundary_markdown", "uncertainty_markdown"}),
-    ),
-    "historical_event": (
-        frozenset({"event_markdown"}),
-        frozenset(
-            {
-                "time_markdown",
-                "background_markdown",
-                "outcome_markdown",
-                "significance_markdown",
-                "uncertainty_markdown",
-            }
-        ),
-    ),
-    "workflow": (
-        frozenset({"goal_markdown", "entry_meaning_markdown"}),
-        frozenset(),
-    ),
-    "work_step": (
-        frozenset(
-            {
-                "objective_markdown",
-                "instruction_markdown",
-                "completion_meaning_markdown",
-            }
-        ),
-        frozenset(),
-    ),
-    "rule": (
-        frozenset({"statement_markdown"}),
-        frozenset({"rationale_markdown", "violation_impact_markdown"}),
-    ),
-    "principle": (
-        frozenset({"statement_markdown", "rationale_markdown"}),
-        frozenset({"tradeoff_markdown"}),
-    ),
-    "practice": (
-        frozenset({"situation_markdown", "behavior_markdown", "lesson_markdown"}),
-        frozenset(
-            {
-                "outcome_markdown",
-                "uncertainty_markdown",
-            }
-        ),
-    ),
-    "archive_record": (
-        frozenset({"content_overview_markdown"}),
-        frozenset({"provenance_markdown", "integrity_markdown"}),
-    ),
-}
 
+class Evidence(StrictModel):
+    """一项识别或陈述在当前文档中的可追溯来源。"""
 
-class MemoryCardCandidate(StrictModel):
-    card_id: str = Field(pattern=r"^card-\d+$")
-    kind: MemoryCardKind
-    title: str = Field(min_length=1, max_length=100)
-    summary: str = Field(min_length=1, max_length=500)
-    content: dict[str, str | None] = Field(min_length=1, max_length=6)
-    evidence_ids: list[str] = Field(min_length=1, max_length=12)
-
-    @model_validator(mode="after")
-    def validate_content_fields(self) -> MemoryCardCandidate:
-        required, optional = CARD_CONTENT_FIELDS[self.kind]
-        keys = set(self.content)
-        missing = required - keys
-        unknown = keys - required - optional
-        empty_required = {
-            key
-            for key in required
-            if self.content.get(key) is None or not str(self.content[key]).strip()
-        }
-        if missing or empty_required:
-            names = ", ".join(sorted(missing | empty_required))
-            raise ValueError(f"{self.kind} 缺少必填内容字段：{names}")
-        if unknown:
-            raise ValueError(
-                f"{self.kind} 包含未知内容字段：{', '.join(sorted(unknown))}"
-            )
-        for key, value in self.content.items():
-            if value is not None and not value.strip():
-                raise ValueError(f"{self.kind}.{key} 不能为空字符串")
-        if self.kind == "activity_pattern":
-            recurrence = self.content["recurrence_kind"]
-            if recurrence not in {
-                "annual",
-                "semester",
-                "irregular",
-                "on_demand",
-                "unknown",
-            }:
-                raise ValueError("activity_pattern.recurrence_kind 取值无效")
-        if self.kind == "activity_trait":
-            dimension = self.content["dimension"]
-            if dimension not in {
-                "scale",
-                "format",
-                "audience",
-                "funding",
-                "venue",
-                "recurrence",
-                "other",
-            }:
-                raise ValueError("activity_trait.dimension 取值无效")
-        return self
-
-
-class LocalEdgeCandidate(StrictModel):
-    edge_id: str = Field(pattern=r"^edge-\d+$")
-    from_card_id: str = Field(pattern=r"^card-\d+$")
-    to_card_id: str = Field(pattern=r"^card-\d+$")
-    context_card_id: str | None = Field(default=None, pattern=r"^card-\d+$")
-    relation_type: MemoryRelationType
-    sequence: int | None = Field(default=None, ge=0)
-    temporal_scope_markdown: str | None = Field(default=None, max_length=500)
-    note_markdown: str | None = Field(default=None, max_length=500)
-    evidence_ids: list[str] = Field(min_length=1, max_length=12)
-
-
-class SourceEvidenceCandidate(StrictModel):
     evidence_id: str = Field(pattern=r"^evidence-\d+$")
     start_block_id: BlockId
     end_block_id: BlockId
-    role: Literal["basis", "example", "counterexample", "context"]
-    note_markdown: str = Field(min_length=1, max_length=500)
+    role: Literal["identity", "basis", "context", "example", "counterexample"]
+    note_markdown: str | None = Field(default=None, max_length=500)
 
 
-class UncompiledSegment(StrictModel):
-    start_block_id: BlockId
-    end_block_id: BlockId
-    reason_kind: Literal[
-        "structural_only",
-        "not_long_term_memory",
-        "duplicate_within_region",
-        "insufficient_information",
-        "unsupported_card_kind",
-        "needs_parent_context",
+class MemoryObject(StrictModel):
+    """当前局部能够持续指认的对象；类型在叶子阶段只是候选。"""
+
+    object_id: str = Field(pattern=r"^obj-\d+$")
+    label: str = Field(min_length=1, max_length=150)
+    aliases: list[str] = Field(default_factory=list, max_length=20)
+    kind_hints: list[ObjectKindHint] = Field(min_length=1, max_length=4)
+    identity_markdown: str | None = Field(default=None, max_length=1_000)
+    evidence_ids: list[str] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_kind_hints(self) -> MemoryObject:
+        if len(set(self.kind_hints)) != len(self.kind_hints):
+            raise ValueError("kind_hints 不能重复")
+        if "unknown" in self.kind_hints and len(self.kind_hints) > 1:
+            raise ValueError("unknown 不能与其他对象类型候选并列")
+        if len(set(self.aliases)) != len(self.aliases):
+            raise ValueError("aliases 不能重复")
+        return self
+
+
+class Assertion(StrictModel):
+    """来源对一个或多个对象作出的事实性记录或观点性表达。"""
+
+    assertion_id: str = Field(pattern=r"^assert-\d+$")
+    about_object_ids: list[str] = Field(min_length=1, max_length=12)
+    mode: AssertionMode
+    kind_hint: AssertionKindHint | None = None
+    statement_markdown: str = Field(min_length=1, max_length=3_000)
+    holder_object_id: str | None = None
+    authority_status: AuthorityStatus | None = None
+    temporal_scope_markdown: str | None = Field(default=None, max_length=500)
+    uncertainty_markdown: str | None = Field(default=None, max_length=500)
+    evidence_ids: list[str] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_semantics(self) -> Assertion:
+        if len(set(self.about_object_ids)) != len(self.about_object_ids):
+            raise ValueError("about_object_ids 不能重复")
+        if self.mode == "record" and (
+            self.holder_object_id is not None or self.authority_status is not None
+        ):
+            raise ValueError("记录性陈述不能设置观点持有者或观点权威状态")
+        record_kinds = {
+            "existence",
+            "state",
+            "event",
+            "practice",
+            "outcome",
+            "formal_norm",
+        }
+        viewpoint_kinds = {
+            "interpretation",
+            "causal_explanation",
+            "evaluation",
+            "guidance",
+            "goal",
+            "proposal",
+            "prediction",
+        }
+        if self.kind_hint in record_kinds and self.mode != "record":
+            raise ValueError(f"{self.kind_hint} 只能作为记录性陈述")
+        if self.kind_hint in viewpoint_kinds and self.mode != "viewpoint":
+            raise ValueError(f"{self.kind_hint} 只能作为观点性陈述")
+        return self
+
+
+class Relation(StrictModel):
+    """两个对象间有依据的连接；关系也保留陈述来源和立场。"""
+
+    relation_id: str = Field(pattern=r"^rel-\d+$")
+    from_object_id: str
+    predicate: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    to_object_id: str
+    context_object_id: str | None = None
+    mode: AssertionMode = "record"
+    holder_object_id: str | None = None
+    authority_status: AuthorityStatus | None = None
+    temporal_scope_markdown: str | None = Field(default=None, max_length=500)
+    uncertainty_markdown: str | None = Field(default=None, max_length=500)
+    evidence_ids: list[str] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def validate_semantics(self) -> Relation:
+        if self.from_object_id == self.to_object_id:
+            raise ValueError("关系两端不能是同一个对象")
+        if self.mode == "record" and (
+            self.holder_object_id is not None or self.authority_status is not None
+        ):
+            raise ValueError("记录性关系不能设置观点持有者或观点权威状态")
+        return self
+
+
+class UnresolvedItem(StrictModel):
+    """无法在当前局部可靠决定、需要父节点或人工继续处理的问题。"""
+
+    unresolved_id: str = Field(pattern=r"^unresolved-\d+$")
+    kind: Literal[
+        "object_identity",
+        "object_kind",
+        "assertion_scope",
+        "viewpoint_holder",
+        "relation",
+        "other",
     ]
-    reason: str = Field(min_length=1, max_length=500)
+    description_markdown: str = Field(min_length=1, max_length=1_000)
+    object_ids: list[str] = Field(default_factory=list, max_length=12)
+    assertion_ids: list[str] = Field(default_factory=list, max_length=12)
+    relation_ids: list[str] = Field(default_factory=list, max_length=12)
+    evidence_ids: list[str] = Field(min_length=1, max_length=20)
 
 
-class LeafCandidateSubgraph(StrictModel):
-    new_cards: list[MemoryCardCandidate] = Field(default_factory=list, max_length=20)
-    local_edges: list[LocalEdgeCandidate] = Field(default_factory=list, max_length=40)
-    source_evidence: list[SourceEvidenceCandidate] = Field(
-        default_factory=list,
-        max_length=40,
+class MemoryPackage(StrictModel):
+    """一个区域可独立校验、也可递归交给父节点的记忆中间包。"""
+
+    schema_version: Literal["object-assertion-package.v1"] = (
+        "object-assertion-package.v1"
     )
-    uncompiled_segments: list[UncompiledSegment] = Field(
-        default_factory=list,
-        max_length=30,
+    objects: list[MemoryObject] = Field(default_factory=list, max_length=100)
+    assertions: list[Assertion] = Field(default_factory=list, max_length=200)
+    relations: list[Relation] = Field(default_factory=list, max_length=200)
+    evidence: list[Evidence] = Field(default_factory=list, max_length=300)
+    unresolved: list[UnresolvedItem] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_references(self) -> MemoryPackage:
+        object_ids = _unique_ids("object_id", self.objects)
+        assertion_ids = _unique_ids("assertion_id", self.assertions)
+        relation_ids = _unique_ids("relation_id", self.relations)
+        evidence_ids = _unique_ids("evidence_id", self.evidence)
+        _unique_ids("unresolved_id", self.unresolved)
+
+        used_evidence_ids: set[str] = set()
+        for item in self.objects:
+            _require_known("对象依据", item.evidence_ids, evidence_ids)
+            used_evidence_ids.update(item.evidence_ids)
+        for item in self.assertions:
+            _require_known("陈述对象", item.about_object_ids, object_ids)
+            _require_optional("观点持有者", item.holder_object_id, object_ids)
+            _require_known("陈述依据", item.evidence_ids, evidence_ids)
+            used_evidence_ids.update(item.evidence_ids)
+        for item in self.relations:
+            _require_known(
+                "关系对象",
+                [item.from_object_id, item.to_object_id],
+                object_ids,
+            )
+            _require_optional("关系上下文", item.context_object_id, object_ids)
+            _require_optional("关系观点持有者", item.holder_object_id, object_ids)
+            _require_known("关系依据", item.evidence_ids, evidence_ids)
+            used_evidence_ids.update(item.evidence_ids)
+        for item in self.unresolved:
+            _require_known("未决对象", item.object_ids, object_ids)
+            _require_known("未决陈述", item.assertion_ids, assertion_ids)
+            _require_known("未决关系", item.relation_ids, relation_ids)
+            _require_known("未决依据", item.evidence_ids, evidence_ids)
+            used_evidence_ids.update(item.evidence_ids)
+
+        unused = evidence_ids - used_evidence_ids
+        if unused:
+            raise ValueError(f"存在未被任何内容引用的依据：{', '.join(sorted(unused))}")
+        return self
+
+
+class RegionCompilationArtifact(StrictModel):
+    """一个区域及其记忆包的可递归编译产物。"""
+
+    schema_version: Literal["region-object-compilation.v1"] = (
+        "region-object-compilation.v1"
     )
-
-
-class LeafCompilationResult(StrictModel):
-    leaf_node_id: str = Field(pattern=r"^region-\d{4,}$")
+    created_at: datetime
+    source: SourceMetadata
+    region_tree_schema_version: str
+    region_node_id: str = Field(pattern=r"^region-\d{4,}$")
     label: str
-    lineage: list[str]
+    lineage_node_ids: list[str]
     start_block_id: BlockId
     end_block_id: BlockId
     source_pages: list[int]
-    status: Literal["compiled", "failed"]
-    subgraph: LeafCandidateSubgraph | None = None
-    error: str | None = None
-    model_calls: int = Field(default=0, ge=0)
+    package: MemoryPackage
+    model_calls: int = Field(ge=1, le=2)
 
 
-class LeafCompilationSnapshot(StrictModel):
-    schema_version: Literal["leaf-compilation.v1"] = "leaf-compilation.v1"
-    created_at: datetime
-    status: Literal["running", "complete", "partial"]
-    source: SourceMetadata
-    region_tree_schema_version: str
-    leaf_results: list[LeafCompilationResult]
-    deferred_content_node_ids: list[str]
-    model_calls: int = Field(default=0, ge=0)
-    issues: list[str] = Field(default_factory=list)
+def _unique_ids(field_name: str, items: list[StrictModel]) -> set[str]:
+    values = [str(getattr(item, field_name)) for item in items]
+    if len(values) != len(set(values)):
+        raise ValueError(f"{field_name} 不能重复")
+    return set(values)
+
+
+def _require_known(label: str, references: list[str], known: set[str]) -> None:
+    missing = set(references) - known
+    if missing:
+        raise ValueError(f"{label}引用了不存在的 ID：{', '.join(sorted(missing))}")
+
+
+def _require_optional(label: str, reference: str | None, known: set[str]) -> None:
+    if reference is not None:
+        _require_known(label, [reference], known)

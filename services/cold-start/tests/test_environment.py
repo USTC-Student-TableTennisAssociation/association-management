@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from cold_start.config import CompilationSettings, ExplorationSettings, ModelSettings
+from cold_start.config import ExplorationSettings, ModelSettings
 from cold_start.environment import find_environment_file, load_environment_file
 
 
@@ -59,13 +59,3 @@ def test_reads_region_parallelism_from_environment(
     settings = ExplorationSettings.from_environment()
 
     assert settings.max_parallel_regions == 6
-
-
-def test_reads_parent_integration_parallelism_from_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS", "5")
-
-    settings = CompilationSettings.from_environment()
-
-    assert settings.max_parallel_parents == 5
