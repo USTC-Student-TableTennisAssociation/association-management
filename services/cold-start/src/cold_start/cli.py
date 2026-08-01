@@ -7,6 +7,12 @@ import asyncio
 import sys
 from pathlib import Path
 
+from cold_start.compilation import (
+    LeafObjectCompiler,
+    create_leaf_artifact_paths,
+    load_exploration_inputs,
+    write_leaf_artifact,
+)
 from cold_start.config import ExplorationSettings, ModelSettings
 from cold_start.document import DoclingPdfLoader
 from cold_start.environment import load_environment_file
@@ -71,6 +77,23 @@ def build_parser() -> argparse.ArgumentParser:
     explore = subparsers.add_parser("explore", help="运行单 PDF 全局勘探")
     _add_pdf_arguments(explore)
     _add_model_arguments(explore)
+
+    compile_leaf = subparsers.add_parser(
+        "compile-leaf",
+        help="用新对象—陈述协议编译一个指定内容叶子",
+    )
+    compile_leaf.add_argument(
+        "--run",
+        type=Path,
+        required=True,
+        help="包含 global-exploration.json 的勘探运行目录",
+    )
+    compile_leaf.add_argument(
+        "--leaf-id",
+        required=True,
+        help="需要编译的内容叶子节点 ID，例如 region-0063",
+    )
+    _add_model_arguments(compile_leaf)
     return parser
 
 
@@ -168,11 +191,54 @@ async def _run_explore(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_compile_leaf(args: argparse.Namespace) -> int:
+    progress = ConsoleProgressReporter()
+    _report_environment(args, progress)
+    model_settings = ModelSettings.from_environment(
+        model=args.model,
+        api_base_url=args.api_base_url,
+        api_key=args.api_key,
+        read_timeout_seconds=args.read_timeout_seconds,
+        max_retries=args.max_model_retries,
+    )
+    exploration, blocks = load_exploration_inputs(args.run)
+    paths = create_leaf_artifact_paths(args.run, args.leaf_id)
+    progress.report(
+        "模型",
+        (
+            f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
+            "强制工具提交，校验失败最多修复一次"
+        ),
+    )
+    progress.report("产物", f"已创建单叶子编译目录 {paths.directory}")
+    progress.report("模型", f"模型输入、正文和思考将实时保存到 {paths.model_streams}")
+    model = OpenAICompatibleChatModel(
+        model_settings,
+        progress=progress,
+        trace_directory=paths.model_streams,
+        show_model_stream=args.show_model_stream,
+    )
+    try:
+        artifact = await LeafObjectCompiler(
+            model=model,
+            exploration=exploration,
+            blocks=blocks,
+            progress=progress,
+        ).compile(args.leaf_id)
+    finally:
+        await model.aclose()
+    write_leaf_artifact(paths, artifact)
+    progress.report("完成", f"单叶子编译产物：{paths.directory}")
+    return 0
+
+
 def main() -> None:
     args = build_parser().parse_args()
     try:
         if args.command == "explore":
             raise SystemExit(asyncio.run(_run_explore(args)))
+        if args.command == "compile-leaf":
+            raise SystemExit(asyncio.run(_run_compile_leaf(args)))
     except KeyboardInterrupt:
         print("任务已取消。", file=sys.stderr)
         raise SystemExit(130) from None

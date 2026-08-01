@@ -29,8 +29,8 @@
 不完整，观点保留持有者和权威状态，关系也保留来源、时间和不确定性。父节点可以合并、
 拆分或重定向对象，而不用把原文强行补写成一张字段完整的卡片。
 
-当前分支已完成新中间协议、引用完整性校验和对象合并后的确定性引用重映射。真实模型
-叶子编译、父节点递归整合和数据库结构会按此顺序继续实现。
+当前分支已完成新中间协议、引用完整性校验、对象合并后的确定性引用重映射，以及指定
+单个叶子的真实模型编译。父节点递归整合和数据库结构会在验证局部输出后继续实现。
 
 ## 安装
 
@@ -106,6 +106,29 @@ region-tree-checks.json    结构校准结果和来源解析警告
 parsed-document.md         Docling 解析出的全文
 parsed-pages.json          分页原文
 parsed-blocks.json         带稳定 ID 的原文块
+```
+
+## 编译一个叶子
+
+先从 `region-tree.md` 中选定一个 `content_source` 叶子，再运行：
+
+```bash
+uv run cold-start compile-leaf \
+  --run "../../.cold-start/runs/20260729T100753Z-107ebc775f" \
+  --leaf-id "region-0063"
+```
+
+模型会收到文档背景、从根节点到该叶子的简短介绍，以及该叶子的完整带编号原文。模型
+必须通过 `submit_memory_package` 工具提交结果；程序会验证所有对象和依据引用，以及
+依据是否落在当前叶子范围内。首次提交无效时只允许一次定向修复。
+
+每次运行创建独立产物目录：
+
+```text
+object-compilations/<UTC 时间>-<叶子 ID>/
+  model-streams/             模型请求、原始流、正文和思考
+  region-compilation.json    完整结构化记忆包
+  region-compilation.md      供人工检查的对象、陈述、关系与依据
 ```
 
 ## 当前边界
