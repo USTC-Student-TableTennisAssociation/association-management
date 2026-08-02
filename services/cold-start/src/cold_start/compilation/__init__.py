@@ -14,6 +14,7 @@ from cold_start.compilation.models import (
     RegionCompilationArtifact,
     Relation,
     UnresolvedItem,
+    package_warnings,
 )
 from cold_start.compilation.operations import ObjectMergeConflict, merge_objects
 
@@ -30,5 +31,6 @@ __all__ = [
     "create_leaf_artifact_paths",
     "load_exploration_inputs",
     "merge_objects",
+    "package_warnings",
     "write_leaf_artifact",
 ]

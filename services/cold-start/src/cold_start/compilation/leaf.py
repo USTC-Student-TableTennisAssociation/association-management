@@ -11,7 +11,11 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from cold_start.compilation.models import MemoryPackage, RegionCompilationArtifact
+from cold_start.compilation.models import (
+    MemoryPackage,
+    RegionCompilationArtifact,
+    package_warnings,
+)
 from cold_start.document.blocks import format_blocks
 from cold_start.document.models import ParsedBlock
 from cold_start.global_exploration.models import GlobalExplorationSnapshot
@@ -21,13 +25,25 @@ from cold_start.region_tree.models import RegionNode
 from cold_start.region_tree.runtime import BlockIndex
 
 SUBMIT_TOOL_NAME = "submit_memory_package"
+
+
+def _submission_schema() -> dict[str, object]:
+    schema = MemoryPackage.model_json_schema()
+    semantic_fields = ["objects", "assertions", "relations", "unresolved"]
+    schema["required"] = [*semantic_fields, "evidence"]
+    schema["anyOf"] = [
+        {"properties": {field: {"minItems": 1}}} for field in semantic_fields
+    ]
+    return schema
+
+
 SUBMIT_MEMORY_PACKAGE_TOOL: tuple[dict[str, object], ...] = (
     {
         "type": "function",
         "function": {
             "name": SUBMIT_TOOL_NAME,
             "description": "提交当前叶子的对象、陈述、关系、依据和未决项。",
-            "parameters": MemoryPackage.model_json_schema(),
+            "parameters": _submission_schema(),
         },
     },
 )
@@ -53,6 +69,9 @@ LEAF_COMPILATION_SYSTEM_PROMPT = """
    contains、next 等关系表达。predicate 使用简短 snake_case 英文临时谓词。
 4. Evidence：对象识别、陈述或关系所依据的当前叶子连续原文块范围。
 
+Evidence 不是独立的摘录清单。先完成对象、陈述、关系或未决项，再只为这些结果建立
+依据；每条 Evidence 都必须被至少一个结果引用。禁止只提交 Evidence。
+
 Unresolved 只是编译过程中的未决问题，不是第五种知识。仅当当前原文确实无法判断对象
 同一性、类型、陈述范围、观点持有者或关系时记录，留给父节点继续处理。不要把普通的
 省略信息全部变成未决项。
@@ -62,7 +81,10 @@ Unresolved 只是编译过程中的未决问题，不是第五种知识。仅当
 作者赞成它；作者提出未来方向也不等于已经成为组织正式原则。
 
 每个对象、陈述和关系必须引用 evidence_ids。依据范围必须位于当前叶子内。不要输出
-分析正文；完成判断后只调用 submit_memory_package 一次。
+分析正文。objects、assertions、relations、evidence、unresolved 五个数组都必须显式
+提交；没有内容的数组填写 []。这是 content_source 叶子，四个语义数组中至少一个必须
+非空。mode 是陈述的主要判断；kind_hint 只在确定时填写，不确定就填写 null。完成判断
+后只调用 submit_memory_package 一次。
 """.strip()
 
 
@@ -131,6 +153,10 @@ class LeafObjectCompiler:
             model_calls += 1
             package = self._parse(repair, leaf)
 
+        warnings = package_warnings(package)
+        for warning in warnings:
+            self.progress.report(label, f"保留待复核警告：{warning}")
+
         self.progress.report(
             label,
             (
@@ -150,6 +176,7 @@ class LeafObjectCompiler:
             source_pages=leaf.source_pages,
             package=package,
             model_calls=model_calls,
+            warnings=warnings,
         )
 
     def _leaf(self, node_id: str) -> RegionNode:
@@ -180,6 +207,10 @@ class LeafObjectCompiler:
         if call.name != SUBMIT_TOOL_NAME:
             raise ValueError(f"模型调用了未知工具 {call.name}")
         package = MemoryPackage.model_validate(json.loads(call.arguments))
+        if not any(
+            (package.objects, package.assertions, package.relations, package.unresolved)
+        ):
+            raise ValueError("内容叶子不能只提交 Evidence，至少需要一项语义结果")
         self._validate_evidence_ranges(package, leaf)
         return package
 
@@ -319,6 +350,11 @@ def _render_artifact(artifact: RegionCompilationArtifact) -> str:
         f"> 区域：`{artifact.region_node_id}`",
         f"> 原文：`{artifact.start_block_id}` → `{artifact.end_block_id}`",
         f"> 模型调用：{artifact.model_calls}",
+        "",
+        "## 待复核警告",
+        "",
+        *(f"- {warning}" for warning in artifact.warnings),
+        *([] if artifact.warnings else ["无。"]),
         "",
         "## 对象",
         "",

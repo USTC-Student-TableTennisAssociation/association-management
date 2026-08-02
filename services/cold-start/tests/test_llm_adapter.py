@@ -175,7 +175,9 @@ async def test_adapter_keeps_partial_trace_when_remote_stream_breaks(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages() -> None:
+async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages(
+    tmp_path,
+) -> None:
     request_bodies: list[dict[str, object]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -268,6 +270,7 @@ async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages() -> 
                 api_key=None,
             ),
             client=client,
+            trace_directory=tmp_path,
         )
         first = await model.complete_turn(
             messages=[{"role": "user", "content": "查找二课"}],
@@ -315,6 +318,14 @@ async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages() -> 
         "type": "enabled",
         "clear_thinking": False,
     }
+    tool_trace = json.loads(next(tmp_path.glob("*.tool-calls.json")).read_text())
+    assert tool_trace == [
+        {
+            "id": "call_001",
+            "name": "search_document",
+            "arguments": '{"query":"二课"}',
+        }
+    ]
 
 
 @pytest.mark.asyncio

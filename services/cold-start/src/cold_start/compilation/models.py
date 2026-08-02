@@ -47,6 +47,21 @@ AssertionKindHint = Literal[
     "other",
 ]
 
+RECORD_ASSERTION_KINDS = frozenset(
+    {"existence", "state", "event", "practice", "outcome", "formal_norm"}
+)
+VIEWPOINT_ASSERTION_KINDS = frozenset(
+    {
+        "interpretation",
+        "causal_explanation",
+        "evaluation",
+        "guidance",
+        "goal",
+        "proposal",
+        "prediction",
+    }
+)
+
 AuthorityStatus = Literal[
     "personal_view",
     "role_based_view",
@@ -106,31 +121,6 @@ class Assertion(StrictModel):
     def validate_semantics(self) -> Assertion:
         if len(set(self.about_object_ids)) != len(self.about_object_ids):
             raise ValueError("about_object_ids 不能重复")
-        if self.mode == "record" and (
-            self.holder_object_id is not None or self.authority_status is not None
-        ):
-            raise ValueError("记录性陈述不能设置观点持有者或观点权威状态")
-        record_kinds = {
-            "existence",
-            "state",
-            "event",
-            "practice",
-            "outcome",
-            "formal_norm",
-        }
-        viewpoint_kinds = {
-            "interpretation",
-            "causal_explanation",
-            "evaluation",
-            "guidance",
-            "goal",
-            "proposal",
-            "prediction",
-        }
-        if self.kind_hint in record_kinds and self.mode != "record":
-            raise ValueError(f"{self.kind_hint} 只能作为记录性陈述")
-        if self.kind_hint in viewpoint_kinds and self.mode != "viewpoint":
-            raise ValueError(f"{self.kind_hint} 只能作为观点性陈述")
         return self
 
 
@@ -153,10 +143,6 @@ class Relation(StrictModel):
     def validate_semantics(self) -> Relation:
         if self.from_object_id == self.to_object_id:
             raise ValueError("关系两端不能是同一个对象")
-        if self.mode == "record" and (
-            self.holder_object_id is not None or self.authority_status is not None
-        ):
-            raise ValueError("记录性关系不能设置观点持有者或观点权威状态")
         return self
 
 
@@ -199,15 +185,12 @@ class MemoryPackage(StrictModel):
         evidence_ids = _unique_ids("evidence_id", self.evidence)
         _unique_ids("unresolved_id", self.unresolved)
 
-        used_evidence_ids: set[str] = set()
         for item in self.objects:
             _require_known("对象依据", item.evidence_ids, evidence_ids)
-            used_evidence_ids.update(item.evidence_ids)
         for item in self.assertions:
             _require_known("陈述对象", item.about_object_ids, object_ids)
             _require_optional("观点持有者", item.holder_object_id, object_ids)
             _require_known("陈述依据", item.evidence_ids, evidence_ids)
-            used_evidence_ids.update(item.evidence_ids)
         for item in self.relations:
             _require_known(
                 "关系对象",
@@ -217,17 +200,12 @@ class MemoryPackage(StrictModel):
             _require_optional("关系上下文", item.context_object_id, object_ids)
             _require_optional("关系观点持有者", item.holder_object_id, object_ids)
             _require_known("关系依据", item.evidence_ids, evidence_ids)
-            used_evidence_ids.update(item.evidence_ids)
         for item in self.unresolved:
             _require_known("未决对象", item.object_ids, object_ids)
             _require_known("未决陈述", item.assertion_ids, assertion_ids)
             _require_known("未决关系", item.relation_ids, relation_ids)
             _require_known("未决依据", item.evidence_ids, evidence_ids)
-            used_evidence_ids.update(item.evidence_ids)
 
-        unused = evidence_ids - used_evidence_ids
-        if unused:
-            raise ValueError(f"存在未被任何内容引用的依据：{', '.join(sorted(unused))}")
         return self
 
 
@@ -248,6 +226,48 @@ class RegionCompilationArtifact(StrictModel):
     source_pages: list[int]
     package: MemoryPackage
     model_calls: int = Field(ge=1, le=2)
+    warnings: list[str] = Field(default_factory=list)
+
+
+def package_warnings(package: MemoryPackage) -> list[str]:
+    """返回不阻断局部产物、但需要父节点或人工复核的语义问题。"""
+
+    warnings: list[str] = []
+    used_evidence_ids = {
+        evidence_id
+        for item in [
+            *package.objects,
+            *package.assertions,
+            *package.relations,
+            *package.unresolved,
+        ]
+        for evidence_id in item.evidence_ids
+    }
+    unused = {item.evidence_id for item in package.evidence} - used_evidence_ids
+    if unused:
+        warnings.append(f"存在未被知识引用的依据：{', '.join(sorted(unused))}")
+
+    for item in package.assertions:
+        if item.mode == "record" and item.kind_hint in VIEWPOINT_ASSERTION_KINDS:
+            warnings.append(
+                f"{item.assertion_id} 的 kind_hint={item.kind_hint} 与 mode=record 不一致"
+            )
+        if item.mode == "viewpoint" and item.kind_hint in RECORD_ASSERTION_KINDS:
+            warnings.append(
+                f"{item.assertion_id} 的 kind_hint={item.kind_hint} "
+                "与 mode=viewpoint 不一致"
+            )
+        if item.mode == "record" and (
+            item.holder_object_id is not None or item.authority_status is not None
+        ):
+            warnings.append(f"{item.assertion_id} 是 record，但包含观点归属字段")
+
+    for item in package.relations:
+        if item.mode == "record" and (
+            item.holder_object_id is not None or item.authority_status is not None
+        ):
+            warnings.append(f"{item.relation_id} 是 record，但包含观点归属字段")
+    return warnings
 
 
 def _unique_ids(field_name: str, items: list[StrictModel]) -> set[str]:

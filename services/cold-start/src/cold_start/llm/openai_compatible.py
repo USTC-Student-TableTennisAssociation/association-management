@@ -54,10 +54,12 @@ class _Trace:
         attempt: int,
     ) -> None:
         self.files: dict[str, TextIO] = {}
+        self.tool_calls_path: Path | None = None
         if directory is None:
             return
         directory.mkdir(parents=True, exist_ok=True)
         stem = f"{sequence:03d}-{_safe_label(label)}-attempt-{attempt}"
+        self.tool_calls_path = directory / f"{stem}.tool-calls.json"
         for kind in ("content", "reasoning"):
             self.files[kind] = (directory / f"{stem}.{kind}.partial.txt").open(
                 "w", encoding="utf-8"
@@ -70,6 +72,25 @@ class _Trace:
     def flush(self) -> None:
         for file in self.files.values():
             file.flush()
+
+    def save_tool_calls(self, calls: tuple[ToolCall, ...]) -> None:
+        if self.tool_calls_path is None or not calls:
+            return
+        self.tool_calls_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "id": call.id,
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    }
+                    for call in calls
+                ],
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
     def close(self) -> None:
         for file in self.files.values():
@@ -270,6 +291,7 @@ class OpenAICompatibleChatModel:
                 reasoning_content="".join(reasoning).strip(),
                 tool_calls=tuple(calls[index].build() for index in sorted(calls)),
             )
+            trace.save_tool_calls(result.tool_calls)
             if not result.content and not result.reasoning_content and not result.tool_calls:
                 raise ModelProtocolError("模型 SSE 流没有返回任何内容")
             trace.flush()

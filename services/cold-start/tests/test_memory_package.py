@@ -12,6 +12,7 @@ from cold_start.compilation import (
     Relation,
     UnresolvedItem,
     merge_objects,
+    package_warnings,
 )
 
 
@@ -78,7 +79,7 @@ def test_package_accepts_incomplete_record_and_sourced_viewpoint() -> None:
     assert package.relations[0].predicate == "uses"
 
 
-def test_package_rejects_semantic_and_reference_errors() -> None:
+def test_package_keeps_semantic_conflicts_as_warnings() -> None:
     with pytest.raises(ValidationError, match="unknown 不能与其他"):
         MemoryObject(
             object_id="obj-1",
@@ -87,15 +88,28 @@ def test_package_rejects_semantic_and_reference_errors() -> None:
             evidence_ids=["evidence-1"],
         )
 
-    with pytest.raises(ValidationError, match="只能作为观点性陈述"):
-        Assertion(
-            assertion_id="assert-1",
-            about_object_ids=["obj-1"],
-            mode="record",
-            kind_hint="guidance",
-            statement_markdown="错误地把建议写成事实。",
-            evidence_ids=["evidence-1"],
-        )
+    package = MemoryPackage(
+        objects=[_object(1, "继往开来杯", "activity")],
+        assertions=[
+            Assertion(
+                assertion_id="assert-1",
+                about_object_ids=["obj-1"],
+                mode="record",
+                kind_hint="guidance",
+                statement_markdown="模型把建议标记成了记录。",
+                evidence_ids=["evidence-1"],
+            )
+        ],
+        evidence=[_evidence(1), _evidence(2)],
+    )
+
+    warnings = package_warnings(package)
+
+    assert any("kind_hint=guidance" in warning for warning in warnings)
+    assert any("evidence-2" in warning for warning in warnings)
+
+
+def test_package_rejects_dangling_references() -> None:
 
     with pytest.raises(ValidationError, match="不存在的 ID"):
         MemoryPackage(

@@ -128,7 +128,13 @@ def _exploration() -> GlobalExplorationSnapshot:
     )
 
 
-def _turn(*, end_block_id: str = "p0001-b0002") -> ModelTurn:
+def _turn(
+    *,
+    end_block_id: str = "p0001-b0002",
+    assertion_kind: str = "practice",
+    add_unused_evidence: bool = False,
+    evidence_only: bool = False,
+) -> ModelTurn:
     arguments = {
         "objects": [
             {
@@ -143,7 +149,7 @@ def _turn(*, end_block_id: str = "p0001-b0002") -> ModelTurn:
                 "assertion_id": "assert-1",
                 "about_object_ids": ["obj-1"],
                 "mode": "record",
-                "kind_hint": "practice",
+                "kind_hint": assertion_kind,
                 "statement_markdown": "继往开来杯过去通常申请两个场地。",
                 "evidence_ids": ["evidence-1"],
             }
@@ -159,6 +165,17 @@ def _turn(*, end_block_id: str = "p0001-b0002") -> ModelTurn:
         ],
         "unresolved": [],
     }
+    if add_unused_evidence:
+        arguments["evidence"].append(
+            {
+                "evidence_id": "evidence-2",
+                "start_block_id": "p0001-b0001",
+                "end_block_id": "p0001-b0001",
+                "role": "context",
+            }
+        )
+    if evidence_only:
+        arguments.update(objects=[], assertions=[], relations=[], unresolved=[])
     return ModelTurn(
         content="",
         tool_calls=(
@@ -221,6 +238,37 @@ async def test_invalid_evidence_gets_only_one_repair() -> None:
 
 
 @pytest.mark.asyncio
+async def test_semantic_mismatch_and_unused_evidence_do_not_trigger_repair() -> None:
+    model = FakeModel([_turn(assertion_kind="evaluation", add_unused_evidence=True)])
+    compiler = LeafObjectCompiler(
+        model=model,
+        exploration=_exploration(),
+        blocks=_blocks(),
+    )
+
+    artifact = await compiler.compile("region-0002")
+
+    assert artifact.model_calls == 1
+    assert any("kind_hint=evaluation" in warning for warning in artifact.warnings)
+    assert any("evidence-2" in warning for warning in artifact.warnings)
+
+
+@pytest.mark.asyncio
+async def test_evidence_only_submission_requires_semantic_repair() -> None:
+    model = FakeModel([_turn(evidence_only=True), _turn()])
+    compiler = LeafObjectCompiler(
+        model=model,
+        exploration=_exploration(),
+        blocks=_blocks(),
+    )
+
+    artifact = await compiler.compile("region-0002")
+
+    assert artifact.model_calls == 2
+    assert "不能只提交 Evidence" in str(model.calls[1]["messages"][-1]["content"])
+
+
+@pytest.mark.asyncio
 async def test_rejects_non_leaf_without_calling_model() -> None:
     model = FakeModel([])
     compiler = LeafObjectCompiler(
@@ -233,3 +281,16 @@ async def test_rejects_non_leaf_without_calling_model() -> None:
         await compiler.compile("region-0001")
 
     assert not model.calls
+
+
+def test_submission_schema_requires_all_arrays_and_semantic_content() -> None:
+    schema = SUBMIT_MEMORY_PACKAGE_TOOL[0]["function"]["parameters"]
+
+    assert set(schema["required"]) == {
+        "objects",
+        "assertions",
+        "relations",
+        "evidence",
+        "unresolved",
+    }
+    assert len(schema["anyOf"]) == 4
