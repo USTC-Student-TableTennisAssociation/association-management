@@ -1,66 +1,75 @@
 # 冷启动 Worker
 
-冷启动 Worker 负责把单份协会手册 PDF 逐步编译为可进入长期记忆层的候选知识。
+冷启动 Worker 目前负责把单份协会手册 PDF 解析为稳定原文块和连续原文区域树，并在此
+基础上开发新的“对象—叙述—依据”基础记忆编译器。
 
-当前实现覆盖四个阶段：全局勘探先形成简短的文档背景和可追溯到原文块的递归区域树；
-内容叶子分别生成带来源依据的局部候选子图；父节点从最深层开始逐层对齐语义、合并
-重复卡片并补充跨孩子连线；最后把完整根图写入记忆层数据库。
+旧的固定卡片编译、父节点卡片整合和数据库导入流程已经移除，不保留兼容入口。这样可以
+先用真实叶子验证新语义协议，再决定数据库结构，而不会让旧卡片字段继续影响模型判断。
 
-完整流程会把根节点候选图作为 `draft` 写入记忆层数据库；当前不生成 SearchCard，也不
-自动发布记忆。
-
-## 当前处理流程
+## 整体方向
 
 ```text
 单份 PDF
   → Docling 解析
   → 带页码的稳定原文块
   ├→ 顺序阅读，形成简短文档背景
-  └→ 递归切分，形成区域树
-       → 全树结构校准
-       → 全局勘探产物
-       → 内容叶子并行局部编译
-            → 卡片候选
-            → 局部连线候选
-            → 来源依据
-            → 未编译说明
-       → 父节点自底向上整合
-            → 紧凑目录路由
-            → 候选卡片与证据展开
-            → 合并、修正和跨孩子连线
-            → 根节点候选记忆图
-       → 单事务写入记忆层数据库草稿
-            → 记忆节点与类型详情
-            → 记忆关系
-            → 原文来源锚点
-            → 候选 ID 与数据库 UUID 映射报告
+  └→ 递归切分，形成连续原文区域树
+       → 叶子局部编译
+            → Object：可持续指认的对象
+            → Assertion：使用对象引用模板表达的记录或观点
+            → Evidence：上述判断对应的原文位置
+       → 父节点基础整合
+            → 只合并/修订已有 Object 与 Assertion
+            → 独立发现缺失 Object 候选
+            → 独立 Evidence 复查后由程序补入 Object 引用
+       → 活动运营视角草稿
+            → 局部高召回属性与关系投影
+            → 父节点跨孩子关系恢复
+            → 四条硬业务线路全局复核
+            → 最多五轮定向修复并收敛
 ```
 
-文档背景和区域树根节点并行生成。根节点确定第一层切分后，程序继续递归判断各区域
-是否需要拆分；多个区域可以并行处理。模型在局部上下文不足时可以调用
-`search_document`，使用 BGE-M3 检索其他原文。
+区域树是编译顺序和上下文边界，不是知识分类。基础编译不选择固定卡片类型，不分析
+对象关系，也不要求每条信息先在某个业务视角下得到解释。原文明示的对象关系仍作为
+自然语言叙述忠实保留，后续再由活动运营等业务视角决定如何显式连线。
 
-区域树中的父节点可以保留未分配给子节点的自有原文：
+Assertion 不重复保存对象名称和 `about_object_ids`。正文使用
+`{{object:对象ID}}` 引用 Object，例如 `{{object:obj-1}}过去通常申请两个场地。`；
+程序直接从模板推导涉及对象，并在局部 ID 重写或父节点对象合并时同步改写引用。供人
+阅读时再用对象当前的 `label` 渲染。因此修正对象规范名称只需修改 Object，不必逐条
+修改 Assertion。只有“原文把某个名称写成什么”本身就是叙述内容时，该名称才作为引号
+中的字面值留在模板内。
 
-- `content_source`：自身包含后续知识提取需要读取的内容；
-- `structural_context`：只用于解释标题、章节关系或文档结构。
+每条 Assertion 还必须携带结构化 `temporal_scope` 和简短
+`temporal_basis_markdown`。前者明确时间类型、起止边界、精度和置信度，后者披露时间来自
+原文明示、文档成文背景、章节时期还是无法判断。无法定位时显式使用 `unknown`，没有明确
+起止的常设身份或一般规则使用 `general`，不得为填时间而虚构年份。活动视角中的属性和关系
+完整保留来源 Assertion，因此自动继承同一套时间与依据；Object 本身是被指认实体，不重复
+挂一份容易冲突的时间。
 
-最终校准只检查区域树的结构问题。PDF 编号、跨页残片等解析异常单独记录为
-`source_issues`，不会被误当成区域树切分错误。
+提取、覆盖复核和修复调用共享同一份严格输出协议。Object 固定使用 `object_id`、
+`label`、`aliases`，不直接保存 Evidence；Evidence 固定使用 `evidence_id`、
+`start_block_id`、`end_block_id`、`note_markdown`。模型不得用 `name`、
+`canonical_name`、`block_id` 或 `text` 等近义字段替代。可空字段没有内容时使用 `null`，
+不使用空字符串；`record` 不设置观点持有者。模型提交必须显式包含正确的
+`schema_version`。每条 Assertion 至少包含一个 `{{object:对象ID}}`，不能提交没有对象的
+孤立叙述；所有对象、观点持有者和 Evidence 引用都必须指向本包内已有 ID，Evidence 范围
+还必须完整位于当前节点的自有原文中。每个 Object 必须连接至少一条 Assertion，其依据
+通过这些 Assertion 的 Evidence 动态追溯。未被任何 Assertion 使用的 Evidence 不会阻断
+产出，但会形成明确的人工复核警告。
+
+Assertion 先经过现实语义门：只记录协会、活动、人物、角色、工作、制度、历史和真实
+业务结构，不把目录、章节标题、概览、承接语、列表引导语或“本章将介绍什么”等文档
+组织信息编译成记忆。相似表达若真正描述的是协会业务结构则仍然保留。只有文档导航而
+没有现实命题的来源节点可以合法输出三个空数组，程序不会逼模型制造伪叙述。
+
+当前会编译区域树中全部 `content_source` 节点：每个来源先完整提取一次，再由独立模型
+调用逐块复核遗漏；之后按树深度从叶子向根节点整合。父节点只返回对象对齐、重复叙述
+合并和有充分依据的纠正操作，程序无损保留其余内容，不进行业务关系分析。
 
 ## 安装
 
-勘探与编译阶段要求 Python 3.11–3.13 和 [uv](https://docs.astral.sh/uv/)；完整流程还要求
-Node.js、pnpm 和可连接的 PostgreSQL。
-
-首次安装时先在仓库根目录安装 Node.js 依赖：
-
-```bash
-pnpm install
-pnpm prisma:generate
-```
-
-再安装冷启动 Worker 的 Python 环境：
+要求 Python 3.11–3.13 和 [uv](https://docs.astral.sh/uv/)：
 
 ```bash
 cd services/cold-start
@@ -85,19 +94,23 @@ AI_API_BASE_URL=https://example.com/v1
 AI_API_KEY=...
 AI_MODEL=...
 
-DATABASE_URL=postgresql://...
-SHADOW_DATABASE_URL=postgresql://...
-
 AI_READ_TIMEOUT_SECONDS=600
 AI_MAX_RETRIES=2
 AI_STREAM_PROGRESS_INTERVAL_SECONDS=5
+# 所有分析、提交、修复和父节点请求共享；学校接口 RPM=20 时建议设为 18。
+AI_REQUESTS_PER_MINUTE=18
 
 COLD_START_EMBEDDING_MODEL=BAAI/bge-m3
 COLD_START_EMBEDDING_DEVICE=
 COLD_START_EMBEDDING_BATCH_SIZE=8
 COLD_START_MAX_PARALLEL_REGIONS=6
 COLD_START_MAX_PARALLEL_COMPILATIONS=6
-COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS=6
+COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS=3
+COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS=6
+COLD_START_PERSPECTIVE_OBJECTS_PER_GROUP=40
+COLD_START_PERSPECTIVE_OBJECT_GROUP_CHARS=50000
+COLD_START_PERSPECTIVE_ASSERTIONS_PER_GROUP=12
+COLD_START_PERSPECTIVE_MAX_REVIEW_ROUNDS=5
 ```
 
 完整示例见仓库根目录的 `.env.example`。本地接口不要求鉴权时可以不设置
@@ -106,41 +119,9 @@ COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS=6
 模型请求固定使用 SSE 流式响应。运行期间，模型输入、正文、思考和原始流会持续写入
 本次运行目录；即使调用失败，已收到的内容也会保留。
 
-首次使用空数据库时，先从仓库根目录应用已经提交的 Prisma migration：
+## 运行全局勘探
 
-```bash
-pnpm prisma:deploy
-```
-
-可以先用 `pnpm exec prisma migrate status --schema prisma/schema.prisma` 检查状态。数据库表未
-完成迁移时，候选图生成不受影响，但最后的数据库导入会失败。
-
-## 运行
-
-从 `services/cold-start` 目录运行完整流程：
-
-```bash
-uv run cold-start run \
-  --pdf "../../docs/architecture/USTC_TTA_乒协生存手册.pdf" \
-  --output "../../.cold-start/runs"
-```
-
-该命令会依次执行全局勘探、内容叶子编译、父节点逐层整合和数据库导入。终端会显示
-每个阶段的独立耗时，最后显示从 PDF 解析开始计算的总耗时和
-`database-import.json` 所在目录。若区域树未冻结、叶子编译或父节点整合未全部成功，
-流程会在对应阶段停止并保留产物。
-
-如需覆盖叶子和父节点并发数：
-
-```bash
-uv run cold-start run \
-  --max-parallel-leaves 6 \
-  --max-parallel-parents 6 \
-  --pdf "../../docs/architecture/USTC_TTA_乒协生存手册.pdf" \
-  --output "../../.cold-start/runs"
-```
-
-以下命令仍可用于只运行和调试全局勘探：
+从 `services/cold-start` 目录运行：
 
 ```bash
 uv run cold-start explore \
@@ -157,99 +138,305 @@ uv run cold-start explore \
   --output "../../.cold-start/runs"
 ```
 
-完成勘探后，使用具体运行目录编译其中的内容叶子：
-
-```bash
-uv run cold-start compile-leaves \
-  --run "../../.cold-start/runs/20260729T100753Z-107ebc775f"
-```
-
-如需调整同时发出的叶子模型请求数量：
-
-```bash
-uv run cold-start compile-leaves \
-  --max-parallel-leaves 6 \
-  --run "../../.cold-start/runs/20260729T100753Z-107ebc775f"
-```
-
-叶子编译全部成功后，从叶子向根节点逐层整合。`--compilation` 指向包含
-`leaf-compilation.json` 的具体目录：
-
-```bash
-uv run cold-start integrate-parents \
-  --compilation "../../.cold-start/runs/20260729T100753Z-107ebc775f/leaf-compilations/<UTC 时间>"
-```
-
-如需调整同一深度父节点的并发数：
-
-```bash
-uv run cold-start integrate-parents \
-  --max-parallel-parents 6 \
-  --compilation "../../.cold-start/runs/20260729T100753Z-107ebc775f/leaf-compilations/<UTC 时间>"
-```
-
-已有完整父节点整合结果时，也可以单独写入数据库：
-
-```bash
-uv run cold-start import-db \
-  --integration "../../.cold-start/runs/<运行目录>/leaf-compilations/<编译目录>/parent-integrations/<整合目录>"
-```
-
-数据库导入要求根图状态为 `complete`，并读取 `DATABASE_URL`。所有节点和边以 `draft`
-状态写入；卡片、类型详情、关系、来源锚点及其引用在同一个事务中提交，任一步失败都会
-整体回滚。当前导入器按一次性冷启动设计，不会对重复运行做幂等更新；不要把同一份整合
-结果重复导入同一个数据库。
-
-## 运行产物
-
-每次运行会创建不可覆盖的 `<UTC 时间>-<PDF 哈希>/` 目录：
+主要产物包括：
 
 ```text
 model-streams/             完整提示词、原始 SSE、正文和思考
 global-exploration.json    全局勘探主快照
-global-exploration.md      供人工快速检查的概览
 document-context.md        后续模型使用的简短文档背景
 region-tree.json           完整区域树数据
 region-tree.md             供人工查看的区域树
 region-tree-checks.json    结构校准结果和来源解析警告
-region-tree-working.json   运行中的区域树检查点
 parsed-document.md         Docling 解析出的全文
 parsed-pages.json          分页原文
 parsed-blocks.json         带稳定 ID 的原文块
 ```
 
-每次叶子编译会在勘探运行目录下新建独立目录：
+来源解析警告只作为诊断报告保存，不参与区域树的 `stop` / `split` 判断，也不会使已经
+完成结构判断的区域树变为未冻结状态。单条警告格式错误时只忽略该条警告，不否决模型的
+结构判断。
 
-```text
-leaf-compilations/<UTC 时间>/
-  model-streams/                  叶子编译模型请求与流式响应
-  leaf-compilation-working.json   每完成一个叶子更新的检查点
-  leaf-compilation.json           完整结构化候选子图
-  leaf-compilation.md             供人工检查的可读报告
-  parent-integrations/<UTC 时间>/
-    model-streams/                    父节点路由和裁决的模型流
-    parent-integration-working.json   逐层整合检查点
-    parent-integration.json           根节点候选图和所有增量裁决
-    parent-integration.md             供人工检查的整合报告
-    database-import.json              数据库导入成功后生成的 ID 映射与提交结果
+## 完整基础编译
+
+已有冻结的区域树后，从所有内容来源节点一直编译到根节点：
+
+```bash
+uv run cold-start compile \
+  --run "../../.cold-start/runs/20260729T100753Z-107ebc775f"
 ```
 
-程序要求每个叶子的所有原文块至少被一项来源依据或未编译说明覆盖。单个叶子失败不会
-中断其他叶子，最终状态会标记为 `partial`，成功结果和失败原因都会保留。
+如果完整编译在某个来源或模型调用处中断，可继续同一个未完成目录。程序会校验并复用
+`sources/*/source-compilation.json`，只重新编译尚未成功落盘的来源，然后从父节点整合阶段
+继续；已有模型流文件不会被覆盖：
+
+```bash
+uv run cold-start compile \
+  --run "../../.cold-start/runs/20260729T100753Z-107ebc775f" \
+  --resume "../../.cold-start/runs/20260729T100753Z-107ebc775f/basic-compilations/<未完成目录>-full"
+```
+
+也可以临时覆盖并发数量：
+
+```bash
+uv run cold-start compile \
+  --run "../../.cold-start/runs/20260729T100753Z-107ebc775f" \
+  --max-parallel-sources 8 \
+  --max-parallel-parents 4
+```
+
+处理过程分为三个阶段：
+
+1. 并行编译所有拥有 `content_source` 自有原文的叶子或父节点。第一次调用启用思考，
+   直接输出完整 Object、Assertion、Evidence 正文 JSON；第二次调用再次启用思考，逐块
+   对照原文进行覆盖复核，并输出完整替代 JSON。Assertion 按可独立判断真假的命题原子化，
+   所有已经提取为 Object、且在命题中实际充当参与者的对象指认都写成对象引用模板；覆盖
+   复核会专门检查不能因已有一个 Object 引用而漏掉同一命题中的其他已有 Object。标题本身
+   不生成文档结构 Assertion，但标题若命名现实活动、流程或工作事项，且正文以“常规流程”
+   “特殊审批”等方式省略主语，基础提取必须建立该标题 Object，并把它补回正文 Assertion。
+   覆盖复核还会检查命题的核心工作锚点，不能用审批部门、负责人、地点或举例对象代替真正
+   被描述的流程 Object。
+2. 按深度从叶子向根节点整合。父模型只提交对象合并、重复叙述合并和必要纠正，不重新
+   输出整包，因此不会因为父节点输出遗漏而删除孩子内容，也不会建立 Relation。父节点
+   还会收到程序按 Object label/aliases 列出的可能漏标引用候选，在能够消除同名歧义时通过
+   `assertion_revisions` 修正原模板；这仍是基础 Assertion 纠正，不是业务连线。父节点使用
+   一次启用思考的正文 JSON 调用。基础提取、覆盖复核和父节点整合的每次提交若校验
+   失败，最多允许连续进行 3 次最小协议修复；JSON 语法错误和字段协议错误都使用同一上限，
+   即使连续发生同类错误也会继续尝试。所有修复调用都显式启用思考。
+3. 每个父节点完成上述已有项整合后，再进入独立的缺失 Object 恢复。第一个模型只报告
+   `MissingObjectCandidate`，不能修改基础包；第二个模型只对候选做 Evidence 复查。只有
+   `accept` 候选才由程序创建父节点命名空间中的新 Object，并把 Assertion 中与规范名称
+   完全相同的字面值原位替换为对象引用。程序会校验候选 Assertion、Evidence、绑定位置和
+   ID，且要求替换前后的可见 Assertion 正文完全一致。reject/defer 不改变基础包。每个
+   父节点的发现、复查和新建 ID 都单独写入审计文件。
+
+完整运行目录：
+
+```text
+basic-compilations/<UTC 时间>-full/
+  model-streams/             所有模型请求、原始流、正文和思考
+  sources/<节点 ID>/         每个 content_source 节点的提取结果与逐块覆盖报告
+  nodes/<节点 ID>.json       每个节点完成整合后的基础记忆包
+  nodes/<节点 ID>.missing-objects.json  缺失 Object 候选、复查与确定性写入记录
+  working.json               运行中的完成进度；中断时仍可检查已有节点
+  root-package.json          根节点最终 Object、Assertion、Evidence 包
+  basic-compilation.json     完整运行快照、节点统计和根包
+  basic-compilation.md       供人工检查的整树汇总和根包内容
+```
+
+## 调试单个叶子
+
+先从 `region-tree.md` 中选定一个 `content_source` 叶子，再运行：
+
+```bash
+uv run cold-start compile-leaf \
+  --run "../../.cold-start/runs/20260729T100753Z-107ebc775f" \
+  --leaf-id "region-0063"
+```
+
+这个命令只用于局部调试。第一次模型调用会收到文档背景、从根节点到该叶子的简短介绍，
+以及该叶子的完整带编号原文；模型启用思考并在正文输出完整 Object、Assertion、Evidence
+JSON。第二次调用重新逐块比较原文与第一次结果，贯彻 Assertion 原子化标准并输出完整
+替代 JSON。覆盖复核默认保留第一次结果的 ID 和对象边界，只修正原文能够明确证明的
+遗漏或错误。两个阶段都不分析 Relation；同样使用上述最多三次且全部开启思考的协议
+修复规则。
+
+每次运行创建独立产物目录：
+
+```text
+basic-compilations/<UTC 时间>-<叶子 ID>/
+  model-streams/             模型请求、原始流、正文和思考
+  basic-compilation.json     完整结构化基础记忆包
+  basic-compilation.md       对象、叙述、依据及原文逐块覆盖报告
+```
+
+## 映射活动运营视角
+
+第一轮修整同时加入了新的通用业务视角协议，但尚未替换下面的 v10 运行器。新协议把
+Activity、Workflow、SubWorkflow（仍使用 Workflow 节点种类）、WorkStep 和支撑对象统一为
+递归 `BusinessNode`，用 `BusinessTopologyEdge` 表达 uses / contains / precedes /
+depends_on。`BusinessDimension.applies_to` 可指向任意节点种类及动态 `role_key`；具体值统一
+写入 `DimensionAssignment.subject_node_id`，不再使用 Activity 专属赋值结构。confirmed
+维度对每个适用节点必须显式给出 known、unknown、not_applicable 或 conflicting。该协议位于
+`activity_view/perspective_schema.py`，当前只作为下一版运行流程的数据边界，现有
+`map-activity` 仍产生 v10 草稿。
+
+完整基础编译通过后，把其中的 Object、Assertion、Evidence 映射为隔离的
+`activity_operations` 草稿：
+
+```bash
+uv run cold-start map-activity \
+  --compilation "../../.cold-start/runs/20260729T100753Z-107ebc775f/basic-compilations/20260803T072128342102Z-full"
+```
+
+这个阶段不重新读取整份 PDF，也不覆盖输入的基础记忆包。程序先读取全文 Object
+紧凑索引，形成一份全局活动运营语义边界；再把共享 Object 的 Assertion
+组成确定性连通分量；互不连通的分量不再为了节省调用而混装，超出单组上限的分量再按原文
+顺序分批处理。默认每组最多 12 条 Assertion，区域树只为当前分量补充共同父级上下文。
+
+处理先完成一次局部高召回编译：从全文紧凑索引识别材料板块，再逐条把 Assertion 投影为
+Attribute、卡片关系、引用复查或省略；随后按已投影 Relation 的连通分量组织候选 Object，
+无关系 Object 只与同一来源区域中的对象合组。每组同时受 Object 数量和展开后字符数限制，
+避免把行政、财务、场地和物资等跨度过大的判断塞进同一次调用。分类阶段读取候选 Object 的
+全部相关 Assertion，但不再读取或保护前一阶段的临时投影，只判断 `view_card`、
+`support_reference`、`outside_view` 三态和主要角色。
+
+局部结果之后进入循环：区域树父节点自底向上读取自己的 introduction、直接孩子摘要和孩子
+已有投影，只合成有结构依据的跨孩子关系；四个全局审查器再分别从 `activity_flow`、
+`guidance`、`staffing`、`organization_context` 检查完整紧凑 Object—Assertion 图和当前
+草稿；程序合并差异后，只重投影被点名的 Assertion，再重新做父节点关系恢复和全局审查。没有
+新变更时提前收敛；后续轮次只重算受影响区域到根节点之间的父节点；相同问题在同一状态
+重复时转为未解决问题；安全上限默认 5 轮，可通过
+`COLD_START_PERSPECTIVE_MAX_REVIEW_ROUNDS` 调整。
+
+活动运营边界同时包含运营主干和运营指导。后者不要求能立刻执行：预算边界、信息准确性、
+舆论红线、渠道选择经验等，只要会稳定改变具体活动判断，就可以作为 Rule、Principle、
+Practice 或 Insight 保留；纯组织愿景、历史评价和治理哲学仍留在基础记忆或其他视角。
+
+四条线路是固定准入合同，不是宽泛主题标签：
+
+```text
+activity_flow          活动 → 活动特征 → Workflow；Workflow 递归包含子 Workflow/WorkStep
+guidance               Rule / Principle / Practice / Insight 性质的 Assertion
+staffing               Person → Role → 负责的活动或工作
+organization_context   直接改变活动授权、资源、人员容量或执行能力的时期背景
+```
+
+只有 Object 能形成卡片。Fact、Rule、Principle、Practice 和 Insight 是 Assertion 的语义性质，
+不会再成为与 Object 平级的节点。全局规划按来源区域组织 Object，只用每个 Object 分散抽样的
+最多两条 Assertion 识别
+语义板块，不作最终去留；局部语义校正仍读取候选 Object 的完整相关 Assertion 集合。每个
+候选 Object 必须被分为：
+
+```text
+view_card          本视角中可独立检索和连接的卡片
+support_reference  可承载保留 Attribute 或作为必要指代，但不成卡
+outside_view       留在基础记忆或其他业务视角
+```
+
+`view_card` 再从现有角色中选择稳定主要角色。除 organization、activity、
+activity_trait、workflow、work_step、person、role、period 外，支撑对象可使用 system、
+funding_scheme、communication_channel、standard、document、venue、resource，避免把二课、
+经费规范、公众号或场地区域硬塞成活动特征或工作步骤。
+
+非联系性 Assertion 整体成为以 Object 为主体的 Attribute，不再强制填写固定属性槽位。主体
+可以是 `view_card`，也可以是 `support_reference`；后者保留可检索的运营知识但不制造宽泛
+业务卡。联系性 Assertion 整体成为 Relation：Relation 端点必须是 `view_card`，并保留原始
+Assertion、时间、Evidence 和不确定性，只额外记录四条线路中的结构模式及参与角色。
+
+Relation 模式与线路固定对应：
+
+```text
+activity_flow
+  classification       对象归入活动或工作分类
+  workflow_use         活动或活动特征使用 Workflow
+  composition          Workflow 包含子 Workflow 或 WorkStep
+  sequence             工作位置之间的明确先后
+  dependency           工作位置之间的明确依赖
+
+guidance
+  guidance_application 指导 Assertion 的作用位置与适用范围
+
+staffing
+  role_holding         Person 担任 Role
+  responsibility       Person/Role 负责活动或工作
+  participation        Person/Role 参与活动或工作
+
+organization_context
+  contextualization    Organization/Period 为对象提供有来源的背景
+```
+
+Attribute 主体和每个 Relation 参与者都必须由基础 Assertion 明确引用。Attribute 主体允许
+是 `view_card` 或 `support_reference`；Relation 的所有端点仍必须是 `view_card`。因此像
+“经费管理建立在预算刚性与收支两条线之上”这样的运营原则可以进入 guidance，但宽泛的
+“经费管理”本身不必成为业务卡。保留 Assertion 中其他被引用但不成卡的 Object 也自动成为
+`support_reference`。省略和视角外判断只影响活动运营草稿，基础 Object、Assertion 和
+Evidence 仍完整保留。
+
+四线路审查对父级关系候选先显式输出 `accept`、`reject` 或 `unresolved`；只有主线路审查
+接受的候选才进入正式图。对基础 Assertion 仍只输出 `add_lane`、`remove_lane`、`reproject`
+三类最小差异。定向修复只能处理被点名的基础 Assertion；Attribute 主体允许是
+`view_card` 或 `support_reference`，Relation 端点仍必须全部为 `view_card`。证据不足或固定对象边界无法安全修复
+的问题进入未解决列表，不会靠循环猜测。
+
+父节点不是自由知识合成器，只恢复被连续原文切分隐藏、但来源已经表达的跨区域关系。候选
+使用 `derivation_kind=parent_recovery`，同时保留证明类型、桥接 Evidence、支撑 Assertion
+和来源区域节点。证明类型仅允许原文直接陈述、结构恢复和条件逻辑的必要规范化；共同数据、
+可能帮助、同章共现、常识推断或改革设想都不能形成正式关系。结构恢复仅允许
+classification、workflow_use、composition；dependency 必须有明确前置、必要条件或“否则
+无法”的 Evidence。
+
+每种 Relation 还具有程序级 Object 角色签名。例如 composition 的 whole 必须是 Workflow，
+part 只能是 Workflow/WorkStep；Organization 不能为了连接活动而伪装成 whole。若局部关系
+与 Object 真实角色冲突，程序保持 Object 角色并只重投影受影响的 Assertion。父级候选关系
+正文由程序按关系模式和对象名称生成，模型不能自由补写因果解释。父级恢复会读取候选
+Assertion 的 Evidence 原文和区域树已有 source_issues；证明触及来源冲突时只能报告问题。
+父级 `direct_statement` 仍要求至少一条 Assertion 同时引用全部端点；
+`necessary_normalization` 允许多条原子 Assertion 联合覆盖端点，但 Evidence 必须以“必须”、
+“否则无法”或“只有……才”等条件逻辑直接证明必要关系，不能把分别介绍两个 Object 的材料
+拼成联系。
+
+模型只判断 Attribute 的主要归属，不负责决定其他引用 Object 是否保留，也不能为了让次要
+Object 成卡而制造 Relation。基础 Assertion 的 `mode=record/viewpoint` 描述来源陈述姿态；
+活动视角的 `semantic_kind=fact/rule/principle/practice/insight` 描述业务语义，两者相互独立。
+
+业务投影保留一个受限的异常分支：程序只把 Assertion 模板中按名称明示、但尚未引用的已有
+Object 列为候选；只有模型判断缺少候选引用会阻碍当前 Attribute 或 Relation 时，才能请求
+`reference_review_requests`。随后独立复查只读取该 Assertion 的 Evidence 原文，逐个确认、
+拒绝或标记存疑。确认后只允许把原模板中的名称换成 Object 占位符，不得改变命题正文，并只
+重投影受影响的 Assertion；确认新增的 Object 会随该投影自动形成卡片。拒绝或存疑不会修改
+基础内容，也不得继续循环复查。
+
+确认的修订作为本次运行的可审计 amendment 使用，使后续投影能够引用正确 Object；程序不会
+悄悄覆盖输入的 `basic-compilation.json`。后续若要正式回写基础层，可以由人工审核 amendment
+后进入专门发布流程。
+
+活动运营产物只属于当前视角，并固定保持 `draft`：
+
+```text
+activity-perspectives/<UTC 时间>-draft/
+  model-streams/             全部提示词、正文、思考与工具调用
+  group-checkpoints/         Assertion、Object 与成功父节点结果的独立检查点
+  semantic-boundary.json     全局语义边界规划
+  activity-operations.json   完整视角草稿
+  activity-operations.md     按对象卡整理的人类可读报告
+  object-cards.json          由进入视角的 Object 形成的唯一卡片
+  reference-review-results.json
+                             按需 Evidence 复查的确认、拒绝与存疑结果
+  assertion-reference-amendments.json
+                             本次运行确认并采用的基础 Assertion 引用修订
+  attribute-projections.json 以 view_card/support_reference Object 为主体的 Assertion
+  relation-projections.json  作为对象卡关系的 Assertion
+  parent-recovery.json       父节点关系恢复与线路准入发现的未决问题
+  review-rounds.json         每轮四线路差异、收敛状态和未解决问题
+  omissions.json             本视角的支撑引用、视角外 Object 与省略 Assertion ID
+  working.json               全局边界、Assertion 投影与对象语义校正阶段检查点
+```
+
+模型或接口失败后，可继续同一草稿并复用已经校验的 Assertion、Object、定向修复、父节点
+恢复和单线路全局复核检查点；输入发生变化的检查点会自动失效。单个父节点连续协议失败会
+记录为 `synthesis_failure` 并继续处理其余节点。单条全局线路复核失败时，该线路负责的父级
+候选不会准入，失败会作为未决问题写入草稿，不再中止整份结果。父节点只读取跨直接孩子或
+父节点自有的 Assertion 候选；全局复核只读取程序为当前线路筛出的高召回候选子图：
+
+```bash
+uv run cold-start map-activity \
+  --compilation "../../.cold-start/runs/<运行目录>/basic-compilations/<完整编译目录>" \
+  --resume "../../.cold-start/runs/<运行目录>/basic-compilations/<完整编译目录>/activity-perspectives/<未完成草稿>"
+```
+
+模型流同时保存逐事件的 `*.sse.jsonl`。若思考或正文连续三次逐字重复同一长片段，程序会中止
+当前单次请求、保留原始 SSE 并让该分组明确失败；不会把截断内容当成成功结果。
+
+关系的 `derivation_kind` 区分原文直接支持的 `direct_source` 与把充分原文规范化为业务谓词
+的 `perspective_interpretation`。当前版本先生成可审查文件草稿，尚未写入或发布数据库视角。
 
 ## 当前边界
 
-当前实现只处理一份 PDF，目标是先验证《乒协生存手册》的端到端编译与入库效果。暂不处理：
+当前只处理一份 PDF，并先验证《乒协生存手册》的整树基础记忆提取质量。暂不处理：
 
 - 多文件组织、跨文件消歧和版本关系；
 - 原始文件层映射；
-- SearchCard、向量索引、人工审核界面和自动发布。
-
-叶子编译明确不把区域树节点等同于知识卡片。一张较粗的叶子可以生成多张原子卡片，
-也可以在没有长期记忆时只返回未编译说明。父节点整合采用“全量紧凑目录、候选局部
-展开”：路由调用只确定需要检查的范围，裁决调用只输出必要的增量操作，未提及的卡片
-和边由程序继承。数据库导入只接收状态为 `complete` 的根图，并保留候选 ID 到数据库
-UUID 的映射，方便回查编译结果。
+- 活动运营视角的数据库写入、SearchCard、人工审核界面和自动发布。
 
 ## 验证
 
@@ -257,5 +444,3 @@ UUID 的映射，方便回查编译结果。
 uv run ruff check .
 uv run pytest
 ```
-
-单元测试使用假模型，不会产生外部模型调用。

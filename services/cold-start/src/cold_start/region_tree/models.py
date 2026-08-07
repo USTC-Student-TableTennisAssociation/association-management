@@ -30,12 +30,12 @@ SourceRole = Literal["content_source", "structural_context"]
 
 
 class SourceIssue(StrictModel):
-    block_ids: list[BlockId] = Field(min_length=1, max_length=8)
+    block_ids: list[BlockId] = Field(min_length=1)
     reason: str = Field(min_length=1, max_length=500)
 
 
 class DecisionWithSourceIssues(StrictModel):
-    source_issues: list[SourceIssue] = Field(default_factory=list, max_length=4)
+    source_issues: list[SourceIssue] = Field(default_factory=list)
 
 
 class StopDecision(DecisionWithSourceIssues):

@@ -21,7 +21,12 @@ from cold_start.region_tree.prompts import (
     REGION_TREE_SYSTEM_PROMPT,
     STRUCTURE_REPAIR_SYSTEM_PROMPT,
 )
-from cold_start.region_tree.runtime import BlockIndex, RegionRuntime, RegionTree
+from cold_start.region_tree.runtime import (
+    BlockIndex,
+    RegionRuntime,
+    RegionTree,
+    _parse_region,
+)
 
 
 class FakeEmbedder:
@@ -386,6 +391,59 @@ def test_source_role_is_semantic_instead_of_inferred_from_block_type() -> None:
     snapshot = tree.snapshot()
     assert snapshot.status == "frozen"
     assert snapshot.structural_context_node_ids == ["region-0001"]
+
+
+def test_source_diagnostics_never_block_a_valid_tree_decision() -> None:
+    raw_issues = [
+        {
+            "block_ids": [f"p{9000 + index:04d}-b0001"],
+            "reason": f"第 {index} 条来源解析诊断。",
+        }
+        for index in range(1, 6)
+    ]
+    raw_issues.extend(
+        [
+            {"block_ids": [], "reason": "缺少定位的坏诊断。"},
+            {"block_ids": ["not-a-block"], "reason": "块编号格式错误。"},
+        ]
+    )
+    decision = _parse_region(
+        json.dumps(
+            {
+                "action": "stop",
+                "owned_source_role": "content_source",
+                "introduction": "这是一段完整内容。",
+                "reason": "无需继续切分。",
+                "source_issues": raw_issues,
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    tree = RegionTree(BlockIndex(blocks()), max_depth=5)
+    tree.initialize(title="测试手册", decision=decision)
+    snapshot = tree.snapshot()
+
+    assert snapshot.status == "frozen"
+    assert len(snapshot.source_issues) == 5
+    assert snapshot.source_issues[0].block_ids == ["p9001-b0001"]
+
+
+def test_source_diagnostic_sanitizer_preserves_parent_partition_error() -> None:
+    decision = _parse_region(
+        json.dumps(
+            {
+                "action": "parent_partition_error",
+                "problem_kind": "missing_intermediate_region",
+                "related_node_ids": ["region-0002", "region-0003"],
+                "reason": "两个节点需要一个共同父区域。",
+                "source_issues": [{"unexpected": "诊断字段不能破坏主判断"}],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert isinstance(decision, ParentPartitionError)
 
 
 def test_structural_heading_can_be_owned_by_branch_without_becoming_leaf() -> None:

@@ -52,3 +52,7 @@ pnpm dev
 ```
 
 当前第一版 AI 入口使用 OpenAI-compatible 的 `/chat/completions` 接口。前端聊天记录暂存在浏览器页面状态中，刷新后不会保留。
+
+uv run cold-start compile \
+  --run "../../.cold-start/runs/20260807T082737Z-107ebc775f" \
+  --resume "../../.cold-start/runs/20260807T082737Z-107ebc775f/basic-compilations/20260807T092658760085Z-full"

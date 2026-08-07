@@ -7,7 +7,9 @@ import pytest
 from cold_start.config import ModelSettings
 from cold_start.llm.openai_compatible import (
     ModelProtocolError,
+    ModelRepetitionError,
     OpenAICompatibleChatModel,
+    _RequestRateLimiter,
 )
 
 
@@ -17,6 +19,19 @@ class RecordingProgressReporter:
 
     def report(self, stage: str, message: str) -> None:
         self.events.append((stage, message))
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.delays: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, delay: float) -> None:
+        self.delays.append(delay)
+        self.now += delay
 
 
 class BrokenSseStream(httpx.AsyncByteStream):
@@ -33,6 +48,28 @@ class BrokenSseStream(httpx.AsyncByteStream):
 def sse_event(payload: object) -> str:
     data = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
     return f"data: {data}\n\n"
+
+
+@pytest.mark.asyncio
+async def test_global_rate_limiter_spaces_every_request_attempt() -> None:
+    progress = RecordingProgressReporter()
+    clock = FakeClock()
+    limiter = _RequestRateLimiter(
+        20,
+        progress=progress,
+        clock=clock,
+        sleep=clock.sleep,
+    )
+
+    await limiter.acquire("请求一")
+    await limiter.acquire("请求二")
+    await limiter.acquire("重试也计数")
+
+    assert clock.delays == [3.0, 3.0]
+    assert progress.events == [
+        ("请求二", "RPM 限速排队：等待 3.0 秒后发起请求"),
+        ("重试也计数", "RPM 限速排队：等待 3.0 秒后发起请求"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -102,6 +139,9 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
     assert "勘探结果" in next(tmp_path.glob("*.content.partial.txt")).read_text(
         encoding="utf-8"
     )
+    raw_events = next(tmp_path.glob("*.sse.jsonl")).read_text(encoding="utf-8")
+    assert '"kind": "comment"' in raw_events
+    assert "[DONE]" in raw_events
     request_trace = json.loads(next(tmp_path.glob("*.request.json")).read_text())
     assert request_trace["payload"]["messages"] == [
         {"role": "system", "content": "系统"},
@@ -109,6 +149,36 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
     ]
     assert "Authorization" not in request_trace
     assert "secret" not in json.dumps(request_trace)
+
+
+@pytest.mark.asyncio
+async def test_adapter_continues_trace_sequence_in_existing_directory(tmp_path) -> None:
+    (tmp_path / "085-旧请求.request.json").write_text("{}", encoding="utf-8")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text=(
+                sse_event({"choices": [{"delta": {"content": "完成"}}]})
+                + sse_event("[DONE]")
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        model = OpenAICompatibleChatModel(
+            ModelSettings(
+                model="test-model",
+                api_base_url="http://model.test/v1",
+                api_key=None,
+            ),
+            client=client,
+            trace_directory=tmp_path,
+        )
+        await model.complete(system_prompt="系统", user_prompt="用户", request_label="恢复")
+
+    assert (tmp_path / "086-恢复.request.json").is_file()
 
 
 @pytest.mark.asyncio
@@ -175,7 +245,9 @@ async def test_adapter_keeps_partial_trace_when_remote_stream_breaks(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages() -> None:
+async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages(
+    tmp_path,
+) -> None:
     request_bodies: list[dict[str, object]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -266,8 +338,10 @@ async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages() -> 
                 model="test-model",
                 api_base_url="http://model.test/v1",
                 api_key=None,
+                requests_per_minute=60_000,
             ),
             client=client,
+            trace_directory=tmp_path,
         )
         first = await model.complete_turn(
             messages=[{"role": "user", "content": "查找二课"}],
@@ -315,6 +389,14 @@ async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages() -> 
         "type": "enabled",
         "clear_thinking": False,
     }
+    tool_trace = json.loads(next(tmp_path.glob("*.tool-calls.json")).read_text())
+    assert tool_trace == [
+        {
+            "id": "call_001",
+            "name": "search_document",
+            "arguments": '{"query":"二课"}',
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -371,3 +453,74 @@ async def test_adapter_returns_reasoning_only_turn_without_transport_retry() -> 
     assert requests == 1
     assert turn.content == ""
     assert turn.reasoning_content == "已经完成判断。"
+
+
+@pytest.mark.asyncio
+async def test_adapter_aborts_exact_repetition_and_keeps_raw_sse(tmp_path) -> None:
+    repeated_unit = "模型在同一个选择之间来回判断，既没有增加新证据，也没有推进到正式答案。" * 6
+    stream_body = "".join(
+        sse_event({"choices": [{"delta": {"reasoning_content": repeated_unit}}]})
+        for _ in range(6)
+    ) + sse_event("[DONE]")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text=stream_body,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        model = OpenAICompatibleChatModel(
+            ModelSettings(
+                model="test-model",
+                api_base_url="http://model.test/v1",
+                api_key=None,
+                max_retries=1,
+            ),
+            client=client,
+            trace_directory=tmp_path,
+        )
+        with pytest.raises(ModelRepetitionError, match="连续重复同一片段"):
+            await model.complete_turn(
+                messages=[{"role": "user", "content": "输出 JSON"}],
+                thinking="enabled",
+            )
+
+    assert next(tmp_path.glob("*.sse.jsonl")).stat().st_size > 0
+    assert next(tmp_path.glob("*.reasoning.partial.txt")).stat().st_size > 0
+
+
+@pytest.mark.asyncio
+async def test_adapter_allows_repeated_structured_content() -> None:
+    repeated_item = '{"relation_pattern":"role_holding","lane_tags":["staffing"]}'
+    stream_body = "".join(
+        sse_event({"choices": [{"delta": {"content": repeated_item}}]})
+        for _ in range(6)
+    ) + sse_event("[DONE]")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text=stream_body,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        model = OpenAICompatibleChatModel(
+            ModelSettings(
+                model="test-model",
+                api_base_url="http://model.test/v1",
+                api_key=None,
+                max_retries=1,
+            ),
+            client=client,
+        )
+        turn = await model.complete_turn(
+            messages=[{"role": "user", "content": "输出关系 JSON"}],
+            thinking="enabled",
+        )
+
+    assert turn.content == repeated_item * 6
