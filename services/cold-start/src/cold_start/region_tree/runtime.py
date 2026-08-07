@@ -175,11 +175,6 @@ class BlockIndex:
         self.validate_owned_role(owned, decision.owned_source_role)
         return owned
 
-    def validate_source_issues(self, issues: list[SourceIssue]) -> None:
-        for issue in issues:
-            for block_id in issue.block_ids:
-                self.position(block_id)
-
     def _segment(self, left: int, right: int) -> SourceSegment:
         return SourceSegment(
             start_block_id=self.blocks[left].block_id,
@@ -549,7 +544,6 @@ class RegionTree:
         self.issues.append(issue)
 
     def _record_source_issues(self, issues: list[SourceIssue]) -> None:
-        self.index.validate_source_issues(issues)
         for issue in issues:
             key = tuple(issue.block_ids)
             if all(tuple(item.block_ids) != key for item in self.source_issues):
@@ -946,7 +940,6 @@ class RegionRuntime:
         reconsidering: bool = False,
     ) -> None:
         if isinstance(decision, (StopDecision, SplitDecision)):
-            self.index.validate_source_issues(decision.source_issues)
             self.index.resolve_ownership(
                 node.start_block_id,
                 node.end_block_id,
@@ -962,7 +955,6 @@ class RegionRuntime:
         node: RegionNode,
         decision: RepairDecision,
     ) -> None:
-        self.index.validate_source_issues(decision.source_issues)
         if isinstance(decision, (StopDecision, SplitDecision)):
             self.index.resolve_ownership(
                 node.start_block_id,
@@ -1047,7 +1039,6 @@ async def decide_root(
     def validate(decision: RegionDecision) -> None:
         if isinstance(decision, ParentPartitionError):
             raise ValueError("根节点不能报告父分割错误")
-        index.validate_source_issues(decision.source_issues)
         index.resolve_ownership(
             blocks[0].block_id,
             blocks[-1].block_id,
@@ -1175,11 +1166,37 @@ def _json_object(raw: str) -> str:
 
 
 def _parse_region(raw: str) -> RegionDecision:
-    return RegionDecisionOutput.model_validate_json(_json_object(raw)).root
+    return RegionDecisionOutput.model_validate(_decision_payload(raw)).root
 
 
 def _parse_repair(raw: str) -> RepairDecision:
-    return RepairDecisionOutput.model_validate_json(_json_object(raw)).root
+    return RepairDecisionOutput.model_validate(_decision_payload(raw)).root
+
+
+def _decision_payload(raw: str) -> dict[str, Any]:
+    """解析主判断，并把来源诊断限制为独立、非阻塞的附属记录。"""
+
+    payload = json.loads(_json_object(raw))
+    if not isinstance(payload, dict):
+        raise ValueError("模型输出的 JSON 顶层必须是对象")
+
+    if payload.get("action") == "parent_partition_error":
+        payload.pop("source_issues", None)
+        return payload
+    if "source_issues" not in payload:
+        return payload
+
+    raw_issues = payload.get("source_issues", [])
+    valid_issues: list[dict[str, Any]] = []
+    if isinstance(raw_issues, list):
+        for raw_issue in raw_issues:
+            try:
+                issue = SourceIssue.model_validate(raw_issue)
+            except (TypeError, ValidationError):
+                continue
+            valid_issues.append(issue.model_dump())
+    payload["source_issues"] = valid_issues
+    return payload
 
 
 def _tree_decision(decision: RegionDecision) -> StopDecision | SplitDecision:

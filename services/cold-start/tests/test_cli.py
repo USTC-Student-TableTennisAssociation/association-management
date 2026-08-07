@@ -117,6 +117,7 @@ async def test_cli_auto_loads_env_and_prints_detailed_progress(
             env_file=None,
             read_timeout_seconds=None,
             max_model_retries=None,
+            requests_per_minute=None,
             show_model_stream=False,
             embedding_model="fake-bge-m3",
         )
@@ -131,3 +132,43 @@ async def test_cli_auto_loads_env_and_prints_detailed_progress(
     assert "[汇总] 区域树状态 frozen" in output
     assert "[完成] 全局勘探产物" in output
     assert list((tmp_path / "runs").glob("*/global-exploration.json"))
+
+
+def test_cli_exposes_full_basic_compilation_command() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "compile",
+            "--run",
+            "run-directory",
+            "--max-parallel-sources",
+            "8",
+            "--max-parallel-parents",
+            "4",
+            "--resume",
+            "existing-full-run",
+            "--requests-per-minute",
+            "18",
+        ]
+    )
+
+    assert args.command == "compile"
+    assert args.max_parallel_sources == 8
+    assert args.max_parallel_parents == 4
+    assert args.resume == Path("existing-full-run")
+    assert args.requests_per_minute == 18
+
+
+def test_cli_exposes_activity_operations_mapping_command() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "map-activity",
+            "--compilation",
+            "basic-compilation-directory",
+            "--max-parallel-groups",
+            "8",
+        ]
+    )
+
+    assert args.command == "map-activity"
+    assert args.compilation == Path("basic-compilation-directory")
+    assert args.max_parallel_groups == 8

@@ -19,6 +19,7 @@ class ModelSettings:
     pool_timeout_seconds: float = 60.0
     stream_progress_interval_seconds: float = 5.0
     max_retries: int = 2
+    requests_per_minute: int = 18
 
     @classmethod
     def from_environment(
@@ -29,6 +30,7 @@ class ModelSettings:
         api_key: str | None = None,
         read_timeout_seconds: float | None = None,
         max_retries: int | None = None,
+        requests_per_minute: int | None = None,
     ) -> ModelSettings:
         resolved_model = model or os.getenv("AI_MODEL")
         resolved_base_url = api_base_url or os.getenv("AI_API_BASE_URL")
@@ -56,6 +58,11 @@ class ModelSettings:
                 explicit=max_retries,
                 default=2,
             ),
+            requests_per_minute=_environment_int(
+                "AI_REQUESTS_PER_MINUTE",
+                explicit=requests_per_minute,
+                default=18,
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -66,6 +73,7 @@ class ModelSettings:
             "pool_timeout_seconds": self.pool_timeout_seconds,
             "stream_progress_interval_seconds": self.stream_progress_interval_seconds,
             "max_retries": self.max_retries,
+            "requests_per_minute": self.requests_per_minute,
         }
         for name, value in positive_values.items():
             if value <= 0:
@@ -99,7 +107,7 @@ class ExplorationSettings:
             ),
             embedding_model=embedding_model
             or os.getenv("COLD_START_EMBEDDING_MODEL")
-            or "BAAI/bge-m3"
+            or "BAAI/bge-m3",
         )
 
     def __post_init__(self) -> None:
@@ -117,6 +125,96 @@ class ExplorationSettings:
                 raise ValueError(f"{name} 必须大于 0")
         if not self.embedding_model.strip():
             raise ValueError("embedding_model 不能为空")
+
+
+@dataclass(frozen=True)
+class CompilationSettings:
+    """整棵区域树基础编译的并发边界。"""
+
+    max_parallel_sources: int = 6
+    max_parallel_parents: int = 3
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        max_parallel_sources: int | None = None,
+        max_parallel_parents: int | None = None,
+    ) -> CompilationSettings:
+        return cls(
+            max_parallel_sources=_environment_int(
+                "COLD_START_MAX_PARALLEL_COMPILATIONS",
+                explicit=max_parallel_sources,
+                default=6,
+            ),
+            max_parallel_parents=_environment_int(
+                "COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS",
+                explicit=max_parallel_parents,
+                default=3,
+            ),
+        )
+
+    def __post_init__(self) -> None:
+        if self.max_parallel_sources < 1:
+            raise ValueError("max_parallel_sources 必须大于 0")
+        if self.max_parallel_parents < 1:
+            raise ValueError("max_parallel_parents 必须大于 0")
+
+
+@dataclass(frozen=True)
+class ActivityViewSettings:
+    """活动运营视角的父级语义分组与并发边界。"""
+
+    max_parallel_groups: int = 6
+    max_objects_per_group: int = 40
+    max_object_group_chars: int = 50_000
+    max_assertions_per_group: int = 12
+    max_review_rounds: int = 5
+
+    @classmethod
+    def from_environment(
+        cls,
+        *,
+        max_parallel_groups: int | None = None,
+    ) -> ActivityViewSettings:
+        return cls(
+            max_parallel_groups=_environment_int(
+                "COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS",
+                explicit=max_parallel_groups,
+                default=6,
+            ),
+            max_objects_per_group=_environment_int(
+                "COLD_START_PERSPECTIVE_OBJECTS_PER_GROUP",
+                explicit=None,
+                default=40,
+            ),
+            max_object_group_chars=_environment_int(
+                "COLD_START_PERSPECTIVE_OBJECT_GROUP_CHARS",
+                explicit=None,
+                default=50_000,
+            ),
+            max_assertions_per_group=_environment_int(
+                "COLD_START_PERSPECTIVE_ASSERTIONS_PER_GROUP",
+                explicit=None,
+                default=12,
+            ),
+            max_review_rounds=_environment_int(
+                "COLD_START_PERSPECTIVE_MAX_REVIEW_ROUNDS",
+                explicit=None,
+                default=5,
+            ),
+        )
+
+    def __post_init__(self) -> None:
+        positive = {
+            "max_parallel_groups": self.max_parallel_groups,
+            "max_objects_per_group": self.max_objects_per_group,
+            "max_object_group_chars": self.max_object_group_chars,
+            "max_assertions_per_group": self.max_assertions_per_group,
+            "max_review_rounds": self.max_review_rounds,
+        }
+        if any(value < 1 for value in positive.values()):
+            raise ValueError("活动运营视角的并发和分组设置必须大于 0")
 
 
 def _environment_float(

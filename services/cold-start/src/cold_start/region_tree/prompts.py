@@ -51,7 +51,8 @@ REGION_TREE_SYSTEM_PROMPT = f"""
 
 PDF 解析可能产生错误编号、跨页残片，或者把两节文字混进同一个 block。此类问题不能
 靠区域树修复：将相关 block_id 和原因写入 source_issues，同时继续返回语义上正确的
-stop 或 split。单个 block 内混有别节文字时，不能返回 parent_partition_error。
+stop 或 split。source_issues 只是附属诊断，不参与 stop/split 判断，也不会决定区域树
+是否冻结。单个 block 内混有别节文字时，不能返回 parent_partition_error。
 
 split 时，孩子只覆盖真正属于孩子的连续原文，可以在开头、中间或结尾留下空隙。
 所有未被孩子覆盖的块自动成为当前节点直接拥有的原文。章节标题、统领全部孩子的
@@ -213,7 +214,8 @@ STRUCTURE_REPAIR_SYSTEM_PROMPT = f"""
 跨页排版或解析结果有误，必须返回 keep，并把异常写入 source_issues；即使程序之后
 仍能从字面编号看见冲突，也不能为了迎合编号而重切。只有现有树确实把完整原文块放在
 错误分支下时才返回 split。也可以在目标确实不应继续分区时返回 stop。遵守区域树的
-原文归属、角色和单层切分规则，只输出符合 JSON Schema 的 JSON。
+原文归属、角色和单层切分规则，只输出符合 JSON Schema 的 JSON。source_issues 只是
+附属诊断，不参与 keep/stop/split 判断，也不会决定区域树是否冻结。
 
 复核时沿用同一叶子停止条件：
 {REGION_BOUNDARY_RULES}
