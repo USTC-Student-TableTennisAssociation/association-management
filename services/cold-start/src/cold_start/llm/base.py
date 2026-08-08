@@ -58,7 +58,7 @@ class ChatModel(Protocol):
         *,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.0,
+        temperature: float | None = None,
         request_label: str = "模型",
     ) -> str: ...
 
@@ -68,7 +68,7 @@ class ChatModel(Protocol):
         messages: Sequence[Mapping[str, Any]],
         tools: Sequence[Mapping[str, Any]] = (),
         tool_choice: object | None = None,
-        temperature: float = 0.0,
+        temperature: float | None = None,
         request_label: str = "模型",
         thinking: ThinkingMode | None = None,
     ) -> ModelTurn: ...

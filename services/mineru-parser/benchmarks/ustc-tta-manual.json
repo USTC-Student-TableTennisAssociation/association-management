@@ -1,0 +1,51 @@
+{
+  "name": "中国科大乒协生存手册",
+  "expected_page_count": 35,
+  "minimum_table_blocks": 3,
+  "page_contains_all": [
+    {
+      "check_id": "appendix_b_presidents",
+      "page": 35,
+      "values": [
+        "历任会长名单",
+        "Table B.1",
+        "魏汉东",
+        "钟轹弘",
+        "杨鸿瑞",
+        "陈建绿",
+        "吕孟天",
+        "赵天翔",
+        "王龙",
+        "吴煜昊"
+      ]
+    }
+  ],
+  "document_order": [
+    {
+      "check_id": "section_12_2_reading_order",
+      "values": [
+        "从预算确定、和学校沟通到最终结项的完整流程",
+        "对于乒协什么时候有什么活动也一无所知",
+        "大二刚接任的我可能和一个刚入学的",
+        "没有什么区别",
+        "上一任的所有核心骨干都离开了乒协",
+        "我需要从零开始负责所有的工作",
+        "往届留下的只有策划案资料",
+        "会长一人包揽"
+      ]
+    }
+  ],
+  "markdown_forbidden_regex": [
+    {
+      "check_id": "qq_group_not_split_into_false_heading",
+      "pattern": "^#{1,6}\\s+QQ\\s*$"
+    }
+  ],
+  "page_has_block_types": [
+    {
+      "check_id": "bbs_archive_keeps_visual_evidence",
+      "page": 8,
+      "types": ["image"]
+    }
+  ]
+}

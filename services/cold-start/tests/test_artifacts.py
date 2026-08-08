@@ -7,6 +7,7 @@ from cold_start.document.models import ParsedDocument, ParsedPage
 from cold_start.global_exploration.artifacts import (
     create_exploration_run_directory,
     write_exploration_artifacts,
+    write_parsing_artifacts,
 )
 from cold_start.global_exploration.models import (
     GlobalExplorationSnapshot,
@@ -24,7 +25,7 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
     pages = (ParsedPage(page_number=1, markdown="# 首页\n\n正文"),)
     blocks = build_document_blocks(pages)
     document = ParsedDocument(
-        source_path=Path("/tmp/handbook.pdf"),
+        source_path=tmp_path / "handbook.pdf",
         title="手册",
         file_sha256="c" * 64,
         parser_name="test",
@@ -32,6 +33,7 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
         blocks=blocks,
         markdown="# 首页\n\n正文",
     )
+    document.source_path.write_bytes(b"pdf")
     root = RegionNode(
         node_id="region-0001",
         parent_id=None,
@@ -81,7 +83,7 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
     )
     directory = create_exploration_run_directory(
         output_root=tmp_path,
-        document=document,
+        source_path=document.source_path,
     )
     paths = write_exploration_artifacts(
         run_directory=directory,
@@ -99,3 +101,30 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
     assert "region-0001" in paths.region_tree_markdown.read_text()
     assert "区域树" in paths.report_markdown.read_text()
     assert "来源解析警告" in paths.report_markdown.read_text()
+
+
+def test_parsing_artifacts_are_available_before_exploration(tmp_path: Path) -> None:
+    pages = (ParsedPage(page_number=1, markdown="# 首页\n\n正文"),)
+    document = ParsedDocument(
+        source_path=tmp_path / "handbook.pdf",
+        title="手册",
+        file_sha256="e" * 64,
+        parser_name="test",
+        pages=pages,
+        blocks=build_document_blocks(pages),
+        markdown="# 首页\n\n正文",
+    )
+    document.source_path.write_bytes(b"pdf")
+    directory = create_exploration_run_directory(
+        output_root=tmp_path,
+        source_path=document.source_path,
+    )
+
+    paths = write_parsing_artifacts(
+        run_directory=directory,
+        document=document,
+    )
+
+    assert paths.parsed_document_markdown.read_text() == document.markdown
+    assert paths.parsed_blocks_json.exists()
+    assert not paths.snapshot_json.exists()

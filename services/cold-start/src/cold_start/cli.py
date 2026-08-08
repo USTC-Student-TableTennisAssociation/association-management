@@ -28,12 +28,13 @@ from cold_start.config import (
     ExplorationSettings,
     ModelSettings,
 )
-from cold_start.document import DoclingPdfLoader
+from cold_start.document import MinerUPdfLoader
 from cold_start.environment import load_environment_file
 from cold_start.global_exploration import (
     GlobalExplorationRunner,
     create_exploration_run_directory,
     write_exploration_artifacts,
+    write_parsing_artifacts,
 )
 from cold_start.llm import OpenAICompatibleChatModel
 from cold_start.progress import ConsoleProgressReporter
@@ -202,23 +203,45 @@ async def _execute_explore(
         ),
     )
 
-    progress.report("PDF", f"开始解析 {args.pdf}")
-    document = await asyncio.to_thread(DoclingPdfLoader().load, args.pdf)
+    run_directory = create_exploration_run_directory(
+        output_root=args.output,
+        source_path=args.pdf,
+    )
+    model_stream_directory = run_directory / "model-streams"
+    progress.report("产物", f"已创建运行目录 {run_directory}")
+
+    pdf_loader = MinerUPdfLoader(
+        progress=lambda message: progress.report("PDF", message)
+    )
+    progress.report(
+        "PDF",
+        (
+            f"开始解析 {args.pdf}；{pdf_loader.parser_name}，"
+            f"计算设备 {pdf_loader.accelerator_description()}"
+        ),
+    )
+    document = await asyncio.to_thread(
+        pdf_loader.load,
+        args.pdf,
+        raw_output_directory=run_directory / "mineru-raw",
+    )
     nonempty_pages = sum(bool(page.markdown.strip()) for page in document.pages)
     progress.report(
         "PDF",
         (
             f"解析完成：{nonempty_pages}/{document.page_count} 页非空，"
-            f"全文 {len(document.markdown)} 字符，{len(document.blocks)} 个稳定块"
+            f"全文 {len(document.markdown)} 字符，{len(document.blocks)} 个稳定块；"
+            f"{document.parser_name}"
         ),
     )
-
-    run_directory = create_exploration_run_directory(
-        output_root=args.output,
+    parsing_paths = write_parsing_artifacts(
+        run_directory=run_directory,
         document=document,
     )
-    model_stream_directory = run_directory / "model-streams"
-    progress.report("产物", f"已创建运行目录 {run_directory}")
+    progress.report(
+        "产物",
+        f"PDF 解析产物已提前写入 {parsing_paths.parsed_document_markdown}",
+    )
     progress.report("模型", f"模型输入、正文和思考将实时保存到 {model_stream_directory}")
     progress.report(
         "检索",

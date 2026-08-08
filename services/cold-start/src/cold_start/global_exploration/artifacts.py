@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,26 +25,25 @@ class ArtifactPaths:
     parsed_document_markdown: Path
     parsed_pages_json: Path
     parsed_blocks_json: Path
+    mineru_raw_directory: Path
+    mineru_log: Path
 
 
 def create_exploration_run_directory(
     *,
     output_root: Path,
-    document: ParsedDocument,
+    source_path: Path,
 ) -> Path:
-    run_id = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{document.file_sha256[:10]}"
+    source = source_path.expanduser().resolve()
+    file_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    run_id = f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{file_sha256[:10]}"
     directory = output_root.expanduser().resolve() / run_id
     directory.mkdir(parents=True, exist_ok=False)
     return directory
 
 
-def write_exploration_artifacts(
-    *,
-    run_directory: Path,
-    document: ParsedDocument,
-    snapshot: GlobalExplorationSnapshot,
-) -> ArtifactPaths:
-    paths = ArtifactPaths(
+def _artifact_paths(run_directory: Path) -> ArtifactPaths:
+    return ArtifactPaths(
         run_directory=run_directory,
         snapshot_json=run_directory / "global-exploration.json",
         report_markdown=run_directory / "global-exploration.md",
@@ -54,6 +54,46 @@ def write_exploration_artifacts(
         parsed_document_markdown=run_directory / "parsed-document.md",
         parsed_pages_json=run_directory / "parsed-pages.json",
         parsed_blocks_json=run_directory / "parsed-blocks.json",
+        mineru_raw_directory=run_directory / "mineru-raw",
+        mineru_log=run_directory / "mineru.log",
+    )
+
+
+def write_parsing_artifacts(
+    *,
+    run_directory: Path,
+    document: ParsedDocument,
+) -> ArtifactPaths:
+    paths = _artifact_paths(run_directory)
+    paths.parsed_document_markdown.write_text(document.markdown, encoding="utf-8")
+    paths.parsed_pages_json.write_text(
+        json.dumps(
+            [page.model_dump() for page in document.pages],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    paths.parsed_blocks_json.write_text(
+        json.dumps(
+            [block.model_dump() for block in document.blocks],
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return paths
+
+
+def write_exploration_artifacts(
+    *,
+    run_directory: Path,
+    document: ParsedDocument,
+    snapshot: GlobalExplorationSnapshot,
+) -> ArtifactPaths:
+    paths = write_parsing_artifacts(
+        run_directory=run_directory,
+        document=document,
     )
     paths.snapshot_json.write_text(snapshot.model_dump_json(indent=2), encoding="utf-8")
     paths.report_markdown.write_text(_report(snapshot), encoding="utf-8")
@@ -79,23 +119,6 @@ def write_exploration_artifacts(
         encoding="utf-8",
     )
     paths.region_tree_markdown.write_text(_tree(snapshot), encoding="utf-8")
-    paths.parsed_document_markdown.write_text(document.markdown, encoding="utf-8")
-    paths.parsed_pages_json.write_text(
-        json.dumps(
-            [page.model_dump() for page in document.pages],
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-    paths.parsed_blocks_json.write_text(
-        json.dumps(
-            [block.model_dump() for block in document.blocks],
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
     return paths
 
 

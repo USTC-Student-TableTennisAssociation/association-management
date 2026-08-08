@@ -15,7 +15,22 @@ from cold_start.llm.base import ModelTurn, ThinkingMode
 
 
 class FakePdfLoader:
-    def load(self, source_path: Path) -> ParsedDocument:
+    parser_name = "fake"
+
+    def __init__(self, *, progress=None) -> None:
+        self.progress = progress
+
+    @staticmethod
+    def accelerator_description() -> str:
+        return "fake-device"
+
+    def load(
+        self,
+        source_path: Path,
+        *,
+        raw_output_directory: Path,
+    ) -> ParsedDocument:
+        raw_output_directory.mkdir()
         pages = (ParsedPage(page_number=1, markdown="# 测试手册\n正文"),)
         return ParsedDocument(
             source_path=source_path.resolve(),
@@ -41,6 +56,7 @@ class FakeChatModel:
         self.progress = progress
         self.trace_directory = trace_directory
         self.show_model_stream = show_model_stream
+        assert (trace_directory.parent / "parsed-document.md").exists()
 
     async def complete(
         self,
@@ -104,7 +120,8 @@ async def test_cli_auto_loads_env_and_prints_detailed_progress(
     for variable in ("AI_MODEL", "AI_API_BASE_URL", "AI_API_KEY"):
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.chdir(working_directory)
-    monkeypatch.setattr(cli, "DoclingPdfLoader", FakePdfLoader)
+    (working_directory / "handbook.pdf").write_bytes(b"pdf")
+    monkeypatch.setattr(cli, "MinerUPdfLoader", FakePdfLoader)
     monkeypatch.setattr(cli, "OpenAICompatibleChatModel", FakeChatModel)
 
     result = await cli._run_explore(
@@ -131,6 +148,7 @@ async def test_cli_auto_loads_env_and_prints_detailed_progress(
     assert "[区域树·根节点] 完成判断" in output
     assert "[汇总] 区域树状态 frozen" in output
     assert "[完成] 全局勘探产物" in output
+    assert "PDF 解析产物已提前写入" in output
     assert list((tmp_path / "runs").glob("*/global-exploration.json"))
 
 

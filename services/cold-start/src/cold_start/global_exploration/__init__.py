@@ -3,6 +3,7 @@
 from cold_start.global_exploration.artifacts import (
     create_exploration_run_directory,
     write_exploration_artifacts,
+    write_parsing_artifacts,
 )
 from cold_start.global_exploration.graph import GlobalExplorationRunner
 from cold_start.global_exploration.models import GlobalExplorationSnapshot
@@ -12,4 +13,5 @@ __all__ = [
     "GlobalExplorationSnapshot",
     "create_exploration_run_directory",
     "write_exploration_artifacts",
+    "write_parsing_artifacts",
 ]
