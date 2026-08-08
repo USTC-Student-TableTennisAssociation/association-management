@@ -10,7 +10,7 @@
 
 ```text
 单份 PDF
-  → Docling 解析
+  → MinerU 解析
   → 带页码的稳定原文块
   ├→ 顺序阅读，形成简短文档背景
   └→ 递归切分，形成连续原文区域树
@@ -82,8 +82,16 @@ Windows 可以先安装 uv：
 winget install --id=astral-sh.uv -e
 ```
 
-安装后重新打开终端，再用 `uv --version` 确认命令可用。第一次运行时，Docling 和
+安装后重新打开终端，再用 `uv --version` 确认命令可用。第一次运行时，MinerU 和
 BGE-M3 可能下载模型；生产环境应在镜像构建阶段预下载并固定缓存。
+
+项目会在 Windows 从 PyTorch 官方 CUDA 12.8 索引安装 GPU 版 Torch；Linux 和 macOS
+使用 PyPI 对应平台版本。Windows 更新代码后必须重新执行一次 `uv sync --python 3.11`；完成后可用
+以下命令确认 4070 已被当前虚拟环境识别：
+
+```bat
+uv run python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
+```
 
 ## 环境配置
 
@@ -103,6 +111,10 @@ AI_REQUESTS_PER_MINUTE=18
 COLD_START_EMBEDDING_MODEL=BAAI/bge-m3
 COLD_START_EMBEDDING_DEVICE=
 COLD_START_EMBEDDING_BATCH_SIZE=8
+COLD_START_MINERU_BACKEND=hybrid-engine
+COLD_START_MINERU_EFFORT=high
+COLD_START_MINERU_METHOD=auto
+COLD_START_MINERU_IMAGE_ANALYSIS=true
 COLD_START_MAX_PARALLEL_REGIONS=6
 COLD_START_MAX_PARALLEL_COMPILATIONS=6
 COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS=3
@@ -147,10 +159,22 @@ document-context.md        后续模型使用的简短文档背景
 region-tree.json           完整区域树数据
 region-tree.md             供人工查看的区域树
 region-tree-checks.json    结构校准结果和来源解析警告
-parsed-document.md         Docling 解析出的全文
-parsed-pages.json          分页原文
-parsed-blocks.json         带稳定 ID 的原文块
+parsed-document.md         MinerU 稳定块按页重建的全文
+mineru-raw/                MinerU 的 JSON、Markdown、图片与其他原始产物
+mineru.log                 MinerU 完整运行日志
+parsed-pages.json          实际进入后续流程的分页原文
+parsed-blocks.json         带稳定 ID、来源类型、bbox 和资源路径的原文块
 ```
+
+PDF 默认使用已经在乒协手册上验证过的
+`hybrid-engine + high + auto + image-analysis`。冷启动不会重新解释 MinerU 的标题层级，
+也不会再用另一套解析器覆盖其结果，而是直接把稳定 `content_list.json` 映射为分页原文
+和稳定来源块。表格 HTML、图片 OCR/描述、页码、原始类型、bbox 与图片路径都会保留；
+`mineru-raw/` 保存完整原始产物，便于任意 Evidence 回看。
+
+运行目录会在解析前创建，因此 MinerU 或后续模型失败时，已经产生的日志和原始文件仍会
+保留。Windows 下 `cold-start` 会自动以 Python UTF-8 模式启动，无需每次手动设置
+`PYTHONUTF8`。启动日志会显示当前 Torch 实际识别到的 CUDA、MPS 或 CPU 设备。
 
 来源解析警告只作为诊断报告保存，不参与区域树的 `stop` / `split` 判断，也不会使已经
 完成结构判断的区域树变为未冻结状态。单条警告格式错误时只忽略该条警告，不否决模型的

@@ -51,6 +51,11 @@ next-env.d.ts
 /services/cold-start/.ruff_cache
 /services/cold-start/**/__pycache__
 /services/cold-start/**/*.py[cod]
+/services/mineru-parser/.venv
+/services/mineru-parser/.pytest_cache
+/services/mineru-parser/.ruff_cache
+/services/mineru-parser/**/__pycache__
+/services/mineru-parser/**/*.py[cod]
 /.cold-start
 
 # Local Syncthing configuration

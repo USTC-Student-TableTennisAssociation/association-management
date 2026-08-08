@@ -18,7 +18,6 @@ BlockType = Literal[
     "other",
 ]
 
-
 class ParsedPage(BaseModel):
     """保留页码锚点的一页结构化文本。"""
 
@@ -39,6 +38,10 @@ class ParsedBlock(BaseModel):
     source_pages: tuple[int, ...] = Field(min_length=1)
     heading_level: int | None = Field(default=None, ge=1, le=6)
     heading_path: tuple[str, ...] = ()
+    source_type: str | None = None
+    source_sub_type: str | None = None
+    bbox: tuple[float, float, float, float] | None = None
+    asset_path: str | None = None
     markdown: str = Field(min_length=1)
 
 

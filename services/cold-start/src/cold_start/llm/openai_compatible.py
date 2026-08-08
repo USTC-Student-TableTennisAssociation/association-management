@@ -227,7 +227,7 @@ class OpenAICompatibleChatModel:
         *,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.0,
+        temperature: float | None = None,
         request_label: str = "模型",
     ) -> str:
         turn = await self.complete_turn(
@@ -248,16 +248,17 @@ class OpenAICompatibleChatModel:
         messages: Sequence[Mapping[str, Any]],
         tools: Sequence[Mapping[str, Any]] = (),
         tool_choice: object | None = None,
-        temperature: float = 0.0,
+        temperature: float | None = None,
         request_label: str = "模型",
         thinking: ThinkingMode | None = None,
     ) -> ModelTurn:
         payload: dict[str, object] = {
             "model": self.settings.model,
             "messages": list(messages),
-            "temperature": temperature,
             "stream": True,
         }
+        if temperature is not None:
+            payload["temperature"] = temperature
         if tools:
             payload.update(tools=list(tools), tool_choice=tool_choice or "auto")
         if thinking:

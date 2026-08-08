@@ -123,6 +123,7 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
     body = json.loads(captured_request.content)
     assert body["model"] == "test-model"
     assert body["stream"] is True
+    assert "temperature" not in body
     assert any(
         stage == "测试" and "收到首个正文片段" in message
         for stage, message in progress.events
@@ -149,6 +150,39 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
     ]
     assert "Authorization" not in request_trace
     assert "secret" not in json.dumps(request_trace)
+
+
+@pytest.mark.asyncio
+async def test_adapter_sends_temperature_only_when_explicitly_requested() -> None:
+    captured_body: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text=(
+                sse_event({"choices": [{"delta": {"content": "完成"}}]})
+                + sse_event("[DONE]")
+            ),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        model = OpenAICompatibleChatModel(
+            ModelSettings(
+                model="test-model",
+                api_base_url="http://model.test/v1",
+                api_key=None,
+            ),
+            client=client,
+        )
+        await model.complete(
+            system_prompt="系统",
+            user_prompt="用户",
+            temperature=0.2,
+        )
+
+    assert captured_body["temperature"] == 0.2
 
 
 @pytest.mark.asyncio
