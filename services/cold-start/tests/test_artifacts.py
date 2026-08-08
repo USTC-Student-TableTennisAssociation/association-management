@@ -92,10 +92,10 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
     assert paths.snapshot_json.exists()
     assert paths.region_tree_json.exists()
     assert paths.region_tree_checks_json.exists()
-    checks = json.loads(paths.region_tree_checks_json.read_text())
+    checks = json.loads(paths.region_tree_checks_json.read_text(encoding="utf-8"))
     assert checks["source_issues"][0]["reason"] == "测试来源解析警告。"
     assert paths.parsed_blocks_json.exists()
-    assert paths.document_context_markdown.read_text() == "这是一份协会内部手册。"
-    assert "region-0001" in paths.region_tree_markdown.read_text()
-    assert "区域树" in paths.report_markdown.read_text()
-    assert "来源解析警告" in paths.report_markdown.read_text()
+    assert paths.document_context_markdown.read_text(encoding="utf-8") == "这是一份协会内部手册。"
+    assert "region-0001" in paths.region_tree_markdown.read_text(encoding="utf-8")
+    assert "区域树" in paths.report_markdown.read_text(encoding="utf-8")
+    assert "来源解析警告" in paths.report_markdown.read_text(encoding="utf-8")

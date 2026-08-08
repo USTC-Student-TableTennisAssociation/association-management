@@ -142,7 +142,9 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
     raw_events = next(tmp_path.glob("*.sse.jsonl")).read_text(encoding="utf-8")
     assert '"kind": "comment"' in raw_events
     assert "[DONE]" in raw_events
-    request_trace = json.loads(next(tmp_path.glob("*.request.json")).read_text())
+    request_trace = json.loads(
+        next(tmp_path.glob("*.request.json")).read_text(encoding="utf-8")
+    )
     assert request_trace["payload"]["messages"] == [
         {"role": "system", "content": "系统"},
         {"role": "user", "content": "用户"},
@@ -389,7 +391,9 @@ async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages(
         "type": "enabled",
         "clear_thinking": False,
     }
-    tool_trace = json.loads(next(tmp_path.glob("*.tool-calls.json")).read_text())
+    tool_trace = json.loads(
+        next(tmp_path.glob("*.tool-calls.json")).read_text(encoding="utf-8")
+    )
     assert tool_trace == [
         {
             "id": "call_001",

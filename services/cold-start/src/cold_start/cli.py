@@ -437,6 +437,7 @@ async def _run_map_activity(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
+    _configure_utf8_stdio()
     args = build_parser().parse_args()
     try:
         if args.command == "explore":
@@ -453,6 +454,14 @@ def main() -> None:
     except Exception as error:
         print(f"冷启动任务失败：{error}", file=sys.stderr)
         raise SystemExit(1) from error
+
+
+def _configure_utf8_stdio() -> None:
+    """让 Windows 终端中的中文进度和错误信息统一按 UTF-8 输出。"""
+
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
 
 
 if __name__ == "__main__":
