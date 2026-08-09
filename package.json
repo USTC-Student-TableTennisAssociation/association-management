@@ -15,7 +15,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "memory:import-cold-start": "tsc --project prisma/tsconfig.cold-start-import.json && node .prisma-cold-start-build/prisma/import-cold-start.js"
+    "memory:import-source-semantics": "tsc --project prisma/tsconfig.source-semantics-import.json && node .prisma-source-semantics-build/prisma/import-source-semantics.js"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.8.0",

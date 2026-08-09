@@ -176,6 +176,49 @@ def test_cli_exposes_full_basic_compilation_command() -> None:
     assert args.requests_per_minute == 18
 
 
+def test_cli_exposes_source_semantic_compilation_command() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "compile-source",
+            "--run",
+            "run-directory",
+            "--source-id",
+            "region-0063",
+            "--resume",
+            "existing-source-run",
+        ]
+    )
+
+    assert args.command == "compile-source"
+    assert args.run == Path("run-directory")
+    assert args.source_id == "region-0063"
+    assert args.resume == Path("existing-source-run")
+
+
+def test_cli_exposes_all_source_semantic_compilation_command() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "compile-sources",
+            "--run",
+            "run-directory",
+            "--max-parallel-sources",
+            "8",
+            "--source-id",
+            "region-0095",
+            "--source-id",
+            "region-0097",
+            "--resume",
+            "existing-full-source-run",
+        ]
+    )
+
+    assert args.command == "compile-sources"
+    assert args.run == Path("run-directory")
+    assert args.max_parallel_sources == 8
+    assert args.source_id == ["region-0095", "region-0097"]
+    assert args.resume == Path("existing-full-source-run")
+
+
 def test_cli_exposes_activity_operations_mapping_command() -> None:
     args = cli.build_parser().parse_args(
         [
