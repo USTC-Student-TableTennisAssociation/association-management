@@ -558,3 +558,46 @@ async def test_adapter_allows_repeated_structured_content() -> None:
         )
 
     assert turn.content == repeated_item * 6
+
+
+@pytest.mark.asyncio
+async def test_adapter_allows_reused_json_schema_in_reasoning() -> None:
+    items = [
+        (
+            f'{{"claim_id":"claim-{index}","temporal_annotations":['
+            '{"raw_expression":"秋季学期","kind":"recurring",'
+            '"normalized_text":"秋季学期","start":null,"end":null,'
+            '"precision":"semester","derivation":"source_explicit",'
+            f'"basis_markdown":"赛事{index}在秋季学期举办。"}}]}}'
+        )
+        for index in range(1, 7)
+    ]
+    stream_body = "".join(
+        sse_event({"choices": [{"delta": {"reasoning_content": item}}]})
+        for item in items
+    ) + sse_event("[DONE]")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text=stream_body,
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        model = OpenAICompatibleChatModel(
+            ModelSettings(
+                model="test-model",
+                api_base_url="http://model.test/v1",
+                api_key=None,
+                max_retries=1,
+            ),
+            client=client,
+        )
+        turn = await model.complete_turn(
+            messages=[{"role": "user", "content": "输出时间 JSON"}],
+            thinking="enabled",
+        )
+
+    assert turn.reasoning_content == "".join(items)

@@ -28,7 +28,7 @@ class ModelRepetitionError(ModelProtocolError):
 
 
 class _RepetitionGuard:
-    """用短而严格的重复片段检测生成退化，不限制正常思考总长度。"""
+    """只检测完整片段的连续循环，不把结构化字段复用误判为退化。"""
 
     def __init__(
         self,
@@ -52,9 +52,20 @@ class _RepetitionGuard:
         probe = self.text[-self.probe_chars :]
         if not probe.strip():
             return None
-        earlier = self.text[: -self.probe_chars]
-        if earlier.count(probe) >= self.required_occurrences - 1:
-            return probe
+        current_start = len(self.text) - self.probe_chars
+        earlier = self.text[:current_start]
+        previous_start = earlier.rfind(probe)
+        while previous_start >= 0:
+            period = current_start - previous_start
+            first_start = current_start - period * (self.required_occurrences - 1)
+            if first_start >= 0:
+                cycles = [
+                    self.text[first_start + period * index : first_start + period * (index + 1)]
+                    for index in range(self.required_occurrences - 1)
+                ]
+                if cycles[0].strip() and all(cycle == cycles[0] for cycle in cycles[1:]):
+                    return cycles[0]
+            previous_start = earlier.rfind(probe, 0, previous_start)
         return None
 
 

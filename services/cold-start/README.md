@@ -1,10 +1,11 @@
 # 冷启动 Worker
 
 冷启动 Worker 目前负责把单份协会手册 PDF 解析为稳定原文块和连续原文区域树，并在此
-基础上开发新的“对象—叙述—依据”基础记忆编译器。
+基础上编译“Object—Assertion—SourceBlock”来源记忆。
 
-旧的固定卡片编译、父节点卡片整合和数据库导入流程已经移除，不保留兼容入口。这样可以
-先用真实叶子验证新语义协议，再决定数据库结构，而不会让旧卡片字段继续影响模型判断。
+旧的固定卡片数据库和 `full-basic-compilation.v5` 数据库协议已经移除，不保留兼容入口。
+数据库直接保存 `source-semantics-full.v4` 中每个来源区域的 Object、Assertion、Object
+Mention 和 TemporalAnnotation；Assertion 的依据直接连接回稳定原文块。
 
 ## 整体方向
 
@@ -14,14 +15,13 @@
   → 带页码的稳定原文块
   ├→ 顺序阅读，形成简短文档背景
   └→ 递归切分，形成连续原文区域树
-       → 叶子局部编译
-            → Object：可持续指认的对象
-            → Assertion：使用对象引用模板表达的记录或观点
-            → Evidence：上述判断对应的原文位置
-       → 父节点基础整合
-            → 只合并/修订已有 Object 与 Assertion
-            → 独立发现缺失 Object 候选
-            → 独立 Evidence 复查后由程序补入 Object 引用
+       → 编译全部 content_source 来源节点
+            → 原子命题提取与遗漏复核
+            → Object mention 发现与确定性模板生成
+            → 来源时间表达标准化
+       → 来源记忆数据库
+            → 每次导入先清空现有来源记忆层
+            → 完整写入来源区域、原文块、Object、Assertion、Mention 和时间标注
        → 活动运营视角草稿
             → 局部高召回属性与关系投影
             → 父节点跨孩子关系恢复
@@ -180,6 +180,103 @@ PDF 默认使用已经在乒协手册上验证过的
 完成结构判断的区域树变为未冻结状态。单条警告格式错误时只忽略该条警告，不否决模型的
 结构判断。
 
+## 第一轮来源语义编译
+
+批量编译区域树中全部拥有 `content_source` 自有原文的节点：
+
+```bash
+uv run cold-start compile-sources \
+  --run "../../.cold-start/runs/20260808T054110Z-107ebc775f"
+```
+
+可以临时覆盖来源并发数：
+
+```bash
+uv run cold-start compile-sources \
+  --run "../../.cold-start/runs/20260808T054110Z-107ebc775f" \
+  --max-parallel-sources 8
+```
+
+批量运行目录按来源隔离四个阶段断点：
+
+```text
+source-semantic-compilations/<UTC 时间>-full/
+  model-streams/
+  working.json
+  sources/
+    region-0063/
+      01-initial-claims.json
+      02-reviewed-claims.json
+      03-object-mentions.json
+      04-temporal-annotations.json
+      source-semantics.json
+      source-semantics.md
+  source-semantics-full.json
+  source-semantics-full.md
+```
+
+某些来源失败时，其他来源仍会继续并保存结果。恢复同一目录后，每个来源会从自身第一个
+未完成阶段继续：
+
+```bash
+uv run cold-start compile-sources \
+  --run "../../.cold-start/runs/20260808T054110Z-107ebc775f" \
+  --resume "../../.cold-start/runs/20260808T054110Z-107ebc775f/source-semantic-compilations/<未完成目录>-full"
+```
+
+为了单独调试某个节点，也可以对任意拥有 `content_source` 自有原文的节点运行同样的四遍
+式来源编译：
+
+```bash
+uv run cold-start compile-source \
+  --run "../../.cold-start/runs/20260808T054110Z-107ebc775f" \
+  --source-id "region-0063"
+```
+
+四次模型调用彼此隔离，并且都直接输出 JSON 正文：
+
+1. 只提取有原文依据的原子现实命题，不判断 Object、时间、立场或 Relation；
+2. 冻结第一次结果，只增量报告遗漏命题，不能重新输出或改写已有命题；
+3. 高召回发现冻结命题中的 Object mention。模型只提交 `claim_id`、命题中的精确
+   `span_text` 及其 `occurrence_index`，不负责 Object 的最终取舍、规范化、合并、
+   别名、ID 或命题模板重写。
+4. 只根据 frozen plain claims、`supporting_block_ids` 对应原文和必要来源上下文，标准化
+   来源实际写出的时间表达。每条命题返回 `temporal_annotations` 列表；无时间表达时为空，
+   不自动生成“持续适用”，也不判断事实可信度、来源质量或当前是否仍有效。
+
+程序负责校验 mention 的存在性、范围、重叠与可逆性，确定性生成 Object、mention ID
+和命题引用模板，并在每一遍结束后立即写入断点：
+
+```text
+source-semantic-compilations/<UTC 时间>-<来源节点>/
+  model-streams/
+  01-initial-claims.json
+  02-reviewed-claims.json
+  03-object-mentions.json
+  04-temporal-annotations.json
+  source-semantics.json
+  source-semantics.md
+```
+
+任一后续阶段失败时，可以从该阶段恢复，不会重新执行已经成功写入断点的阶段：
+
+```bash
+uv run cold-start compile-source \
+  --run "../../.cold-start/runs/20260808T054110Z-107ebc775f" \
+  --source-id "region-0063" \
+  --resume "../../.cold-start/runs/20260808T054110Z-107ebc775f/source-semantic-compilations/<未完成目录>"
+```
+
+Temporal 阶段对 JSON Schema、claim 全覆盖、枚举、绝对时间格式、范围顺序和
+`raw_expression` 来源锚点做确定性校验；失败时最多进行一次不携带旧正文或 reasoning 的
+clean retry。`source-semantics.v4` 和 `source-semantics-full.v4` 在每条 Assertion 上保存
+`temporal_annotations`。已有01—03断点可以直接恢复并只补跑 Temporal；旧版v3最终快照会被
+新快照替换，不需要重跑前三阶段。
+
+这是第一轮来源记忆，包含高召回的局部 Object mention、程序生成的临时 Object、可逆命题
+模板、原文块依据和来源锚定的结构化时间。它尚未进行 Object 的最终取舍、跨来源规范化或
+业务视角投影；数据库导入忠实保存这一阶段，不会把局部 Object 擅自合并成全局 Object。
+
 ## 完整基础编译
 
 已有冻结的区域树后，从所有内容来源节点一直编译到根节点：
@@ -246,6 +343,40 @@ basic-compilations/<UTC 时间>-full/
   basic-compilation.json     完整运行快照、节点统计和根包
   basic-compilation.md       供人工检查的整树汇总和根包内容
 ```
+
+## 导入来源记忆数据库
+
+数据库直接读取 `compile-sources` 完整运行目录中的 `source-semantics-full.json`。导入器只
+接受 `source-semantics-full.v4`，并校验来源区域、局部 ID、模板与 Mention 可逆性、原文块
+引用、时间表达和全量计数。校验通过后，它在同一个事务中清空现有来源记忆表，再写入本次
+结果。当前项目没有需要保留的旧记忆数据，因此不提供旧 Schema 或旧产物兼容逻辑。
+
+先部署新的 Prisma migration 并生成客户端：
+
+```bash
+pnpm prisma:deploy
+pnpm prisma:generate
+```
+
+只校验文件，不连接或修改数据库：
+
+```bash
+pnpm memory:import-source-semantics -- \
+  --input ".cold-start/runs/<运行目录>/source-semantic-compilations/<完整编译目录>" \
+  --validate-only
+```
+
+清空记忆层并导入：
+
+```bash
+pnpm memory:import-source-semantics -- \
+  --input ".cold-start/runs/<运行目录>/source-semantic-compilations/<完整编译目录>"
+```
+
+导入后会在完整编译目录写入 `database-import.json`，记录来源区域、Object 和 Assertion 的
+数据库 UUID 映射及各表写入数量。局部 `obj-1`、`claim-1` 通过来源区域命名空间区分；
+`memory_object_mentions` 提供 Assertion 到 Object 的精确引用，
+`memory_assertion_source_blocks` 提供 Assertion 到原文块的来源依据。
 
 ## 调试单个叶子
 

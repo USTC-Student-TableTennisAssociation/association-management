@@ -8,402 +8,202 @@ datasource db {
   provider = "postgresql"
 }
 
-enum MemoryNodeKind {
-  search_card
-  activity_pattern
-  activity_trait
-  person
-  role
-  historical_event
-  workflow
-  work_step
-  rule
-  principle
-  practice
-  archive_record
-}
-
-enum MemoryStatus {
-  draft
-  published
-  retired
-}
-
-enum MemorySearchTermKind {
-  official_name
-  alias
-  historical_name
-  abbreviation
-  misspelling
-  keyword
-}
-
-enum MemoryActivityRecurrenceKind {
-  annual
-  semester
-  irregular
-  on_demand
+enum MemoryTemporalKind {
+  point
+  range
+  recurring
+  relative
+  contextual
   unknown
 }
 
-enum MemoryActivityTraitDimension {
-  scale
-  format
-  audience
-  funding
-  venue
-  recurrence
-  other
+enum MemoryTemporalPrecision {
+  day
+  month
+  year
+  academic_year
+  semester
+  unspecified
 }
 
-enum MemoryRelationType {
-  routes_to
-  has_trait
-  uses
-  contains
-  next
-  requires
-  exception_to
-  applies_to
-  relevant_at
-  informs
-  constrains
-  deviates_from
-  establishes
-  changes
-  held_role
-  responsible_for
-  participated_in
-  authored
+enum MemoryTemporalDerivation {
+  source_explicit
+  contextual_inference
+  unresolved
 }
 
-enum MemorySourceRole {
-  basis
-  example
-  counterexample
-  context
+/// 一次 source-semantics-full.v4 全量来源语义编译。
+/// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个来源记忆层。
+model MemoryCompilation {
+  id                      String   @id @default(uuid()) @db.Uuid
+  schemaVersion           String   @map("schema_version") @db.Text
+  compiledAt              DateTime @map("compiled_at")
+  importedAt              DateTime @default(now()) @map("imported_at")
+  sourcePath              String   @map("source_path") @db.Text
+  sourceTitle             String   @map("source_title") @db.Text
+  sourceSha256            String   @map("source_sha256") @db.Text
+  sourceParser            String   @map("source_parser") @db.Text
+  sourcePageCount         Int      @map("source_page_count")
+  sourceBlockCount        Int      @map("source_block_count")
+  regionTreeSchemaVersion String   @map("region_tree_schema_version") @db.Text
+  sourceNodeIds           String[] @map("source_node_ids")
+  sourceNodeCount         Int      @map("source_node_count")
+  assertionCount          Int      @map("assertion_count")
+  objectCount             Int      @map("object_count")
+  objectMentionCount      Int      @map("object_mention_count")
+  modelCalls              Int      @map("model_calls")
+
+  sourceRegions MemorySourceRegion[]
+  sourceBlocks  MemorySourceBlock[]
+  objects       MemoryObject[]
+  assertions    MemoryAssertion[]
+
+  @@index([sourceSha256])
+  @@map("memory_compilations")
 }
 
-enum MemoryEmbeddingPurpose {
-  routing
-  semantic_retrieval
+/// 区域树中实际拥有原文并经过 source semantics 编译的节点。
+model MemorySourceRegion {
+  id                  String   @id @default(uuid()) @db.Uuid
+  compilationId       String   @map("compilation_id") @db.Uuid
+  sourceNodeId        String   @map("source_node_id") @db.Text
+  schemaVersion       String   @map("schema_version") @db.Text
+  label               String   @db.Text
+  lineageNodeIds      String[] @map("lineage_node_ids")
+  sourcePages         Int[]    @map("source_pages")
+  sourceBlockIds      String[] @map("source_block_ids")
+  coveredBlockIds     String[] @map("covered_block_ids")
+  unclaimedBlockIds   String[] @map("unclaimed_block_ids")
+  initialClaimCount   Int      @map("initial_claim_count")
+  reviewAdditionCount Int      @map("review_addition_count")
+  modelCalls          Int      @map("model_calls")
+  createdAt           DateTime @map("created_at")
+
+  compilation MemoryCompilation     @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  objects     MemoryObject[]
+  assertions  MemoryAssertion[]
+  mentions    MemoryObjectMention[]
+
+  @@unique([compilationId, sourceNodeId])
+  @@index([label])
+  @@map("memory_source_regions")
 }
 
-/// 组织长期记忆图的稳定节点身份与生命周期。
-/// 具体语义由且仅由一个与 kind 对应的一对一扩展表承载。
-model MemoryNode {
-  id      String         @id @default(uuid()) @db.Uuid
-  kind    MemoryNodeKind
-  title   String         @db.Text
-  summary String         @db.Text
-  status  MemoryStatus   @default(draft)
+/// PDF 解析后的稳定原文块，是 Assertion 的来源依据和回看锚点。
+model MemorySourceBlock {
+  id            String   @id @default(uuid()) @db.Uuid
+  compilationId String   @map("compilation_id") @db.Uuid
+  sourceBlockId String   @map("source_block_id") @db.Text
+  order         Int
+  blockType     String   @map("block_type") @db.Text
+  sourcePages   Int[]    @map("source_pages")
+  headingLevel  Int?     @map("heading_level")
+  headingPath   String[] @map("heading_path")
+  sourceType    String?  @map("source_type") @db.Text
+  sourceSubType String?  @map("source_sub_type") @db.Text
+  bbox          Json?    @db.JsonB
+  assetPath     String?  @map("asset_path") @db.Text
+  markdown      String   @db.Text
 
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
-  publishedAt DateTime? @map("published_at")
-  retiredAt   DateTime? @map("retired_at")
+  compilation   MemoryCompilation            @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  assertionUses MemoryAssertionSourceBlock[]
 
-  searchCard      MemorySearchCard?
-  activityPattern MemoryActivityPattern?
-  activityTrait   MemoryActivityTrait?
-  person          MemoryPerson?
-  role            MemoryRole?
-  historicalEvent MemoryHistoricalEvent?
-  workflow        MemoryWorkflow?
-  workStep        MemoryWorkStep?
-  rule            MemoryRule?
-  principle       MemoryPrinciple?
-  practice        MemoryPractice?
-  archiveRecord   MemoryArchiveRecord?
-
-  outgoingEdges MemoryEdge[]       @relation("MemoryEdgeFrom")
-  incomingEdges MemoryEdge[]       @relation("MemoryEdgeTo")
-  contextEdges  MemoryEdge[]       @relation("MemoryEdgeContext")
-  sources       MemoryNodeSource[]
-  embeddings    MemoryEmbedding[]
-
-  @@index([status])
-  @@index([kind, status])
-  @@map("memory_nodes")
+  @@unique([compilationId, sourceBlockId])
+  @@unique([compilationId, order])
+  @@map("memory_source_blocks")
 }
 
-/// 搜索入口只负责将用户表达路由到规范节点，不承载规则、流程或经验。
-model MemorySearchCard {
-  nodeId                 String  @id @map("node_id") @db.Uuid
-  intentMarkdown         String  @map("intent_markdown") @db.Text
-  disambiguationMarkdown String? @map("disambiguation_markdown") @db.Text
-
-  node  MemoryNode         @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-  terms MemorySearchTerm[]
-
-  @@map("memory_search_cards")
-}
-
-/// SearchCard 的正式名称、别名、旧称、缩写、错写和检索关键词。
-model MemorySearchTerm {
-  id             String               @id @default(uuid()) @db.Uuid
-  searchCardId   String               @map("search_card_id") @db.Uuid
-  term           String               @db.Text
-  normalizedTerm String               @map("normalized_term") @db.Text
-  kind           MemorySearchTermKind
-  weight         Float                @default(1)
-  isActive       Boolean              @default(true) @map("is_active")
-  createdAt      DateTime             @default(now()) @map("created_at")
-  updatedAt      DateTime             @updatedAt @map("updated_at")
-
-  searchCard MemorySearchCard @relation(fields: [searchCardId], references: [nodeId], onDelete: Cascade)
-
-  @@unique([searchCardId, normalizedTerm])
-  @@index([normalizedTerm, isActive])
-  @@map("memory_search_terms")
-}
-
-/// 跨年份复用的活动身份；具体某一届活动仍属于状态层。
-model MemoryActivityPattern {
-  nodeId                   String                       @id @map("node_id") @db.Uuid
-  descriptionMarkdown      String                       @map("description_markdown") @db.Text
-  purposeMarkdown          String?                      @map("purpose_markdown") @db.Text
-  recurrenceKind           MemoryActivityRecurrenceKind @map("recurrence_kind")
-  typicalTimingMarkdown    String?                      @map("typical_timing_markdown") @db.Text
-  identityBoundaryMarkdown String?                      @map("identity_boundary_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@index([recurrenceKind])
-  @@map("memory_activity_patterns")
-}
-
-/// 会影响 Workflow 和上下文记忆加载的可复用活动特征。
-model MemoryActivityTrait {
-  nodeId             String                       @id @map("node_id") @db.Uuid
-  dimension          MemoryActivityTraitDimension
-  code               String                       @db.Text
-  definitionMarkdown String                       @map("definition_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@unique([dimension, code])
-  @@map("memory_activity_traits")
-}
-
-/// 需要在组织记忆图中稳定识别的人物身份；不保存联系方式、账号或当前权限。
-model MemoryPerson {
-  nodeId                 String  @id @map("node_id") @db.Uuid
-  identityMarkdown       String  @map("identity_markdown") @db.Text
-  disambiguationMarkdown String? @map("disambiguation_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@map("memory_people")
-}
-
-/// 跨届可能持续存在的组织角色；具体职责和任职关系由图关系表达。
-model MemoryRole {
-  nodeId              String  @id @map("node_id") @db.Uuid
-  definitionMarkdown  String  @map("definition_markdown") @db.Text
-  boundaryMarkdown    String? @map("boundary_markdown") @db.Text
-  uncertaintyMarkdown String? @map("uncertainty_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@map("memory_roles")
-}
-
-/// 在某个时间点或时间范围内发生的一次重要事情或变化。
-model MemoryHistoricalEvent {
-  nodeId               String  @id @map("node_id") @db.Uuid
-  eventMarkdown        String  @map("event_markdown") @db.Text
-  timeMarkdown         String? @map("time_markdown") @db.Text
-  backgroundMarkdown   String? @map("background_markdown") @db.Text
-  outcomeMarkdown      String? @map("outcome_markdown") @db.Text
-  significanceMarkdown String? @map("significance_markdown") @db.Text
-  uncertaintyMarkdown  String? @map("uncertainty_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@map("memory_historical_events")
-}
-
-/// 一组连续、分支、共享或可回退工作的组织节点。
-/// Workflow 自身不保存完成条件；是否结束由后续工作节点和运行状态判断。
-model MemoryWorkflow {
-  nodeId               String @id @map("node_id") @db.Uuid
-  goalMarkdown         String @map("goal_markdown") @db.Text
-  entryMeaningMarkdown String @map("entry_meaning_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@map("memory_workflows")
-}
-
-/// Workflow 中能够独立理解、验收并承载上下文记忆的工作位置。
-model MemoryWorkStep {
-  nodeId                    String @id @map("node_id") @db.Uuid
-  objectiveMarkdown         String @map("objective_markdown") @db.Text
-  instructionMarkdown       String @map("instruction_markdown") @db.Text
-  completionMeaningMarkdown String @map("completion_meaning_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@map("memory_work_steps")
-}
-
-/// 组织确认的制度要求、禁止事项或行为边界。
-model MemoryRule {
-  nodeId                  String  @id @map("node_id") @db.Uuid
-  statementMarkdown       String  @map("statement_markdown") @db.Text
-  rationaleMarkdown       String? @map("rationale_markdown") @db.Text
-  violationImpactMarkdown String? @map("violation_impact_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@map("memory_rules")
-}
-
-/// 不直接形成硬性门槛、但会稳定影响组织判断的原则。
-model MemoryPrinciple {
-  nodeId            String  @id @map("node_id") @db.Uuid
-  statementMarkdown String  @map("statement_markdown") @db.Text
-  rationaleMarkdown String  @map("rationale_markdown") @db.Text
-  tradeoffMarkdown  String? @map("tradeoff_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@map("memory_principles")
-}
-
-/// 从过去实际工作中提炼出的情境、做法、结果和认识。
-/// 它与规则、原则和活动的关系由 MemoryEdge 表达。
-model MemoryPractice {
-  nodeId              String  @id @map("node_id") @db.Uuid
-  situationMarkdown   String  @map("situation_markdown") @db.Text
-  behaviorMarkdown    String  @map("behavior_markdown") @db.Text
-  outcomeMarkdown     String? @map("outcome_markdown") @db.Text
-  lessonMarkdown      String  @map("lesson_markdown") @db.Text
-  uncertaintyMarkdown String? @map("uncertainty_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@map("memory_practices")
-}
-
-/// 组织需要长期知道其存在的重要档案；普通来源文件仍只进入原始文件层。
-model MemoryArchiveRecord {
-  nodeId                  String  @id @map("node_id") @db.Uuid
-  contentOverviewMarkdown String  @map("content_overview_markdown") @db.Text
-  provenanceMarkdown      String? @map("provenance_markdown") @db.Text
-  integrityMarkdown       String? @map("integrity_markdown") @db.Text
-
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-
-  @@map("memory_archive_records")
-}
-
-/// 长期记忆节点之间带方向、带类型的语义关系。
-/// contextNode 使同一关系能够限定在某个 Activity、ActivityTrait 或 Workflow 中：
-/// 例如“在继往开来杯中，到达申请场地 WorkStep 时加载两个场地的 Practice”，
-/// 或“在大型赛事 Workflow 中，WorkStep A 的下一步是 WorkStep B”。
-model MemoryEdge {
-  id                    String             @id @default(uuid()) @db.Uuid
-  fromNodeId            String             @map("from_node_id") @db.Uuid
-  toNodeId              String             @map("to_node_id") @db.Uuid
-  contextNodeId         String?            @map("context_node_id") @db.Uuid
-  relationType          MemoryRelationType @map("relation_type")
-  sequence              Int?
-  temporalScopeMarkdown String?            @map("temporal_scope_markdown") @db.Text
-  noteMarkdown          String?            @map("note_markdown") @db.Text
-  status                MemoryStatus       @default(draft)
-
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
-  publishedAt DateTime? @map("published_at")
-  retiredAt   DateTime? @map("retired_at")
-
-  fromNode    MemoryNode         @relation("MemoryEdgeFrom", fields: [fromNodeId], references: [id], onDelete: Cascade)
-  toNode      MemoryNode         @relation("MemoryEdgeTo", fields: [toNodeId], references: [id], onDelete: Cascade)
-  contextNode MemoryNode?        @relation("MemoryEdgeContext", fields: [contextNodeId], references: [id], onDelete: Cascade)
-  sources     MemoryEdgeSource[]
-
-  @@unique([fromNodeId, toNodeId, relationType, contextNodeId], map: "memory_edges_relation_context_key")
-  @@index([fromNodeId, relationType, status])
-  @@index([toNodeId, relationType, status])
-  @@index([contextNodeId, relationType, status])
-  @@map("memory_edges")
-}
-
-/// 原始材料片段在记忆层中的定位锚点。
-/// sourceAssetRef 未来应改为指向原始文件层 SourceAsset 的外键。
-model MemorySourceAnchor {
+/// 当前来源区域中由字面 mention 确定性生成的 provisional Object。
+model MemoryObject {
   id             String   @id @default(uuid()) @db.Uuid
-  sourceAssetRef String   @map("source_asset_ref") @db.Text
-  pageStart      Int?     @map("page_start")
-  pageEnd        Int?     @map("page_end")
-  sectionPath    String?  @map("section_path") @db.Text
-  startBlockId   String?  @map("start_block_id") @db.Text
-  endBlockId     String?  @map("end_block_id") @db.Text
-  startOffset    Int?     @map("start_offset")
-  endOffset      Int?     @map("end_offset")
-  excerpt        String?  @db.Text
-  excerptHash    String?  @map("excerpt_hash") @db.Text
+  compilationId  String   @map("compilation_id") @db.Uuid
+  sourceRegionId String   @map("source_region_id") @db.Uuid
+  sourceObjectId String   @map("source_object_id") @db.Text
+  label          String   @db.Text
+  aliases        String[]
   createdAt      DateTime @default(now()) @map("created_at")
 
-  nodeSources MemoryNodeSource[]
-  edgeSources MemoryEdgeSource[]
+  compilation  MemoryCompilation     @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  sourceRegion MemorySourceRegion    @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  mentions     MemoryObjectMention[]
 
-  @@index([sourceAssetRef])
-  @@index([sourceAssetRef, startBlockId, endBlockId], map: "memory_source_anchors_block_range_idx")
-  @@map("memory_source_anchors")
+  @@unique([sourceRegionId, sourceObjectId])
+  @@index([compilationId, label])
+  @@map("memory_objects")
 }
 
-/// 节点与原始材料片段之间的依据、案例、反例或背景关系。
-model MemoryNodeSource {
-  id             String           @id @default(uuid()) @db.Uuid
-  nodeId         String           @map("node_id") @db.Uuid
-  sourceAnchorId String           @map("source_anchor_id") @db.Uuid
-  role           MemorySourceRole
-  noteMarkdown   String?          @map("note_markdown") @db.Text
-  createdAt      DateTime         @default(now()) @map("created_at")
+/// 来源关于一个或多个 Object 作出的冻结原子命题。
+model MemoryAssertion {
+  id                        String   @id @default(uuid()) @db.Uuid
+  compilationId             String   @map("compilation_id") @db.Uuid
+  sourceRegionId            String   @map("source_region_id") @db.Uuid
+  sourceClaimId             String   @map("source_claim_id") @db.Text
+  statementTemplateMarkdown String   @map("statement_template_markdown") @db.Text
+  createdAt                 DateTime @default(now()) @map("created_at")
 
-  node         MemoryNode         @relation(fields: [nodeId], references: [id], onDelete: Cascade)
-  sourceAnchor MemorySourceAnchor @relation(fields: [sourceAnchorId], references: [id], onDelete: Cascade)
+  compilation         MemoryCompilation            @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  sourceRegion        MemorySourceRegion           @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  mentions            MemoryObjectMention[]
+  sourceBlockLinks    MemoryAssertionSourceBlock[]
+  temporalAnnotations MemoryTemporalAnnotation[]
 
-  @@unique([nodeId, sourceAnchorId, role])
-  @@index([sourceAnchorId])
-  @@map("memory_node_sources")
+  @@unique([sourceRegionId, sourceClaimId])
+  @@map("memory_assertions")
 }
 
-/// 边也需要独立依据，避免“两个节点都正确但连线没有来源”。
-model MemoryEdgeSource {
-  id             String           @id @default(uuid()) @db.Uuid
-  edgeId         String           @map("edge_id") @db.Uuid
-  sourceAnchorId String           @map("source_anchor_id") @db.Uuid
-  role           MemorySourceRole
-  noteMarkdown   String?          @map("note_markdown") @db.Text
-  createdAt      DateTime         @default(now()) @map("created_at")
+/// Object 在冻结命题中的精确、可逆字面位置。
+model MemoryObjectMention {
+  id              String @id @default(uuid()) @db.Uuid
+  sourceRegionId  String @map("source_region_id") @db.Uuid
+  assertionId     String @map("assertion_id") @db.Uuid
+  objectId        String @map("object_id") @db.Uuid
+  sourceMentionId String @map("source_mention_id") @db.Text
+  spanText        String @map("span_text") @db.Text
+  occurrenceIndex Int    @map("occurrence_index")
+  start           Int
+  end             Int
 
-  edge         MemoryEdge         @relation(fields: [edgeId], references: [id], onDelete: Cascade)
-  sourceAnchor MemorySourceAnchor @relation(fields: [sourceAnchorId], references: [id], onDelete: Cascade)
+  sourceRegion MemorySourceRegion @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  assertion    MemoryAssertion    @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  object       MemoryObject       @relation(fields: [objectId], references: [id], onDelete: Cascade)
 
-  @@unique([edgeId, sourceAnchorId, role])
-  @@index([sourceAnchorId])
-  @@map("memory_edge_sources")
+  @@unique([sourceRegionId, sourceMentionId])
+  @@index([assertionId])
+  @@index([objectId])
+  @@map("memory_object_mentions")
 }
 
-/// 由节点文本派生的本地向量索引；它不构成组织知识事实。
-model MemoryEmbedding {
-  id            String                      @id @default(uuid()) @db.Uuid
-  nodeId        String                      @map("node_id") @db.Uuid
-  purpose       MemoryEmbeddingPurpose
-  modelKey      String                      @map("model_key") @db.Text
-  modelRevision String                      @map("model_revision") @db.Text
-  dimension     Int
-  contentHash   String                      @map("content_hash") @db.Text
-  embedding     Unsupported("vector(1024)")
-  createdAt     DateTime                    @default(now()) @map("created_at")
+/// Assertion 对稳定原文块的直接依据；ordinal 保留 supporting_block_ids 顺序。
+model MemoryAssertionSourceBlock {
+  assertionId String @map("assertion_id") @db.Uuid
+  blockId     String @map("block_id") @db.Uuid
+  ordinal     Int
 
-  node MemoryNode @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  assertion   MemoryAssertion   @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  sourceBlock MemorySourceBlock @relation(fields: [blockId], references: [id], onDelete: Cascade)
 
-  @@unique([nodeId, purpose, modelKey, modelRevision, contentHash])
-  @@index([nodeId, purpose])
-  @@map("memory_embeddings")
+  @@id([assertionId, blockId])
+  @@index([blockId])
+  @@map("memory_assertion_source_blocks")
+}
+
+/// Assertion 中一项来源锚定的结构化时间表达，不表示事实真实性或当前有效性。
+model MemoryTemporalAnnotation {
+  id             String                   @id @default(uuid()) @db.Uuid
+  assertionId    String                   @map("assertion_id") @db.Uuid
+  ordinal        Int
+  rawExpression  String                   @map("raw_expression") @db.Text
+  kind           MemoryTemporalKind
+  normalizedText String                   @map("normalized_text") @db.Text
+  start          String?                  @db.Text
+  end            String?                  @db.Text
+  precision      MemoryTemporalPrecision
+  derivation     MemoryTemporalDerivation
+  basisMarkdown  String                   @map("basis_markdown") @db.Text
+
+  assertion MemoryAssertion @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+
+  @@unique([assertionId, ordinal])
+  @@index([kind, precision])
+  @@map("memory_temporal_annotations")
 }

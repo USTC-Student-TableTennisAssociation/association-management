@@ -44,6 +44,8 @@ next-env.d.ts
 # Prisma Client is generated from prisma/schema.prisma.
 /src/generated/prisma
 /.prisma-cold-start-build
+/.prisma-basic-memory-build
+/.prisma-source-semantics-build
 
 # Python cold-start worker
 /services/cold-start/.venv

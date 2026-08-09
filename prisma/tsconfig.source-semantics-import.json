@@ -4,7 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "rootDir": "..",
-    "outDir": "../.prisma-cold-start-build",
+    "outDir": "../.prisma-source-semantics-build",
     "declaration": false,
     "sourceMap": false,
     "skipLibCheck": true,
@@ -13,7 +13,7 @@
     "types": ["node"]
   },
   "include": [
-    "./import-cold-start.ts",
+    "./import-source-semantics.ts",
     "../src/generated/prisma/**/*.ts"
   ]
 }

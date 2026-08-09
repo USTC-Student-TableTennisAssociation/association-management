@@ -22,6 +22,14 @@ from cold_start.compilation import (
     open_full_artifact_paths,
     write_leaf_artifact,
 )
+from cold_start.compilation.source_semantics import (
+    FullSourceSemanticRunner,
+    SourceSemanticCompiler,
+    create_full_source_semantic_paths,
+    create_source_semantic_paths,
+    open_full_source_semantic_paths,
+    open_source_semantic_paths,
+)
 from cold_start.config import (
     ActivityViewSettings,
     CompilationSettings,
@@ -141,6 +149,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="覆盖 COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS",
     )
     _add_model_arguments(compile_full)
+
+    compile_source = subparsers.add_parser(
+        "compile-source",
+        help="分四遍编译一个来源节点的命题、Object mention 和时间标注",
+    )
+    compile_source.add_argument(
+        "--run",
+        type=Path,
+        required=True,
+        help="包含 global-exploration.json 的勘探运行目录",
+    )
+    compile_source.add_argument(
+        "--source-id",
+        required=True,
+        help="拥有 content_source 自有原文的节点 ID，例如 region-0063",
+    )
+    compile_source.add_argument(
+        "--resume",
+        type=Path,
+        help="继续已有来源语义编译目录，复用已经成功写入的阶段断点",
+    )
+    _add_model_arguments(compile_source)
+
+    compile_sources = subparsers.add_parser(
+        "compile-sources",
+        help="并行编译区域树中的全部内容来源，逐阶段保存断点",
+    )
+    compile_sources.add_argument(
+        "--run",
+        type=Path,
+        required=True,
+        help="包含 global-exploration.json 的勘探运行目录",
+    )
+    compile_sources.add_argument(
+        "--max-parallel-sources",
+        type=int,
+        help="覆盖 COLD_START_MAX_PARALLEL_COMPILATIONS",
+    )
+    compile_sources.add_argument(
+        "--source-id",
+        action="append",
+        help=(
+            "只编译指定 content_source 节点；可重复传入，"
+            "不传时编译全部来源"
+        ),
+    )
+    compile_sources.add_argument(
+        "--resume",
+        type=Path,
+        help="继续已有全部来源语义编译目录，按来源和阶段复用断点",
+    )
+    _add_model_arguments(compile_sources)
 
     map_activity = subparsers.add_parser(
         "map-activity",
@@ -386,6 +446,120 @@ async def _run_compile_full(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_compile_source(args: argparse.Namespace) -> int:
+    progress = ConsoleProgressReporter()
+    _report_environment(args, progress)
+    model_settings = ModelSettings.from_environment(
+        model=args.model,
+        api_base_url=args.api_base_url,
+        api_key=args.api_key,
+        read_timeout_seconds=args.read_timeout_seconds,
+        max_retries=args.max_model_retries,
+        requests_per_minute=args.requests_per_minute,
+    )
+    exploration, blocks = load_exploration_inputs(args.run)
+    paths = (
+        open_source_semantic_paths(args.resume)
+        if args.resume
+        else create_source_semantic_paths(args.run, args.source_id)
+    )
+    progress.report(
+        "模型",
+        (
+            f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
+            f"全局 RPM {model_settings.requests_per_minute}；"
+            "原子命题、遗漏扫描、Object mention 和时间标注分别调用模型"
+        ),
+    )
+    progress.report(
+        "产物",
+        (
+            f"继续来源语义编译目录 {paths.directory}"
+            if args.resume
+            else f"已创建来源语义编译目录 {paths.directory}"
+        ),
+    )
+    progress.report("模型", f"模型输入、正文和思考将实时保存到 {paths.model_streams}")
+    model = OpenAICompatibleChatModel(
+        model_settings,
+        progress=progress,
+        trace_directory=paths.model_streams,
+        show_model_stream=args.show_model_stream,
+    )
+    try:
+        await SourceSemanticCompiler(
+            model=model,
+            exploration=exploration,
+            blocks=blocks,
+            paths=paths,
+            progress=progress,
+        ).compile(args.source_id)
+    finally:
+        await model.aclose()
+    progress.report("完成", f"来源语义编译产物：{paths.directory}")
+    return 0
+
+
+async def _run_compile_sources(args: argparse.Namespace) -> int:
+    progress = ConsoleProgressReporter()
+    _report_environment(args, progress)
+    model_settings = ModelSettings.from_environment(
+        model=args.model,
+        api_base_url=args.api_base_url,
+        api_key=args.api_key,
+        read_timeout_seconds=args.read_timeout_seconds,
+        max_retries=args.max_model_retries,
+        requests_per_minute=args.requests_per_minute,
+    )
+    compilation_settings = CompilationSettings.from_environment(
+        max_parallel_sources=args.max_parallel_sources,
+    )
+    exploration, blocks = load_exploration_inputs(args.run)
+    paths = (
+        open_full_source_semantic_paths(args.resume)
+        if args.resume
+        else create_full_source_semantic_paths(args.run)
+    )
+    progress.report(
+        "模型",
+        (
+            f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
+            f"全局 RPM {model_settings.requests_per_minute}；"
+            f"来源并发 {compilation_settings.max_parallel_sources}；"
+            "每个来源依次执行原子命题、遗漏扫描、Object mention 和时间标注"
+        ),
+    )
+    progress.report(
+        "产物",
+        (
+            f"继续全部来源语义编译目录 {paths.directory}"
+            if args.resume
+            else f"已创建全部来源语义编译目录 {paths.directory}"
+        ),
+    )
+    progress.report("模型", f"模型输入、工具参数和思考将实时保存到 {paths.model_streams}")
+    model = OpenAICompatibleChatModel(
+        model_settings,
+        progress=progress,
+        trace_directory=paths.model_streams,
+        show_model_stream=args.show_model_stream,
+    )
+    try:
+        await FullSourceSemanticRunner(
+            model=model,
+            exploration=exploration,
+            blocks=blocks,
+            paths=paths,
+            max_parallel_sources=compilation_settings.max_parallel_sources,
+            source_node_ids=args.source_id,
+            progress=progress,
+        ).run()
+    finally:
+        await model.aclose()
+    progress.report("完成", f"全部来源语义编译产物：{paths.directory}")
+    return 0
+
+
 async def _run_map_activity(args: argparse.Namespace) -> int:
     progress = ConsoleProgressReporter()
     _report_environment(args, progress)
@@ -468,6 +642,10 @@ def main() -> None:
             raise SystemExit(asyncio.run(_run_compile_leaf(args)))
         if args.command == "compile":
             raise SystemExit(asyncio.run(_run_compile_full(args)))
+        if args.command == "compile-source":
+            raise SystemExit(asyncio.run(_run_compile_source(args)))
+        if args.command == "compile-sources":
+            raise SystemExit(asyncio.run(_run_compile_sources(args)))
         if args.command == "map-activity":
             raise SystemExit(asyncio.run(_run_map_activity(args)))
     except KeyboardInterrupt:
