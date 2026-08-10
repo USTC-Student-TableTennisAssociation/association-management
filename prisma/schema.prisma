@@ -32,8 +32,8 @@ enum MemoryTemporalDerivation {
   unresolved
 }
 
-/// 一次 source-semantics-full.v4 全量来源语义编译。
-/// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个来源记忆层。
+/// 一次已完成 Global Resolution 的 cold-start package。
+/// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个记忆层。
 model MemoryCompilation {
   id                      String   @id @default(uuid()) @db.Uuid
   schemaVersion           String   @map("schema_version") @db.Text
@@ -49,14 +49,16 @@ model MemoryCompilation {
   sourceNodeIds           String[] @map("source_node_ids")
   sourceNodeCount         Int      @map("source_node_count")
   assertionCount          Int      @map("assertion_count")
-  objectCount             Int      @map("object_count")
-  objectMentionCount      Int      @map("object_mention_count")
+  objectFragmentCount     Int      @map("object_fragment_count")
+  surfaceFormCount        Int      @map("surface_form_count")
+  fragmentReferenceCount  Int      @map("fragment_reference_count")
   modelCalls              Int      @map("model_calls")
 
-  sourceRegions MemorySourceRegion[]
-  sourceBlocks  MemorySourceBlock[]
-  objects       MemoryObject[]
-  assertions    MemoryAssertion[]
+  sourceRegions   MemorySourceRegion[]
+  sourceBlocks    MemorySourceBlock[]
+  objectFragments MemorySourceObjectFragment[]
+  assertions      MemoryAssertion[]
+  globalObjects   MemoryGlobalObject[]
 
   @@index([sourceSha256])
   @@map("memory_compilations")
@@ -79,10 +81,9 @@ model MemorySourceRegion {
   modelCalls          Int      @map("model_calls")
   createdAt           DateTime @map("created_at")
 
-  compilation MemoryCompilation     @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  objects     MemoryObject[]
-  assertions  MemoryAssertion[]
-  mentions    MemoryObjectMention[]
+  compilation     MemoryCompilation            @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  objectFragments MemorySourceObjectFragment[]
+  assertions      MemoryAssertion[]
 
   @@unique([compilationId, sourceNodeId])
   @@index([label])
@@ -113,64 +114,60 @@ model MemorySourceBlock {
   @@map("memory_source_blocks")
 }
 
-/// 当前来源区域中由字面 mention 确定性生成的 provisional Object。
-model MemoryObject {
-  id             String   @id @default(uuid()) @db.Uuid
-  compilationId  String   @map("compilation_id") @db.Uuid
-  sourceRegionId String   @map("source_region_id") @db.Uuid
-  sourceObjectId String   @map("source_object_id") @db.Text
-  label          String   @db.Text
-  aliases        String[]
-  createdAt      DateTime @default(now()) @map("created_at")
+/// Leaf compiler 产生的 source-local ObjectFragment；不是长期 Object，也不直接供 Search 使用。
+model MemorySourceObjectFragment {
+  id               String   @id @default(uuid()) @db.Uuid
+  compilationId    String   @map("compilation_id") @db.Uuid
+  sourceRegionId   String   @map("source_region_id") @db.Uuid
+  sourceFragmentId String   @map("source_fragment_id") @db.Text
+  surfaceForms     String[] @map("surface_forms")
+  createdAt        DateTime @default(now()) @map("created_at")
 
-  compilation  MemoryCompilation     @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  sourceRegion MemorySourceRegion    @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
-  mentions     MemoryObjectMention[]
+  compilation         MemoryCompilation                     @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  sourceRegion        MemorySourceRegion                    @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  assertionReferences MemoryAssertionFragmentReference[]
+  surfaceMemberships  MemoryGlobalObjectSurfaceMembership[]
 
-  @@unique([sourceRegionId, sourceObjectId])
-  @@index([compilationId, label])
-  @@map("memory_objects")
+  @@unique([sourceRegionId, sourceFragmentId])
+  @@index([compilationId])
+  @@map("memory_source_object_fragments")
 }
 
 /// 来源关于一个或多个 Object 作出的冻结原子命题。
 model MemoryAssertion {
-  id                        String   @id @default(uuid()) @db.Uuid
-  compilationId             String   @map("compilation_id") @db.Uuid
-  sourceRegionId            String   @map("source_region_id") @db.Uuid
-  sourceClaimId             String   @map("source_claim_id") @db.Text
-  statementTemplateMarkdown String   @map("statement_template_markdown") @db.Text
-  createdAt                 DateTime @default(now()) @map("created_at")
+  id                              String   @id @default(uuid()) @db.Uuid
+  compilationId                   String   @map("compilation_id") @db.Uuid
+  sourceRegionId                  String   @map("source_region_id") @db.Uuid
+  sourceClaimId                   String   @map("source_claim_id") @db.Text
+  statementTemplateMarkdown       String   @map("statement_template_markdown") @db.Text
+  globalStatementTemplateMarkdown String   @map("global_statement_template_markdown") @db.Text
+  contextDependent                Boolean  @map("context_dependent")
+  createdAt                       DateTime @default(now()) @map("created_at")
 
-  compilation         MemoryCompilation            @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  sourceRegion        MemorySourceRegion           @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
-  mentions            MemoryObjectMention[]
-  sourceBlockLinks    MemoryAssertionSourceBlock[]
-  temporalAnnotations MemoryTemporalAnnotation[]
+  compilation             MemoryCompilation                       @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  sourceRegion            MemorySourceRegion                      @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  fragmentReferences      MemoryAssertionFragmentReference[]
+  literalGlobalReferences MemoryGlobalAssertionLiteralReference[]
+  sourceBlockLinks        MemoryAssertionSourceBlock[]
+  temporalAnnotations     MemoryTemporalAnnotation[]
 
   @@unique([sourceRegionId, sourceClaimId])
   @@map("memory_assertions")
 }
 
-/// Object 在冻结命题中的精确、可逆字面位置。
-model MemoryObjectMention {
-  id              String @id @default(uuid()) @db.Uuid
-  sourceRegionId  String @map("source_region_id") @db.Uuid
-  assertionId     String @map("assertion_id") @db.Uuid
-  objectId        String @map("object_id") @db.Uuid
-  sourceMentionId String @map("source_mention_id") @db.Text
-  spanText        String @map("span_text") @db.Text
-  occurrenceIndex Int    @map("occurrence_index")
-  start           Int
-  end             Int
+/// Assertion template 中一次 `{{fragment:...}}` 引用；ordinal 保留重复引用及出现顺序。
+model MemoryAssertionFragmentReference {
+  assertionId      String @map("assertion_id") @db.Uuid
+  objectFragmentId String @map("object_fragment_id") @db.Uuid
+  ordinal          Int
 
-  sourceRegion MemorySourceRegion @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
-  assertion    MemoryAssertion    @relation(fields: [assertionId], references: [id], onDelete: Cascade)
-  object       MemoryObject       @relation(fields: [objectId], references: [id], onDelete: Cascade)
+  assertion         MemoryAssertion                            @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  objectFragment    MemorySourceObjectFragment                 @relation(fields: [objectFragmentId], references: [id], onDelete: Cascade)
+  globalResolutions MemoryGlobalAssertionReferenceResolution[]
 
-  @@unique([sourceRegionId, sourceMentionId])
-  @@index([assertionId])
-  @@index([objectId])
-  @@map("memory_object_mentions")
+  @@id([assertionId, ordinal])
+  @@index([objectFragmentId])
+  @@map("memory_assertion_fragment_references")
 }
 
 /// Assertion 对稳定原文块的直接依据；ordinal 保留 supporting_block_ids 顺序。
@@ -206,4 +203,70 @@ model MemoryTemporalAnnotation {
   @@unique([assertionId, ordinal])
   @@index([kind, precision])
   @@map("memory_temporal_annotations")
+}
+
+/// 完整 cold-start package 最终导入的 Global Object；Resolver runtime 不读写数据库。
+model MemoryGlobalObject {
+  id                      String @id @default(uuid()) @db.Uuid
+  compilationId           String @map("compilation_id") @db.Uuid
+  globalObjectKey         String @map("global_object_key") @db.Text
+  canonicalName           String @map("canonical_name") @db.Text
+  identitySummaryMarkdown String @map("identity_summary_markdown") @db.Text
+
+  compilation          MemoryCompilation                          @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  surfaceMemberships   MemoryGlobalObjectSurfaceMembership[]
+  referenceResolutions MemoryGlobalAssertionReferenceResolution[]
+  literalReferences    MemoryGlobalAssertionLiteralReference[]
+
+  @@unique([compilationId, globalObjectKey])
+  @@index([compilationId])
+  @@map("memory_global_objects")
+}
+
+/// 一个 source-local surface form 当前归属哪个 Global Object。
+model MemoryGlobalObjectSurfaceMembership {
+  objectFragmentId   String @map("object_fragment_id") @db.Uuid
+  surfaceFormOrdinal Int    @map("surface_form_ordinal")
+  globalObjectId     String @map("global_object_id") @db.Uuid
+
+  objectFragment MemorySourceObjectFragment @relation(fields: [objectFragmentId], references: [id], onDelete: Cascade)
+  globalObject   MemoryGlobalObject         @relation(fields: [globalObjectId], references: [id], onDelete: Restrict)
+
+  @@id([objectFragmentId, surfaceFormOrdinal])
+  @@index([globalObjectId])
+  @@map("memory_global_object_surface_memberships")
+}
+
+/// Assertion template 中一次 Fragment 引用当前解析到哪个 Global Object。
+model MemoryGlobalAssertionReferenceResolution {
+  assertionId      String @map("assertion_id") @db.Uuid
+  referenceOrdinal Int    @map("reference_ordinal")
+  globalObjectId   String @map("global_object_id") @db.Uuid
+
+  sourceReference MemoryAssertionFragmentReference @relation(fields: [assertionId, referenceOrdinal], references: [assertionId, ordinal], onDelete: Cascade)
+  globalObject    MemoryGlobalObject               @relation(fields: [globalObjectId], references: [id], onDelete: Restrict)
+
+  @@id([assertionId, referenceOrdinal])
+  @@index([globalObjectId])
+  @@map("memory_global_assertion_reference_resolutions")
+}
+
+/// Global Resolver 完成后由无歧义字符串匹配补出的 Assertion 文本 reference atom。
+model MemoryGlobalAssertionLiteralReference {
+  atomId         String @id @map("atom_id") @db.Text
+  assertionId    String @map("assertion_id") @db.Uuid
+  literalOrdinal Int    @map("literal_ordinal")
+  globalOrdinal  Int    @map("global_ordinal")
+  sourceStart    Int    @map("source_start")
+  sourceEnd      Int    @map("source_end")
+  sourceText     String @map("source_text") @db.Text
+  globalObjectId String @map("global_object_id") @db.Uuid
+
+  assertion    MemoryAssertion    @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  globalObject MemoryGlobalObject @relation(fields: [globalObjectId], references: [id], onDelete: Restrict)
+
+  @@unique([assertionId, literalOrdinal])
+  @@index([assertionId, globalOrdinal])
+  @@index([globalObjectId])
+  @@map("memory_global_assertion_literal_references")
 }

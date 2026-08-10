@@ -4,6 +4,7 @@ import argparse
 import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -110,11 +111,7 @@ async def test_cli_auto_loads_env_and_prints_detailed_progress(
     working_directory = tmp_path / "services" / "cold-start"
     working_directory.mkdir(parents=True)
     (tmp_path / ".env").write_text(
-        (
-            "AI_MODEL=fake-model\n"
-            "AI_API_BASE_URL=http://model.test/v1\n"
-            "AI_API_KEY=fake-key\n"
-        ),
+        ("AI_MODEL=fake-model\nAI_API_BASE_URL=http://model.test/v1\nAI_API_KEY=fake-key\n"),
         encoding="utf-8",
     )
     for variable in ("AI_MODEL", "AI_API_BASE_URL", "AI_API_KEY"):
@@ -217,6 +214,111 @@ def test_cli_exposes_all_source_semantic_compilation_command() -> None:
     assert args.max_parallel_sources == 8
     assert args.source_id == ["region-0095", "region-0097"]
     assert args.resume == Path("existing-full-source-run")
+
+
+def test_cli_exposes_source_region_global_object_resolver_command() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "resolve-objects",
+            "--compilation",
+            "source-semantic-full-directory",
+            "--candidate-limit",
+            "6",
+            "--stop-after",
+            "10",
+            "--no-bge",
+        ]
+    )
+
+    assert args.command == "resolve-objects"
+    assert args.compilation == Path("source-semantic-full-directory")
+    assert args.resume is None
+    assert args.candidate_limit == 6
+    assert args.stop_after == 10
+    assert args.no_bge is True
+
+
+def test_cli_exposes_global_assertion_finalization_command() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "finalize-assertions",
+            "--resolution",
+            "completed-global-resolution",
+        ]
+    )
+
+    assert args.command == "finalize-assertions"
+    assert args.resolution == Path("completed-global-resolution")
+
+
+@pytest.mark.asyncio
+async def test_global_object_resolver_creates_local_model_streams(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    trace_directories: list[Path] = []
+    compilation_directory = tmp_path / "source-semantic-full"
+    compilation_directory.mkdir()
+    fake_dataset = SimpleNamespace(
+        directory=compilation_directory,
+        source_sha256="a" * 64,
+        source_node_ids=(),
+        regions=(),
+    )
+    fake_state = SimpleNamespace(next_source_region_ordinal=0, objects=())
+
+    class FakeResolverModel:
+        def __init__(
+            self,
+            settings,
+            *,
+            progress,
+            trace_directory: Path,
+            show_model_stream: bool,
+        ) -> None:
+            del settings, progress, show_model_stream
+            assert trace_directory.is_dir()
+            assert trace_directory.name == "model-streams"
+            trace_directories.append(trace_directory)
+
+        async def aclose(self) -> None:
+            return None
+
+    class FakeResolverRunner:
+        def __init__(self, **kwargs: object) -> None:
+            del kwargs
+
+        async def run_all(self, *, stop_after: int | None = None) -> SimpleNamespace:
+            assert stop_after == 1
+            return fake_state
+
+    monkeypatch.setenv("AI_MODEL", "fake-model")
+    monkeypatch.setenv("AI_API_BASE_URL", "http://model.test/v1")
+    monkeypatch.setattr(cli, "load_source_compilation", lambda path: fake_dataset)
+    monkeypatch.setattr(cli, "initial_registry", lambda dataset: fake_state)
+    monkeypatch.setattr(cli, "write_working_registry", lambda paths, dataset, state: None)
+    monkeypatch.setattr(cli, "OpenAICompatibleChatModel", FakeResolverModel)
+    monkeypatch.setattr(cli, "GlobalObjectResolverRunner", FakeResolverRunner)
+
+    args = cli.build_parser().parse_args(
+        [
+            "resolve-objects",
+            "--compilation",
+            str(compilation_directory),
+            "--no-bge",
+            "--stop-after",
+            "1",
+        ]
+    )
+    result = await cli._run_resolve_objects(args)
+
+    assert len(trace_directories) == 1
+    run_directory = trace_directories[0].parent
+    assert result == 0
+    assert run_directory.parent == compilation_directory / "global-resolutions"
+    assert run_directory.name.endswith("-full")
+    assert f"已创建 Global Resolution 目录 {run_directory}" in capsys.readouterr().out
 
 
 def test_cli_exposes_activity_operations_mapping_command() -> None:

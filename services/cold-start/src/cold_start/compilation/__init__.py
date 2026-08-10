@@ -36,6 +36,7 @@ from cold_start.compilation.operations import (
 from cold_start.compilation.source_semantics import (
     FullSourceSemanticRunner,
     FullSourceSemanticSnapshot,
+    ObjectFragment,
     SourceSemanticCompiler,
     SourceSemanticSnapshot,
     TemporalAnnotation,
@@ -67,6 +68,7 @@ __all__ = [
     "MissingObjectRecoveryArtifact",
     "MissingObjectReviewOutput",
     "NodeIntegrationResult",
+    "ObjectFragment",
     "ParentIntegrationDecision",
     "RegionCompilationArtifact",
     "SourceSemanticCompiler",

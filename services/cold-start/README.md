@@ -1,11 +1,13 @@
 # 冷启动 Worker
 
 冷启动 Worker 目前负责把单份协会手册 PDF 解析为稳定原文块和连续原文区域树，并在此
-基础上编译“Object—Assertion—SourceBlock”来源记忆。
+基础上编译“ObjectFragment—Assertion—SourceBlock”叶子来源 IR。
 
 旧的固定卡片数据库和 `full-basic-compilation.v5` 数据库协议已经移除，不保留兼容入口。
-数据库直接保存 `source-semantics-full.v4` 中每个来源区域的 Object、Assertion、Object
-Mention 和 TemporalAnnotation；Assertion 的依据直接连接回稳定原文块。
+基础来源编译现在输出 `source-semantics-full.v7`。Atomic naming hints 会在第三阶段被吸收进
+Object Fragment，不再生成长期 `SameReferentEvidence`。v7 产物可以导入来源记忆数据库，
+再由增量 Global Resolver 解析为后续 Search 应消费的 Global Object Registry。Assertion 的
+依据始终连接回稳定原文块。
 
 ## 整体方向
 
@@ -16,12 +18,11 @@ Mention 和 TemporalAnnotation；Assertion 的依据直接连接回稳定原文�
   ├→ 顺序阅读，形成简短文档背景
   └→ 递归切分，形成连续原文区域树
        → 编译全部 content_source 来源节点
-            → 原子命题提取与遗漏复核
-            → Object mention 发现与确定性模板生成
+            → Atomic 同时提取事实命题与来源明示同指称草稿
+            → 只对事实命题做遗漏复核
+            → Object Fragment Construction 同时完成局部名称分组与命题模板生成
             → 来源时间表达标准化
-       → 来源记忆数据库
-            → 每次导入先清空现有来源记忆层
-            → 完整写入来源区域、原文块、Object、Assertion、Mention 和时间标注
+       → Global Resolver 将 Fragment 归并为当前 Global Object Registry
        → 活动运营视角草稿
             → 局部高召回属性与关系投影
             → 父节点跨孩子关系恢复
@@ -207,7 +208,7 @@ source-semantic-compilations/<UTC 时间>-full/
     region-0063/
       01-initial-claims.json
       02-reviewed-claims.json
-      03-object-mentions.json
+      03-object-fragments.json
       04-temporal-annotations.json
       source-semantics.json
       source-semantics.md
@@ -233,26 +234,36 @@ uv run cold-start compile-source \
   --source-id "region-0063"
 ```
 
-四次模型调用彼此隔离，并且都直接输出 JSON 正文：
+四个阶段彼此隔离，并且模型调用都直接输出 JSON 正文：
 
-1. 只提取有原文依据的原子现实命题，不判断 Object、时间、立场或 Relation；
+1. 一次 Atomic 阅读同时提取有原文依据的现实命题和来源明示的同指称字面草稿。能自然、
+   低成本独立化的 Claim 正常独立化；需要明显代词消解、跨句/跨 block 身份推断、省略补全或
+   复杂语义重建时，保留可用表达并标记 `context_dependent=true`，后续阅读时回到所属
+   SourceRegion 理解，不建立 antecedent 或 context span。`claims` 只保存 factual proposition；
+   `same_referent_drafts` 只保存至少两个原文字面
+   span 及其 `occurrence_index`、`supporting_block_ids`，不生成 Object ID、alias 或
+   canonical label，也不根据名称相似、常识或跨来源背景推断；
 2. 冻结第一次结果，只增量报告遗漏命题，不能重新输出或改写已有命题；
-3. 高召回发现冻结命题中的 Object mention。模型只提交 `claim_id`、命题中的精确
-   `span_text` 及其 `occurrence_index`，不负责 Object 的最终取舍、规范化、合并、
-   别名、ID 或命题模板重写。
+3. 一次 Object Fragment Construction 同时发现 reusable names、在当前 SourceRegion 内
+   合并明显同指的名称，并直接为每条 frozen claim 生成 `{{fragment:F1}}` 模板。Atomic
+   `same_referent_drafts` 是必须同组的 hard grouping hint；名称可以只来自 SourceRegion 的
+   naming context，不要求附着在 factual claim 上。该阶段不做全局 identity、canonical label、
+   Object type、Relation 或业务价值判断。
 4. 只根据 frozen plain claims、`supporting_block_ids` 对应原文和必要来源上下文，标准化
    来源实际写出的时间表达。每条命题返回 `temporal_annotations` 列表；无时间表达时为空，
    不自动生成“持续适用”，也不判断事实可信度、来源质量或当前是否仍有效。
 
-程序负责校验 mention 的存在性、范围、重叠与可逆性，确定性生成 Object、mention ID
-和命题引用模板，并在每一遍结束后立即写入断点：
+程序只负责 Strict JSON/schema、claim 全覆盖、Fragment key/引用完整性、surface form 在当前
+SourceRegion、reviewed/frozen claims 或 Atomic naming hints 中的轻量来源存在性，以及 Atomic
+hard grouping 校验，并把临时 `F1` 稳定化为 source-local
+`fragment-1`。不再计算 Mention 坐标、机械 substring replacement 或模板反向还原：
 
 ```text
 source-semantic-compilations/<UTC 时间>-<来源节点>/
   model-streams/
   01-initial-claims.json
   02-reviewed-claims.json
-  03-object-mentions.json
+  03-object-fragments.json
   04-temporal-annotations.json
   source-semantics.json
   source-semantics.md
@@ -269,13 +280,16 @@ uv run cold-start compile-source \
 
 Temporal 阶段对 JSON Schema、claim 全覆盖、枚举、绝对时间格式、范围顺序和
 `raw_expression` 来源锚点做确定性校验；失败时最多进行一次不携带旧正文或 reasoning 的
-clean retry。`source-semantics.v4` 和 `source-semantics-full.v4` 在每条 Assertion 上保存
-`temporal_annotations`。已有01—03断点可以直接恢复并只补跑 Temporal；旧版v3最终快照会被
-新快照替换，不需要重跑前三阶段。
+clean retry。带 `context_dependent` 的 Atomic 与 Missing 断点升级为 `source-claims.v4`，旧 v3
+断点不会被复用；由 Claim 派生的 Fragment 断点升级为 `source-object-fragments.v2`，因此恢复旧
+目录时会从 Atomic 重新运行四个阶段。Temporal 协议本身仍为 v1。最终快照升级为
+`source-semantics.v7` / `source-semantics-full.v7`，working 升为 v7；旧最终快照不会被当作当前
+完成结果，但 v3—v6 working 目录仍可用于核对来源与节点集合并逐来源重建。
 
-这是第一轮来源记忆，包含高召回的局部 Object mention、程序生成的临时 Object、可逆命题
-模板、原文块依据和来源锚定的结构化时间。它尚未进行 Object 的最终取舍、跨来源规范化或
-业务视角投影；数据库导入忠实保存这一阶段，不会把局部 Object 擅自合并成全局 Object。
+这是 Global Resolver 之前的 Leaf compiler IR：它包含 Object Fragment、引用 Fragment
+语义位置的 Assertion template、原文块依据和来源锚定时间。Fragment 不是长期 Object；v7
+产物导入数据库后，由 Resolver 将 surface atom 和 Assertion reference atom 解析到当前
+Global Object Registry。Resolver 不修改这里的 Fragment 或 Assertion template。
 
 ## 完整基础编译
 
@@ -344,14 +358,96 @@ basic-compilations/<UTC 时间>-full/
   basic-compilation.md       供人工检查的整树汇总和根包内容
 ```
 
-## 导入来源记忆数据库
+## 解析 Global Object Registry
 
-数据库直接读取 `compile-sources` 完整运行目录中的 `source-semantics-full.json`。导入器只
-接受 `source-semantics-full.v4`，并校验来源区域、局部 ID、模板与 Mention 可逆性、原文块
-引用、时间表达和全量计数。校验通过后，它在同一个事务中清空现有来源记忆表，再写入本次
-结果。当前项目没有需要保留的旧记忆数据，因此不提供旧 Schema 或旧产物兼容逻辑。
+Resolver 直接读取 `compile-sources` 的完整本地产物，不读写数据库。它按
+`source_node_ids` 顺序消费 SourceRegion：候选召回仍按 Fragment 进行，但每个非空
+SourceRegion 只发起一次 LLM 身份对齐，将该 Region 的全部 Fragments、Assertions、局部
+语境和各自 candidates 一次性交给模型，再整体校验和提交 integration plan。
 
-先部署新的 Prisma migration 并生成客户端：
+```bash
+cd services/cold-start
+uv run cold-start resolve-objects \
+  --compilation "../../.cold-start/runs/<运行目录>/source-semantic-compilations/<完整编译目录>" \
+  --embedding-model "BAAI/bge-m3" \
+  --candidate-limit 8
+```
+
+每次新执行会在输入编译目录下自动建立一个本地运行目录：
+
+```text
+<完整来源语义目录>/global-resolutions/<UTC 时间>-full/
+  model-streams/           完整 request、原始 SSE、reasoning 和 content
+  working.json             当前 Registry 与 SourceRegion cursor
+  global-resolution.json  全部 Region 完成后生成的最终产物
+```
+
+这些文件都不在 Resolver 中间过程写入数据库。`model-streams/` 只是本地调试 trace，
+不构成 Resolution decision/history；`working.json` 仅保存当前状态，不保存 candidates、
+decision archaeology 或 membership 历史。Source ObjectFragment 始终保持不可变。
+
+词面 normalized exact、compact exact、保守 contains 与 BGE top-k 只组成候选集合；任何分数都
+不会自动触发 identity 合并。模型只允许在本轮候选中选择，并提交四种局部动作：
+
+```text
+create  incoming 是新身份，建立一个 Global Object
+attach  incoming 加入一个已有 Global Object
+merge   多个已有 Object 同一，保留最早 UUID 并移动当前归属
+split   incoming 或一个已有 Object 混合身份，保留原 UUID 并拆出新 Object
+```
+
+`create / attach / merge / split` 可以在同一 Region integration plan 中同时发生。split 不只划分
+Fragment 的 `surface_forms`：程序还要求模型把 Assertion template 中每一次
+Fragment 引用按真实指称完整分区；因此“二课审批 / 二课系统”可以分别成为流程和平台，同时
+相关 Assertion 不会被机械复制到两个 Object。Source ObjectFragment、原 surface form 和原
+Assertion template 全部保持不变。
+
+中断后从本地 `working.json` 继续：
+
+```bash
+uv run cold-start resolve-objects \
+  --compilation "../../.cold-start/runs/<运行目录>/source-semantic-compilations/<完整编译目录>" \
+  --resume "<完整编译目录>/global-resolutions/<UTC 时间>-full" \
+  --embedding-model "BAAI/bge-m3" \
+  --candidate-limit 8
+```
+
+`--candidate-limit 8` 表示每个 Fragment 最多向该 Region 的那一次模型调用提交 8 个普通候选；
+精确词面命中会强制保留。`--stop-after 10` 表示本次最多前进 10 个 SourceRegion，不是
+10 个 Fragment 或 10 次必然的模型调用；没有 Fragment 的 Region 只前进 cursor。仅使用词面召回可以
+增加 `--no-bge`。
+
+第一版不执行 final closure：处理过的 SourceRegion 不会因后续 Registry 变化重新入队，未被当前
+Region 内各 Fragment 召回的 Global Object 也不会被模型重新审判。Global Object 数据结构已经为 Search
+提供消费边界，但本轮没有修改 Search 实现。
+
+## 物化 Global Assertions
+
+`resolve-objects` 完整处理全部 SourceRegion 后，会自动额外写出 `global-assertions.json`：
+
+- 原始 Source Assertion 的 `{{fragment:fragment-x}}` 保持不变，继续作为 compiler IR 与来源锚点；
+- 最终 Assertion template 中，每次 Fragment reference 按该 reference atom 的当前归属替换为
+  `{{object:<Global Object UUID>}}`；
+- 再使用最终 Registry 当前拥有的 surface forms 扫描普通文本，按最长、无歧义匹配补充 literal
+  reference atoms；共享 surface 不自动判断 identity；
+- 这个阶段不调用模型或 BGE，不创建、merge 或 split Global Object，也不保存 resolution history。
+
+已经完成的旧 Global Resolution 不需要重跑模型，可以单独补生成：
+
+```bash
+uv run cold-start finalize-assertions \
+  --resolution "../../.cold-start/runs/<运行目录>/source-semantic-compilations/<完整编译目录>/global-resolutions/<UTC 时间>-full"
+```
+
+命令会在该 Global Resolution 目录原子写入或重新生成 `global-assertions.json`。
+
+## 导入完整 cold-start package
+
+数据库只接受同时包含 `global-resolution.json` 与 `global-assertions.json` 的完整结果，不接受未解析的
+单独 `source-semantics-full.json`。导入器会同时校验不可变 Source IR、Global Object UUID/key、
+所有 source atom 的完整互斥归属，以及 Global Assertion template/literal reference spans。
+
+先部署 Prisma migration 并生成客户端：
 
 ```bash
 pnpm prisma:deploy
@@ -361,22 +457,22 @@ pnpm prisma:generate
 只校验文件，不连接或修改数据库：
 
 ```bash
-pnpm memory:import-source-semantics -- \
-  --input ".cold-start/runs/<运行目录>/source-semantic-compilations/<完整编译目录>" \
+pnpm memory:import-cold-start -- \
+  --input ".cold-start/runs/<运行目录>/source-semantic-compilations/<完整编译目录>/global-resolutions/<UTC 时间>-full" \
   --validate-only
 ```
 
-清空记忆层并导入：
+最终一次性替换当前记忆层：
 
 ```bash
-pnpm memory:import-source-semantics -- \
-  --input ".cold-start/runs/<运行目录>/source-semantic-compilations/<完整编译目录>"
+pnpm memory:import-cold-start -- \
+  --input ".cold-start/runs/<运行目录>/source-semantic-compilations/<完整编译目录>/global-resolutions/<UTC 时间>-full"
 ```
 
-导入后会在完整编译目录写入 `database-import.json`，记录来源区域、Object 和 Assertion 的
-数据库 UUID 映射及各表写入数量。局部 `obj-1`、`claim-1` 通过来源区域命名空间区分；
-`memory_object_mentions` 提供 Assertion 到 Object 的精确引用，
-`memory_assertion_source_blocks` 提供 Assertion 到原文块的来源依据。
+导入后会在 Global Resolution 目录写入 `database-import.json`，记录各类最终实体和当前
+atom 归属的写入数量。数据库保存原始 Source Assertion、物化后的 Global Assertion、source reference
+resolution 和新增的 literal reference atoms；不保存 Resolver cursor、candidates、decision log、
+模型流、successor lineage 或 membership 历史区间。
 
 ## 调试单个叶子
 
