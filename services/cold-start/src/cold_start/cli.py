@@ -44,8 +44,20 @@ from cold_start.global_exploration import (
     write_exploration_artifacts,
     write_parsing_artifacts,
 )
+from cold_start.global_resolution import (
+    GlobalObjectCandidateRetriever,
+    GlobalObjectResolverRunner,
+    create_global_resolution_paths,
+    finalize_existing_global_resolution,
+    initial_registry,
+    load_source_compilation,
+    load_working_registry,
+    open_global_resolution_paths,
+    write_working_registry,
+)
 from cold_start.llm import OpenAICompatibleChatModel
 from cold_start.progress import ConsoleProgressReporter
+from cold_start.region_tree.runtime import BgeM3Embedder
 
 
 def _add_model_arguments(command: argparse.ArgumentParser) -> None:
@@ -89,10 +101,7 @@ def _add_pdf_arguments(command: argparse.ArgumentParser) -> None:
     )
     command.add_argument(
         "--embedding-model",
-        help=(
-            "本地 BGE-M3 目录或 Hugging Face 模型名；"
-            "覆盖 COLD_START_EMBEDDING_MODEL"
-        ),
+        help=("本地 BGE-M3 目录或 Hugging Face 模型名；覆盖 COLD_START_EMBEDDING_MODEL"),
     )
 
 
@@ -152,7 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     compile_source = subparsers.add_parser(
         "compile-source",
-        help="分四遍编译一个来源节点的命题、Object mention 和时间标注",
+        help="分四遍编译一个来源节点的 Atomic 语义、Object Fragment 和时间标注",
     )
     compile_source.add_argument(
         "--run",
@@ -190,10 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
     compile_sources.add_argument(
         "--source-id",
         action="append",
-        help=(
-            "只编译指定 content_source 节点；可重复传入，"
-            "不传时编译全部来源"
-        ),
+        help=("只编译指定 content_source 节点；可重复传入，不传时编译全部来源"),
     )
     compile_sources.add_argument(
         "--resume",
@@ -201,6 +207,54 @@ def build_parser() -> argparse.ArgumentParser:
         help="继续已有全部来源语义编译目录，按来源和阶段复用断点",
     )
     _add_model_arguments(compile_sources)
+
+    resolve_objects = subparsers.add_parser(
+        "resolve-objects",
+        help="按 SourceRegion 把本地 ObjectFragment 解析为 Global Object Registry",
+    )
+    resolve_objects.add_argument(
+        "--compilation",
+        type=Path,
+        required=True,
+        help="完整来源语义目录或 source-semantics-full.json",
+    )
+    resolve_objects.add_argument(
+        "--resume",
+        type=Path,
+        help="继续已有 Global Resolution 目录中的 working.json",
+    )
+    resolve_objects.add_argument(
+        "--embedding-model",
+        help="本地 BGE-M3 目录或 Hugging Face 模型名",
+    )
+    resolve_objects.add_argument(
+        "--no-bge",
+        action="store_true",
+        help="只使用词面召回；仍由模型判断 identity",
+    )
+    resolve_objects.add_argument(
+        "--candidate-limit",
+        type=int,
+        default=8,
+        help="每个 incoming Fragment 最多提交给模型的普通候选数；精确词面候选强制保留",
+    )
+    resolve_objects.add_argument(
+        "--stop-after",
+        type=int,
+        help="本次最多继续处理多少个 SourceRegion；用于人工小批量验证",
+    )
+    _add_model_arguments(resolve_objects)
+
+    finalize_assertions = subparsers.add_parser(
+        "finalize-assertions",
+        help="把已完成 Global Resolution 物化为只引用 Global Object 的 Assertions",
+    )
+    finalize_assertions.add_argument(
+        "--resolution",
+        type=Path,
+        required=True,
+        help="已完成的 Global Resolution 目录或 global-resolution.json",
+    )
 
     map_activity = subparsers.add_parser(
         "map-activity",
@@ -270,9 +324,7 @@ async def _execute_explore(
     model_stream_directory = run_directory / "model-streams"
     progress.report("产物", f"已创建运行目录 {run_directory}")
 
-    pdf_loader = MinerUPdfLoader(
-        progress=lambda message: progress.report("PDF", message)
-    )
+    pdf_loader = MinerUPdfLoader(progress=lambda message: progress.report("PDF", message))
     progress.report(
         "PDF",
         (
@@ -468,7 +520,8 @@ async def _run_compile_source(args: argparse.Namespace) -> int:
         (
             f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
             f"全局 RPM {model_settings.requests_per_minute}；"
-            "原子命题、遗漏扫描、Object mention 和时间标注分别调用模型"
+            "Atomic 来源语义、遗漏扫描、Object Fragment Construction 和时间标注"
+            "分别调用模型；Atomic naming hints 在 Fragment Construction 中作为硬分组提示"
         ),
     )
     progress.report(
@@ -526,7 +579,8 @@ async def _run_compile_sources(args: argparse.Namespace) -> int:
             f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
             f"全局 RPM {model_settings.requests_per_minute}；"
             f"来源并发 {compilation_settings.max_parallel_sources}；"
-            "每个来源依次执行原子命题、遗漏扫描、Object mention 和时间标注"
+            "每个来源依次执行 Atomic 来源语义、遗漏扫描、Object Fragment Construction "
+            "和时间标注；Atomic naming hints 在 Fragment Construction 中作为硬分组提示"
         ),
     )
     progress.report(
@@ -574,9 +628,7 @@ async def _run_map_activity(args: argparse.Namespace) -> int:
     view_settings = ActivityViewSettings.from_environment(
         max_parallel_groups=args.max_parallel_groups,
     )
-    source_path, compilation, exploration, blocks = load_activity_view_inputs(
-        args.compilation
-    )
+    source_path, compilation, exploration, blocks = load_activity_view_inputs(args.compilation)
     paths = (
         open_activity_view_paths(args.resume)
         if args.resume
@@ -633,6 +685,102 @@ async def _run_map_activity(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _run_resolve_objects(args: argparse.Namespace) -> int:
+    progress = ConsoleProgressReporter()
+    _report_environment(args, progress)
+    if args.candidate_limit < 1:
+        raise ValueError("candidate-limit 必须大于 0")
+    if args.stop_after is not None and args.stop_after < 1:
+        raise ValueError("stop-after 必须大于 0")
+    model_settings = ModelSettings.from_environment(
+        model=args.model,
+        api_base_url=args.api_base_url,
+        api_key=args.api_key,
+        read_timeout_seconds=args.read_timeout_seconds,
+        max_retries=args.max_model_retries,
+        requests_per_minute=args.requests_per_minute,
+    )
+    exploration_settings = ExplorationSettings.from_environment(
+        embedding_model=args.embedding_model,
+    )
+    dataset = load_source_compilation(args.compilation)
+    paths = (
+        open_global_resolution_paths(args.resume)
+        if args.resume
+        else create_global_resolution_paths(dataset.directory)
+    )
+    state = load_working_registry(paths, dataset) if args.resume else initial_registry(dataset)
+    if not args.resume:
+        write_working_registry(paths, dataset, state)
+    progress.report(
+        "产物",
+        (
+            f"继续 Global Resolution 目录 {paths.directory}"
+            if args.resume
+            else f"已创建 Global Resolution 目录 {paths.directory}"
+        ),
+    )
+    progress.report("模型", f"模型输入、原始 SSE、正文和思考将实时保存到 {paths.model_streams}")
+    progress.report(
+        "全局对象",
+        (
+            f"Source {dataset.source_sha256[:12]}；"
+            f"从 Region {state.next_source_region_ordinal}/{len(dataset.regions)} 继续；"
+            f"每 Fragment 候选上限 {args.candidate_limit}；"
+            + (
+                "词面召回"
+                if args.no_bge
+                else f"词面 + BGE-M3（{exploration_settings.embedding_model}）召回"
+            )
+        ),
+    )
+    embedder = (
+        None if args.no_bge else BgeM3Embedder(exploration_settings.embedding_model, progress)
+    )
+    model = OpenAICompatibleChatModel(
+        model_settings,
+        progress=progress,
+        trace_directory=paths.model_streams,
+        show_model_stream=args.show_model_stream,
+    )
+    try:
+        state = await GlobalObjectResolverRunner(
+            model=model,
+            dataset=dataset,
+            paths=paths,
+            state=state,
+            retriever=GlobalObjectCandidateRetriever(
+                embedder=embedder,
+                candidate_limit=args.candidate_limit,
+            ),
+            progress=progress,
+        ).run_all(stop_after=args.stop_after)
+    finally:
+        await model.aclose()
+    if state.next_source_region_ordinal < len(dataset.regions):
+        progress.report(
+            "暂停",
+            f"已处理 {state.next_source_region_ordinal}/{len(dataset.regions)} 个 SourceRegion；"
+            f"使用 --resume {paths.directory} 继续",
+        )
+    else:
+        progress.report(
+            "完成",
+            f"Global Resolution：{len(state.objects)} 个 Object；{paths.artifact_json}",
+        )
+    return 0
+
+
+def _run_finalize_assertions(args: argparse.Namespace) -> int:
+    output, artifact = finalize_existing_global_resolution(args.resolution)
+    print(
+        f"Global Assertions 已完成：{artifact.total_assertions} 条 Assertion，"
+        f"{artifact.total_source_reference_atoms} 个来源 reference atom，"
+        f"新增 {artifact.total_literal_reference_atoms} 个字符串 reference atom；{output}"
+    )
+    return 0
+
+
 def main() -> None:
     args = build_parser().parse_args()
     try:
@@ -646,6 +794,10 @@ def main() -> None:
             raise SystemExit(asyncio.run(_run_compile_source(args)))
         if args.command == "compile-sources":
             raise SystemExit(asyncio.run(_run_compile_sources(args)))
+        if args.command == "resolve-objects":
+            raise SystemExit(asyncio.run(_run_resolve_objects(args)))
+        if args.command == "finalize-assertions":
+            raise SystemExit(_run_finalize_assertions(args))
         if args.command == "map-activity":
             raise SystemExit(asyncio.run(_run_map_activity(args)))
     except KeyboardInterrupt:
