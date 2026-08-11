@@ -957,6 +957,11 @@ async function importColdStart(
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
   try {
     await prisma.$transaction(async (transaction) => {
+      // GlobalObject 端使用 RESTRICT，不能只依赖 Compilation/Assertion 的级联顺序。
+      // 先移除当前快照的解析连接，再原子替换整个单一 Compilation。
+      await transaction.memoryGlobalAssertionLiteralReference.deleteMany();
+      await transaction.memoryGlobalAssertionReferenceResolution.deleteMany();
+      await transaction.memoryGlobalObjectSurfaceMembership.deleteMany();
       await transaction.memoryCompilation.deleteMany();
       await transaction.memoryCompilation.create({ data: {
         id: compilationId, schemaVersion: snapshot.schema_version, compiledAt: new Date(snapshot.created_at),
