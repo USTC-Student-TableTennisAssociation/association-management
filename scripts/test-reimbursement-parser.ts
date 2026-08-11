@@ -16,6 +16,9 @@ import {
 } from '../src/lib/tools/reimbursementParser';
 import * as path from 'path';
 import * as fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 async function main() {
   // 解析命令行参数

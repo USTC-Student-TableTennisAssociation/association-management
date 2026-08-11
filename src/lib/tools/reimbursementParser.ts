@@ -17,7 +17,8 @@
  *   - 审批单完整提取（预算明细各品目数量、单价、总金额）
  */
 
-import { recognize } from 'tesseract.js';
+import Tesseract from 'tesseract.js';
+const recognize = Tesseract.recognize;
 import * as path from 'path';
 import * as fs from 'fs';
 
