@@ -132,6 +132,29 @@ COLD_START_PERSPECTIVE_MAX_REVIEW_ROUNDS=5
 模型请求固定使用 SSE 流式响应。运行期间，模型输入、正文、思考和原始流会持续写入
 本次运行目录；即使调用失败，已收到的内容也会保留。
 
+## 运行常驻 BGE-M3 搜索服务
+
+基础编译中的区域判断和搜索层的 Assertion 向量索引复用同一个本地 `BgeM3Embedder`。
+Web 搜索需要模型跨请求常驻，因此在仓库根目录启动 HTTP 包装：
+
+```bash
+pnpm memory:serve-embeddings
+```
+
+也可以直接从本目录运行并覆盖监听地址或模型：
+
+```bash
+uv run cold-start serve-embeddings \
+  --host 127.0.0.1 \
+  --port 8765 \
+  --embedding-model BAAI/bge-m3
+```
+
+服务只监听本机、没有鉴权，提供 `GET /health` 和 `POST /embed`；不要直接暴露到公网。
+首次 `/embed` 请求才会延迟加载模型。设备未指定时依次选择 CUDA、MPS、CPU。完成
+Global Resolution 的数据库导入后，在仓库根目录运行 `pnpm memory:index-assertions` 建立或
+刷新搜索派生索引。
+
 ## 运行全局勘探
 
 从 `services/cold-start` 目录运行：

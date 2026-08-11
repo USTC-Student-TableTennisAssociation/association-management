@@ -22,6 +22,9 @@ AI 在系统中主要承担交互入口和知识处理辅助的角色。用户�
 * Next.js
 * TypeScript
 * Tailwind CSS
+* Vercel AI SDK
+* PostgreSQL + Prisma
+* 本地 BGE-M3
 
 ## 本地开发
 
@@ -34,10 +37,10 @@ pnpm install
 配置环境变量：
 
 ```bash
-cp .env.example .env.local
+cp .env.example .env
 ```
 
-在 `.env.local` 中填写：
+在 `.env` 中填写：
 
 ```env
 AI_API_KEY=
@@ -51,7 +54,33 @@ AI_MODEL=
 pnpm dev
 ```
 
-当前第一版 AI 入口使用 OpenAI-compatible 的 `/chat/completions` 接口。前端聊天记录暂存在浏览器页面状态中，刷新后不会保留。
+当前聊天入口使用 OpenAI-compatible 的 `/chat/completions` 接口和 AI SDK 流式 tool loop。
+模型会自行判断是否需要调用 `searchMemory`，并可继续用 `followObject` 沿已经发现的
+GlobalObject 探索 Assertion；问候、改写等不需要组织知识的请求不会强制搜索。前端聊天记录
+暂存在浏览器页面状态中，刷新后不会保留。
+
+## Object–Assertion 搜索
+
+搜索层只把 `MemoryGlobalObject` 视为 Object。`MemorySourceObjectFragment`、Fragment
+Reference 和 Resolution 只负责底层来源解析，不进入 AI 的主要概念。Assertion 命中后会按
+最终 Global Assertion 渲染，并连接到所有已解析的 GlobalObject（包括 literal reference
+atom）。SourceBlock 原文不进入默认回答上下文，只在回答完成后按实际使用的 `[A#]` 引用
+回查，用于来源展示。
+
+数据库已导入完成的 Global Resolution 后，启动本地 BGE-M3 服务并建立 Assertion 派生索引：
+
+```bash
+pnpm memory:serve-embeddings
+# 另一个终端；首次或 Global Resolution 重新导入后运行
+pnpm memory:index-assertions
+pnpm dev
+```
+
+`memory:serve-embeddings` 会在本机加载 `COLD_START_EMBEDDING_MODEL`，默认监听
+`127.0.0.1:8765`。模型名为 `BAAI/bge-m3` 时会优先使用本机 Hugging Face 缓存，首次缺少
+权重时才需要下载；也可以把该环境变量设为已下载模型的绝对路径。可用
+`curl http://127.0.0.1:8765/health` 检查服务。查询与索引必须使用相同的模型、修订标识和
+1024 维度。
 
 冷启动模块的安装、运行和产物说明见
 [`services/cold-start/README.md`](services/cold-start/README.md)。
