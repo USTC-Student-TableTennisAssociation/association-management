@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -37,6 +38,7 @@ from cold_start.config import (
     ModelSettings,
 )
 from cold_start.document import MinerUPdfLoader
+from cold_start.embedding_server import serve_embeddings
 from cold_start.environment import load_environment_file
 from cold_start.global_exploration import (
     GlobalExplorationRunner,
@@ -277,6 +279,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="继续未完成的活动视角草稿目录，复用已校验通过的分组结果",
     )
     _add_model_arguments(map_activity)
+
+    embedding_server = subparsers.add_parser(
+        "serve-embeddings",
+        help="启动供离线索引和在线搜索复用的常驻 BGE-M3 服务",
+    )
+    embedding_server.add_argument("--host", default="127.0.0.1")
+    embedding_server.add_argument("--port", type=int, default=8765)
+    embedding_server.add_argument(
+        "--embedding-model",
+        help="本地 BGE-M3 目录或 Hugging Face 模型名",
+    )
+    embedding_server.add_argument(
+        "--model-revision",
+        help="写入数据库和 Locate Trace 的模型修订标识",
+    )
+    embedding_server.add_argument(
+        "--env-file",
+        type=Path,
+        help="显式指定环境文件；不指定时从当前目录向上查找 .env",
+    )
     return parser
 
 
@@ -784,6 +806,22 @@ def _run_finalize_assertions(args: argparse.Namespace) -> int:
 def main() -> None:
     args = build_parser().parse_args()
     try:
+        if args.command == "serve-embeddings":
+            _report_environment(args, ConsoleProgressReporter())
+            settings = ExplorationSettings.from_environment(
+                embedding_model=args.embedding_model,
+            )
+            serve_embeddings(
+                host=args.host,
+                port=args.port,
+                model_name=settings.embedding_model,
+                model_revision=(
+                    args.model_revision
+                    or os.getenv("COLD_START_EMBEDDING_MODEL_REVISION")
+                    or "local"
+                ),
+            )
+            return
         if args.command == "explore":
             raise SystemExit(asyncio.run(_run_explore(args)))
         if args.command == "compile-leaf":

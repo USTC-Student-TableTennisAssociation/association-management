@@ -1,7 +1,7 @@
 generator client {
   provider            = "prisma-client"
   output              = "../src/generated/prisma"
-  importFileExtension = "js"
+  importFileExtension = "ts"
 }
 
 datasource db {
@@ -54,11 +54,12 @@ model MemoryCompilation {
   fragmentReferenceCount  Int      @map("fragment_reference_count")
   modelCalls              Int      @map("model_calls")
 
-  sourceRegions   MemorySourceRegion[]
-  sourceBlocks    MemorySourceBlock[]
-  objectFragments MemorySourceObjectFragment[]
-  assertions      MemoryAssertion[]
-  globalObjects   MemoryGlobalObject[]
+  sourceRegions           MemorySourceRegion[]
+  sourceBlocks            MemorySourceBlock[]
+  objectFragments         MemorySourceObjectFragment[]
+  assertions              MemoryAssertion[]
+  globalObjects           MemoryGlobalObject[]
+  assertionEmbeddingIndex MemoryAssertionEmbeddingIndex?
 
   @@index([sourceSha256])
   @@map("memory_compilations")
@@ -150,6 +151,7 @@ model MemoryAssertion {
   literalGlobalReferences MemoryGlobalAssertionLiteralReference[]
   sourceBlockLinks        MemoryAssertionSourceBlock[]
   temporalAnnotations     MemoryTemporalAnnotation[]
+  embedding               MemoryAssertionEmbedding?
 
   @@unique([sourceRegionId, sourceClaimId])
   @@map("memory_assertions")
@@ -269,4 +271,30 @@ model MemoryGlobalAssertionLiteralReference {
   @@index([assertionId, globalOrdinal])
   @@index([globalObjectId])
   @@map("memory_global_assertion_literal_references")
+}
+
+/// Search 派生的 Assertion 向量索引状态；基础 cold-start importer 不负责写入。
+model MemoryAssertionEmbeddingIndex {
+  compilationId         String   @id @map("compilation_id") @db.Uuid
+  modelKey              String   @map("model_key") @db.Text
+  modelRevision         String   @map("model_revision") @db.Text
+  dimension             Int
+  indexedAssertionCount Int      @map("indexed_assertion_count")
+  indexedAt             DateTime @default(now()) @map("indexed_at")
+
+  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+
+  @@map("memory_assertion_embedding_indexes")
+}
+
+/// Search 派生的 Assertion BGE-M3 向量；可在基础记忆重新导入后完整重建。
+model MemoryAssertionEmbedding {
+  assertionId String                      @id @map("assertion_id") @db.Uuid
+  contentHash String                      @map("content_hash") @db.Text
+  embedding   Unsupported("vector(1024)")
+  createdAt   DateTime                    @default(now()) @map("created_at")
+
+  assertion MemoryAssertion @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+
+  @@map("memory_assertion_embeddings")
 }

@@ -3,6 +3,8 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "rootDir": "..",
     "outDir": "../.prisma-source-semantics-build",
     "declaration": false,
@@ -14,6 +16,9 @@
   },
   "include": [
     "./import-source-semantics.ts",
+    "./index-assertions.ts",
+    "../src/memory/embedding-client.ts",
+    "../src/memory/resolved-assertion.ts",
     "../src/generated/prisma/**/*.ts"
   ]
 }
