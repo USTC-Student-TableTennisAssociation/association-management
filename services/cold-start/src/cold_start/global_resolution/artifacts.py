@@ -107,7 +107,9 @@ def load_source_compilation(path: Path) -> SourceCompilationDataset:
                 assertion_id=key,
                 source_node_id=source.region_node_id,
                 source_claim_id=assertion.claim_id,
+                kind=assertion.kind,
                 statement_template_markdown=assertion.statement_template_markdown,
+                semantic_fragment_ids=assertion.semantic_fragment_ids,
                 context_dependent=assertion.context_dependent,
                 supporting_blocks=supporting_blocks,
             )
@@ -137,6 +139,16 @@ def load_source_compilation(path: Path) -> SourceCompilationDataset:
             raise ValueError(
                 f"{source.region_node_id} Assertion 引用了未知 Fragment："
                 + "、".join(sorted(unknown_references))
+            )
+        unknown_semantic_links = {
+            fragment_id
+            for assertion in source.assertions
+            for fragment_id in assertion.semantic_fragment_ids
+        } - known_fragment_ids
+        if unknown_semantic_links:
+            raise ValueError(
+                f"{source.region_node_id} Reference Assertion 引用未知 Fragment："
+                + "、".join(sorted(unknown_semantic_links))
             )
         fragments = []
         for fragment in source.object_fragments:

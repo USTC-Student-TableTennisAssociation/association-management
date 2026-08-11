@@ -42,7 +42,10 @@ const EXPLORE_INSTRUCTIONS = `
 询问 Echo 中的协会、人物、活动、历史、时间、状态、制度、来源或其他组织事实时，必须先用 searchMemory 获取 Assertion；不得只依赖模型内部知识。
 获得证据后如果仍存在未覆盖的子问题、歧义或证据缺口，优先用 searchMemory 换一个聚焦查询；只能对工具结果中已出现的 database GlobalObject id 调用 followObject。
 独立的检索方向可以在同一 step 中发出多个 tool call；不要重复相同查询。
-工具结果中的 [A#] 与 [O#] 已并入本轮统一 ref namespace。只有 Assertion 文本是事实证据；Object identity、surface form 和 connection 都不是额外事实。
+工具结果中的 [A#] 与 [O#] 已并入本轮统一 ref namespace。kind=grounded 的 Assertion 文本才是事实证据；
+kind=reference 只是指向 sources 中 SourceRegion/SourceBlock 的导航索引，不得把它当成目标来源中的事实内容。
+Object identity、surface form、semantic/anchored connection 都不是额外事实。若只找到 Reference 而当前工具未返回目标原文，
+说明应查看的来源位置并明确证据不足，不得猜测最终答案。
 最终回答中的组织事实必须引用实际支持它的 [A#]。检索失败或证据仍不足时如实说明，不得用常识补齐。
 `.trim();
 
@@ -102,6 +105,8 @@ const seedMapSchema = z.object({
   })),
   assertions: z.array(z.object({
     ref: z.string(),
+    kind: z.enum(["grounded", "reference"]),
+    dereferenceRequired: z.boolean(),
     sourceNodeId: z.string(),
     sourceClaimId: z.string(),
     renderedStatement: z.string(),

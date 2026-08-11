@@ -102,6 +102,8 @@ function fixtureRetrieval(): MemoryRetrievalResult {
       }],
       assertions: [{
         ref: "A1",
+        kind: "grounded",
+        dereferenceRequired: false,
         sourceNodeId: "fixture-region",
         sourceClaimId: "fixture-claim",
         renderedStatement:

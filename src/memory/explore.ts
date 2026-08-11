@@ -7,6 +7,7 @@ import {
 } from "@/memory/resolved-assertion";
 import { getMemoryRetriever } from "@/memory/retriever";
 import type {
+  MemoryAssertionKind,
   MemoryObjectAssertionConnection,
   MemoryRetrievalResult,
   MemorySourceReference,
@@ -35,6 +36,8 @@ export type MemoryExploreObject = {
 
 export type MemoryExploreAssertion = {
   ref: string;
+  kind: MemoryAssertionKind;
+  dereferenceRequired: boolean;
   sourceNodeId: string;
   sourceClaimId: string;
   renderedStatement: string;
@@ -128,6 +131,8 @@ function compactObject(input: {
 
 function compactAssertion(input: {
   ref: string;
+  kind: MemoryAssertionKind;
+  dereferenceRequired: boolean;
   sourceNodeId: string;
   sourceClaimId: string;
   renderedStatement: string;
@@ -137,6 +142,8 @@ function compactAssertion(input: {
 }): MemoryExploreAssertion {
   return {
     ref: input.ref,
+    kind: input.kind,
+    dereferenceRequired: input.dereferenceRequired,
     sourceNodeId: input.sourceNodeId,
     sourceClaimId: input.sourceClaimId,
     renderedStatement: input.renderedStatement,
@@ -308,6 +315,7 @@ async function loadFollowAssertions(compilationId: string, assertionIds: string[
     select: {
       id: true,
       sourceClaimId: true,
+      kind: true,
       globalStatementTemplateMarkdown: true,
       contextDependent: true,
       compilation: { select: { sourceTitle: true, sourceSha256: true } },
@@ -331,6 +339,17 @@ async function loadFollowAssertions(compilationId: string, assertionIds: string[
       },
       literalGlobalReferences: {
         orderBy: { globalOrdinal: "asc" },
+        select: {
+          globalObject: {
+            select: {
+              id: true,
+              canonicalName: true,
+            },
+          },
+        },
+      },
+      semanticObjectLinks: {
+        orderBy: { globalObjectId: "asc" },
         select: {
           globalObject: {
             select: {
@@ -391,15 +410,24 @@ function resolvedReferences(assertion: FollowAssertionRecord): ResolvedAssertion
   return [...fragmentReferences, ...literalReferences];
 }
 
+function semanticReferences(assertion: FollowAssertionRecord): ResolvedAssertionReference[] {
+  return assertion.semanticObjectLinks.map(({ globalObject }) => ({
+    globalObjectId: globalObject.id,
+    canonicalName: globalObject.canonicalName,
+  }));
+}
+
 function renderFollowAssertion(assertion: FollowAssertionRecord): {
   row: FollowAssertionRecord;
   renderedStatement: string;
   references: ResolvedAssertionReference[];
+  associatedReferences: ResolvedAssertionReference[];
 } {
   const references = resolvedReferences(assertion);
   return {
     row: assertion,
     references,
+    associatedReferences: [...references, ...semanticReferences(assertion)],
     renderedStatement: renderResolvedAssertion({
       globalStatementTemplateMarkdown: assertion.globalStatementTemplateMarkdown,
       references,
@@ -468,7 +496,7 @@ export async function followObject(
 
   const compilationId = await latestCompilationId();
   throwIfAborted(runtime.signal);
-  const [targetObjects, fragmentResolutionRows, literalReferenceRows] = await Promise.all([
+  const [targetObjects, fragmentResolutionRows, literalReferenceRows, semanticLinkRows] = await Promise.all([
     loadGlobalObjects(compilationId, [normalizedObjectId]),
     getDatabase().memoryGlobalAssertionReferenceResolution.findMany({
       where: {
@@ -481,6 +509,16 @@ export async function followObject(
       take: FOLLOW_ASSERTION_SCAN_LIMIT + 1,
     }),
     getDatabase().memoryGlobalAssertionLiteralReference.findMany({
+      where: {
+        globalObjectId: normalizedObjectId,
+        globalObject: { compilationId },
+      },
+      select: { assertionId: true },
+      distinct: ["assertionId"],
+      orderBy: { assertionId: "asc" },
+      take: FOLLOW_ASSERTION_SCAN_LIMIT + 1,
+    }),
+    getDatabase().memoryAssertionSemanticObjectLink.findMany({
       where: {
         globalObjectId: normalizedObjectId,
         globalObject: { compilationId },
@@ -504,6 +542,7 @@ export async function followObject(
   const allAssertionIds = [...new Set([
     ...fragmentResolutionRows.map((row) => row.assertionId),
     ...literalReferenceRows.map((row) => row.assertionId),
+    ...semanticLinkRows.map((row) => row.assertionId),
   ])].sort();
   const scanTruncated = allAssertionIds.length > FOLLOW_ASSERTION_SCAN_LIMIT;
   const scannedAssertionIds = allAssertionIds.slice(0, FOLLOW_ASSERTION_SCAN_LIMIT);
@@ -529,7 +568,7 @@ export async function followObject(
   const selectedAssertions = rankedAssertions.slice(0, FOLLOW_ASSERTION_LIMIT);
   const relatedObjectIds = new Set<string>([normalizedObjectId]);
   for (const assertion of selectedAssertions) {
-    for (const reference of assertion.references) relatedObjectIds.add(reference.globalObjectId);
+    for (const reference of assertion.associatedReferences) relatedObjectIds.add(reference.globalObjectId);
   }
 
   const allObjects = await loadGlobalObjects(compilationId, [...relatedObjectIds]);
@@ -554,11 +593,13 @@ export async function followObject(
     ...object,
     lexicalMatch: false,
     semanticMatch: selectedAssertions.some((assertion) =>
-      assertion.references.some((reference) => reference.globalObjectId === object.id),
+      assertion.associatedReferences.some((reference) => reference.globalObjectId === object.id),
     ),
   }));
   const assertions = selectedAssertions.map((assertion) => compactAssertion({
     ref: assertionRefById.get(assertion.row.id)!,
+    kind: assertion.row.kind,
+    dereferenceRequired: assertion.row.kind === "reference",
     sourceNodeId: assertion.row.sourceRegion.sourceNodeId,
     sourceClaimId: assertion.row.sourceClaimId,
     renderedStatement: assertion.renderedStatement,
@@ -570,7 +611,7 @@ export async function followObject(
   const seenConnections = new Set<string>();
   for (const assertion of selectedAssertions) {
     const assertionRef = assertionRefById.get(assertion.row.id)!;
-    for (const objectId of new Set(assertion.references.map((reference) => reference.globalObjectId))) {
+    for (const objectId of new Set(assertion.associatedReferences.map((reference) => reference.globalObjectId))) {
       const objectRef = objectRefById.get(objectId);
       if (!objectRef) continue;
       const key = `${assertionRef}\u0000${objectRef}`;

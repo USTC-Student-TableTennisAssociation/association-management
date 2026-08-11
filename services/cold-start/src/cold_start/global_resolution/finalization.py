@@ -50,6 +50,7 @@ def build_global_assertions_artifact(
 
     reference_owners: dict[str, str] = {}
     surface_owners: dict[str, set[str]] = {}
+    fragment_owners: dict[tuple[str, str], set[str]] = {}
     for item in state.objects:
         for atom in item.reference_atoms:
             previous = reference_owners.setdefault(atom.atom_id, item.global_object_id)
@@ -57,6 +58,9 @@ def build_global_assertions_artifact(
                 raise ValueError(f"reference atom {atom.atom_id} 有多个当前 owner")
         for atom in item.surface_atoms:
             surface_owners.setdefault(atom.surface_form, set()).add(item.global_object_id)
+            fragment_owners.setdefault(
+                (atom.source_node_id, atom.source_fragment_id), set()
+            ).add(item.global_object_id)
     if set(reference_owners) != set(dataset.reference_atoms):
         raise ValueError("完整 Global Registry 未覆盖全部 source reference atoms")
 
@@ -73,12 +77,18 @@ def build_global_assertions_artifact(
     finalized = []
     source_reference_count = 0
     literal_reference_count = 0
+    semantic_link_count = 0
     for region in dataset.regions:
         for assertion in region.assertions:
             source = assertion.statement_template_markdown
             source_replacements = []
             placeholder_spans = []
-            for source_ordinal, match in enumerate(_FRAGMENT_REFERENCE_PATTERN.finditer(source)):
+            source_matches = (
+                list(_FRAGMENT_REFERENCE_PATTERN.finditer(source))
+                if assertion.kind == "grounded"
+                else []
+            )
+            for source_ordinal, match in enumerate(source_matches):
                 atom_id = reference_atom_id(
                     assertion.source_node_id,
                     assertion.source_claim_id,
@@ -98,11 +108,15 @@ def build_global_assertions_artifact(
                 )
                 placeholder_spans.append((match.start(), match.end()))
 
-            literal_candidates = _literal_candidates(
-                source,
-                surfaces_longest_first=surfaces_longest_first,
-                surface_owners=unique_surface_owners,
-                excluded_spans=placeholder_spans,
+            literal_candidates = (
+                _literal_candidates(
+                    source,
+                    surfaces_longest_first=surfaces_longest_first,
+                    surface_owners=unique_surface_owners,
+                    excluded_spans=placeholder_spans,
+                )
+                if assertion.kind == "grounded"
+                else []
             )
             literal_replacements = [
                 _Replacement(
@@ -126,9 +140,25 @@ def build_global_assertions_artifact(
             global_template = _replace_with_global_objects(source, replacements)
             if "{{fragment:" in global_template:
                 raise ValueError(f"{assertion.assertion_id} 仍包含 Source Fragment 引用")
+            linked_global_object_ids = list(
+                dict.fromkeys(
+                    object_id
+                    for fragment_id in assertion.semantic_fragment_ids
+                    for object_id in sorted(
+                        fragment_owners.get(
+                            (assertion.source_node_id, fragment_id), set()
+                        )
+                    )
+                )
+            )
+            if assertion.kind == "reference" and not linked_global_object_ids:
+                raise ValueError(
+                    f"{assertion.assertion_id} 的 semantic Fragment 没有当前 Global Object owner"
+                )
             finalized.append(
                 GlobalizedAssertion(
                     assertion_id=assertion.assertion_id,
+                    kind=assertion.kind,
                     global_statement_template_markdown=global_template,
                     reference_atoms=[
                         GlobalAssertionReferenceAtom(
@@ -141,10 +171,12 @@ def build_global_assertions_artifact(
                         )
                         for ordinal, item in enumerate(replacements)
                     ],
+                    linked_global_object_ids=linked_global_object_ids,
                 )
             )
             source_reference_count += len(source_replacements)
             literal_reference_count += len(literal_replacements)
+            semantic_link_count += len(linked_global_object_ids)
 
     return GlobalAssertionsArtifact(
         created_at=datetime.now(UTC),
@@ -157,6 +189,7 @@ def build_global_assertions_artifact(
         total_source_reference_atoms=source_reference_count,
         total_literal_reference_atoms=literal_reference_count,
         total_reference_atoms=source_reference_count + literal_reference_count,
+        total_semantic_object_links=semantic_link_count,
     )
 
 

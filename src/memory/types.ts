@@ -37,6 +37,8 @@ export type MemoryTemporalAnnotation = {
   basis: string;
 };
 
+export type MemoryAssertionKind = "grounded" | "reference";
+
 export type MemorySourceReference = {
   sourceTitle: string;
   sourceSha256: string;
@@ -63,6 +65,8 @@ export type MemoryObjectSeed = {
 
 export type MemoryAssertionSeed = {
   ref: string;
+  kind: MemoryAssertionKind;
+  dereferenceRequired: boolean;
   sourceNodeId: string;
   sourceClaimId: string;
   renderedStatement: string;

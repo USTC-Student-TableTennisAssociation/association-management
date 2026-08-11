@@ -26,6 +26,8 @@ describe("buildEvidenceContext", () => {
         assertions: [
           {
             ref: "A1",
+            kind: "grounded",
+            dereferenceRequired: false,
             sourceNodeId: "region-1",
             sourceClaimId: "claim-1",
             renderedStatement: "测试对象在 2025 年举办活动。",
@@ -67,6 +69,7 @@ describe("buildEvidenceContext", () => {
     });
 
     expect(context).toContain("[A1] 测试对象在 2025 年举办活动");
+    expect(context).toContain("类型：Grounded（事实证据）");
     expect(context).toContain("[O1] Global Object：测试对象");
     expect(context).toContain("Surface forms：测试对象、测试别名");
     expect(context).toContain("canonical identity 和 surface forms 只用于识别");

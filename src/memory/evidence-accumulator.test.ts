@@ -27,6 +27,8 @@ function initial(): MemoryRetrievalResult {
       }],
       assertions: [{
         ref: "A1",
+        kind: "grounded",
+        dereferenceRequired: false,
         sourceNodeId: "region-1",
         sourceClaimId: "claim-1",
         renderedStatement: "继往开来是换届活动。",
@@ -113,6 +115,8 @@ function explored(): MemoryExploreResult {
     assertions: [
       {
         ref: "A1",
+        kind: "grounded",
+        dereferenceRequired: false,
         sourceNodeId: "region-1",
         sourceClaimId: "claim-1",
         renderedStatement: "继往开来是换届活动。",
@@ -122,6 +126,8 @@ function explored(): MemoryExploreResult {
       },
       {
         ref: "A2",
+        kind: "grounded",
+        dereferenceRequired: false,
         sourceNodeId: "region-2",
         sourceClaimId: "claim-2",
         renderedStatement: "换届包含工作交接。",

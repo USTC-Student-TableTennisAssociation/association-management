@@ -208,6 +208,7 @@ async function loadAssertions(compilationId: string) {
     select: {
       id: true,
       sourceClaimId: true,
+      kind: true,
       globalStatementTemplateMarkdown: true,
       contextDependent: true,
       sourceRegion: { select: { sourceNodeId: true, label: true } },
@@ -230,6 +231,17 @@ async function loadAssertions(compilationId: string) {
       },
       literalGlobalReferences: {
         orderBy: { globalOrdinal: "asc" },
+        select: {
+          globalObject: {
+            select: {
+              id: true,
+              canonicalName: true,
+            },
+          },
+        },
+      },
+      semanticObjectLinks: {
+        orderBy: { globalObjectId: "asc" },
         select: {
           globalObject: {
             select: {
@@ -275,16 +287,28 @@ async function loadAssertions(compilationId: string) {
         canonicalName: globalObject.canonicalName,
       }),
     );
+    const semanticReferences = row.semanticObjectLinks.map<ResolvedAssertionReference>(
+      ({ globalObject }) => ({
+        globalObjectId: globalObject.id,
+        canonicalName: globalObject.canonicalName,
+      }),
+    );
     return {
       id: row.id,
       sourceClaimId: row.sourceClaimId,
+      kind: row.kind,
       globalStatementTemplateMarkdown: row.globalStatementTemplateMarkdown,
       contextDependent: row.contextDependent,
       sourceRegion: row.sourceRegion,
       references: [...fragmentReferences, ...literalReferences],
+      semanticReferences,
       temporalAnnotations: row.temporalAnnotations,
     };
   });
+}
+
+function associatedReferences(assertion: AssertionRecord): ResolvedAssertionReference[] {
+  return [...assertion.references, ...assertion.semanticReferences];
 }
 
 function rankObjectLexical(
@@ -583,7 +607,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
   for (const selected of selectedAssertions) {
     const assertionRef = assertionRefById.get(selected.id)!;
     const matches = matchesForAssertion(selected.hits);
-    for (const objectId of new Set(selected.assertion.references.map((reference) => reference.globalObjectId))) {
+    for (const objectId of new Set(associatedReferences(selected.assertion).map((reference) => reference.globalObjectId))) {
       const refs = supportingAssertionsByObject.get(objectId) ?? new Set<string>();
       refs.add(assertionRef);
       supportingAssertionsByObject.set(objectId, refs);
@@ -635,6 +659,8 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     const matchedBy = matchesForAssertion(item.hits);
     return {
       ref: assertionRefById.get(item.id)!,
+      kind: item.assertion.kind,
+      dereferenceRequired: item.assertion.kind === "reference",
       sourceNodeId: item.assertion.sourceRegion.sourceNodeId,
       sourceClaimId: item.assertion.sourceClaimId,
       renderedStatement: renderAssertion(item.assertion),
@@ -679,7 +705,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
   for (const selected of selectedAssertions) {
     const assertionRef = assertionRefById.get(selected.id)!;
     const resolvedObjectIds = new Set(
-      selected.assertion.references.map((reference) => reference.globalObjectId),
+      associatedReferences(selected.assertion).map((reference) => reference.globalObjectId),
     );
     for (const objectId of resolvedObjectIds) {
       const objectRef = objectRefById.get(objectId);

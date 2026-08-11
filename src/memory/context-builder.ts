@@ -45,8 +45,12 @@ function renderObject(seed: MemoryObjectSeed): string {
 }
 
 function renderAssertion(seed: MemoryAssertionSeed): string {
+  const assertionKind = seed.kind === "reference"
+    ? "Reference（导航索引，需要回读来源）"
+    : "Grounded（事实证据）";
   return [
     `[${seed.ref}] ${seed.renderedStatement}`,
+    `  类型：${assertionKind}`,
     `  上下文依赖：${seed.contextDependent ? "是，不得脱离当前来源语境扩张解读" : "否"}`,
     `  Facets：${seed.matchedFacets.join("、") || "无"}`,
     `  检索明细：${renderMatchSummary(seed) || "无"}`,
@@ -75,7 +79,8 @@ export function buildEvidenceContext(result: MemoryRetrievalResult): string {
     "其中只包含 Assertion 知识与最小来源标识，不包含 SourceBlock 原文。",
     "来源标题、页码、block 和 sourceNode 只用于引用追溯，不作为额外事实内容。",
     "Object 的 canonical identity 和 surface forms 只用于识别“指向哪个对象”，不是事实证据。",
-    "回答必须依据 Assertion。Object 名称命中或 Object–Assertion Connection 本身不证明 Assertion 之外的任何事实。",
+    "回答中的事实必须依据 kind=grounded 的 Assertion。Object 名称命中或 Object–Assertion Connection 本身不证明 Assertion 之外的任何事实。",
+    "kind=reference 只说明应去哪个 SourceRegion/SourceBlock 继续读取；在目标原文未被 dereference 前，不得将它当成最终事实证据。",
     "类似活动或其他 Object 的事实只能作为类比，不得改写成用户所问 Object 自身的事实。",
     "组织知识不足时必须明确说明，不得用知识库外常识补齐组织事实。",
     "重要结论请在句末引用对应 Assertion，例如 [A1]；只能引用下列真实存在的 Assertion ref。",

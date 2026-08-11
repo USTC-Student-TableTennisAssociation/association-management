@@ -31,7 +31,9 @@ type TemporalAnnotation = {
 
 type SourceAssertion = {
   claim_id: string;
+  kind: "grounded" | "reference";
   statement_template_markdown: string;
+  semantic_fragment_ids: string[];
   supporting_block_ids: string[];
   context_dependent: boolean;
   temporal_annotations: TemporalAnnotation[];
@@ -44,7 +46,7 @@ type SourceObjectFragment = {
 };
 
 type SourceRegion = {
-  schema_version: "source-semantics.v7";
+  schema_version: "source-semantics.v8";
   created_at: string;
   source: SourceMetadata;
   region_tree_schema_version: string;
@@ -63,7 +65,7 @@ type SourceRegion = {
 };
 
 type Snapshot = {
-  schema_version: "source-semantics-full.v7";
+  schema_version: "source-semantics-full.v8";
   created_at: string;
   source: SourceMetadata;
   region_tree_schema_version: string;
@@ -87,7 +89,7 @@ type StoredGlobalObject = {
 type GlobalResolutionArtifact = {
   schema_version: "global-resolution.v1";
   created_at: string;
-  source_semantics_schema_version: "source-semantics-full.v7";
+  source_semantics_schema_version: "source-semantics-full.v8";
   source_sha256: string;
   source_node_ids: string[];
   source_region_count: number;
@@ -107,14 +109,16 @@ type GlobalAssertionReferenceAtom = {
 
 type GlobalizedAssertion = {
   assertion_id: string;
+  kind: "grounded" | "reference";
   global_statement_template_markdown: string;
   reference_atoms: GlobalAssertionReferenceAtom[];
+  linked_global_object_ids: string[];
 };
 
 type GlobalAssertionsArtifact = {
-  schema_version: "global-assertions.v1";
+  schema_version: "global-assertions.v2";
   created_at: string;
-  source_semantics_schema_version: "source-semantics-full.v7";
+  source_semantics_schema_version: "source-semantics-full.v8";
   global_resolution_schema_version: "global-resolution.v1";
   source_sha256: string;
   source_node_ids: string[];
@@ -123,6 +127,7 @@ type GlobalAssertionsArtifact = {
   total_source_reference_atoms: number;
   total_literal_reference_atoms: number;
   total_reference_atoms: number;
+  total_semantic_object_links: number;
 };
 
 type ResolvedInput = {
@@ -149,6 +154,7 @@ type Arguments = { input: string; validateOnly: boolean };
 
 const FRAGMENT_REFERENCE_PATTERN = /\{\{fragment:([^{}]+)\}\}/g;
 const GLOBAL_OBJECT_REFERENCE_PATTERN = /\{\{object:([^{}]+)\}\}/g;
+const ASSERTION_KINDS = new Set(["grounded", "reference"]);
 const TEMPORAL_KINDS = new Set(["point", "range", "recurring", "relative", "contextual", "unknown"]);
 const TEMPORAL_PRECISIONS = new Set(["day", "month", "year", "academic_year", "semester", "unspecified"]);
 const TEMPORAL_DERIVATIONS = new Set(["source_explicit", "contextual_inference", "unresolved"]);
@@ -330,8 +336,8 @@ function referenceIds(template: string): string[] {
 
 function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Snapshot; blocks: ParsedBlock[] } {
   const root = objectValue(value, "source-semantics-full.json");
-  if (root.schema_version !== "source-semantics-full.v7") {
-    throw new Error(`不支持的来源语义版本：${String(root.schema_version)}；只接受 source-semantics-full.v7`);
+  if (root.schema_version !== "source-semantics-full.v8") {
+    throw new Error(`不支持的来源语义版本：${String(root.schema_version)}；只接受 source-semantics-full.v8`);
   }
   const source = validateSourceMetadata(root.source, "source");
   const blocks = arrayValue(blocksValue, "parsed-blocks.json").map((raw, index): ParsedBlock => {
@@ -361,7 +367,7 @@ function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Sna
   const sourceNodeIds = unique(stringArray(root.source_node_ids, "source_node_ids"), "source_node_ids");
   const sources = arrayValue(root.sources, "sources").map((raw, regionIndex): SourceRegion => {
     const region = objectValue(raw, `sources[${regionIndex}]`);
-    if (region.schema_version !== "source-semantics.v7") throw new Error(`sources[${regionIndex}] 不是 source-semantics.v7`);
+    if (region.schema_version !== "source-semantics.v8") throw new Error(`sources[${regionIndex}] 不是 source-semantics.v8`);
     const regionSource = validateSourceMetadata(region.source, `sources[${regionIndex}].source`);
     if (!sameSource(source, regionSource)) throw new Error(`sources[${regionIndex}].source 与全量 source 不一致`);
     if (region.region_tree_schema_version !== regionTreeSchemaVersion) throw new Error(`sources[${regionIndex}] 的区域树版本不一致`);
@@ -412,15 +418,40 @@ function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Sna
     }
     const assertionTemplates = new Map<string, string>();
     const assertionFragmentIds = new Map<string, string[]>();
+    const assertionKinds = new Map<string, SourceAssertion["kind"]>();
+    const assertionSemanticFragmentIds = new Map<string, string[]>();
     for (const [claimId, item] of assertionRawById) {
+      const kind = enumValue(
+        item.kind,
+        ASSERTION_KINDS,
+        `${regionNodeId}.${claimId}.kind`,
+      ) as SourceAssertion["kind"];
       const template = stringValue(item.statement_template_markdown, `${regionNodeId}.${claimId}.statement_template_markdown`);
       const refs = referenceIds(template);
       const remainder = template.replace(FRAGMENT_REFERENCE_PATTERN, "");
       if (remainder.includes("{{fragment:")) throw new Error(`${regionNodeId}.${claimId} 包含不完整的 Fragment 引用`);
       if (template.includes("{{object:")) throw new Error(`${regionNodeId}.${claimId} 提前包含 Global Object 引用`);
       if (refs.some((id) => !fragmentById.has(id))) throw new Error(`${regionNodeId}.${claimId} 包含不存在的 Fragment 引用`);
+      const semanticFragmentIds = unique(
+        stringArray(
+          item.semantic_fragment_ids,
+          `${regionNodeId}.${claimId}.semantic_fragment_ids`,
+        ),
+        `${regionNodeId}.${claimId}.semantic_fragment_ids`,
+      );
+      if (semanticFragmentIds.some((id) => !fragmentById.has(id))) {
+        throw new Error(`${regionNodeId}.${claimId} 包含不存在的 semantic Fragment 引用`);
+      }
+      if (kind === "grounded" && semanticFragmentIds.length) {
+        throw new Error(`${regionNodeId}.${claimId} grounded Assertion 不能使用 semantic links`);
+      }
+      if (kind === "reference" && (!semanticFragmentIds.length || refs.length)) {
+        throw new Error(`${regionNodeId}.${claimId} Reference Assertion 需要 semantic links 且不能使用 anchored Fragment token`);
+      }
       assertionTemplates.set(claimId, template);
       assertionFragmentIds.set(claimId, refs);
+      assertionKinds.set(claimId, kind);
+      assertionSemanticFragmentIds.set(claimId, semanticFragmentIds);
     }
 
     const assertions = [...assertionRawById].map(([claimId, item]): SourceAssertion => {
@@ -431,13 +462,19 @@ function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Sna
         ...supporting.map((id) => blockById.get(id)!.markdown),
         ...(assertionFragmentIds.get(claimId) ?? []).flatMap((id) => fragmentById.get(id)!.surface_forms),
       ];
+      const temporalAnnotations = arrayValue(item.temporal_annotations, `${regionNodeId}.${claimId}.temporal_annotations`).map((annotation, index) =>
+        validateTemporal(annotation, `${regionNodeId}.${claimId}.temporal_annotations[${index}]`, groundingTexts));
+      if (assertionKinds.get(claimId) === "reference" && temporalAnnotations.length) {
+        throw new Error(`${regionNodeId}.${claimId} Reference Assertion 不能有 Temporal Annotation`);
+      }
       return {
         claim_id: claimId,
+        kind: assertionKinds.get(claimId)!,
         statement_template_markdown: assertionTemplates.get(claimId)!,
+        semantic_fragment_ids: assertionSemanticFragmentIds.get(claimId)!,
         supporting_block_ids: supporting,
         context_dependent: booleanValue(item.context_dependent, `${regionNodeId}.${claimId}.context_dependent`),
-        temporal_annotations: arrayValue(item.temporal_annotations, `${regionNodeId}.${claimId}.temporal_annotations`).map((annotation, index) =>
-          validateTemporal(annotation, `${regionNodeId}.${claimId}.temporal_annotations[${index}]`, groundingTexts)),
+        temporal_annotations: temporalAnnotations,
       };
     });
     const initialClaimCount = integerValue(region.initial_claim_count, `${regionNodeId}.initial_claim_count`);
@@ -446,7 +483,7 @@ function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Sna
     const createdAt = new Date(stringValue(region.created_at, `${regionNodeId}.created_at`));
     if (Number.isNaN(createdAt.getTime())) throw new Error(`${regionNodeId}.created_at 不是有效时间`);
     return {
-      schema_version: "source-semantics.v7",
+      schema_version: "source-semantics.v8",
       created_at: createdAt.toISOString(),
       source: regionSource,
       region_tree_schema_version: regionTreeSchemaVersion,
@@ -479,7 +516,7 @@ function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Sna
   if (Number.isNaN(createdAt.getTime())) throw new Error("created_at 不是有效时间");
   return {
     snapshot: {
-      schema_version: "source-semantics-full.v7",
+      schema_version: "source-semantics-full.v8",
       created_at: createdAt.toISOString(),
       source,
       region_tree_schema_version: regionTreeSchemaVersion,
@@ -542,6 +579,11 @@ type ValidatedGlobalAssertions = {
   artifact: GlobalAssertionsArtifact;
   globalTemplates: Map<string, string>;
   literalReferences: LiteralReferenceAssignment[];
+  semanticLinks: Array<{
+    sourceNodeId: string;
+    sourceClaimId: string;
+    globalObjectId: string;
+  }>;
 };
 
 function validateGlobalResolution(value: unknown, snapshot: Snapshot): ValidatedResolution {
@@ -652,7 +694,7 @@ function validateGlobalResolution(value: unknown, snapshot: Snapshot): Validated
     artifact: {
       schema_version: "global-resolution.v1",
       created_at: createdAt.toISOString(),
-      source_semantics_schema_version: "source-semantics-full.v7",
+      source_semantics_schema_version: "source-semantics-full.v8",
       source_sha256: snapshot.source.sha256,
       source_node_ids: sourceNodeIds,
       source_region_count: sourceRegionCount,
@@ -679,7 +721,7 @@ function validateGlobalAssertions(
   resolution: ValidatedResolution,
 ): ValidatedGlobalAssertions {
   const root = objectValue(value, "global-assertions.json");
-  if (root.schema_version !== "global-assertions.v1") {
+  if (root.schema_version !== "global-assertions.v2") {
     throw new Error(`不支持的 Global Assertions 版本：${String(root.schema_version)}`);
   }
   if (root.source_semantics_schema_version !== snapshot.schema_version ||
@@ -707,6 +749,7 @@ function validateGlobalAssertions(
     ]),
   );
   const surfaceTextOwners = new Map<string, Set<string>>();
+  const fragmentOwners = new Map<string, Set<string>>();
   for (const assignment of resolution.surfaceAssignments) {
     const region = snapshot.sources.find((item) => item.region_node_id === assignment.sourceNodeId)!;
     const fragment = region.object_fragments.find((item) => item.fragment_id === assignment.sourceFragmentId)!;
@@ -714,6 +757,10 @@ function validateGlobalAssertions(
     const owners = surfaceTextOwners.get(surfaceText) ?? new Set<string>();
     owners.add(assignment.globalObjectId);
     surfaceTextOwners.set(surfaceText, owners);
+    const fragmentKey = localKey(assignment.sourceNodeId, assignment.sourceFragmentId);
+    const semanticOwners = fragmentOwners.get(fragmentKey) ?? new Set<string>();
+    semanticOwners.add(assignment.globalObjectId);
+    fragmentOwners.set(fragmentKey, semanticOwners);
   }
 
   const expectedAssertions = snapshot.sources.flatMap((region) =>
@@ -724,6 +771,7 @@ function validateGlobalAssertions(
   }
   const globalTemplates = new Map<string, string>();
   const literalReferences: LiteralReferenceAssignment[] = [];
+  const semanticLinks: ValidatedGlobalAssertions["semanticLinks"] = [];
   const validatedAssertions: GlobalizedAssertion[] = [];
   const allAtomIds = new Set<string>();
   let sourceReferenceCount = 0;
@@ -733,6 +781,23 @@ function validateGlobalAssertions(
     const assertionId = stringValue(item.assertion_id, `${label}.assertion_id`);
     const expectedAssertionId = `assertion:${expected.region.region_node_id}:${expected.assertion.claim_id}`;
     if (assertionId !== expectedAssertionId) throw new Error(`${label} 的 assertion_id/顺序不一致`);
+    const kind = enumValue(item.kind, ASSERTION_KINDS, `${label}.kind`) as GlobalizedAssertion["kind"];
+    if (kind !== expected.assertion.kind) throw new Error(`${label} 的 kind 与 Source Assertion 不一致`);
+    const linkedGlobalObjectIds = unique(
+      stringArray(item.linked_global_object_ids, `${label}.linked_global_object_ids`),
+      `${label}.linked_global_object_ids`,
+    );
+    const expectedLinkedObjectIds = [...new Set(
+      expected.assertion.semantic_fragment_ids.flatMap((fragmentId) =>
+        [...(fragmentOwners.get(localKey(expected.region.region_node_id, fragmentId)) ?? [])]
+          .sort()),
+    )];
+    if (JSON.stringify(linkedGlobalObjectIds) !== JSON.stringify(expectedLinkedObjectIds)) {
+      throw new Error(`${label} 的 linked_global_object_ids 与 semantic Fragment owners 不一致`);
+    }
+    if (linkedGlobalObjectIds.some((id) => !globalObjectIds.has(id))) {
+      throw new Error(`${label} 的 semantic link 引用未知 Global Object`);
+    }
     const globalTemplate = stringValue(
       item.global_statement_template_markdown,
       `${label}.global_statement_template_markdown`,
@@ -750,6 +815,9 @@ function validateGlobalAssertions(
     }
 
     const rawReferences = arrayValue(item.reference_atoms, `${label}.reference_atoms`);
+    if (kind === "reference" && rawReferences.length) {
+      throw new Error(`${label} Reference Assertion 不能使用 anchored reference atoms`);
+    }
     const references: GlobalAssertionReferenceAtom[] = [];
     const seenSourceAtoms = new Set<string>();
     let expectedLiteralOrdinal = 0;
@@ -823,9 +891,16 @@ function validateGlobalAssertions(
     globalTemplates.set(localKey(expected.region.region_node_id, expected.assertion.claim_id), globalTemplate);
     validatedAssertions.push({
       assertion_id: assertionId,
+      kind,
       global_statement_template_markdown: globalTemplate,
       reference_atoms: references,
+      linked_global_object_ids: linkedGlobalObjectIds,
     });
+    semanticLinks.push(...linkedGlobalObjectIds.map((globalObjectId) => ({
+      sourceNodeId: expected.region.region_node_id,
+      sourceClaimId: expected.assertion.claim_id,
+      globalObjectId,
+    })));
   }
 
   const totalAssertions = integerValue(root.total_assertions, "global-assertions.total_assertions");
@@ -838,23 +913,30 @@ function validateGlobalAssertions(
     "global-assertions.total_literal_reference_atoms",
   );
   const totalReferences = integerValue(root.total_reference_atoms, "global-assertions.total_reference_atoms");
+  const totalSemanticObjectLinks = integerValue(
+    root.total_semantic_object_links,
+    "global-assertions.total_semantic_object_links",
+  );
   if (totalAssertions !== expectedAssertions.length || totalSourceReferences !== sourceReferenceCount ||
       totalLiteralReferences !== literalReferences.length ||
-      totalReferences !== sourceReferenceCount + literalReferences.length) {
+      totalReferences !== sourceReferenceCount + literalReferences.length ||
+      totalSemanticObjectLinks !== semanticLinks.length) {
     throw new Error("Global Assertions totals 与实际内容不一致");
   }
   return {
     artifact: {
-      schema_version: "global-assertions.v1", created_at: createdAt.toISOString(),
-      source_semantics_schema_version: "source-semantics-full.v7",
+      schema_version: "global-assertions.v2", created_at: createdAt.toISOString(),
+      source_semantics_schema_version: "source-semantics-full.v8",
       global_resolution_schema_version: "global-resolution.v1",
       source_sha256: snapshot.source.sha256, source_node_ids: sourceNodeIds,
       assertions: validatedAssertions, total_assertions: totalAssertions,
       total_source_reference_atoms: totalSourceReferences,
       total_literal_reference_atoms: totalLiteralReferences, total_reference_atoms: totalReferences,
+      total_semantic_object_links: totalSemanticObjectLinks,
     },
     globalTemplates,
     literalReferences,
+    semanticLinks,
   };
 }
 
@@ -900,6 +982,7 @@ async function importColdStart(
   const assertions: Prisma.MemoryAssertionCreateManyInput[] = snapshot.sources.flatMap((region) => region.assertions.map((item) => ({
     id: assertionIds.get(localKey(region.region_node_id, item.claim_id))!, compilationId,
     sourceRegionId: regionIds.get(region.region_node_id)!, sourceClaimId: item.claim_id,
+    kind: item.kind,
     statementTemplateMarkdown: item.statement_template_markdown,
     globalStatementTemplateMarkdown: globalAssertions.globalTemplates.get(localKey(region.region_node_id, item.claim_id))!,
     contextDependent: item.context_dependent,
@@ -952,6 +1035,11 @@ async function importColdStart(
       sourceText: item.sourceText,
       globalObjectId: item.globalObjectId,
     }));
+  const semanticObjectLinks: Prisma.MemoryAssertionSemanticObjectLinkCreateManyInput[] =
+    globalAssertions.semanticLinks.map((item) => ({
+      assertionId: assertionIds.get(localKey(item.sourceNodeId, item.sourceClaimId))!,
+      globalObjectId: item.globalObjectId,
+    }));
 
   const pool = new Pool({ connectionString });
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
@@ -959,6 +1047,7 @@ async function importColdStart(
     await prisma.$transaction(async (transaction) => {
       // GlobalObject 端使用 RESTRICT，不能只依赖 Compilation/Assertion 的级联顺序。
       // 先移除当前快照的解析连接，再原子替换整个单一 Compilation。
+      await transaction.memoryAssertionSemanticObjectLink.deleteMany();
       await transaction.memoryGlobalAssertionLiteralReference.deleteMany();
       await transaction.memoryGlobalAssertionReferenceResolution.deleteMany();
       await transaction.memoryGlobalObjectSurfaceMembership.deleteMany();
@@ -984,6 +1073,7 @@ async function importColdStart(
       if (surfaceMemberships.length) await transaction.memoryGlobalObjectSurfaceMembership.createMany({ data: surfaceMemberships });
       if (referenceResolutions.length) await transaction.memoryGlobalAssertionReferenceResolution.createMany({ data: referenceResolutions });
       if (literalReferences.length) await transaction.memoryGlobalAssertionLiteralReference.createMany({ data: literalReferences });
+      if (semanticObjectLinks.length) await transaction.memoryAssertionSemanticObjectLink.createMany({ data: semanticObjectLinks });
     }, { maxWait: 30_000, timeout: 300_000 });
   } finally {
     await prisma.$disconnect();
@@ -1000,7 +1090,8 @@ async function importColdStart(
       assertion_source_block_links: assertionBlocks.length, temporal_annotations: temporals.length,
       global_objects: globalObjects.length, global_surface_memberships: surfaceMemberships.length,
       global_reference_resolutions: referenceResolutions.length,
-      global_literal_references: literalReferences.length },
+      global_literal_references: literalReferences.length,
+      semantic_object_links: semanticObjectLinks.length },
     source_region_ids: [...regionIds].map(([source_node_id, database_id]) => ({ source_node_id, database_id })),
     object_fragment_ids: snapshot.sources.flatMap((region) => region.object_fragments.map((item) => ({ source_node_id: region.region_node_id,
       source_fragment_id: item.fragment_id, database_id: fragmentIds.get(localKey(region.region_node_id, item.fragment_id))! }))),

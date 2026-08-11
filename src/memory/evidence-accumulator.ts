@@ -163,6 +163,8 @@ export class MemoryEvidenceAccumulator {
         this.assertionRefByKey.set(key, ref);
         this.assertions.push({
           ref,
+          kind: item.kind,
+          dereferenceRequired: item.dereferenceRequired,
           sourceNodeId: item.sourceNodeId,
           sourceClaimId: item.sourceClaimId,
           renderedStatement: item.renderedStatement,
@@ -173,6 +175,12 @@ export class MemoryEvidenceAccumulator {
           sources: item.sources.map(withoutExcerpt),
         });
       } else if (existing) {
+        if (
+          existing.kind !== item.kind ||
+          existing.dereferenceRequired !== item.dereferenceRequired
+        ) {
+          throw new Error(`Assertion ${key} 的 kind/dereference 标记不一致`);
+        }
         existing.temporalAnnotations = mergeUnique(
           existing.temporalAnnotations,
           item.temporalAnnotations,

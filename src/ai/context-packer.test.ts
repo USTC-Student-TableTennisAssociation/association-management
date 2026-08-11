@@ -29,6 +29,8 @@ function message(role: "user" | "assistant", content: string): ModelMessage {
 function memory(id: string, content: string): MemoryAssertionSeed {
   return {
     ref: id,
+    kind: "grounded",
+    dereferenceRequired: false,
     sourceNodeId: "region-test",
     sourceClaimId: id,
     renderedStatement: content,

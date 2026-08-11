@@ -35,6 +35,7 @@ from cold_start.global_resolution.models import (
     RegistryState,
     ResolutionGroup,
     ResolutionTarget,
+    SourceBlockEvidence,
     SourceFragmentDossier,
     SourceRegionDossier,
     SurfaceAtom,
@@ -61,13 +62,19 @@ def assertion(
     claim_id: str,
     *,
     statement: str = "一条来源命题",
+    kind: str = "grounded",
+    semantic_fragment_ids: list[str] | None = None,
+    supporting_blocks: list[SourceBlockEvidence] | None = None,
 ) -> AssertionEvidence:
     return AssertionEvidence(
         assertion_id=assertion_key(source_node_id, claim_id),
         source_node_id=source_node_id,
         source_claim_id=claim_id,
+        kind=kind,
         statement_template_markdown=statement,
+        semantic_fragment_ids=semantic_fragment_ids or [],
         context_dependent=False,
+        supporting_blocks=supporting_blocks or [],
     )
 
 
@@ -181,7 +188,7 @@ def dataset(
     snapshot = cast(
         FullSourceSemanticSnapshot,
         SimpleNamespace(
-            schema_version="source-semantics-full.v7",
+            schema_version="source-semantics-full.v8",
             source=SimpleNamespace(sha256="a" * 64),
             source_node_ids=[item.source_node_id for item in regions],
         ),
@@ -687,6 +694,63 @@ def test_global_assertion_finalization_replaces_fragments_and_adds_literal_atoms
         "二课系统",
         "报销",
     ]
+
+
+def test_case_c_reference_finalization_links_five_objects_without_span_replacement() -> None:
+    event_names = ["继往开来", "四国大战", "萍水相逢", "会员大赛", "院系杯"]
+    source_fragments = [
+        fragment("region-0001", f"fragment-{index}", [name])
+        for index, name in enumerate(event_names, start=1)
+    ]
+    reference_evidence = assertion(
+        "region-0001",
+        "claim-1",
+        kind="reference",
+        statement="乒协主要品牌赛事的名称、比赛形式和基本定位集中记录于“品牌活动”表格。",
+        semantic_fragment_ids=[item.source_fragment_id for item in source_fragments],
+        supporting_blocks=[
+            SourceBlockEvidence(
+                source_block_id="p0010-b0004",
+                markdown="品牌活动表格原文",
+            )
+        ],
+    )
+    incoming = region(
+        "region-0001",
+        source_fragments,
+        assertions=[reference_evidence],
+    )
+    source_dataset = dataset([incoming], [reference_evidence])
+    state = registry(
+        ["region-0001"],
+        cursor=1,
+        objects=[
+            global_object(
+                f"global-event-{index}",
+                f"global-000001-{index:02d}",
+                name,
+                source_fragment.surface_atoms,
+            )
+            for index, (name, source_fragment) in enumerate(
+                zip(event_names, source_fragments, strict=True),
+                start=1,
+            )
+        ],
+    )
+
+    artifact = build_global_assertions_artifact(source_dataset, state)
+    finalized = artifact.assertions[0]
+
+    assert finalized.kind == "reference"
+    assert finalized.global_statement_template_markdown == reference_evidence.statement_template_markdown
+    assert all(name not in finalized.global_statement_template_markdown for name in event_names)
+    assert finalized.reference_atoms == []
+    assert finalized.linked_global_object_ids == [
+        f"global-event-{index}" for index in range(1, 6)
+    ]
+    assert artifact.total_reference_atoms == 0
+    assert artifact.total_semantic_object_links == 5
+    assert reference_evidence.supporting_blocks[0].source_block_id == "p0010-b0004"
 
 
 def test_global_assertion_literal_matching_is_longest_and_skips_ambiguous_surfaces() -> None:

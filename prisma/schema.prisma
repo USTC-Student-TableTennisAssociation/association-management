@@ -32,6 +32,11 @@ enum MemoryTemporalDerivation {
   unresolved
 }
 
+enum MemoryAssertionKind {
+  grounded
+  reference
+}
+
 /// 一次已完成 Global Resolution 的 cold-start package。
 /// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个记忆层。
 model MemoryCompilation {
@@ -134,21 +139,23 @@ model MemorySourceObjectFragment {
   @@map("memory_source_object_fragments")
 }
 
-/// 来源关于一个或多个 Object 作出的冻结原子命题。
+/// 来源中的内聚知识单元，或指向明确来源区域的导航索引。
 model MemoryAssertion {
-  id                              String   @id @default(uuid()) @db.Uuid
-  compilationId                   String   @map("compilation_id") @db.Uuid
-  sourceRegionId                  String   @map("source_region_id") @db.Uuid
-  sourceClaimId                   String   @map("source_claim_id") @db.Text
-  statementTemplateMarkdown       String   @map("statement_template_markdown") @db.Text
-  globalStatementTemplateMarkdown String   @map("global_statement_template_markdown") @db.Text
-  contextDependent                Boolean  @map("context_dependent")
-  createdAt                       DateTime @default(now()) @map("created_at")
+  id                              String              @id @default(uuid()) @db.Uuid
+  compilationId                   String              @map("compilation_id") @db.Uuid
+  sourceRegionId                  String              @map("source_region_id") @db.Uuid
+  sourceClaimId                   String              @map("source_claim_id") @db.Text
+  kind                            MemoryAssertionKind @default(grounded)
+  statementTemplateMarkdown       String              @map("statement_template_markdown") @db.Text
+  globalStatementTemplateMarkdown String              @map("global_statement_template_markdown") @db.Text
+  contextDependent                Boolean             @map("context_dependent")
+  createdAt                       DateTime            @default(now()) @map("created_at")
 
   compilation             MemoryCompilation                       @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   sourceRegion            MemorySourceRegion                      @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
   fragmentReferences      MemoryAssertionFragmentReference[]
   literalGlobalReferences MemoryGlobalAssertionLiteralReference[]
+  semanticObjectLinks     MemoryAssertionSemanticObjectLink[]
   sourceBlockLinks        MemoryAssertionSourceBlock[]
   temporalAnnotations     MemoryTemporalAnnotation[]
   embedding               MemoryAssertionEmbedding?
@@ -215,14 +222,28 @@ model MemoryGlobalObject {
   canonicalName           String @map("canonical_name") @db.Text
   identitySummaryMarkdown String @map("identity_summary_markdown") @db.Text
 
-  compilation          MemoryCompilation                          @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  surfaceMemberships   MemoryGlobalObjectSurfaceMembership[]
-  referenceResolutions MemoryGlobalAssertionReferenceResolution[]
-  literalReferences    MemoryGlobalAssertionLiteralReference[]
+  compilation            MemoryCompilation                          @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  surfaceMemberships     MemoryGlobalObjectSurfaceMembership[]
+  referenceResolutions   MemoryGlobalAssertionReferenceResolution[]
+  literalReferences      MemoryGlobalAssertionLiteralReference[]
+  semanticAssertionLinks MemoryAssertionSemanticObjectLink[]
 
   @@unique([compilationId, globalObjectKey])
   @@index([compilationId])
   @@map("memory_global_objects")
+}
+
+/// Reference Assertion 对 Global Object 的语义覆盖；不要求 Object 名称出现在 Assertion 正文中。
+model MemoryAssertionSemanticObjectLink {
+  assertionId    String @map("assertion_id") @db.Uuid
+  globalObjectId String @map("global_object_id") @db.Uuid
+
+  assertion    MemoryAssertion    @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  globalObject MemoryGlobalObject @relation(fields: [globalObjectId], references: [id], onDelete: Restrict)
+
+  @@id([assertionId, globalObjectId])
+  @@index([globalObjectId])
+  @@map("memory_assertion_semantic_object_links")
 }
 
 /// 一个 source-local surface form 当前归属哪个 Global Object。
