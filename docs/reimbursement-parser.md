@@ -107,6 +107,14 @@ type MatchResult = {
 
 ## 改进历史
 
+### fix: 适配 ESM 项目结构与 pnpm 构建
+
+| # | 问题 | 改进 |
+|---|------|------|
+| 1 | `import { recognize }` 在 ESM 项目中对 CJS 包报错 | 改为默认导入 `Tesseract.recognize` |
+| 2 | `__dirname` 在 ESM 下报未定义 | 用 `fileURLToPath(import.meta.url)` 替代 |
+| 3 | pnpm `ignoredBuiltDependencies` 与 `allowBuilds` 配置冲突 | 统一用 `allowBuilds`，移除 `ignoredBuiltDependencies` |
+
 ### v3 改进内容
 
 | # | 问题 | 改进 |
