@@ -635,6 +635,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     const matchedBy = matchesForAssertion(item.hits);
     return {
       ref: assertionRefById.get(item.id)!,
+      id: item.assertion.id,
       sourceNodeId: item.assertion.sourceRegion.sourceNodeId,
       sourceClaimId: item.assertion.sourceClaimId,
       renderedStatement: renderAssertion(item.assertion),

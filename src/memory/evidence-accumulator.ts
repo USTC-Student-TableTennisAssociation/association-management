@@ -163,6 +163,7 @@ export class MemoryEvidenceAccumulator {
         this.assertionRefByKey.set(key, ref);
         this.assertions.push({
           ref,
+          ...(item.id ? { id: item.id } : {}),
           sourceNodeId: item.sourceNodeId,
           sourceClaimId: item.sourceClaimId,
           renderedStatement: item.renderedStatement,
@@ -173,6 +174,7 @@ export class MemoryEvidenceAccumulator {
           sources: item.sources.map(withoutExcerpt),
         });
       } else if (existing) {
+        existing.id ??= item.id;
         existing.temporalAnnotations = mergeUnique(
           existing.temporalAnnotations,
           item.temporalAnnotations,

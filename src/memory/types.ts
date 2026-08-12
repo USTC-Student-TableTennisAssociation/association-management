@@ -63,6 +63,8 @@ export type MemoryObjectSeed = {
 
 export type MemoryAssertionSeed = {
   ref: string;
+  /** Database identity is present for the real Object–Assertion retriever. */
+  id?: string;
   sourceNodeId: string;
   sourceClaimId: string;
   renderedStatement: string;
