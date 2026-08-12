@@ -163,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     compile_source = subparsers.add_parser(
         "compile-source",
-        help="分四遍编译一个来源节点的内聚 Assertion、Object Fragment 和时间标注",
+        help="分三遍编译一个来源节点的内聚 Assertion 与 Object Fragment",
     )
     compile_source.add_argument(
         "--run",
@@ -542,8 +542,8 @@ async def _run_compile_source(args: argparse.Namespace) -> int:
         (
             f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
             f"全局 RPM {model_settings.requests_per_minute}；"
-            "内聚 Assertion/Reference、遗漏扫描、Object Fragment Construction 和时间标注"
-            "分别调用模型；source naming hints 在 Fragment Construction 中作为硬分组提示"
+            "内聚 Assertion/Reference、遗漏扫描和 Object Fragment Construction 分别调用模型；"
+            "source naming hints 在 Fragment Construction 中作为硬分组提示"
         ),
     )
     progress.report(
@@ -601,8 +601,9 @@ async def _run_compile_sources(args: argparse.Namespace) -> int:
             f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
             f"全局 RPM {model_settings.requests_per_minute}；"
             f"来源并发 {compilation_settings.max_parallel_sources}；"
-            "每个来源依次执行内聚 Assertion/Reference、遗漏扫描、Object Fragment Construction "
-            "和时间标注；source naming hints 在 Fragment Construction 中作为硬分组提示"
+            "整份 Source 先进行一次保守 Source Time 提取；每个来源依次执行内聚 "
+            "Assertion/Reference、遗漏扫描和 Object Fragment Construction；source naming hints "
+            "在 Fragment Construction 中作为硬分组提示"
         ),
     )
     progress.report(

@@ -3,7 +3,7 @@ import type {
   MemoryObjectSeed,
   MemoryRetrievalResult,
   MemorySourceReference,
-  MemoryTemporalAnnotation,
+  MemorySourceTime,
   StructuredSeedMap,
 } from "@/memory/types";
 
@@ -16,16 +16,25 @@ function renderMatchSummary(seed: MemoryObjectSeed | MemoryAssertionSeed): strin
     .join("；");
 }
 
-function renderTemporal(annotation: MemoryTemporalAnnotation): string {
-  const bounds = annotation.start || annotation.end
-    ? `，范围 ${annotation.start ?? "?"} → ${annotation.end ?? "?"}`
-    : "";
-  return `${annotation.rawExpression} → ${annotation.normalizedText}（${annotation.kind}/${annotation.precision}/${annotation.derivation}${bounds}）`;
-}
-
 function renderSource(source: MemorySourceReference): string {
   const pages = source.pages.length ? `，页码 ${source.pages.join(", ")}` : "";
   return `${source.sourceTitle}，block=${source.sourceBlockId}${pages}，sourceNode=${source.sourceNodeId}`;
+}
+
+function renderSourceTime(sourceTime: MemorySourceTime | undefined): string {
+  if (!sourceTime) return "未加载。";
+  const evidence = sourceTime.supportingBlocks.length
+    ? sourceTime.supportingBlocks.map((block) => {
+        const pages = block.pages.length ? `，页码 ${block.pages.join(", ")}` : "";
+        return `${block.sourceBlockId}${pages}`;
+      }).join("；")
+    : "无";
+  return [
+    `来源：${sourceTime.sourceTitle}`,
+    `来源时间：${sourceTime.text ?? "未提供明确时间锚点"}`,
+    `来源时间证据块：${evidence}`,
+    "说明：来源时间只定位文档历史位置，不表示其中全部 Assertion 的有效期。",
+  ].join("\n");
 }
 
 function renderObject(seed: MemoryObjectSeed): string {
@@ -54,8 +63,7 @@ function renderAssertion(seed: MemoryAssertionSeed): string {
     `  上下文依赖：${seed.contextDependent ? "是，不得脱离当前来源语境扩张解读" : "否"}`,
     `  Facets：${seed.matchedFacets.join("、") || "无"}`,
     `  检索明细：${renderMatchSummary(seed) || "无"}`,
-    `  时间：${seed.temporalAnnotations.length ? seed.temporalAnnotations.map(renderTemporal).join("；") : "未标注"}`,
-    `  来源：${seed.sources.length ? seed.sources.map(renderSource).join("\n  - ") : "未加载"}`,
+    `  Assertion 证据块：${seed.sources.length ? seed.sources.map(renderSource).join("\n  - ") : "未加载"}`,
   ].join("\n");
 }
 
@@ -87,6 +95,9 @@ export function buildEvidenceContext(result: MemoryRetrievalResult): string {
     "",
     "## Query Facets",
     facets || "无。",
+    "",
+    "## Source Time Provenance",
+    renderSourceTime(seedMap.sourceTime),
     "",
     "## Global Object Seeds",
     objects,
@@ -120,6 +131,7 @@ export function sliceSeedMapAssertions(
   const objectRefs = new Set(objects.map((item) => item.ref));
   return {
     facets: seedMap.facets,
+    ...(seedMap.sourceTime ? { sourceTime: seedMap.sourceTime } : {}),
     objects,
     assertions,
     connections: seedMap.connections.filter(

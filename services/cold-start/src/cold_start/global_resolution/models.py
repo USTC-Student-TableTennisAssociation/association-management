@@ -239,8 +239,8 @@ class RegistryState(StrictModel):
 
 
 class GlobalResolutionWorking(StrictModel):
-    schema_version: Literal["global-resolution-working.v1"] = "global-resolution-working.v1"
-    source_semantics_schema_version: Literal["source-semantics-full.v8"]
+    schema_version: Literal["global-resolution-working.v2"] = "global-resolution-working.v2"
+    source_semantics_schema_version: Literal["source-semantics-full.v9"]
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
     next_source_region_ordinal: int = Field(ge=0)
@@ -248,9 +248,9 @@ class GlobalResolutionWorking(StrictModel):
 
 
 class GlobalResolutionArtifact(StrictModel):
-    schema_version: Literal["global-resolution.v1"] = "global-resolution.v1"
+    schema_version: Literal["global-resolution.v2"] = "global-resolution.v2"
     created_at: datetime
-    source_semantics_schema_version: Literal["source-semantics-full.v8"]
+    source_semantics_schema_version: Literal["source-semantics-full.v9"]
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
     source_region_count: int = Field(ge=0)
@@ -304,10 +304,10 @@ class GlobalizedAssertion(StrictModel):
 
 
 class GlobalAssertionsArtifact(StrictModel):
-    schema_version: Literal["global-assertions.v2"] = "global-assertions.v2"
+    schema_version: Literal["global-assertions.v3"] = "global-assertions.v3"
     created_at: datetime
-    source_semantics_schema_version: Literal["source-semantics-full.v8"]
-    global_resolution_schema_version: Literal["global-resolution.v1"]
+    source_semantics_schema_version: Literal["source-semantics-full.v9"]
+    global_resolution_schema_version: Literal["global-resolution.v2"]
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
     assertions: list[GlobalizedAssertion]

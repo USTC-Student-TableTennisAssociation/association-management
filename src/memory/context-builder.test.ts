@@ -3,12 +3,18 @@ import { describe, expect, it } from "vitest";
 import { buildEvidenceContext } from "@/memory/context-builder";
 
 describe("buildEvidenceContext", () => {
-  it("renders assertions, objects, connections, time, and source provenance", () => {
+  it("renders assertions, objects, connections, source time, and provenance", () => {
     const context = buildEvidenceContext({
       query: "test",
       mode: "fixture",
       seedMap: {
         facets: [{ id: "facet-0", text: "test", source: "query" }],
+        sourceTime: {
+          sourceTitle: "测试来源",
+          sourceSha256: "sha",
+          text: "2026年春",
+          supportingBlocks: [{ sourceBlockId: "block-time", pages: [2] }],
+        },
         objects: [
           {
             ref: "O1",
@@ -34,17 +40,6 @@ describe("buildEvidenceContext", () => {
             contextDependent: true,
             matchedBy: [],
             matchedFacets: ["facet-0"],
-            temporalAnnotations: [
-              {
-                rawExpression: "2025 年",
-                kind: "point",
-                normalizedText: "2025年",
-                start: "2025",
-                precision: "year",
-                derivation: "source_explicit",
-                basis: "原文明确写出",
-              },
-            ],
             sources: [
               {
                 sourceTitle: "测试来源",
@@ -74,7 +69,9 @@ describe("buildEvidenceContext", () => {
     expect(context).toContain("Surface forms：测试对象、测试别名");
     expect(context).toContain("canonical identity 和 surface forms 只用于识别");
     expect(context).toContain("上下文依赖：是，不得脱离当前来源语境扩张解读");
-    expect(context).toContain("2025 年 → 2025年");
+    expect(context).toContain("来源时间：2026年春");
+    expect(context).toContain("来源时间证据块：block-time，页码 2");
+    expect(context).toContain("不表示其中全部 Assertion 的有效期");
     expect(context).toContain("测试来源，block=block-1");
     expect(context).toContain("A1 ↔ O1");
     expect(context).toContain("只能引用下列真实存在的 Assertion ref");

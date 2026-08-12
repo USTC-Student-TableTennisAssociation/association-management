@@ -24,7 +24,6 @@ function retrieval(): MemoryRetrievalResult {
         contextDependent: false,
         matchedBy: [],
         matchedFacets: [],
-        temporalAnnotations: [],
         sources: [{
           sourceTitle: "Source",
           sourceSha256: "sha",

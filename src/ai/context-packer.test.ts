@@ -37,7 +37,6 @@ function memory(id: string, content: string): MemoryAssertionSeed {
     contextDependent: false,
     matchedBy: [],
     matchedFacets: [],
-    temporalAnnotations: [],
     sources: [
       {
         sourceTitle: "测试来源",

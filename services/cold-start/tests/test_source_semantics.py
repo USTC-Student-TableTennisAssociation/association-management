@@ -13,7 +13,7 @@ from cold_start.compilation.source_semantics import (
     CONSERVATIVE_ATOMIC_FALLBACK_SYSTEM_PROMPT,
     MISSING_CLAIMS_SYSTEM_PROMPT,
     OBJECT_FRAGMENT_SYSTEM_PROMPT,
-    TEMPORAL_ANNOTATION_SYSTEM_PROMPT,
+    SOURCE_TIME_SYSTEM_PROMPT,
     AssertionKind,
     AtomicClaimSubmission,
     FragmentAssertionTemplateDraft,
@@ -27,15 +27,13 @@ from cold_start.compilation.source_semantics import (
     SourceObjectFragmentCheckpoint,
     SourceSameReferentDraft,
     SourceSemanticCompiler,
-    TemporalAnnotation,
-    TemporalAnnotationSubmission,
-    TemporalClaimAnnotations,
-    _attach_temporal_annotations,
+    SourceTimeSubmission,
     _materialize_fragments,
     _validate_fragment_checkpoint,
     _validate_fragment_submission,
+    _validate_missing_claims,
     _validate_same_referent_drafts,
-    _validate_temporal_submission,
+    _validate_source_time,
     create_full_source_semantic_paths,
     create_source_semantic_paths,
     normalize_json_fence,
@@ -174,23 +172,6 @@ def _one_fragment_turn(
     )
 
 
-def _temporal_turn(
-    *claim_ids: str,
-    annotations: Mapping[str, list[dict[str, object]]] | None = None,
-) -> ModelTurn:
-    annotations = annotations or {}
-    return _json_turn(
-        {
-            "claims": [
-                {
-                    "claim_id": claim_id,
-                    "temporal_annotations": annotations.get(claim_id, []),
-                }
-                for claim_id in claim_ids
-            ]
-        }
-    )
-
 
 def _blocks(
     paragraph: str = "继往开来杯过去通常申请两个场地。大型比赛必须提前申请场地。",
@@ -271,14 +252,13 @@ def _exploration() -> GlobalExplorationSnapshot:
 
 
 @pytest.mark.asyncio
-async def test_compiles_four_direct_json_stages(tmp_path: Path) -> None:
+async def test_compiles_three_direct_json_stages(tmp_path: Path) -> None:
     paths = create_source_semantic_paths(tmp_path, "region-0002")
     model = FakeJsonModel(
         [
             _initial_turn(),
             _review_turn(),
             _fragment_turn(),
-            _temporal_turn("claim-1", "claim-2"),
         ]
     )
 
@@ -291,7 +271,7 @@ async def test_compiles_four_direct_json_stages(tmp_path: Path) -> None:
 
     assert snapshot.initial_claim_count == 1
     assert snapshot.review_addition_count == 1
-    assert snapshot.model_calls == 4
+    assert snapshot.model_calls == 3
     assert [item.claim_id for item in snapshot.assertions] == ["claim-1", "claim-2"]
     assert snapshot.assertions[0].statement_template_markdown.startswith(
         "{{fragment:fragment-1}}"
@@ -310,11 +290,10 @@ async def test_compiles_four_direct_json_stages(tmp_path: Path) -> None:
     assert paths.initial_claims_json.exists()
     assert paths.reviewed_claims_json.exists()
     assert paths.object_fragments_json.exists()
-    assert paths.temporal_annotations_json.exists()
     assert paths.snapshot_json.exists()
     assert paths.report_markdown.exists()
 
-    assert len(model.calls) == 4
+    assert len(model.calls) == 3
     assert all(call["thinking"] == "enabled" for call in model.calls)
     assert all(call["temperature"] is None for call in model.calls)
     assert all(call["tools"] == () for call in model.calls)
@@ -344,9 +323,14 @@ async def test_compiles_four_direct_json_stages(tmp_path: Path) -> None:
         "statement_template_markdown",
         "semantic_fragment_keys",
     }
-    temporal_system = str(model.calls[3]["messages"][0]["content"])
-    assert temporal_system == TEMPORAL_ANNOTATION_SYSTEM_PROMPT
-    assert snapshot.assertions[0].temporal_annotations == []
+    assert set(snapshot.assertions[0].model_dump()) == {
+        "claim_id",
+        "kind",
+        "statement_template_markdown",
+        "semantic_fragment_ids",
+        "supporting_block_ids",
+        "context_dependent",
+    }
 
 
 @pytest.mark.asyncio
@@ -376,7 +360,6 @@ async def test_model_constructs_fragment_and_direct_template(tmp_path: Path) -> 
                 ),
                 _json_turn({"claims": []}),
                 fragment,
-                _temporal_turn("claim-1"),
             ]
         ),
         exploration=_exploration(),
@@ -414,7 +397,6 @@ async def test_atomic_parenthetical_same_referent_is_not_a_factual_claim(
                     "assertions": [],
                 }
             ),
-            _temporal_turn(),
         ]
     )
     paths = create_source_semantic_paths(tmp_path, "region-0002")
@@ -427,7 +409,7 @@ async def test_atomic_parenthetical_same_referent_is_not_a_factual_claim(
 
     initial = json.loads(paths.initial_claims_json.read_text(encoding="utf-8"))
     reviewed = json.loads(paths.reviewed_claims_json.read_text(encoding="utf-8"))
-    assert initial["schema_version"] == "source-claims.v5"
+    assert initial["schema_version"] == "source-claims.v6"
     assert initial["claims"] == []
     assert len(initial["same_referent_drafts"]) == 1
     assert reviewed["same_referent_drafts"] == initial["same_referent_drafts"]
@@ -437,8 +419,8 @@ async def test_atomic_parenthetical_same_referent_is_not_a_factual_claim(
         "ABC",
         "远协",
     ]
-    assert snapshot.model_calls == 4
-    assert len(model.calls) == 4
+    assert snapshot.model_calls == 3
+    assert len(model.calls) == 3
     assert not (paths.directory / "05-same-referent.json").exists()
 
 
@@ -467,7 +449,6 @@ async def test_explicit_short_or_english_name_becomes_same_referent(
                     "assertions": [],
                 }
             ),
-            _temporal_turn(),
         ]
     )
     snapshot = await SourceSemanticCompiler(
@@ -479,7 +460,7 @@ async def test_explicit_short_or_english_name_becomes_same_referent(
 
     assert snapshot.object_fragments[0].surface_forms == spans
     assert snapshot.assertions == []
-    assert snapshot.model_calls == 4
+    assert snapshot.model_calls == 3
 
 
 @pytest.mark.asyncio
@@ -519,7 +500,6 @@ async def test_non_identity_relationships_do_not_create_atomic_same_referent(
                     ],
                 }
             ),
-            _temporal_turn("claim-1"),
         ]
     )
     snapshot = await SourceSemanticCompiler(
@@ -533,7 +513,7 @@ async def test_non_identity_relationships_do_not_create_atomic_same_referent(
     assert [item.surface_forms for item in snapshot.object_fragments] == [
         [span] for span in spans
     ]
-    assert len(model.calls) == 4
+    assert len(model.calls) == 3
 
 
 @pytest.mark.asyncio
@@ -565,7 +545,6 @@ async def test_mixed_sentence_is_split_during_atomic_extraction(
                     ],
                 }
             ),
-            _temporal_turn("claim-1"),
         ]
     )
     snapshot = await SourceSemanticCompiler(
@@ -580,7 +559,7 @@ async def test_mixed_sentence_is_split_during_atomic_extraction(
     )
     assert snapshot.assertions[0].supporting_block_ids == ["p0001-b0002"]
     assert snapshot.object_fragments[0].surface_forms == ["甲协会", "ABC"]
-    assert len(model.calls) == 4
+    assert len(model.calls) == 3
 
 
 @pytest.mark.asyncio
@@ -612,7 +591,6 @@ async def test_corrupted_v6_fragment_snapshot_is_rebuilt_from_stage_checkpoints(
                 ],
             }
         ),
-        _temporal_turn("claim-1"),
     ]
     blocks = _blocks("甲协会（ABC）成立于2005年。")
     await SourceSemanticCompiler(
@@ -676,7 +654,6 @@ async def test_ordinary_parenthetical_does_not_become_same_referent(
                         ],
                     }
                 ),
-                _temporal_turn("claim-1"),
             ]
         ),
         exploration=_exploration(),
@@ -801,7 +778,7 @@ async def test_incremental_review_does_not_duplicate_existing_claim(tmp_path: Pa
     )
     snapshot = await SourceSemanticCompiler(
         model=FakeJsonModel(
-            [_initial_turn(), duplicate, one_fragment, _temporal_turn("claim-1")]
+            [_initial_turn(), duplicate, _json_turn({"claims": []}), one_fragment]
         ),
         exploration=_exploration(),
         blocks=_blocks(),
@@ -810,6 +787,7 @@ async def test_incremental_review_does_not_duplicate_existing_claim(tmp_path: Pa
 
     assert len(snapshot.assertions) == 1
     assert snapshot.review_addition_count == 0
+    assert snapshot.model_calls == 4
 
 
 def test_json_fence_normalization_is_strict_and_minimal() -> None:
@@ -946,7 +924,6 @@ async def test_case_a_keeps_a_multisentence_process_as_one_cohesive_assertion(
                     ],
                 }
             ),
-            _temporal_turn("claim-1"),
         ]
     )
 
@@ -961,6 +938,50 @@ async def test_case_a_keeps_a_multisentence_process_as_one_cohesive_assertion(
     discovery_prompt = str(model.calls[0]["messages"][0]["content"])
     assert "流程步骤链" in discovery_prompt
     assert "不要默认按句" in discovery_prompt
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "探索期组织随人员变动频繁调整；稳定期（2020年至今）形成扁平化架构。",
+        "当前传承主要依赖口头传授；24-25学年曾因交接缺失导致年审扣分。",
+        "大型赛事必须在活动前至少7天提交申请。",
+    ],
+)
+@pytest.mark.asyncio
+async def test_time_context_remains_in_assertion_body_without_metadata(
+    tmp_path: Path,
+    statement: str,
+) -> None:
+    model = FakeJsonModel(
+        [
+            _initial_turn(statement=statement),
+            _json_turn({"claims": []}),
+            _json_turn(
+                {
+                    "fragments": [],
+                    "assertions": [
+                        {
+                            "claim_id": "claim-1",
+                            "kind": "grounded",
+                            "statement_template_markdown": statement,
+                            "semantic_fragment_keys": [],
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+
+    snapshot = await SourceSemanticCompiler(
+        model=model,
+        exploration=_exploration(),
+        blocks=_blocks(statement),
+        paths=create_source_semantic_paths(tmp_path, "region-0002"),
+    ).compile("region-0002")
+
+    assert snapshot.assertions[0].statement_template_markdown == statement
+    assert "temporal" not in snapshot.assertions[0].model_dump()
 
 
 @pytest.mark.asyncio
@@ -1010,7 +1031,7 @@ async def test_case_b_prompt_and_protocol_split_different_lifecycles(
         }
     )
     model = FakeJsonModel(
-        [first_turn, _json_turn({"claims": []}), fragment_turn, _temporal_turn("claim-1", "claim-2")]
+        [first_turn, _json_turn({"claims": []}), fragment_turn]
     )
 
     snapshot = await SourceSemanticCompiler(
@@ -1200,7 +1221,6 @@ async def test_unknown_fragment_reference_gets_one_clean_retry(tmp_path: Path) -
             _json_turn({"claims": []}),
             invalid_fragments,
             corrected_fragments,
-            _temporal_turn("claim-1"),
         ]
     )
 
@@ -1211,7 +1231,7 @@ async def test_unknown_fragment_reference_gets_one_clean_retry(tmp_path: Path) -
         paths=create_source_semantic_paths(tmp_path, "region-0002"),
     ).compile("region-0002")
 
-    assert snapshot.model_calls == 5
+    assert snapshot.model_calls == 4
     retry_system = str(model.calls[3]["messages"][0]["content"])
     assert "不存在的 Fragment" in retry_system
 
@@ -1292,7 +1312,7 @@ def test_fragment_checkpoint_uses_stable_ids_without_mention_coordinates() -> No
         claims,
         source_blocks=_blocks("甲协会成立。"),
     )
-    assert checkpoint.schema_version == "source-object-fragments.v3"
+    assert checkpoint.schema_version == "source-object-fragments.v4"
     assert set(checkpoint.fragments[0].model_dump()) == {
         "fragment_id",
         "source_region_id",
@@ -1353,547 +1373,111 @@ def test_fragment_surface_form_can_be_grounded_by_frozen_claim() -> None:
     )
 
 
-def _validated_temporals(
-    statement: str,
-    annotations: list[dict[str, object]],
-) -> list[TemporalAnnotation]:
-    claim = _source_claim("claim-1", statement)
-    submission = TemporalAnnotationSubmission.model_validate(
-        {
-            "claims": [
-                {
-                    "claim_id": "claim-1",
-                    "temporal_annotations": annotations,
-                }
-            ]
-        }
+def test_source_time_is_grounded_and_null_has_no_evidence() -> None:
+    blocks = _blocks("署于 2026 年春。")
+    grounded = SourceTimeSubmission(
+        source_time_text="2026 年春",
+        supporting_block_ids=["p0001-b0002"],
     )
-    _validate_temporal_submission(submission, [claim], _blocks())
-    return submission.claims[0].temporal_annotations
+    assert grounded.source_time_text == "2026年春"
+    _validate_source_time(grounded, blocks)
 
-
-def _temporal_annotation(
-    *,
-    raw_expression: str,
-    kind: str,
-    normalized_text: str,
-    start: str | None,
-    end: str | None,
-    precision: str,
-    derivation: str,
-    basis_markdown: str,
-) -> dict[str, object]:
-    return {
-        "raw_expression": raw_expression,
-        "kind": kind,
-        "normalized_text": normalized_text,
-        "start": start,
-        "end": end,
-        "precision": precision,
-        "derivation": derivation,
-        "basis_markdown": basis_markdown,
-    }
-
-
-def test_temporal_without_source_time_stays_empty() -> None:
-    annotations = _validated_temporals("新闻稿是行政流程的一部分。", [])
-
-    assert annotations == []
-    assert "不得根据一般现在时" in TEMPORAL_ANNOTATION_SYSTEM_PROMPT
-    assert "来源日期不是 Assertion 时间" in TEMPORAL_ANNOTATION_SYSTEM_PROMPT
-    assert "持续适用" in TEMPORAL_ANNOTATION_SYSTEM_PROMPT
-    assert "ASCII 双引号时，必须按 JSON string 规则" in TEMPORAL_ANNOTATION_SYSTEM_PROMPT
-    assert "表格中“继往开来”的举办时间" in TEMPORAL_ANNOTATION_SYSTEM_PROMPT
-
-
-def test_temporal_explicit_date_and_academic_year_range() -> None:
-    date = _validated_temporals(
-        "文档标注日期为2026年1月28日。",
-        [
-            _temporal_annotation(
-                raw_expression="2026年1月28日",
-                kind="point",
-                normalized_text="2026年1月28日",
-                start="2026-01-28",
-                end=None,
-                precision="day",
-                derivation="source_explicit",
-                basis_markdown="来源明确写出“2026年1月28日”。",
-            )
-        ],
-    )[0]
-    academic_year = _validated_temporals(
-        "魏汉东在2025-2026学年任会长。",
-        [
-            _temporal_annotation(
-                raw_expression="2025-2026学年",
-                kind="range",
-                normalized_text="2025-2026学年",
-                start="2025",
-                end="2026",
-                precision="academic_year",
-                derivation="source_explicit",
-                basis_markdown="来源明确写出“2025-2026学年”。",
-            )
-        ],
-    )[0]
-
-    assert (date.kind, date.start, date.derivation) == (
-        "point",
-        "2026-01-28",
-        "source_explicit",
+    western = SourceTimeSubmission(
+        source_time_text="March 2026",
+        supporting_block_ids=["p0001-b0002"],
     )
-    assert date.basis_markdown
-    assert (
-        academic_year.kind,
-        academic_year.start,
-        academic_year.end,
-        academic_year.precision,
-    ) == ("range", "2025", "2026", "academic_year")
+    assert western.source_time_text == "March 2026"
+    _validate_source_time(western, _blocks("Signed March 2026."))
 
-
-def test_temporal_recurring_and_relative_keep_null_bounds() -> None:
-    recurring = _validated_temporals(
-        "换届交接每年五月进行。",
-        [
-            _temporal_annotation(
-                raw_expression="每年五月",
-                kind="recurring",
-                normalized_text="每年5月",
-                start=None,
-                end=None,
-                precision="month",
-                derivation="source_explicit",
-                basis_markdown="来源明确写出“每年五月”。",
-            )
-        ],
-    )[0]
-    relative = _validated_temporals(
-        "大型赛事必须在活动前至少7天提交申请。",
-        [
-            _temporal_annotation(
-                raw_expression="活动前至少7天",
-                kind="relative",
-                normalized_text="活动前至少7天",
-                start=None,
-                end=None,
-                precision="day",
-                derivation="source_explicit",
-                basis_markdown="来源明确规定“活动前至少7天”。",
-            )
-        ],
-    )[0]
-
-    assert (recurring.kind, recurring.normalized_text) == ("recurring", "每年5月")
-    assert recurring.start is recurring.end is None
-    assert relative.kind == "relative"
-    assert relative.start is relative.end is None
-
-
-def test_temporal_contextual_inference_and_unresolved_context() -> None:
-    inferred = _validated_temporals(
-        "本届需要完成组织改革。",
-        [
-            _temporal_annotation(
-                raw_expression="本届",
-                kind="contextual",
-                normalized_text="2025-2026学年",
-                start="2025",
-                end="2026",
-                precision="academic_year",
-                derivation="contextual_inference",
-                basis_markdown="来源写出“本届”，文档背景明确作者为25-26届会长。",
-            )
-        ],
-    )[0]
-    unresolved = _validated_temporals(
-        "当时出现了经验传承断层。",
-        [
-            _temporal_annotation(
-                raw_expression="当时",
-                kind="contextual",
-                normalized_text="当时",
-                start=None,
-                end=None,
-                precision="unspecified",
-                derivation="unresolved",
-                basis_markdown="来源使用“当时”，但当前上下文没有可靠时间锚点。",
-            )
-        ],
-    )[0]
-
-    assert (inferred.start, inferred.end, inferred.derivation) == (
-        "2025",
-        "2026",
-        "contextual_inference",
+    unknown = SourceTimeSubmission(
+        source_time_text=None,
+        supporting_block_ids=[],
     )
-    assert "25-26届" in inferred.basis_markdown
-    assert unresolved.derivation == "unresolved"
-    assert unresolved.start is unresolved.end is None
+    _validate_source_time(unknown, blocks)
+    assert "不是 Assertion validity" in SOURCE_TIME_SYSTEM_PROMPT
+    assert "正文事件的最大年份" in SOURCE_TIME_SYSTEM_PROMPT
 
 
-def test_temporal_preserves_fuzzy_source_language() -> None:
-    approximate = _validated_temporals(
-        "协会约2025年开始改革。",
-        [
-            _temporal_annotation(
-                raw_expression="约2025年",
-                kind="point",
-                normalized_text="约2025年",
-                start="2025",
-                end=None,
-                precision="year",
-                derivation="source_explicit",
-                basis_markdown="来源使用近似表达“约2025年”。",
-            )
-        ],
-    )[0]
-    long_term = _validated_temporals(
-        "长期以来存在经验传承断层。",
-        [
-            _temporal_annotation(
-                raw_expression="长期以来",
-                kind="unknown",
-                normalized_text="长期以来",
-                start=None,
-                end=None,
-                precision="unspecified",
-                derivation="unresolved",
-                basis_markdown="来源使用“长期以来”，但未给出可定位的起止时间。",
-            )
-        ],
-    )[0]
-
-    assert approximate.normalized_text == "约2025年"
-    assert approximate.start == "2025"
-    assert long_term.start is long_term.end is None
-
-
-def test_temporal_supports_multiple_annotations_per_claim() -> None:
-    annotations = _validated_temporals(
-        "继往开来始于2009年，目前每年秋季举办。",
-        [
-            _temporal_annotation(
-                raw_expression="2009年",
-                kind="point",
-                normalized_text="2009年",
-                start="2009",
-                end=None,
-                precision="year",
-                derivation="source_explicit",
-                basis_markdown="来源明确写出“2009年”。",
+def test_source_time_rejects_inferred_or_unknown_evidence() -> None:
+    with pytest.raises(ValueError, match="直接找到"):
+        _validate_source_time(
+            SourceTimeSubmission(
+                source_time_text="2025年",
+                supporting_block_ids=["p0001-b0002"],
             ),
-            _temporal_annotation(
-                raw_expression="目前",
-                kind="contextual",
-                normalized_text="目前",
-                start=None,
-                end=None,
-                precision="unspecified",
-                derivation="unresolved",
-                basis_markdown="来源使用“目前”，但不自动把来源日期作为事实时间。",
-            ),
-            _temporal_annotation(
-                raw_expression="每年秋季",
-                kind="recurring",
-                normalized_text="每年秋季",
-                start=None,
-                end=None,
-                precision="unspecified",
-                derivation="source_explicit",
-                basis_markdown="来源明确写出“每年秋季”。",
-            ),
-        ],
-    )
-
-    assert [item.kind for item in annotations] == ["point", "contextual", "recurring"]
-
-
-def test_temporal_rejects_ungrounded_raw_expression_and_bad_claim_coverage() -> None:
-    claim = _source_claim("claim-1", "协会在2025年开始改革。")
-    ungrounded = TemporalAnnotationSubmission.model_validate(
-        {
-            "claims": [
-                {
-                    "claim_id": "claim-1",
-                    "temporal_annotations": [
-                        _temporal_annotation(
-                            raw_expression="2024年",
-                            kind="point",
-                            normalized_text="2024年",
-                            start="2024",
-                            end=None,
-                            precision="year",
-                            derivation="source_explicit",
-                            basis_markdown="错误的来源锚点。",
-                        )
-                    ],
-                }
-            ]
-        }
-    )
-    with pytest.raises(ValueError, match=r"raw_expression.*不存在"):
-        _validate_temporal_submission(ungrounded, [claim], _blocks())
-
-    for invalid in (
-        {"claims": []},
-        {
-            "claims": [
-                {"claim_id": "claim-2", "temporal_annotations": []},
-            ]
-        },
-        {
-            "claims": [
-                {"claim_id": "claim-1", "temporal_annotations": []},
-                {"claim_id": "claim-1", "temporal_annotations": []},
-            ]
-        },
-    ):
-        submission = TemporalAnnotationSubmission.model_validate(invalid)
-        with pytest.raises(ValueError):
-            _validate_temporal_submission(submission, [claim], _blocks())
-
-
-def test_temporal_schema_rejects_truth_fields_and_invalid_bounds() -> None:
-    base = _temporal_annotation(
-        raw_expression="2025年",
-        kind="point",
-        normalized_text="2025年",
-        start="2025",
-        end=None,
-        precision="year",
-        derivation="source_explicit",
-        basis_markdown="来源明确写出“2025年”。",
-    )
-    for forbidden in ("fact_confidence", "truth_confidence", "source_reliability"):
-        with pytest.raises(ValueError):
-            TemporalAnnotation.model_validate({**base, forbidden: "high"})
-
-    with pytest.raises(ValueError, match="start 不能晚于 end"):
-        TemporalAnnotation.model_validate(
-            {**base, "kind": "range", "start": "2026", "end": "2025"}
+            _blocks("协会于2024年成立。"),
         )
-    with pytest.raises(ValueError, match="日期无效"):
-        TemporalAnnotation.model_validate({**base, "start": "2026-02-30"})
-    with pytest.raises(ValueError, match="unresolved 时间不能填写"):
-        TemporalAnnotation.model_validate({**base, "derivation": "unresolved"})
+    with pytest.raises(ValueError, match="不存在的 SourceBlock"):
+        _validate_source_time(
+            SourceTimeSubmission(
+                source_time_text="2026年春",
+                supporting_block_ids=["p9999-b9999"],
+            ),
+            _blocks("署于2026年春。"),
+        )
 
 
-def test_temporal_attachment_does_not_modify_existing_assertion() -> None:
-    claims = [_source_claim("claim-1", "继往开来杯在2025年举办。")]
-    fragments, assertions = _materialize_fragments(
-        ObjectFragmentSubmission(
-            fragments=[
-                ObjectFragmentDraft(
-                    fragment_key="F1", surface_forms=["继往开来杯"]
-                )
-            ],
-            assertions=[
-                FragmentAssertionTemplateDraft(
-                    claim_id="claim-1",
-                    statement_template_markdown="{{fragment:F1}}在2025年举办。",
-                )
-            ],
-        ),
-        claims,
-        source_region_id="region-0002",
-    )
-    before = assertions[0].model_dump()
-    attached = _attach_temporal_annotations(
-        assertions,
-        [
-            TemporalClaimAnnotations(
+def test_fragment_rejects_self_identity_alias_collapse() -> None:
+    claim = _source_claim("claim-1", "25-26学年乒协会长为魏汉东，署于2026年春。")
+    collapsed = ObjectFragmentSubmission(
+        fragments=[
+            ObjectFragmentDraft(
+                fragment_key="F1",
+                surface_forms=["25-26学年乒协会长", "魏汉东"],
+            )
+        ],
+        assertions=[
+            FragmentAssertionTemplateDraft(
                 claim_id="claim-1",
-                temporal_annotations=_validated_temporals(
-                    claims[0].statement_markdown,
-                    [
-                        _temporal_annotation(
-                            raw_expression="2025年",
-                            kind="point",
-                            normalized_text="2025年",
-                            start="2025",
-                            end=None,
-                            precision="year",
-                            derivation="source_explicit",
-                            basis_markdown="来源明确写出“2025年”。",
-                        )
-                    ],
+                statement_template_markdown=(
+                    "{{fragment:F1}}为{{fragment:F1}}，署于2026年春。"
                 ),
             )
         ],
     )
+    with pytest.raises(ValueError, match="self-identity"):
+        _validate_fragment_submission(
+            collapsed,
+            [claim],
+            source_blocks=_blocks(claim.statement_markdown),
+        )
 
-    assert assertions[0].model_dump() == before
-    assert attached[0].statement_template_markdown == before["statement_template_markdown"]
-    assert attached[0].supporting_block_ids == before["supporting_block_ids"]
-    assert len(attached[0].temporal_annotations) == 1
-    assert fragments[0].surface_forms == ["继往开来杯"]
 
-
-@pytest.mark.asyncio
-async def test_temporal_checkpoint_and_final_snapshot_are_persisted(
-    tmp_path: Path,
-) -> None:
-    paths = create_source_semantic_paths(tmp_path, "region-0002")
-    temporal = _temporal_turn(
-        "claim-1",
-        annotations={
-            "claim-1": [
-                _temporal_annotation(
-                    raw_expression="2025-2026学年",
-                    kind="range",
-                    normalized_text="2025-2026学年",
-                    start="2025",
-                    end="2026",
-                    precision="academic_year",
-                    derivation="source_explicit",
-                    basis_markdown="来源明确写出“2025-2026学年”。",
-                )
-            ]
-        },
-    )
-    snapshot = await SourceSemanticCompiler(
-        model=FakeJsonModel(
-            [
-                _initial_turn(statement="魏汉东在2025-2026学年任会长。"),
-                _json_turn({"claims": []}),
-                _one_fragment_turn(
-                    surface_forms=("魏汉东",),
-                    template="{{fragment:F1}}在2025-2026学年任会长。",
-                ),
-                temporal,
+def test_missing_review_rejects_covered_list_item_but_keeps_new_exception() -> None:
+    existing = [
+        _source_claim(
+            "claim-1",
+            "治理转型包括去中心化、资产化传承和梯队建设。",
+        )
+    ]
+    with pytest.raises(ValueError, match="明确覆盖"):
+        _validate_missing_claims(
+            MissingClaimSubmission(
+                claims=[
+                    {
+                        "statement_markdown": "资产化传承",
+                        "supporting_block_ids": ["p0001-b0002"],
+                        "context_dependent": False,
+                    }
+                ]
+            ),
+            existing,
+            _blocks(existing[0].statement_markdown),
+        )
+    _validate_missing_claims(
+        MissingClaimSubmission(
+            claims=[
+                {
+                    "statement_markdown": "资产化传承不适用于个人隐私档案。",
+                    "supporting_block_ids": ["p0001-b0002"],
+                    "context_dependent": False,
+                }
             ]
         ),
-        exploration=_exploration(),
-        blocks=_blocks("魏汉东在2025-2026学年任会长。"),
-        paths=paths,
-    ).compile("region-0002")
-
-    assert snapshot.schema_version == "source-semantics.v8"
-    assert snapshot.model_calls == 4
-    assert snapshot.assertions[0].temporal_annotations[0].start == "2025"
-    assert "{{fragment:fragment-1}}" in snapshot.assertions[0].statement_template_markdown
-    assert paths.temporal_annotations_json.exists()
-    checkpoint = json.loads(paths.temporal_annotations_json.read_text(encoding="utf-8"))
-    assert checkpoint["schema_version"] == "source-temporal-annotations.v1"
-    assert checkpoint["model_calls"] == 1
-
-
-@pytest.mark.asyncio
-async def test_temporal_validation_failure_gets_one_clean_retry(tmp_path: Path) -> None:
-    invalid = _temporal_turn(
-        "claim-1",
-        annotations={
-            "claim-1": [
-                _temporal_annotation(
-                    raw_expression="不存在的2024年",
-                    kind="point",
-                    normalized_text="2024年",
-                    start="2024",
-                    end=None,
-                    precision="year",
-                    derivation="source_explicit",
-                    basis_markdown="错误锚点。",
-                )
-            ]
-        },
-    )
-    valid = _temporal_turn("claim-1")
-    model = FakeJsonModel(
-        [
-            _initial_turn(),
-            _json_turn({"claims": []}),
-            _one_fragment_turn(),
-            invalid,
-            valid,
-        ]
-    )
-    snapshot = await SourceSemanticCompiler(
-        model=model,
-        exploration=_exploration(),
-        blocks=_blocks(),
-        paths=create_source_semantic_paths(tmp_path, "region-0002"),
-    ).compile("region-0002")
-
-    assert snapshot.model_calls == 5
-    assert len(model.calls) == 5
-    assert str(model.calls[4]["request_label"]).endswith("clean-retry")
-    retry_messages = model.calls[4]["messages"]
-    assert retry_messages[1] == model.calls[3]["messages"][1]
-    assert "错误锚点" not in str(retry_messages)
-    assert "只完成当前阶段要求的单一判断" not in str(retry_messages)
-
-
-@pytest.mark.asyncio
-async def test_temporal_retry_failure_stops_without_third_call(tmp_path: Path) -> None:
-    invalid = _temporal_turn("claim-2")
-    paths = create_source_semantic_paths(tmp_path, "region-0002")
-    model = FakeJsonModel(
-        [
-            _initial_turn(),
-            _json_turn({"claims": []}),
-            _one_fragment_turn(),
-            invalid,
-            invalid,
-        ]
+        existing,
+        _blocks(existing[0].statement_markdown),
     )
 
-    with pytest.raises(ValueError, match=r"Temporal Annotation.*clean retry 均失败"):
-        await SourceSemanticCompiler(
-            model=model,
-            exploration=_exploration(),
-            blocks=_blocks(),
-            paths=paths,
-        ).compile("region-0002")
-
-    assert len(model.calls) == 5
-    assert not paths.temporal_annotations_json.exists()
-    assert not paths.snapshot_json.exists()
-
-
-@pytest.mark.asyncio
-async def test_existing_three_stage_checkpoints_resume_at_temporal_only(
-    tmp_path: Path,
-) -> None:
-    paths = create_source_semantic_paths(tmp_path, "region-0002")
-    await SourceSemanticCompiler(
-        model=FakeJsonModel(
-            [
-                _initial_turn(),
-                _json_turn({"claims": []}),
-                _one_fragment_turn(),
-                _temporal_turn("claim-1"),
-            ]
-        ),
-        exploration=_exploration(),
-        blocks=_blocks(),
-        paths=paths,
-    ).compile("region-0002")
-
-    legacy_snapshot = json.loads(paths.snapshot_json.read_text(encoding="utf-8"))
-    legacy_snapshot["schema_version"] = "source-semantics.v5"
-    for assertion in legacy_snapshot["assertions"]:
-        assertion.pop("temporal_annotations")
-    paths.snapshot_json.write_text(
-        json.dumps(legacy_snapshot, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    paths.temporal_annotations_json.unlink()
-
-    resumed_model = FakeJsonModel([_temporal_turn("claim-1")])
-    snapshot = await SourceSemanticCompiler(
-        model=resumed_model,
-        exploration=_exploration(),
-        blocks=_blocks(),
-        paths=paths,
-    ).compile("region-0002")
-
-    assert len(resumed_model.calls) == 1
-    assert str(resumed_model.calls[0]["request_label"]).endswith(
-        "Temporal Annotation"
-    )
-    assert snapshot.schema_version == "source-semantics.v8"
-    assert snapshot.model_calls == 4
 
 
 @pytest.mark.asyncio
@@ -1918,7 +1502,6 @@ async def test_v3_initial_checkpoint_restarts_for_v8_semantics(
             _initial_turn(),
             _json_turn({"claims": []}),
             _one_fragment_turn(),
-            _temporal_turn("claim-1"),
         ]
     )
     snapshot = await SourceSemanticCompiler(
@@ -1928,11 +1511,11 @@ async def test_v3_initial_checkpoint_restarts_for_v8_semantics(
         paths=paths,
     ).compile("region-0002")
 
-    assert len(model.calls) == 4
+    assert len(model.calls) == 3
     assert str(model.calls[0]["request_label"]).endswith("Assertion Discovery")
-    assert snapshot.schema_version == "source-semantics.v8"
+    assert snapshot.schema_version == "source-semantics.v9"
     initial = json.loads(paths.initial_claims_json.read_text(encoding="utf-8"))
-    assert initial["schema_version"] == "source-claims.v5"
+    assert initial["schema_version"] == "source-claims.v6"
 
 
 @pytest.mark.asyncio
@@ -1944,7 +1527,6 @@ async def test_stage_uses_one_clean_retry_without_bad_output_history(tmp_path: P
             _initial_turn(),
             _json_turn({"claims": []}),
             _one_fragment_turn(),
-            _temporal_turn("claim-1"),
         ]
     )
     snapshot = await SourceSemanticCompiler(
@@ -1954,8 +1536,8 @@ async def test_stage_uses_one_clean_retry_without_bad_output_history(tmp_path: P
         paths=create_source_semantic_paths(tmp_path, "region-0002"),
     ).compile("region-0002")
 
-    assert snapshot.model_calls == 5
-    assert len(model.calls) == 5
+    assert snapshot.model_calls == 4
+    assert len(model.calls) == 4
     first_messages = model.calls[0]["messages"]
     retry_messages = model.calls[1]["messages"]
     assert [item["role"] for item in retry_messages] == ["system", "user"]
@@ -1992,7 +1574,6 @@ async def test_atomic_schema_failure_uses_normal_clean_retry(tmp_path: Path) -> 
             _initial_turn(),
             _json_turn({"claims": []}),
             _one_fragment_turn(),
-            _temporal_turn("claim-1"),
         ]
     )
 
@@ -2003,7 +1584,7 @@ async def test_atomic_schema_failure_uses_normal_clean_retry(tmp_path: Path) -> 
         paths=create_source_semantic_paths(tmp_path, "region-0002"),
     ).compile("region-0002")
 
-    assert snapshot.model_calls == 5
+    assert snapshot.model_calls == 4
     assert str(model.calls[1]["request_label"]).endswith("clean-retry")
     assert "Atomic-Conservative-Fallback" not in str(model.calls[1])
 
@@ -2029,7 +1610,6 @@ async def test_atomic_block_validation_failure_uses_normal_clean_retry(
             _initial_turn(),
             _json_turn({"claims": []}),
             _one_fragment_turn(),
-            _temporal_turn("claim-1"),
         ]
     )
 
@@ -2040,7 +1620,7 @@ async def test_atomic_block_validation_failure_uses_normal_clean_retry(
         paths=create_source_semantic_paths(tmp_path, "region-0002"),
     ).compile("region-0002")
 
-    assert snapshot.model_calls == 5
+    assert snapshot.model_calls == 4
     retry_system = str(model.calls[1]["messages"][0]["content"])
     assert "p9999-b9999" in retry_system
     assert str(model.calls[1]["request_label"]).endswith("clean-retry")
@@ -2058,7 +1638,6 @@ async def test_atomic_repetition_uses_clean_conservative_fallback(
             _initial_turn(),
             _json_turn({"claims": []}),
             _one_fragment_turn(),
-            _temporal_turn("claim-1"),
         ]
     )
     snapshot = await SourceSemanticCompiler(
@@ -2068,7 +1647,7 @@ async def test_atomic_repetition_uses_clean_conservative_fallback(
         paths=paths,
     ).compile("region-0002")
 
-    assert snapshot.model_calls == 5
+    assert snapshot.model_calls == 4
     assert len(model.calls[1]["messages"]) == 2
     assert model.calls[1]["messages"][1] == model.calls[0]["messages"][1]
     fallback_system = str(model.calls[1]["messages"][0]["content"])
@@ -2150,6 +1729,10 @@ class BatchJsonModel:
     ) -> ModelTurn:
         del messages, tools, tool_choice, temperature, thinking
         self.calls.append(request_label)
+        if request_label == "Source Time":
+            return _json_turn(
+                {"source_time_text": None, "supporting_block_ids": []}
+            )
         node_id = "region-0002" if "region-0002" in request_label else "region-0003"
         block_id = "p0001-b0002" if node_id == "region-0002" else "p0001-b0003"
         label = "继往开来杯" if node_id == "region-0002" else "会员大会"
@@ -2189,8 +1772,6 @@ class BatchJsonModel:
                     ],
                 }
             )
-        if "Temporal Annotation" in request_label:
-            return _temporal_turn("claim-1")
         raise AssertionError(f"未预期的模型调用：{request_label}")
 
 
@@ -2265,18 +1846,19 @@ async def test_batch_compiles_all_sources_and_writes_stage_index(tmp_path: Path)
     assert snapshot.total_assertions == 2
     assert snapshot.total_object_fragments == 2
     assert snapshot.total_surface_forms == 2
-    assert snapshot.model_calls == 8
-    assert len(model.calls) == 8
+    assert snapshot.model_calls == 7
+    assert len(model.calls) == 7
+    assert snapshot.source_time_text is None
+    assert paths.source_time_json.exists()
     working = json.loads(paths.working_json.read_text(encoding="utf-8"))
     assert all(item["complete"] for item in working["stages"])
     assert all(item["object_fragments"] for item in working["stages"])
-    assert all(item["temporal_annotations"] for item in working["stages"])
+    assert working["source_time"] is True
     for node_id in snapshot.source_node_ids:
         source = paths.sources / node_id
         assert (source / "01-initial-claims.json").exists()
         assert (source / "02-reviewed-claims.json").exists()
         assert (source / "03-object-fragments.json").exists()
-        assert (source / "04-temporal-annotations.json").exists()
         assert (source / "source-semantics.json").exists()
 
 
@@ -2294,7 +1876,8 @@ async def test_batch_can_filter_sources_without_changing_stage_flow(tmp_path: Pa
 
     assert snapshot.source_node_ids == ["region-0003"]
     assert len(model.calls) == 4
-    assert all("region-0003" in label for label in model.calls)
+    assert model.calls[0] == "Source Time"
+    assert all("region-0003" in label for label in model.calls[1:])
 
 
 @pytest.mark.asyncio
@@ -2326,9 +1909,8 @@ async def test_batch_resume_only_retries_failed_source_stage(tmp_path: Path) -> 
         max_parallel_sources=1,
     ).run()
 
-    assert len(resumed_model.calls) == 2
+    assert len(resumed_model.calls) == 1
     assert resumed_model.calls[0].endswith(
         "region-0003·Object Fragment Construction"
     )
-    assert resumed_model.calls[1].endswith("region-0003·Temporal Annotation")
     assert len(snapshot.sources) == 2

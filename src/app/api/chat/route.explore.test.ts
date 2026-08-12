@@ -111,7 +111,6 @@ function fixtureRetrieval(): MemoryRetrievalResult {
         contextDependent: false,
         matchedBy: [],
         matchedFacets: ["facet-0"],
-        temporalAnnotations: [],
         sources: [{
           sourceTitle: "聊天框架测试 fixture",
           sourceSha256: "fixture",

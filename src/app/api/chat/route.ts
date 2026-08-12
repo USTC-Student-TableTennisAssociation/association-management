@@ -67,17 +67,6 @@ const matchSchema = z.object({
   distance: z.number().optional(),
 });
 
-const temporalSchema = z.object({
-  rawExpression: z.string(),
-  kind: z.enum(["point", "range", "recurring", "relative", "contextual", "unknown"]),
-  normalizedText: z.string(),
-  start: z.string().optional(),
-  end: z.string().optional(),
-  precision: z.enum(["day", "month", "year", "academic_year", "semester", "unspecified"]),
-  derivation: z.enum(["source_explicit", "contextual_inference", "unresolved"]),
-  basis: z.string(),
-});
-
 const sourceSchema = z.object({
   sourceTitle: z.string(),
   sourceSha256: z.string(),
@@ -91,6 +80,15 @@ const sourceSchema = z.object({
 
 const seedMapSchema = z.object({
   facets: z.array(facetSchema),
+  sourceTime: z.object({
+    sourceTitle: z.string(),
+    sourceSha256: z.string(),
+    text: z.string().nullable(),
+    supportingBlocks: z.array(z.object({
+      sourceBlockId: z.string(),
+      pages: z.array(z.number()),
+    })),
+  }).optional(),
   objects: z.array(z.object({
     ref: z.string(),
     id: z.string(),
@@ -113,7 +111,6 @@ const seedMapSchema = z.object({
     contextDependent: z.boolean(),
     matchedBy: z.array(matchSchema),
     matchedFacets: z.array(z.string()),
-    temporalAnnotations: z.array(temporalSchema),
     sources: z.array(sourceSchema),
   })),
   connections: z.array(z.object({

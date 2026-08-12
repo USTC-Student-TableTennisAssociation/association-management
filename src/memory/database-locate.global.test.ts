@@ -13,6 +13,7 @@ const originalMinimumLexicalScore = process.env.MEMORY_MIN_LEXICAL_SCORE;
 
 type MockDatabase = {
   memoryCompilation: { findFirst: ReturnType<typeof vi.fn> };
+  memorySourceBlock: { findMany: ReturnType<typeof vi.fn> };
   memoryGlobalObject: { findMany: ReturnType<typeof vi.fn> };
   memoryAssertion: { findMany: ReturnType<typeof vi.fn> };
   $queryRaw: ReturnType<typeof vi.fn>;
@@ -23,6 +24,8 @@ function snapshot(globalObjectCount: number, assertionCount: number) {
     id: "00000000-0000-4000-8000-000000000001",
     sourceTitle: "GlobalObject test source",
     sourceSha256: "test-sha256",
+    sourceTimeText: null,
+    sourceTimeSupportingBlockIds: [],
     compiledAt: new Date("2026-08-10T00:00:00.000Z"),
     objectFragmentCount: 4,
     surfaceFormCount: 6,
@@ -136,7 +139,6 @@ function assertions() {
       fragmentReferences: [resolution(0, "fragment-event-1", event)],
       literalGlobalReferences: [],
       semanticObjectLinks: [],
-      temporalAnnotations: [],
     },
     {
       id: "assertion-2",
@@ -152,7 +154,6 @@ function assertions() {
         literalReference(club),
       ],
       semanticObjectLinks: [],
-      temporalAnnotations: [],
     },
     {
       id: "assertion-3",
@@ -168,7 +169,6 @@ function assertions() {
       ],
       literalGlobalReferences: [],
       semanticObjectLinks: [],
-      temporalAnnotations: [],
     },
   ];
 }
@@ -201,6 +201,7 @@ function useMockDatabase(input: {
 }): MockDatabase {
   const database: MockDatabase = {
     memoryCompilation: { findFirst: vi.fn().mockResolvedValue(snapshot(input.objects.length, input.assertions.length)) },
+    memorySourceBlock: { findMany: vi.fn().mockResolvedValue([]) },
     memoryGlobalObject: { findMany: vi.fn().mockResolvedValue(input.objects) },
     memoryAssertion: {
       findMany: vi.fn().mockImplementation(async (args: {
@@ -333,7 +334,6 @@ describe("GlobalObject-backed Locate", () => {
       semanticObjectLinks: [{
         globalObject: { id: "global-event", canonicalName: "继往开来" },
       }],
-      temporalAnnotations: [],
     };
     const database = useMockDatabase({
       objects: globalObjects(),
@@ -435,7 +435,6 @@ describe("GlobalObject-backed Locate", () => {
           ],
           literalGlobalReferences: [],
           semanticObjectLinks: [],
-          temporalAnnotations: [],
         },
       ],
     });

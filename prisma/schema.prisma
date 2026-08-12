@@ -8,30 +8,6 @@ datasource db {
   provider = "postgresql"
 }
 
-enum MemoryTemporalKind {
-  point
-  range
-  recurring
-  relative
-  contextual
-  unknown
-}
-
-enum MemoryTemporalPrecision {
-  day
-  month
-  year
-  academic_year
-  semester
-  unspecified
-}
-
-enum MemoryTemporalDerivation {
-  source_explicit
-  contextual_inference
-  unresolved
-}
-
 enum MemoryAssertionKind {
   grounded
   reference
@@ -40,24 +16,27 @@ enum MemoryAssertionKind {
 /// 一次已完成 Global Resolution 的 cold-start package。
 /// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个记忆层。
 model MemoryCompilation {
-  id                      String   @id @default(uuid()) @db.Uuid
-  schemaVersion           String   @map("schema_version") @db.Text
-  compiledAt              DateTime @map("compiled_at")
-  importedAt              DateTime @default(now()) @map("imported_at")
-  sourcePath              String   @map("source_path") @db.Text
-  sourceTitle             String   @map("source_title") @db.Text
-  sourceSha256            String   @map("source_sha256") @db.Text
-  sourceParser            String   @map("source_parser") @db.Text
-  sourcePageCount         Int      @map("source_page_count")
-  sourceBlockCount        Int      @map("source_block_count")
-  regionTreeSchemaVersion String   @map("region_tree_schema_version") @db.Text
-  sourceNodeIds           String[] @map("source_node_ids")
-  sourceNodeCount         Int      @map("source_node_count")
-  assertionCount          Int      @map("assertion_count")
-  objectFragmentCount     Int      @map("object_fragment_count")
-  surfaceFormCount        Int      @map("surface_form_count")
-  fragmentReferenceCount  Int      @map("fragment_reference_count")
-  modelCalls              Int      @map("model_calls")
+  id                           String   @id @default(uuid()) @db.Uuid
+  schemaVersion                String   @map("schema_version") @db.Text
+  compiledAt                   DateTime @map("compiled_at")
+  importedAt                   DateTime @default(now()) @map("imported_at")
+  sourcePath                   String   @map("source_path") @db.Text
+  sourceTitle                  String   @map("source_title") @db.Text
+  sourceSha256                 String   @map("source_sha256") @db.Text
+  sourceParser                 String   @map("source_parser") @db.Text
+  sourcePageCount              Int      @map("source_page_count")
+  sourceBlockCount             Int      @map("source_block_count")
+  /// 来源自身明确提供的时间锚点；不是其中全部 Assertion 的 validity。
+  sourceTimeText               String?  @map("source_time_text") @db.Text
+  sourceTimeSupportingBlockIds String[] @default([]) @map("source_time_supporting_block_ids")
+  regionTreeSchemaVersion      String   @map("region_tree_schema_version") @db.Text
+  sourceNodeIds                String[] @map("source_node_ids")
+  sourceNodeCount              Int      @map("source_node_count")
+  assertionCount               Int      @map("assertion_count")
+  objectFragmentCount          Int      @map("object_fragment_count")
+  surfaceFormCount             Int      @map("surface_form_count")
+  fragmentReferenceCount       Int      @map("fragment_reference_count")
+  modelCalls                   Int      @map("model_calls")
 
   sourceRegions           MemorySourceRegion[]
   sourceBlocks            MemorySourceBlock[]
@@ -157,7 +136,6 @@ model MemoryAssertion {
   literalGlobalReferences MemoryGlobalAssertionLiteralReference[]
   semanticObjectLinks     MemoryAssertionSemanticObjectLink[]
   sourceBlockLinks        MemoryAssertionSourceBlock[]
-  temporalAnnotations     MemoryTemporalAnnotation[]
   embedding               MemoryAssertionEmbedding?
 
   @@unique([sourceRegionId, sourceClaimId])
@@ -191,27 +169,6 @@ model MemoryAssertionSourceBlock {
   @@id([assertionId, blockId])
   @@index([blockId])
   @@map("memory_assertion_source_blocks")
-}
-
-/// Assertion 中一项来源锚定的结构化时间表达，不表示事实真实性或当前有效性。
-model MemoryTemporalAnnotation {
-  id             String                   @id @default(uuid()) @db.Uuid
-  assertionId    String                   @map("assertion_id") @db.Uuid
-  ordinal        Int
-  rawExpression  String                   @map("raw_expression") @db.Text
-  kind           MemoryTemporalKind
-  normalizedText String                   @map("normalized_text") @db.Text
-  start          String?                  @db.Text
-  end            String?                  @db.Text
-  precision      MemoryTemporalPrecision
-  derivation     MemoryTemporalDerivation
-  basisMarkdown  String                   @map("basis_markdown") @db.Text
-
-  assertion MemoryAssertion @relation(fields: [assertionId], references: [id], onDelete: Cascade)
-
-  @@unique([assertionId, ordinal])
-  @@index([kind, precision])
-  @@map("memory_temporal_annotations")
 }
 
 /// 完整 cold-start package 最终导入的 Global Object；Resolver runtime 不读写数据库。

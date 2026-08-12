@@ -621,7 +621,7 @@ def _new_global_object_id(
         raise ValueError("new Global Object 必须拥有 surface atom")
     seed = "\n".join(
         [
-            "global-resolution.v1",
+            "global-resolution.v2",
             state.source_sha256,
             ",".join(sorted(source_object_ids)),
             ",".join(sorted(surface_atom_ids)),

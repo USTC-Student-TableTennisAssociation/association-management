@@ -16,7 +16,6 @@ import {
   type MemorySeedMatch,
   type MemorySearchTrace,
   type MemorySourceReference,
-  type MemoryTemporalAnnotation,
 } from "@/memory/types";
 
 const OBJECT_HITS_PER_FACET = 32;
@@ -251,19 +250,6 @@ async function loadAssertions(compilationId: string) {
           },
         },
       },
-      temporalAnnotations: {
-        orderBy: { ordinal: "asc" },
-        select: {
-          rawExpression: true,
-          kind: true,
-          normalizedText: true,
-          start: true,
-          end: true,
-          precision: true,
-          derivation: true,
-          basisMarkdown: true,
-        },
-      },
     },
   });
   return rows.map((row) => {
@@ -302,7 +288,6 @@ async function loadAssertions(compilationId: string) {
       sourceRegion: row.sourceRegion,
       references: [...fragmentReferences, ...literalReferences],
       semanticReferences,
-      temporalAnnotations: row.temporalAnnotations,
     };
   });
 }
@@ -503,6 +488,8 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
       id: true,
       sourceTitle: true,
       sourceSha256: true,
+      sourceTimeText: true,
+      sourceTimeSupportingBlockIds: true,
       compiledAt: true,
       objectFragmentCount: true,
       surfaceFormCount: true,
@@ -519,6 +506,28 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     },
   });
   if (!snapshot) throw new Error("数据库中没有来源语义 Compilation");
+  const sourceTimeBlocks = snapshot.sourceTimeSupportingBlockIds.length
+    ? await database.memorySourceBlock.findMany({
+        where: {
+          compilationId: snapshot.id,
+          sourceBlockId: { in: snapshot.sourceTimeSupportingBlockIds },
+        },
+        select: { sourceBlockId: true, sourcePages: true },
+      })
+    : [];
+  const sourceTimeBlockById = new Map(
+    sourceTimeBlocks.map((item) => [item.sourceBlockId, item]),
+  );
+  const sourceTime = {
+    sourceTitle: snapshot.sourceTitle,
+    sourceSha256: snapshot.sourceSha256,
+    text: snapshot.sourceTimeText,
+    supportingBlocks: snapshot.sourceTimeSupportingBlockIds.map((sourceBlockId) => {
+      const block = sourceTimeBlockById.get(sourceBlockId);
+      if (!block) throw new Error(`Source Time evidence block 不存在：${sourceBlockId}`);
+      return { sourceBlockId, pages: block.sourcePages };
+    }),
+  };
 
   const facets = (input.facets?.length
     ? input.facets
@@ -667,18 +676,6 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
       contextDependent: item.assertion.contextDependent,
       matchedBy,
       matchedFacets: [...new Set(matchedBy.map((match) => match.facetId))].sort(),
-      temporalAnnotations: item.assertion.temporalAnnotations.map<MemoryTemporalAnnotation>(
-        (annotation) => ({
-          rawExpression: annotation.rawExpression,
-          kind: annotation.kind,
-          normalizedText: annotation.normalizedText,
-          ...(annotation.start === null ? {} : { start: annotation.start }),
-          ...(annotation.end === null ? {} : { end: annotation.end }),
-          precision: annotation.precision,
-          derivation: annotation.derivation,
-          basis: annotation.basisMarkdown,
-        }),
-      ),
       sources: sourcesByAssertion.get(item.id) ?? [],
     };
   });
@@ -789,6 +786,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     mode: "object-assertion",
     seedMap: {
       facets,
+      sourceTime,
       objects: objectSeeds,
       assertions: assertionSeeds,
       connections,

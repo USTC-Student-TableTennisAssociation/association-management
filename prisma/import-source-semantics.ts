@@ -18,17 +18,6 @@ type SourceMetadata = {
   block_count: number;
 };
 
-type TemporalAnnotation = {
-  raw_expression: string;
-  kind: "point" | "range" | "recurring" | "relative" | "contextual" | "unknown";
-  normalized_text: string;
-  start: string | null;
-  end: string | null;
-  precision: "day" | "month" | "year" | "academic_year" | "semester" | "unspecified";
-  derivation: "source_explicit" | "contextual_inference" | "unresolved";
-  basis_markdown: string;
-};
-
 type SourceAssertion = {
   claim_id: string;
   kind: "grounded" | "reference";
@@ -36,7 +25,6 @@ type SourceAssertion = {
   semantic_fragment_ids: string[];
   supporting_block_ids: string[];
   context_dependent: boolean;
-  temporal_annotations: TemporalAnnotation[];
 };
 
 type SourceObjectFragment = {
@@ -46,7 +34,7 @@ type SourceObjectFragment = {
 };
 
 type SourceRegion = {
-  schema_version: "source-semantics.v8";
+  schema_version: "source-semantics.v9";
   created_at: string;
   source: SourceMetadata;
   region_tree_schema_version: string;
@@ -65,9 +53,11 @@ type SourceRegion = {
 };
 
 type Snapshot = {
-  schema_version: "source-semantics-full.v8";
+  schema_version: "source-semantics-full.v9";
   created_at: string;
   source: SourceMetadata;
+  source_time_text: string | null;
+  source_time_supporting_block_ids: string[];
   region_tree_schema_version: string;
   source_node_ids: string[];
   sources: SourceRegion[];
@@ -87,9 +77,9 @@ type StoredGlobalObject = {
 };
 
 type GlobalResolutionArtifact = {
-  schema_version: "global-resolution.v1";
+  schema_version: "global-resolution.v2";
   created_at: string;
-  source_semantics_schema_version: "source-semantics-full.v8";
+  source_semantics_schema_version: "source-semantics-full.v9";
   source_sha256: string;
   source_node_ids: string[];
   source_region_count: number;
@@ -116,10 +106,10 @@ type GlobalizedAssertion = {
 };
 
 type GlobalAssertionsArtifact = {
-  schema_version: "global-assertions.v2";
+  schema_version: "global-assertions.v3";
   created_at: string;
-  source_semantics_schema_version: "source-semantics-full.v8";
-  global_resolution_schema_version: "global-resolution.v1";
+  source_semantics_schema_version: "source-semantics-full.v9";
+  global_resolution_schema_version: "global-resolution.v2";
   source_sha256: string;
   source_node_ids: string[];
   assertions: GlobalizedAssertion[];
@@ -155,9 +145,14 @@ type Arguments = { input: string; validateOnly: boolean };
 const FRAGMENT_REFERENCE_PATTERN = /\{\{fragment:([^{}]+)\}\}/g;
 const GLOBAL_OBJECT_REFERENCE_PATTERN = /\{\{object:([^{}]+)\}\}/g;
 const ASSERTION_KINDS = new Set(["grounded", "reference"]);
-const TEMPORAL_KINDS = new Set(["point", "range", "recurring", "relative", "contextual", "unknown"]);
-const TEMPORAL_PRECISIONS = new Set(["day", "month", "year", "academic_year", "semester", "unspecified"]);
-const TEMPORAL_DERIVATIONS = new Set(["source_explicit", "contextual_inference", "unresolved"]);
+
+function normalizeSourceTimeText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/([\u3400-\u9fff\d])\s+(?=[\u3400-\u9fff\d])/g, "$1");
+}
 
 function parseArguments(argv: string[]): Arguments {
   let input = "";
@@ -288,56 +283,14 @@ function validateSourceMetadata(value: unknown, label: string): SourceMetadata {
   };
 }
 
-function parseAbsoluteTime(value: string, label: string, upperBound = false): number[] {
-  const match = /^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/.exec(value);
-  if (!match) throw new Error(`${label} 只允许 YYYY、YYYY-MM 或 YYYY-MM-DD`);
-  const year = Number(match[1]);
-  const month = match[2] ? Number(match[2]) : upperBound ? 12 : 1;
-  const day = match[3] ? Number(match[3]) : upperBound ? new Date(Date.UTC(year, month, 0)).getUTCDate() : 1;
-  if (month < 1 || month > 12 || day < 1 || day > new Date(Date.UTC(year, month, 0)).getUTCDate()) {
-    throw new Error(`${label} 不是有效日期`);
-  }
-  return [year, month, day];
-}
-
-function compareTimeParts(left: number[], right: number[]): number {
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) return left[index] - right[index];
-  }
-  return 0;
-}
-
-function validateTemporal(value: unknown, label: string, groundingTexts: string[]): TemporalAnnotation {
-  const item = objectValue(value, label);
-  const result = {
-    raw_expression: stringValue(item.raw_expression, `${label}.raw_expression`),
-    kind: enumValue(item.kind, TEMPORAL_KINDS, `${label}.kind`) as TemporalAnnotation["kind"],
-    normalized_text: stringValue(item.normalized_text, `${label}.normalized_text`),
-    start: nullableString(item.start, `${label}.start`),
-    end: nullableString(item.end, `${label}.end`),
-    precision: enumValue(item.precision, TEMPORAL_PRECISIONS, `${label}.precision`) as TemporalAnnotation["precision"],
-    derivation: enumValue(item.derivation, TEMPORAL_DERIVATIONS, `${label}.derivation`) as TemporalAnnotation["derivation"],
-    basis_markdown: stringValue(item.basis_markdown, `${label}.basis_markdown`),
-  };
-  const start = result.start ? parseAbsoluteTime(result.start, `${label}.start`) : null;
-  const end = result.end ? parseAbsoluteTime(result.end, `${label}.end`, true) : null;
-  if (start && end && compareTimeParts(start, end) > 0) throw new Error(`${label}.start 不能晚于 end`);
-  if (result.derivation === "unresolved" && (start || end)) throw new Error(`${label} unresolved 时不能填写 start/end`);
-  const compactRawExpression = result.raw_expression.replace(/\s+/g, "");
-  if (!groundingTexts.some((text) => text.replace(/\s+/g, "").includes(compactRawExpression))) {
-    throw new Error(`${label}.raw_expression 不存在于模板、Fragment surface form 或 supporting blocks`);
-  }
-  return result;
-}
-
 function referenceIds(template: string): string[] {
   return [...template.matchAll(FRAGMENT_REFERENCE_PATTERN)].map((match) => match[1]);
 }
 
 function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Snapshot; blocks: ParsedBlock[] } {
   const root = objectValue(value, "source-semantics-full.json");
-  if (root.schema_version !== "source-semantics-full.v8") {
-    throw new Error(`不支持的来源语义版本：${String(root.schema_version)}；只接受 source-semantics-full.v8`);
+  if (root.schema_version !== "source-semantics-full.v9") {
+    throw new Error(`不支持的来源语义版本：${String(root.schema_version)}；只接受 source-semantics-full.v9`);
   }
   const source = validateSourceMetadata(root.source, "source");
   const blocks = arrayValue(blocksValue, "parsed-blocks.json").map((raw, index): ParsedBlock => {
@@ -362,12 +315,40 @@ function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Sna
   unique(blocks.map((item) => item.block_id), "parsed block_id");
   unique(blocks.map((item) => item.order), "parsed block order");
   const blockById = new Map(blocks.map((item) => [item.block_id, item]));
+  const sourceTimeValue = nullableString(root.source_time_text, "source_time_text");
+  const sourceTimeText = sourceTimeValue === null ? null : normalizeSourceTimeText(sourceTimeValue);
+  if (sourceTimeText !== null && !sourceTimeText) {
+    throw new Error("source_time_text 不能仅包含空白");
+  }
+  const sourceTimeSupportingBlockIds = unique(
+    stringArray(root.source_time_supporting_block_ids, "source_time_supporting_block_ids"),
+    "source_time_supporting_block_ids",
+  );
+  if (sourceTimeText === null && sourceTimeSupportingBlockIds.length) {
+    throw new Error("source_time_text 为 null 时 source_time_supporting_block_ids 必须为空");
+  }
+  if (sourceTimeText !== null && !sourceTimeSupportingBlockIds.length) {
+    throw new Error("非空 source_time_text 必须提供 source_time_supporting_block_ids");
+  }
+  for (const blockId of sourceTimeSupportingBlockIds) {
+    if (!blockById.has(blockId)) throw new Error(`Source Time 引用了不存在的原文块 ${blockId}`);
+  }
+  const sourceTimeOrders = sourceTimeSupportingBlockIds.map((id) => blockById.get(id)!.order);
+  if (sourceTimeOrders.some((order, index) => index > 0 && sourceTimeOrders[index - 1] > order)) {
+    throw new Error("source_time_supporting_block_ids 必须按原文顺序排列");
+  }
+  if (sourceTimeText !== null) {
+    const compact = (value: string): string => value.normalize("NFKC").replace(/\s+/g, "");
+    if (!sourceTimeSupportingBlockIds.some((id) => compact(blockById.get(id)!.markdown).includes(compact(sourceTimeText)))) {
+      throw new Error("source_time_text 必须能在至少一个 supporting SourceBlock 中直接找到");
+    }
+  }
 
   const regionTreeSchemaVersion = stringValue(root.region_tree_schema_version, "region_tree_schema_version");
   const sourceNodeIds = unique(stringArray(root.source_node_ids, "source_node_ids"), "source_node_ids");
   const sources = arrayValue(root.sources, "sources").map((raw, regionIndex): SourceRegion => {
     const region = objectValue(raw, `sources[${regionIndex}]`);
-    if (region.schema_version !== "source-semantics.v8") throw new Error(`sources[${regionIndex}] 不是 source-semantics.v8`);
+    if (region.schema_version !== "source-semantics.v9") throw new Error(`sources[${regionIndex}] 不是 source-semantics.v9`);
     const regionSource = validateSourceMetadata(region.source, `sources[${regionIndex}].source`);
     if (!sameSource(source, regionSource)) throw new Error(`sources[${regionIndex}].source 与全量 source 不一致`);
     if (region.region_tree_schema_version !== regionTreeSchemaVersion) throw new Error(`sources[${regionIndex}] 的区域树版本不一致`);
@@ -457,16 +438,6 @@ function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Sna
     const assertions = [...assertionRawById].map(([claimId, item]): SourceAssertion => {
       const supporting = unique(stringArray(item.supporting_block_ids, `${regionNodeId}.${claimId}.supporting_block_ids`, false), `${regionNodeId}.${claimId}.supporting_block_ids`);
       for (const blockId of supporting) if (!sourceBlockSet.has(blockId)) throw new Error(`${regionNodeId}.${claimId} 引用了来源区域外原文块 ${blockId}`);
-      const groundingTexts = [
-        assertionTemplates.get(claimId)!,
-        ...supporting.map((id) => blockById.get(id)!.markdown),
-        ...(assertionFragmentIds.get(claimId) ?? []).flatMap((id) => fragmentById.get(id)!.surface_forms),
-      ];
-      const temporalAnnotations = arrayValue(item.temporal_annotations, `${regionNodeId}.${claimId}.temporal_annotations`).map((annotation, index) =>
-        validateTemporal(annotation, `${regionNodeId}.${claimId}.temporal_annotations[${index}]`, groundingTexts));
-      if (assertionKinds.get(claimId) === "reference" && temporalAnnotations.length) {
-        throw new Error(`${regionNodeId}.${claimId} Reference Assertion 不能有 Temporal Annotation`);
-      }
       return {
         claim_id: claimId,
         kind: assertionKinds.get(claimId)!,
@@ -474,7 +445,6 @@ function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Sna
         semantic_fragment_ids: assertionSemanticFragmentIds.get(claimId)!,
         supporting_block_ids: supporting,
         context_dependent: booleanValue(item.context_dependent, `${regionNodeId}.${claimId}.context_dependent`),
-        temporal_annotations: temporalAnnotations,
       };
     });
     const initialClaimCount = integerValue(region.initial_claim_count, `${regionNodeId}.initial_claim_count`);
@@ -483,7 +453,7 @@ function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Sna
     const createdAt = new Date(stringValue(region.created_at, `${regionNodeId}.created_at`));
     if (Number.isNaN(createdAt.getTime())) throw new Error(`${regionNodeId}.created_at 不是有效时间`);
     return {
-      schema_version: "source-semantics.v8",
+      schema_version: "source-semantics.v9",
       created_at: createdAt.toISOString(),
       source: regionSource,
       region_tree_schema_version: regionTreeSchemaVersion,
@@ -506,19 +476,23 @@ function validateSnapshot(value: unknown, blocksValue: unknown): { snapshot: Sna
   const totalObjectFragments = integerValue(root.total_object_fragments, "total_object_fragments");
   const totalSurfaceForms = integerValue(root.total_surface_forms, "total_surface_forms");
   const modelCalls = integerValue(root.model_calls, "model_calls");
+  const regionalModelCalls = sources.reduce((sum, item) => sum + item.model_calls, 0);
+  const sourceTimeModelCalls = modelCalls - regionalModelCalls;
   if (totalAssertions !== sources.reduce((sum, item) => sum + item.assertions.length, 0) ||
       totalObjectFragments !== sources.reduce((sum, item) => sum + item.object_fragments.length, 0) ||
       totalSurfaceForms !== sources.reduce((sum, item) => sum + item.object_fragments.reduce((inner, fragment) => inner + fragment.surface_forms.length, 0), 0) ||
-      modelCalls !== sources.reduce((sum, item) => sum + item.model_calls, 0)) {
+      (sourceTimeModelCalls !== 1 && sourceTimeModelCalls !== 2)) {
     throw new Error("全量 totals 与 sources 汇总不一致");
   }
   const createdAt = new Date(stringValue(root.created_at, "created_at"));
   if (Number.isNaN(createdAt.getTime())) throw new Error("created_at 不是有效时间");
   return {
     snapshot: {
-      schema_version: "source-semantics-full.v8",
+      schema_version: "source-semantics-full.v9",
       created_at: createdAt.toISOString(),
       source,
+      source_time_text: sourceTimeText,
+      source_time_supporting_block_ids: sourceTimeSupportingBlockIds,
       region_tree_schema_version: regionTreeSchemaVersion,
       source_node_ids: sourceNodeIds,
       sources,
@@ -588,7 +562,7 @@ type ValidatedGlobalAssertions = {
 
 function validateGlobalResolution(value: unknown, snapshot: Snapshot): ValidatedResolution {
   const root = objectValue(value, "global-resolution.json");
-  if (root.schema_version !== "global-resolution.v1") {
+  if (root.schema_version !== "global-resolution.v2") {
     throw new Error(`不支持的 Global Resolution 版本：${String(root.schema_version)}`);
   }
   if (root.source_semantics_schema_version !== snapshot.schema_version) {
@@ -692,9 +666,9 @@ function validateGlobalResolution(value: unknown, snapshot: Snapshot): Validated
 
   return {
     artifact: {
-      schema_version: "global-resolution.v1",
+      schema_version: "global-resolution.v2",
       created_at: createdAt.toISOString(),
-      source_semantics_schema_version: "source-semantics-full.v8",
+      source_semantics_schema_version: "source-semantics-full.v9",
       source_sha256: snapshot.source.sha256,
       source_node_ids: sourceNodeIds,
       source_region_count: sourceRegionCount,
@@ -721,7 +695,7 @@ function validateGlobalAssertions(
   resolution: ValidatedResolution,
 ): ValidatedGlobalAssertions {
   const root = objectValue(value, "global-assertions.json");
-  if (root.schema_version !== "global-assertions.v2") {
+  if (root.schema_version !== "global-assertions.v3") {
     throw new Error(`不支持的 Global Assertions 版本：${String(root.schema_version)}`);
   }
   if (root.source_semantics_schema_version !== snapshot.schema_version ||
@@ -925,9 +899,9 @@ function validateGlobalAssertions(
   }
   return {
     artifact: {
-      schema_version: "global-assertions.v2", created_at: createdAt.toISOString(),
-      source_semantics_schema_version: "source-semantics-full.v8",
-      global_resolution_schema_version: "global-resolution.v1",
+      schema_version: "global-assertions.v3", created_at: createdAt.toISOString(),
+      source_semantics_schema_version: "source-semantics-full.v9",
+      global_resolution_schema_version: "global-resolution.v2",
       source_sha256: snapshot.source.sha256, source_node_ids: sourceNodeIds,
       assertions: validatedAssertions, total_assertions: totalAssertions,
       total_source_reference_atoms: totalSourceReferences,
@@ -998,13 +972,6 @@ async function importColdStart(
       assertionId: assertionIds.get(localKey(region.region_node_id, item.claim_id))!,
       blockId: blockIds.get(blockId)!, ordinal,
     }))));
-  const temporals: Prisma.MemoryTemporalAnnotationCreateManyInput[] = snapshot.sources.flatMap((region) => region.assertions.flatMap((item) =>
-    item.temporal_annotations.map((annotation, ordinal) => ({
-      id: randomUUID(), assertionId: assertionIds.get(localKey(region.region_node_id, item.claim_id))!, ordinal,
-      rawExpression: annotation.raw_expression, kind: annotation.kind, normalizedText: annotation.normalized_text,
-      start: annotation.start, end: annotation.end, precision: annotation.precision,
-      derivation: annotation.derivation, basisMarkdown: annotation.basis_markdown,
-    }))));
   const globalObjects: Prisma.MemoryGlobalObjectCreateManyInput[] = resolution.artifact.global_objects.map((item) => ({
     id: item.global_object_id,
     compilationId,
@@ -1056,7 +1023,9 @@ async function importColdStart(
         id: compilationId, schemaVersion: snapshot.schema_version, compiledAt: new Date(snapshot.created_at),
         sourcePath: snapshot.source.path, sourceTitle: snapshot.source.title, sourceSha256: snapshot.source.sha256,
         sourceParser: snapshot.source.parser, sourcePageCount: snapshot.source.page_count,
-        sourceBlockCount: snapshot.source.block_count, regionTreeSchemaVersion: snapshot.region_tree_schema_version,
+        sourceBlockCount: snapshot.source.block_count, sourceTimeText: snapshot.source_time_text,
+        sourceTimeSupportingBlockIds: snapshot.source_time_supporting_block_ids,
+        regionTreeSchemaVersion: snapshot.region_tree_schema_version,
         sourceNodeIds: snapshot.source_node_ids, sourceNodeCount: snapshot.sources.length,
         assertionCount: assertions.length, objectFragmentCount: objectFragments.length,
         surfaceFormCount: snapshot.total_surface_forms, fragmentReferenceCount: fragmentReferences.length,
@@ -1068,7 +1037,6 @@ async function importColdStart(
       if (assertions.length) await transaction.memoryAssertion.createMany({ data: assertions });
       if (fragmentReferences.length) await transaction.memoryAssertionFragmentReference.createMany({ data: fragmentReferences });
       if (assertionBlocks.length) await transaction.memoryAssertionSourceBlock.createMany({ data: assertionBlocks });
-      if (temporals.length) await transaction.memoryTemporalAnnotation.createMany({ data: temporals });
       if (globalObjects.length) await transaction.memoryGlobalObject.createMany({ data: globalObjects });
       if (surfaceMemberships.length) await transaction.memoryGlobalObjectSurfaceMembership.createMany({ data: surfaceMemberships });
       if (referenceResolutions.length) await transaction.memoryGlobalAssertionReferenceResolution.createMany({ data: referenceResolutions });
@@ -1087,7 +1055,7 @@ async function importColdStart(
     counts: { source_regions: regions.length, source_blocks: sourceBlocks.length,
       object_fragments: objectFragments.length, surface_forms: snapshot.total_surface_forms,
       assertions: assertions.length, fragment_references: fragmentReferences.length,
-      assertion_source_block_links: assertionBlocks.length, temporal_annotations: temporals.length,
+      assertion_source_block_links: assertionBlocks.length,
       global_objects: globalObjects.length, global_surface_memberships: surfaceMemberships.length,
       global_reference_resolutions: referenceResolutions.length,
       global_literal_references: literalReferences.length,
@@ -1118,13 +1086,11 @@ async function main(): Promise<void> {
     snapshot,
     resolution,
   );
-  const temporalCount = snapshot.sources.reduce((sum, region) =>
-    sum + region.assertions.reduce((inner, assertion) => inner + assertion.temporal_annotations.length, 0), 0);
   const fragmentReferenceCount = snapshot.sources.reduce((sum, region) =>
     sum + region.assertions.reduce((inner, assertion) => inner + referenceIds(assertion.statement_template_markdown).length, 0), 0);
   console.log(`输入验证通过：${snapshot.sources.length} 个来源区域，${snapshot.total_object_fragments} 个 ObjectFragment，` +
     `${snapshot.total_surface_forms} 个 surface form，${snapshot.total_assertions} 条 Assertion，` +
-    `${fragmentReferenceCount} 次 Fragment 引用，${temporalCount} 项时间标注，` +
+    `${fragmentReferenceCount} 次 Fragment 引用，Source Time ${snapshot.source_time_text ?? "未提供"}，` +
     `${resolution.artifact.global_objects.length} 个 Global Object，` +
     `${globalAssertions.artifact.total_literal_reference_atoms} 个字符串 reference atom。`);
   if (args.validateOnly) return;

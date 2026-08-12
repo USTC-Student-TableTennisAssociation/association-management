@@ -36,7 +36,6 @@ function locatedSeedMap() {
     contextDependent: false,
     matchedBy: [],
     matchedFacets: ["facet-0"],
-    temporalAnnotations: [],
     sources: [
       {
         sourceTitle: "Test source",
@@ -100,7 +99,6 @@ function followAssertionRows(includeSemanticReference = false) {
     contextDependent: false,
     compilation: { sourceTitle: "Follow test source", sourceSha256: "follow-sha" },
     sourceRegion: { sourceNodeId: "region-1", label: "Follow region" },
-    temporalAnnotations: [],
     semanticObjectLinks: [],
     sourceBlockLinks: [
       {
@@ -271,8 +269,15 @@ describe("followObject", () => {
     ));
     const database = {
       memoryCompilation: {
-        findFirst: vi.fn().mockResolvedValue({ id: "compilation-current" }),
+        findFirst: vi.fn().mockResolvedValue({
+          id: "compilation-current",
+          sourceTitle: "Follow test source",
+          sourceSha256: "follow-sha",
+          sourceTimeText: null,
+          sourceTimeSupportingBlockIds: [],
+        }),
       },
+      memorySourceBlock: { findMany: vi.fn().mockResolvedValue([]) },
       memoryGlobalObject: { findMany: memoryGlobalObjectFindMany },
       memoryGlobalAssertionReferenceResolution: {
         findMany: vi.fn().mockImplementation(async (args: {

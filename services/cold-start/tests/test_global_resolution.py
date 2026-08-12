@@ -188,7 +188,7 @@ def dataset(
     snapshot = cast(
         FullSourceSemanticSnapshot,
         SimpleNamespace(
-            schema_version="source-semantics-full.v8",
+            schema_version="source-semantics-full.v9",
             source=SimpleNamespace(sha256="a" * 64),
             source_node_ids=[item.source_node_id for item in regions],
         ),
@@ -570,7 +570,6 @@ def test_local_loader_preserves_repeated_reference_ordinals(tmp_path: Path) -> N
                 ),
                 supporting_block_ids=[block.block_id],
                 context_dependent=False,
-                temporal_annotations=[],
             )
         ],
         object_fragments=[
@@ -585,6 +584,8 @@ def test_local_loader_preserves_repeated_reference_ordinals(tmp_path: Path) -> N
     snapshot = FullSourceSemanticSnapshot(
         created_at=datetime.now(UTC),
         source=metadata,
+        source_time_text=None,
+        source_time_supporting_block_ids=[],
         region_tree_schema_version="region-tree.v5",
         source_node_ids=["region-0001"],
         sources=[source],
@@ -742,7 +743,10 @@ def test_case_c_reference_finalization_links_five_objects_without_span_replaceme
     finalized = artifact.assertions[0]
 
     assert finalized.kind == "reference"
-    assert finalized.global_statement_template_markdown == reference_evidence.statement_template_markdown
+    assert (
+        finalized.global_statement_template_markdown
+        == reference_evidence.statement_template_markdown
+    )
     assert all(name not in finalized.global_statement_template_markdown for name in event_names)
     assert finalized.reference_atoms == []
     assert finalized.linked_global_object_ids == [
