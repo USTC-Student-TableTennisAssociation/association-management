@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { ClubChatMessage } from "@/ai/types";
-import { finalStepMessageText } from "@/ai/ui-message-text";
+import {
+  compactChatRequestMessages,
+  finalStepMessageText,
+  modelHistoryMessageText,
+} from "@/ai/ui-message-text";
 
 describe("finalStepMessageText", () => {
   it("shows only the final model step after tool exploration", () => {
@@ -27,5 +31,94 @@ describe("finalStepMessageText", () => {
     };
 
     expect(finalStepMessageText(message)).toBe("继往开来是什么活动？");
+  });
+
+  it("keeps a structured View Proposal in later negotiation context", () => {
+    const message: ClubChatMessage = {
+      id: "assistant-proposal",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "我建议单独展示社团星级。" },
+        {
+          type: "data-viewProposal",
+          data: {
+            id: "00000000-0000-4000-8000-000000000099",
+            viewKey: "society_information",
+            status: "pending",
+            reason: "星级是稳定业务方面。",
+            createdAt: "2026-08-11T00:00:00.000Z",
+            changes: [{
+              type: "SET_CONTENT_DIMENSION",
+              title: "设置「社团星级」",
+              cardSelector: "00000000-0000-4000-8000-000000000091",
+              cardId: "00000000-0000-4000-8000-000000000091",
+              cardTypeKey: "SocietyCard",
+              cardLabel: "中国科学技术大学学生乒乓球协会 · 社团卡片",
+              dimensionName: "社团星级",
+              before: null,
+              after: "三星级社团",
+              supports: [],
+            }],
+          },
+        },
+      ],
+    };
+
+    expect(modelHistoryMessageText(message)).toContain("三星级社团");
+    expect(modelHistoryMessageText(message)).toContain("此前结构化 Proposal");
+  });
+
+  it("removes prior tool payloads while retaining lightweight source anchors", () => {
+    const message = {
+      id: "assistant-source",
+      role: "assistant",
+      parts: [
+        { type: "step-start" },
+        {
+          type: "dynamic-tool",
+          toolName: "readSourceDocument",
+          toolCallId: "source-call",
+          state: "output-available",
+          input: { mode: "full", assertionRef: "A1" },
+          output: { blocks: [{ markdown: "很长的原文正文" }] },
+        },
+        { type: "step-start" },
+        { type: "text", text: "最终回答 [S1]" },
+        {
+          type: "data-sourceReferences",
+          data: {
+            references: [{
+              ref: "S1",
+              label: "测试原文 · 完整原文",
+              document: {
+                id: "doc-1",
+                title: "测试原文",
+                sha256: "sha",
+                parser: "mineru",
+                pageCount: 1,
+                blockCount: 3,
+              },
+              selection: {
+                mode: "full",
+                label: "完整原文",
+                startOrder: 0,
+                endOrder: 2,
+              },
+              startBlockId: "block-1",
+              endBlockId: "block-3",
+              blockCount: 3,
+              pages: [1],
+            }],
+          },
+        },
+      ],
+    } as unknown as ClubChatMessage;
+
+    const compacted = compactChatRequestMessages([message]);
+
+    expect(JSON.stringify(compacted)).not.toContain("很长的原文正文");
+    expect(JSON.stringify(compacted)).not.toContain("readSourceDocument");
+    expect(JSON.stringify(compacted)).toContain("最终回答 [S1]");
+    expect(JSON.stringify(compacted)).toContain('"startBlockId":"block-1"');
   });
 });

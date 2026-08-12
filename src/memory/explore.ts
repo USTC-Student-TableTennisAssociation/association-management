@@ -35,6 +35,7 @@ export type MemoryExploreObject = {
 
 export type MemoryExploreAssertion = {
   ref: string;
+  id?: string;
   sourceNodeId: string;
   sourceClaimId: string;
   renderedStatement: string;
@@ -128,6 +129,7 @@ function compactObject(input: {
 
 function compactAssertion(input: {
   ref: string;
+  id?: string;
   sourceNodeId: string;
   sourceClaimId: string;
   renderedStatement: string;
@@ -137,6 +139,7 @@ function compactAssertion(input: {
 }): MemoryExploreAssertion {
   return {
     ref: input.ref,
+    ...(input.id ? { id: input.id } : {}),
     sourceNodeId: input.sourceNodeId,
     sourceClaimId: input.sourceClaimId,
     renderedStatement: input.renderedStatement,
@@ -236,12 +239,11 @@ export async function searchMemory(
   throwIfAborted(runtime.signal);
   runtime.onLocate?.(retrieval);
   const compact = compactLocatedSeedMap(retrieval.seedMap, SEARCH_ASSERTION_LIMIT);
+  const compilationId = retrieval.compilationId ?? retrieval.trace?.snapshot.id;
   return resultWithCounts({
     kind: "search-memory",
     mode: retrieval.mode,
-    ...(retrieval.trace?.snapshot.id === undefined
-      ? {}
-      : { compilationId: retrieval.trace.snapshot.id }),
+    ...(compilationId ? { compilationId } : {}),
     query: normalizedQuery,
     ...compact,
     warnings: retrieval.trace?.warnings ?? [],
@@ -559,6 +561,7 @@ export async function followObject(
   }));
   const assertions = selectedAssertions.map((assertion) => compactAssertion({
     ref: assertionRefById.get(assertion.row.id)!,
+    id: assertion.row.id,
     sourceNodeId: assertion.row.sourceRegion.sourceNodeId,
     sourceClaimId: assertion.row.sourceClaimId,
     renderedStatement: assertion.renderedStatement,

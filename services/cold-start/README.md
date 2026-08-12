@@ -147,10 +147,14 @@ pnpm memory:serve-embeddings
 uv run cold-start serve-embeddings \
   --host 127.0.0.1 \
   --port 8765 \
-  --embedding-model BAAI/bge-m3
+  --embedding-model BAAI/bge-m3 \
+  --model-revision huggingface-main
 ```
 
 服务只监听本机、没有鉴权，提供 `GET /health` 和 `POST /embed`；不要直接暴露到公网。
+`COLD_START_EMBEDDING_MODEL_REVISION`（或 `--model-revision`）是向量 profile 的稳定修订
+标识；查询服务和数据库索引必须保持一致。未设置时默认使用 `huggingface-main`，不要用缓存
+位置（例如 `local`）表示同一份 Hugging Face 模型。
 首次 `/embed` 请求才会延迟加载模型。设备未指定时依次选择 CUDA、MPS、CPU。完成
 Global Resolution 的数据库导入后，在仓库根目录运行 `pnpm memory:index-assertions` 建立或
 刷新搜索派生索引。
@@ -491,6 +495,11 @@ pnpm memory:import-cold-start -- \
 pnpm memory:import-cold-start -- \
   --input ".cold-start/runs/<运行目录>/source-semantic-compilations/<完整编译目录>/global-resolutions/<UTC 时间>-full"
 ```
+
+如果数据库中已经存在正式 Business View Card 或 Proposal，导入器会在写入前明确拒绝替换，
+避免旧 Compilation 上经用户批准的正式业务状态被级联删除或失去 Object 锚点。请先完成
+Business View 状态到新 Compilation 的迁移，或由管理员明确清理这些状态；当前版本不会自动迁移
+或删除它们。
 
 导入后会在 Global Resolution 目录写入 `database-import.json`，记录各类最终实体和当前
 atom 归属的写入数量。数据库保存原始 Source Assertion、物化后的 Global Assertion、source reference
