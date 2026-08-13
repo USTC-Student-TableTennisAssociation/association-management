@@ -9,6 +9,8 @@ import {
   searchMemory as searchMemoryIndex,
   type MemoryExploreResult,
 } from "@/memory/explore";
+import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { RetrievalCuratorContext } from "@/memory/retrieval-curator";
 import type { MemoryRetrievalResult, MemorySearchTrace } from "@/memory/types";
 
 const MAX_TOOL_CALLS_PER_ANSWER = 6;
@@ -45,6 +47,10 @@ export function createMemoryExploreToolset(input: {
   resultTokenBudget: number;
   sharedResultBudget?: ToolResultTokenBudget;
   signal?: AbortSignal;
+  preferHigherMemory?: boolean;
+  allowKnownObjectIds?: Iterable<string>;
+  curatorContext?: RetrievalCuratorContext;
+  curatorTrace?: EchoDebugTrace;
   onLocateTrace?: (trace: MemorySearchTrace) => void;
   onEvidence?: (
     retrieval: MemoryRetrievalResult,
@@ -52,6 +58,7 @@ export function createMemoryExploreToolset(input: {
   ) => void;
 }) {
   let toolCalls = 0;
+  const additionalKnownObjectIds = new Set(input.allowKnownObjectIds ?? []);
   const resultBudget = input.sharedResultBudget ??
     new ToolResultTokenBudget(input.resultTokenBudget);
 
@@ -75,6 +82,7 @@ export function createMemoryExploreToolset(input: {
     searchMemory: tool({
       description:
         "在 Echo 的 GlobalObject–Assertion 记忆中执行一次聚焦 Locate。" +
+        "把要找的实体原话放进 targetHints，把围绕该实体想了解的信息放进 query；不要把两者润色成一段。" +
         "当回答需要 Echo 的协会、人物、活动、历史、时间、状态、制度或来源等组织事实时使用；" +
         "问候、闲聊、改写、翻译和不依赖组织资料的任务不应调用。" +
         "获得证据后，如问题仍包含未覆盖的子问题，可以换一种聚焦表述再次检索。" +
@@ -82,12 +90,34 @@ export function createMemoryExploreToolset(input: {
         "只有 kind=grounded 的 Assertion 是事实证据，kind=reference 只是需要回读来源的导航索引。",
       inputSchema: z.object({
         query: z.string().trim().min(1).max(memoryExploreLimits.queryChars)
-          .describe("独立、聚焦的记忆检索问题"),
+          .describe("围绕目标 Object 想了解的信息需求；不要重复堆叠目标名称"),
+        targetHints: z.array(z.string().trim().min(1).max(200)).min(1).max(3)
+          .optional()
+          .describe("主对话应提供：用户所指目标实体的名称、别名或忠实原话；不要扩写成相关文档或概念"),
+        targetObjectIds: z.array(z.string().trim().min(1).max(200)).max(3)
+          .optional()
+          .describe("可选：本轮先前工具结果已确认的目标 GlobalObject database id"),
       }),
-      execute: async ({ query }) => {
+      execute: async ({ query, targetHints, targetObjectIds }) => {
         reserveCall();
-        return merge(await searchMemoryIndex(query, {
+        if (targetObjectIds?.some((id) =>
+          !input.evidence.hasObject(id) && !additionalKnownObjectIds.has(id)
+        )) {
+          throw new UnknownExploreObjectError(
+            targetObjectIds.find((id) =>
+              !input.evidence.hasObject(id) && !additionalKnownObjectIds.has(id)
+            )!,
+          );
+        }
+        return merge(await searchMemoryIndex({
+          query,
+          targetHints: targetHints ?? [],
+          targetObjectIds,
+        }, {
           signal: input.signal,
+          preferHigherMemory: input.preferHigherMemory,
+          curatorContext: input.curatorContext,
+          curatorTrace: input.curatorTrace,
           onLocate: (retrieval) => {
             if (retrieval.trace) input.onLocateTrace?.(retrieval.trace);
           },
@@ -110,12 +140,14 @@ export function createMemoryExploreToolset(input: {
       }),
       execute: async ({ globalObjectId, focus }) => {
         reserveCall();
-        if (!input.evidence.hasObject(globalObjectId)) {
+        if (!input.evidence.hasObject(globalObjectId) && !additionalKnownObjectIds.has(globalObjectId)) {
           throw new UnknownExploreObjectError(globalObjectId);
         }
         return merge(
           await followMemoryObject(globalObjectId, focus, {
             signal: input.signal,
+            curatorContext: input.curatorContext,
+            curatorTrace: input.curatorTrace,
           }),
         );
       },

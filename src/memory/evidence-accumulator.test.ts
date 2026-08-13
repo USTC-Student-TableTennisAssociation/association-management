@@ -25,6 +25,13 @@ function initial(): MemoryRetrievalResult {
         lexicalMatch: true,
         semanticMatch: true,
       }],
+      higherMemories: [{
+        ref: "H1",
+        id: "memory-1",
+        globalObjectId: "object-1",
+        contentMarkdown: "这是对继往开来的高层认知。",
+        maintainedAt: "2026-08-14T00:00:00.000Z",
+      }],
       assertions: [{
         ref: "A1",
         kind: "grounded",
@@ -163,6 +170,10 @@ describe("MemoryEvidenceAccumulator", () => {
     expect(merged.assertions.map((item) => item.ref)).toEqual(["A1", "A2"]);
     expect(snapshot.seedMap.objects).toHaveLength(2);
     expect(snapshot.seedMap.assertions).toHaveLength(2);
+    expect(snapshot.seedMap.higherMemories).toEqual([expect.objectContaining({
+      ref: "H1",
+      globalObjectId: "object-1",
+    })]);
     expect(snapshot.seedMap.connections).toEqual([
       { assertionRef: "A1", objectRef: "O1" },
       { assertionRef: "A2", objectRef: "O1" },

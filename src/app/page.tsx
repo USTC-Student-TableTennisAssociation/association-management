@@ -403,10 +403,11 @@ function TraceChannel({
 }
 
 function SeedMapPanel({ seedMap }: { seedMap: StructuredSeedMap }) {
+  const higherMemories = seedMap.higherMemories ?? [];
   return (
     <details className="mt-3 border-t border-zinc-200 pt-2 text-xs text-zinc-600">
       <summary className="cursor-pointer font-medium text-emerald-800">
-        Structured Seed Map（{seedMap.objects.length} Global Objects · {seedMap.assertions.length} Assertions）
+        Structured Seed Map（{seedMap.objects.length} Global Objects · {higherMemories.length} Higher Memories · {seedMap.assertions.length} Assertions）
       </summary>
       <div className="mt-2 space-y-3 rounded-md bg-white p-3">
         <details>
@@ -433,6 +434,23 @@ function SeedMapPanel({ seedMap }: { seedMap: StructuredSeedMap }) {
                     Surface forms：{object.surfaceForms.join("、")}
                   </span>
                 ) : null}
+              </li>
+            ))}
+          </ul>
+        </details>
+
+        <details>
+          <summary className="cursor-pointer font-medium text-zinc-700">
+            Object Higher Memories（{higherMemories.length}）
+          </summary>
+          <ul className="mt-2 space-y-2">
+            {higherMemories.map((memory) => (
+              <li key={memory.ref} className="rounded bg-emerald-50 p-2">
+                <p className="font-medium text-emerald-900">
+                  {memory.ref} · {seedMap.objects.find((object) => object.id === memory.globalObjectId)?.canonicalName ?? memory.globalObjectId}
+                </p>
+                <p className="whitespace-pre-wrap text-zinc-700">{memory.contentMarkdown}</p>
+                <p className="mt-1 text-zinc-500">维护时间：{memory.maintainedAt}</p>
               </li>
             ))}
           </ul>
@@ -874,7 +892,7 @@ export default function Home() {
   }
 
   return (
-    <main className="flex min-h-dvh bg-[#f6f7f4] text-zinc-950 lg:h-dvh lg:overflow-hidden">
+    <main className="flex h-dvh min-h-0 overflow-hidden bg-[#f6f7f4] text-zinc-950">
       <nav className="flex w-60 shrink-0 flex-col border-r border-zinc-200 bg-[#153f35] px-4 py-6 text-white">
         <div className="px-2">
           <p className="text-2xl font-semibold tracking-tight">Echo</p>
@@ -902,10 +920,12 @@ export default function Home() {
         <p className="mt-auto px-3 pt-8 text-xs leading-5 text-emerald-100/45">Shared Brain 为所有业务视角提供事实依据。</p>
       </nav>
 
-      <div className="flex min-w-0 flex-1">
-        <section className="min-w-0 flex-1 overflow-y-auto">
+      <div className="flex min-h-0 min-w-0 flex-1">
+        <section className={`min-h-0 min-w-0 flex-1 ${
+          activeWorkspace === "chat" ? "overflow-hidden" : "overflow-y-auto"
+        }`}>
           {activeWorkspace === "chat" ? (
-            <div className="mx-auto flex h-full min-h-[48rem] w-full max-w-5xl flex-col px-6 py-7 lg:min-h-0 lg:px-10">
+            <div className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col px-6 py-7 lg:px-10">
               <header className="mb-5">
                 <p className="text-sm font-medium text-emerald-700">全局智能层</p>
                 <h1 className="mt-1 text-3xl font-semibold text-zinc-950">AI 对话</h1>

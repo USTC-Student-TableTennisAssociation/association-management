@@ -98,10 +98,20 @@ export type MemoryObjectAssertionConnection = {
   objectRef: string;
 };
 
+export type MemoryHigherMemorySeed = {
+  ref: string;
+  id: string;
+  globalObjectId: string;
+  contentMarkdown: string;
+  maintainedAt: string;
+};
+
 export type StructuredSeedMap = {
   facets: MemoryFacet[];
   sourceTime?: MemorySourceTime;
   objects: MemoryObjectSeed[];
+  /** Only present for the small set of conversation-maintained important Objects. */
+  higherMemories?: MemoryHigherMemorySeed[];
   assertions: MemoryAssertionSeed[];
   connections: MemoryObjectAssertionConnection[];
 };
@@ -172,7 +182,10 @@ export type MemorySearchTrace = {
 
 export type MemoryQuery = {
   query: string;
+  /** Assertion retrieval facets. */
   facets?: MemoryFacet[];
+  /** Entity-only facets; target names must not pollute Assertion ranking. */
+  objectFacets?: MemoryFacet[];
   facetWarnings?: string[];
   signal?: AbortSignal;
 };
@@ -191,6 +204,7 @@ export type MemorySearchBundle = {
   seedMap: StructuredSeedMap;
   /** Final answer citations. Kept outside the optional Locate trace. */
   answerUsedAssertionRefs?: string[];
+  answerUsedHigherMemoryRefs?: string[];
   trace?: MemorySearchTrace;
 };
 

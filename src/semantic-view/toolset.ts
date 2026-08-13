@@ -20,6 +20,7 @@ export function createSemanticViewToolset(input: {
   onProposal?: (proposal: ViewProposalPresentation) => void;
 }) {
   const inspectedViewKeys = new Set<BusinessViewKey>();
+  const inspectedObjectIds = new Set<string>();
   const viewReferences = createSemanticViewReferenceRegistry();
 
   const tools = {
@@ -34,6 +35,12 @@ export function createSemanticViewToolset(input: {
       execute: async ({ viewKey }) => {
         const view = await getSemanticView(viewKey);
         inspectedViewKeys.add(viewKey);
+        for (const card of view.cards) {
+          inspectedObjectIds.add(card.objectId);
+          for (const slot of card.slots) {
+            for (const target of slot.targets) inspectedObjectIds.add(target.objectId);
+          }
+        }
         return viewReferences.buildSnapshot(view);
       },
     }),
@@ -82,6 +89,7 @@ export function createSemanticViewToolset(input: {
 
   return {
     tools,
+    hasInspectedObject: (globalObjectId: string) => inspectedObjectIds.has(globalObjectId),
     citedReferences: viewReferences.citedReferences,
   };
 }

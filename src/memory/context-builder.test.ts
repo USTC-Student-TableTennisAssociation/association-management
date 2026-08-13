@@ -29,6 +29,13 @@ describe("buildEvidenceContext", () => {
             semanticMatch: true,
           },
         ],
+        higherMemories: [{
+          ref: "H1",
+          id: "00000000-0000-4000-8000-000000000099",
+          globalObjectId: "00000000-0000-4000-8000-000000000001",
+          contentMarkdown: "测试对象的当前高层认知。",
+          maintainedAt: "2026-08-14T00:00:00.000Z",
+        }],
         assertions: [
           {
             ref: "A1",
@@ -66,6 +73,9 @@ describe("buildEvidenceContext", () => {
     expect(context).toContain("[A1] 测试对象在 2025 年举办活动");
     expect(context).toContain("类型：Grounded（事实证据）");
     expect(context).toContain("[O1] Global Object：测试对象");
+    expect(context).toContain("[H1] Higher Memory：测试对象");
+    expect(context).toContain("测试对象的当前高层认知");
+    expect(context).toContain("默认先直接使用");
     expect(context).toContain("Surface forms：测试对象、测试别名");
     expect(context).toContain("canonical identity 和 surface forms 只用于识别");
     expect(context).toContain("上下文依赖：是，不得脱离当前来源语境扩张解读");

@@ -17,6 +17,8 @@ export function createChatAssertionQueueTool(input: {
       "当且仅当当前用户消息自身陈述了值得后续检索的新 Echo 组织事实时，",
       "把本轮排入后台 Chat → Assertion 提取。该工具只登记意图，不查询数据库、不创建 Assertion，",
       "也不保证最终会写入；后端仍会进行 Object 关联、Evidence、Embedding 与事务校验。",
+      "后台只能把 Assertion 关联到已经存在且搜索确认的 GlobalObject，不能自动创建新 Object，",
+      "也不会自动更新正式 Business View。不要向用户承诺稍后会自动建档或更新正式状态。",
       "纯问候、闲聊、问题、假设、头脑风暴、改写/查询/记录等操作指令本身，以及仅由 Assistant 历史提供的事实，",
       "都不要调用。若操作指令同时包含用户明确陈述的组织事实，只针对其中的事实触发。",
       "不需要在这里摘录 Evidence 或挑选上下文；后台会收到主对话实际使用的完整语义上下文，并自行选择用户 Evidence、",
@@ -44,12 +46,13 @@ export function createChatAssertionQueueTool(input: {
           "- queue 只表达“值得尝试”；没有圈定 Evidence，也没有要求后台必须产出。",
           "- 后台将接收主对话完整语义转录，并可复用或继续执行 Shared Brain 搜索。",
           "- 此时尚未由后台确认 Object，也尚未写入 Evidence 或 Assertion。",
+          "- 该线路不能创建 GlobalObject，也不会自动更新 Business View。",
         ].join("\n"),
       );
       return {
         queued: true,
         alreadyQueued: false,
-        message: "已排入回答后的可信提取与校验；这不代表一定会写入 Assertion。请继续完成正常回答。",
+        message: "已排入回答后的可信提取与校验；这不代表一定会写入 Assertion，且不会创建新 Object 或自动更新 Business View。请继续完成正常回答。",
       };
     },
   });

@@ -6,8 +6,15 @@ import {
   type ResolvedAssertionReference,
 } from "@/memory/resolved-assertion";
 import { getMemoryRetriever } from "@/memory/retriever";
+import {
+  curateRetrievalAssertions,
+  resolveRetrievalTargets,
+  type AssertionCuration,
+  type RetrievalCuratorContext,
+} from "@/memory/retrieval-curator";
 import type {
   MemoryAssertionKind,
+  MemoryHigherMemorySeed,
   MemoryObjectAssertionConnection,
   MemoryRetrievalResult,
   MemorySourceReference,
@@ -55,6 +62,7 @@ export type MemoryExploreResult = {
   focus?: string;
   sourceTime?: MemorySourceTime;
   objects: MemoryExploreObject[];
+  higherMemories?: MemoryHigherMemorySeed[];
   assertions: MemoryExploreAssertion[];
   connections: MemoryObjectAssertionConnection[];
   counts: {
@@ -71,8 +79,20 @@ export type MemoryExploreResult = {
 
 export type MemoryExploreRuntime = {
   signal?: AbortSignal;
+  /** Main chat prefers Higher Memory; background fact agents explicitly disable it. */
+  preferHigherMemory?: boolean;
+  /** Main chat passes full semantic conversation; background agents omit it. */
+  curatorContext?: RetrievalCuratorContext;
+  /** Human-readable trace for target selection and assertion filtering. */
+  curatorTrace?: import("@/ai/debug-trace").EchoDebugTrace;
   /** Keeps verbose Locate diagnostics out of the model-visible tool result. */
   onLocate?: (retrieval: MemoryRetrievalResult) => void;
+};
+
+export type MemorySearchIntent = {
+  query: string;
+  targetHints?: string[];
+  targetObjectIds?: string[];
 };
 
 type FollowAssertionRecord = Awaited<ReturnType<typeof loadFollowAssertions>>[number];
@@ -194,21 +214,22 @@ function compactLocatedSeedMap(
     connectionsByAssertion.set(connection.assertionRef, objectRefs);
   }
 
-  // Preserve the resolved GlobalObjects that make the selected Assertions
-  // intelligible before filling the remaining budget with lexical-only hits.
+  // Explicit entity/name matches are target candidates and must remain ahead of
+  // objects that only appear because a semantically similar Assertion mentions
+  // them. Related objects are filled in afterwards for evidence intelligibility.
   const orderedObjectRefs: string[] = [];
   const candidateObjectRefs = new Set<string>();
+  for (const object of seedMap.objects) {
+    if (!object.lexicalMatch || candidateObjectRefs.has(object.ref)) continue;
+    candidateObjectRefs.add(object.ref);
+    orderedObjectRefs.push(object.ref);
+  }
   for (const assertion of selectedAssertionSeeds) {
     for (const objectRef of connectionsByAssertion.get(assertion.ref) ?? []) {
       if (candidateObjectRefs.has(objectRef)) continue;
       candidateObjectRefs.add(objectRef);
       orderedObjectRefs.push(objectRef);
     }
-  }
-  for (const object of seedMap.objects) {
-    if (!object.lexicalMatch || candidateObjectRefs.has(object.ref)) continue;
-    candidateObjectRefs.add(object.ref);
-    orderedObjectRefs.push(object.ref);
   }
 
   const objectByRef = new Map(seedMap.objects.map((object) => [object.ref, object]));
@@ -241,31 +262,447 @@ function compactLocatedSeedMap(
   };
 }
 
+async function preferObjectHigherMemories(
+  compilationId: string | undefined,
+  compact: Pick<MemoryExploreResult, "sourceTime" | "objects" | "assertions" | "connections" | "truncated">,
+  targetObjectIds: string[],
+): Promise<{
+  compact: typeof compact & { higherMemories?: MemoryHigherMemorySeed[] };
+  staleObjectIds: string[];
+  newerAssertionIds: string[];
+}> {
+  if (!compilationId || !targetObjectIds.length) {
+    return { compact, staleObjectIds: [], newerAssertionIds: [] };
+  }
+  const database = getDatabase();
+  const rows = await database.memoryObjectHigherMemory.findMany({
+    where: {
+      compilationId,
+      globalObjectId: { in: targetObjectIds },
+    },
+    select: {
+      id: true,
+      globalObjectId: true,
+      contentMarkdown: true,
+      maintainedAt: true,
+    },
+  });
+  if (!rows.length) return { compact, staleObjectIds: [], newerAssertionIds: [] };
+  const earliestMaintainedAt = rows.reduce(
+    (earliest, row) => row.maintainedAt < earliest ? row.maintainedAt : earliest,
+    rows[0].maintainedAt,
+  );
+  const higherMemoryObjectIds = rows.map((row) => row.globalObjectId);
+  const newerAssertions = await database.memoryAssertion.findMany({
+    where: {
+      compilationId,
+      createdAt: { gt: earliestMaintainedAt },
+      OR: [
+        { literalGlobalReferences: { some: { globalObjectId: { in: higherMemoryObjectIds } } } },
+        {
+          fragmentReferences: {
+            some: {
+              globalResolutions: {
+                some: { globalObjectId: { in: higherMemoryObjectIds } },
+              },
+            },
+          },
+        },
+        { semanticObjectLinks: { some: { globalObjectId: { in: higherMemoryObjectIds } } } },
+      ],
+    },
+    select: {
+      id: true,
+      createdAt: true,
+      literalGlobalReferences: { select: { globalObjectId: true } },
+      fragmentReferences: {
+        select: {
+          globalResolutions: { select: { globalObjectId: true } },
+        },
+      },
+      semanticObjectLinks: { select: { globalObjectId: true } },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+    take: 24,
+  });
+  const maintainedAtByObjectId = new Map(
+    rows.map((row) => [row.globalObjectId, row.maintainedAt]),
+  );
+  const staleObjectIds = new Set<string>();
+  const newerAssertionIds: string[] = [];
+  for (const assertion of newerAssertions) {
+    const associatedObjectIds = new Set([
+      ...assertion.literalGlobalReferences.map((reference) => reference.globalObjectId),
+      ...assertion.fragmentReferences.flatMap((reference) =>
+        reference.globalResolutions.map((resolution) => resolution.globalObjectId)
+      ),
+      ...assertion.semanticObjectLinks.map((link) => link.globalObjectId),
+    ]);
+    let makesMemoryStale = false;
+    for (const objectId of associatedObjectIds) {
+      const maintainedAt = maintainedAtByObjectId.get(objectId);
+      if (maintainedAt && assertion.createdAt > maintainedAt) {
+        staleObjectIds.add(objectId);
+        makesMemoryStale = true;
+      }
+    }
+    if (makesMemoryStale) newerAssertionIds.push(assertion.id);
+  }
+  const objectOrder = new Map(targetObjectIds.map((id, index) => [id, index]));
+  const ordered = rows.sort((left, right) =>
+    (objectOrder.get(left.globalObjectId) ?? Number.MAX_SAFE_INTEGER) -
+      (objectOrder.get(right.globalObjectId) ?? Number.MAX_SAFE_INTEGER) ||
+    left.globalObjectId.localeCompare(right.globalObjectId)
+  );
+  return {
+    compact: {
+      ...compact,
+      higherMemories: ordered.map((memory, index) => ({
+        ref: `H${index + 1}`,
+        id: memory.id,
+        globalObjectId: memory.globalObjectId,
+        contentMarkdown: memory.contentMarkdown,
+        maintainedAt: memory.maintainedAt.toISOString(),
+      })),
+    },
+    staleObjectIds: [...staleObjectIds],
+    newerAssertionIds,
+  };
+}
+
+/** Ensure post-maintenance Assertions are Curator candidates even if Locate rank is low. */
+async function appendAssertionsToCompact(
+  compilationId: string,
+  compact: Pick<MemoryExploreResult, "sourceTime" | "objects" | "assertions" | "connections" | "truncated">,
+  assertionIds: string[],
+): Promise<typeof compact> {
+  const existingAssertionIds = new Set(compact.assertions.flatMap((assertion) =>
+    assertion.id ? [assertion.id] : []
+  ));
+  const missingIds = assertionIds.filter((id) => !existingAssertionIds.has(id));
+  if (!missingIds.length) return compact;
+
+  const loaded = await loadFollowAssertions(compilationId, missingIds);
+  const loadedById = new Map(loaded.map((assertion) => [assertion.id, assertion]));
+  const rendered = missingIds.flatMap((id) => {
+    const assertion = loadedById.get(id);
+    return assertion ? [renderFollowAssertion(assertion)] : [];
+  });
+  if (!rendered.length) return compact;
+
+  const existingObjectIds = new Set(compact.objects.map((object) => object.id));
+  const missingObjectIds = [...new Set(rendered.flatMap((assertion) =>
+    assertion.associatedReferences.map((reference) => reference.globalObjectId)
+  ))].filter((id) => !existingObjectIds.has(id));
+  const addedObjects = await loadGlobalObjects(compilationId, missingObjectIds);
+  const objects = [
+    ...compact.objects,
+    ...addedObjects.map((object, index) => compactObject({
+      ref: `OF${index + 1}`,
+      ...object,
+      semanticMatch: true,
+    })),
+  ];
+  const objectRefById = new Map(objects.map((object) => [object.id, object.ref]));
+  const assertions = rendered.map((assertion, index) => compactAssertion({
+    ref: `AF${index + 1}`,
+    id: assertion.row.id,
+    kind: assertion.row.kind,
+    dereferenceRequired: assertion.row.kind === "reference",
+    ...(assertion.row.sourceRegion
+      ? { sourceNodeId: assertion.row.sourceRegion.sourceNodeId }
+      : {}),
+    sourceClaimId: assertion.row.sourceClaimId,
+    renderedStatement: assertion.renderedStatement,
+    contextDependent: assertion.row.contextDependent,
+    sources: assertionSources(assertion.row),
+  }));
+  const connections = rendered.flatMap((assertion, assertionIndex) =>
+    [...new Set(assertion.associatedReferences.map((reference) => reference.globalObjectId))]
+      .flatMap((objectId) => {
+        const objectRef = objectRefById.get(objectId);
+        return objectRef ? [{ assertionRef: `AF${assertionIndex + 1}`, objectRef }] : [];
+      })
+  );
+  return {
+    ...compact,
+    objects,
+    assertions: [...compact.assertions, ...assertions],
+    connections: [...compact.connections, ...connections],
+  };
+}
+
+function curatorObject(object: MemoryExploreObject) {
+  return {
+    id: object.id,
+    canonicalName: object.canonicalName,
+    surfaceForms: object.surfaceForms,
+    lexicalMatch: object.lexicalMatch,
+    semanticMatch: object.semanticMatch,
+  };
+}
+
+function sourceSummary(assertion: MemoryExploreAssertion): string[] {
+  return assertion.sources.map((source) => source.kind === "chat"
+    ? `chat:${source.submittedAt}:${source.actorDisplayName}`
+    : `document:${source.sourceTitle}:${source.sourceRegionLabel}:pages=${source.pages.join(",")}`
+  );
+}
+
+function targetConstrainedCandidates(
+  compact: Pick<MemoryExploreResult, "objects" | "assertions" | "connections">,
+  targetObjectIds: string[],
+): MemoryExploreAssertion[] {
+  const targetRefs = new Set(compact.objects
+    .filter((object) => targetObjectIds.includes(object.id))
+    .map((object) => object.ref));
+  const assertionRefs = new Set(compact.connections
+    .filter((connection) => targetRefs.has(connection.objectRef))
+    .map((connection) => connection.assertionRef));
+  return compact.assertions.filter((assertion) => assertionRefs.has(assertion.ref));
+}
+
+function filterCompactResult(
+  compact: Pick<MemoryExploreResult, "sourceTime" | "objects" | "assertions" | "connections" | "truncated">,
+  targetObjectIds: string[],
+  selectedAssertionIds: string[],
+) {
+  const selectedAssertionIdSet = new Set(selectedAssertionIds);
+  const selectedAssertions = compact.assertions.filter((assertion) =>
+    assertion.id && selectedAssertionIdSet.has(assertion.id)
+  );
+  const selectedAssertionRefs = new Set(selectedAssertions.map((assertion) => assertion.ref));
+  const necessaryObjectRefs = new Set(compact.connections
+    .filter((connection) => selectedAssertionRefs.has(connection.assertionRef))
+    .map((connection) => connection.objectRef));
+  for (const object of compact.objects) {
+    if (targetObjectIds.includes(object.id)) necessaryObjectRefs.add(object.ref);
+  }
+  const selectedObjects = [
+    ...compact.objects.filter((object) => targetObjectIds.includes(object.id)),
+    ...compact.objects.filter((object) =>
+      !targetObjectIds.includes(object.id) && necessaryObjectRefs.has(object.ref)
+    ),
+  ];
+  const localObjectRefByOldRef = new Map(
+    selectedObjects.map((object, index) => [object.ref, `O${index + 1}`]),
+  );
+  const localAssertionRefByOldRef = new Map(
+    selectedAssertions.map((assertion, index) => [assertion.ref, `A${index + 1}`]),
+  );
+  const selectedObjectRefs = new Set(selectedObjects.map((object) => object.ref));
+  const connections = compact.connections.filter((connection) =>
+    selectedAssertionRefs.has(connection.assertionRef) &&
+    selectedObjectRefs.has(connection.objectRef)
+  ).map((connection) => ({
+    assertionRef: localAssertionRefByOldRef.get(connection.assertionRef)!,
+    objectRef: localObjectRefByOldRef.get(connection.objectRef)!,
+  }));
+  return {
+    ...compact,
+    objects: selectedObjects.map((object) => ({
+      ...object,
+      ref: localObjectRefByOldRef.get(object.ref)!,
+    })),
+    assertions: selectedAssertions.map((assertion) => ({
+      ...assertion,
+      ref: localAssertionRefByOldRef.get(assertion.ref)!,
+    })),
+    connections,
+    truncated: {
+      objects: compact.truncated.objects || compact.objects.length > selectedObjects.length,
+      assertions: compact.truncated.assertions || compact.assertions.length > selectedAssertions.length,
+    },
+  };
+}
+
 /**
  * Run the existing Locate pipeline as a bounded, serializable AI tool result.
  * SourceBlock content is deliberately omitted; sources are provenance anchors only.
  */
 export async function searchMemory(
-  query: string,
+  intent: string | MemorySearchIntent,
   runtime: MemoryExploreRuntime = {},
 ): Promise<MemoryExploreResult> {
-  const normalizedQuery = requiredText(query, "query", QUERY_CHAR_LIMIT);
+  const normalizedQuery = requiredText(
+    typeof intent === "string" ? intent : intent.query,
+    "query",
+    QUERY_CHAR_LIMIT,
+  );
+  const targetHints = (typeof intent === "string" ? [] : intent.targetHints ?? [])
+    .map((hint) => requiredText(hint, "targetHint", 200))
+    .slice(0, 3);
+  const targetObjectIds = (typeof intent === "string" ? [] : intent.targetObjectIds ?? [])
+    .map((id) => requiredText(id, "targetObjectId", 200))
+    .slice(0, 3);
   throwIfAborted(runtime.signal);
+  const targetFacets = targetHints.map((text, index) => ({
+      id: `facet-target-${index + 1}`,
+      text,
+      source: "query" as const,
+    }));
   const retrieval = await getMemoryRetriever().retrieve({
     query: normalizedQuery,
+    ...(targetFacets.length ? { objectFacets: targetFacets } : {}),
     signal: runtime.signal,
   });
   throwIfAborted(runtime.signal);
   runtime.onLocate?.(retrieval);
-  const compact = compactLocatedSeedMap(retrieval.seedMap, SEARCH_ASSERTION_LIMIT);
   const compilationId = retrieval.compilationId ?? retrieval.trace?.snapshot.id;
+  const useCurator = runtime.curatorContext !== undefined && retrieval.mode === "object-assertion";
+  // Curator receives a wider internal candidate pool, while legacy/background
+  // callers keep the existing bounded output unchanged.
+  let rawCompact = compactLocatedSeedMap(
+    retrieval.seedMap,
+    useCurator ? 20 : SEARCH_ASSERTION_LIMIT,
+  );
+  if (useCurator && compilationId && targetObjectIds.length) {
+    const missingTargetIds = targetObjectIds.filter((id) =>
+      !rawCompact.objects.some((object) => object.id === id)
+    );
+    if (missingTargetIds.length) {
+      const loadedTargets = await loadGlobalObjects(compilationId, missingTargetIds);
+      rawCompact = {
+        ...rawCompact,
+        objects: [
+          ...loadedTargets.map((object, index) => compactObject({
+            ref: `OT${index + 1}`,
+            ...object,
+            lexicalMatch: true,
+            semanticMatch: false,
+          })),
+          ...rawCompact.objects,
+        ],
+      };
+    }
+  }
+  const target = useCurator
+    ? await resolveRetrievalTargets({
+        query: normalizedQuery,
+        targetHints,
+        explicitTargetObjectIds: targetObjectIds,
+        candidates: rawCompact.objects.map(curatorObject),
+        context: runtime.curatorContext,
+        signal: runtime.signal,
+        trace: runtime.curatorTrace,
+      })
+    : {
+        targetObjectIds: rawCompact.objects.slice(0, 1).map((object) => object.id),
+        mode: "fallback" as const,
+        reasons: [],
+        candidateObjectIds: rawCompact.objects.map((object) => object.id),
+      };
+  const targetIds = target.targetObjectIds;
+  const higherMemoryPreference = runtime.preferHigherMemory === false ||
+      retrieval.mode !== "object-assertion"
+    ? {
+        compact: rawCompact,
+        staleObjectIds: [] as string[],
+        newerAssertionIds: [] as string[],
+      }
+    : await preferObjectHigherMemories(compilationId, rawCompact, targetIds);
+  if (compilationId && higherMemoryPreference.newerAssertionIds.length) {
+    rawCompact = await appendAssertionsToCompact(
+      compilationId,
+      rawCompact,
+      higherMemoryPreference.newerAssertionIds,
+    );
+  }
+  const preferredHigherMemories = (higherMemoryPreference.compact as typeof rawCompact & {
+    higherMemories?: MemoryHigherMemorySeed[];
+  }).higherMemories;
+  const higherMemoryCompact: typeof rawCompact & {
+    higherMemories?: MemoryHigherMemorySeed[];
+  } = {
+    ...rawCompact,
+    ...(preferredHigherMemories
+      ? { higherMemories: preferredHigherMemories }
+      : {}),
+  };
+  const staleHigherMemoryObjectIds = new Set(higherMemoryPreference.staleObjectIds);
+  const higherMemoryTargetIds = new Set(
+    higherMemoryCompact.higherMemories?.map((memory) => memory.globalObjectId) ?? [],
+  );
+  const assertionTargetIds = targetIds.filter((id) =>
+    !higherMemoryTargetIds.has(id) || staleHigherMemoryObjectIds.has(id)
+  );
+  let assertionCuration: AssertionCuration | undefined;
+  let compact: typeof higherMemoryCompact = higherMemoryCompact;
+  if (assertionTargetIds.length && useCurator) {
+    const candidateAssertions = targetConstrainedCandidates(rawCompact, assertionTargetIds);
+    assertionCuration = await curateRetrievalAssertions({
+      query: normalizedQuery,
+      targetHints,
+      targetObjects: rawCompact.objects
+        .filter((object) => assertionTargetIds.includes(object.id))
+        .map(curatorObject),
+      candidates: candidateAssertions.flatMap((assertion) => assertion.id ? [{
+        id: assertion.id,
+        renderedStatement: assertion.renderedStatement,
+        kind: assertion.kind,
+        contextDependent: assertion.contextDependent,
+        sourceSummary: sourceSummary(assertion),
+      }] : []),
+      context: runtime.curatorContext,
+      signal: runtime.signal,
+      trace: runtime.curatorTrace,
+    });
+    compact = filterCompactResult(
+      rawCompact,
+      targetIds,
+      assertionCuration.selectedAssertionIds,
+    );
+    if (higherMemoryCompact.higherMemories?.length) {
+      compact = {
+        ...compact,
+        higherMemories: higherMemoryCompact.higherMemories,
+      };
+    }
+  } else if (
+    higherMemoryCompact.higherMemories?.length &&
+    staleHigherMemoryObjectIds.size === 0
+  ) {
+    compact = {
+      ...higherMemoryCompact,
+      objects: higherMemoryCompact.objects.filter((object) => targetIds.includes(object.id)),
+      assertions: [],
+      connections: [],
+      truncated: {
+        ...higherMemoryCompact.truncated,
+        assertions:
+          higherMemoryCompact.truncated.assertions ||
+          higherMemoryCompact.assertions.length > 0,
+      },
+    };
+  }
+  const higherMemoryNotice = compact.higherMemories?.length
+    ? [staleHigherMemoryObjectIds.size
+        ? "Higher Memory 维护后出现了新的关联 Assertion；已同时返回本次检索命中的 Assertions。在 Higher Memory 下次维护完成前，回答当前状态时必须优先核对较新的 Assertion。"
+        : assertionTargetIds.length
+          ? "已优先返回有记录目标的完整 Higher Memory；Assertions 只来自尚无 Higher Memory 的其他目标。"
+          : "已优先返回完整 Higher Memory；普通 Assertions 本次未进入上下文，需要细节、来源或未覆盖信息时请显式 followObject。"]
+    : [];
+  const coverageNotice = assertionCuration
+    ? [
+        `Retrieval Curator 覆盖判断：${assertionCuration.coverage}。` +
+          (assertionCuration.missingAspects.length
+            ? ` 未覆盖：${assertionCuration.missingAspects.join("；")}`
+            : ""),
+      ]
+    : [];
   return resultWithCounts({
     kind: "search-memory",
     mode: retrieval.mode,
     ...(compilationId ? { compilationId } : {}),
     query: normalizedQuery,
     ...compact,
-    warnings: retrieval.trace?.warnings ?? [],
+    warnings: [
+      ...(retrieval.trace?.warnings ?? []),
+      ...(target.warning ? [target.warning] : []),
+      ...(assertionCuration?.warning ? [assertionCuration.warning] : []),
+      ...higherMemoryNotice,
+      ...coverageNotice,
+    ],
   });
 }
 
@@ -611,7 +1048,37 @@ export async function followObject(
         ) ||
         left.row.sourceClaimId.localeCompare(right.row.sourceClaimId),
     );
-  const selectedAssertions = rankedAssertions.slice(0, FOLLOW_ASSERTION_LIMIT);
+  let selectedAssertions = rankedAssertions.slice(0, FOLLOW_ASSERTION_LIMIT);
+  let assertionCuration: AssertionCuration | undefined;
+  if (runtime.curatorContext) {
+    const candidateAssertions = rankedAssertions.slice(0, 20);
+    assertionCuration = await curateRetrievalAssertions({
+      query: normalizedFocus ?? runtime.curatorContext.originalUserMessage,
+      targetHints: [targetObject.canonicalName],
+      targetObjects: [{
+        id: targetObject.id,
+        canonicalName: targetObject.canonicalName,
+        surfaceForms: targetObject.surfaceForms,
+        lexicalMatch: true,
+        semanticMatch: true,
+      }],
+      candidates: candidateAssertions.map((assertion) => ({
+        id: assertion.row.id,
+        renderedStatement: assertion.renderedStatement,
+        kind: assertion.row.kind,
+        contextDependent: assertion.row.contextDependent,
+        sourceSummary: assertionSources(assertion.row).map((source) => source.kind === "chat"
+          ? `chat:${source.submittedAt}:${source.actorDisplayName}`
+          : `document:${source.sourceTitle}:${source.sourceRegionLabel}:pages=${source.pages.join(",")}`
+        ),
+      })),
+      context: runtime.curatorContext,
+      signal: runtime.signal,
+      trace: runtime.curatorTrace,
+    });
+    const selectedIds = new Set(assertionCuration.selectedAssertionIds);
+    selectedAssertions = candidateAssertions.filter((assertion) => selectedIds.has(assertion.row.id));
+  }
   const relatedObjectIds = new Set<string>([normalizedObjectId]);
   for (const assertion of selectedAssertions) {
     for (const reference of assertion.associatedReferences) relatedObjectIds.add(reference.globalObjectId);
@@ -684,9 +1151,12 @@ export async function followObject(
       assertions:
         scanTruncated || rankedAssertions.length > selectedAssertions.length,
     },
-    warnings: scanTruncated
-      ? [`仅扫描了前 ${FOLLOW_ASSERTION_SCAN_LIMIT} 个关联 Assertion`]
-      : [],
+    warnings: [
+      ...(scanTruncated
+        ? [`仅扫描了前 ${FOLLOW_ASSERTION_SCAN_LIMIT} 个关联 Assertion`]
+        : []),
+      ...(assertionCuration?.warning ? [assertionCuration.warning] : []),
+    ],
   });
 }
 

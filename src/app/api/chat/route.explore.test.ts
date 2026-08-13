@@ -409,6 +409,7 @@ describe("POST /api/chat Explore", () => {
         "readSemanticView",
         "proposeViewChange",
         "queueChatAssertionCapture",
+        "queueHigherMemoryMaintenance",
       ]),
     );
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("本轮开始时尚未执行搜索");
@@ -420,6 +421,9 @@ describe("POST /api/chat Explore", () => {
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("Assertion 很零散");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
       "纯问候、闲聊、问题、假设",
+    );
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
+      "不能创建新 Object",
     );
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain(
       "没有找到足以支持回答的组织事实",
