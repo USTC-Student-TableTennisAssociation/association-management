@@ -1,5 +1,6 @@
 import type {
   MemoryAssertionSeed,
+  MemoryHigherMemorySeed,
   MemoryObjectSeed,
   MemoryRetrievalResult,
   MemorySourceReference,
@@ -70,6 +71,16 @@ function renderAssertion(seed: MemoryAssertionSeed): string {
   ].join("\n");
 }
 
+function renderHigherMemory(seed: MemoryHigherMemorySeed, seedMap: StructuredSeedMap): string {
+  const object = seedMap.objects.find((item) => item.id === seed.globalObjectId);
+  return [
+    `[${seed.ref}] Higher Memory：${object?.canonicalName ?? seed.globalObjectId}`,
+    `  维护时间：${seed.maintainedAt}`,
+    "",
+    seed.contentMarkdown,
+  ].join("\n");
+}
+
 function renderConnections(seedMap: StructuredSeedMap): string {
   if (!seedMap.connections.length) return "无。";
   return seedMap.connections
@@ -83,10 +94,15 @@ export function buildEvidenceContext(result: MemoryRetrievalResult): string {
     .map((facet) => `${facet.id}: ${facet.text}（${facet.source}）`)
     .join("\n");
   const objects = seedMap.objects.map(renderObject).join("\n\n") || "无。";
+  const higherMemories = (seedMap.higherMemories ?? [])
+    .map((item) => renderHigherMemory(item, seedMap))
+    .join("\n\n") || "无。";
   const assertions = seedMap.assertions.map(renderAssertion).join("\n\n") || "无。";
 
   return [
-    "以下是程序 Locate 得到的只读 Object–Assertion Structured Seed Map。",
+    "以下是程序 Locate 得到的只读 Object / Higher Memory / Assertion 结果。",
+    "Higher Memory 是少数重要 Object 经对话维护的高优先级完整认知。出现 [H#] 时默认先直接使用，不要求同时读取或引用其底层 Assertion。",
+    "只有 Higher Memory 未覆盖问题、用户要求细节/原话/来源、出现冲突或明确需要核查时，才继续下钻 Assertions。",
     "其中只包含 Assertion 知识与最小来源标识，不包含 SourceBlock 原文，也不包含聊天 Evidence 原文。",
     "来源标题、页码、block、sourceNode、Actor 和提交时间只用于引用追溯，不作为额外事实内容。",
     "Object 的 canonical identity 和 surface forms 只用于识别“指向哪个对象”，不是事实证据。",
@@ -105,6 +121,9 @@ export function buildEvidenceContext(result: MemoryRetrievalResult): string {
     "## Global Object Seeds",
     objects,
     "",
+    "## Object Higher Memories",
+    higherMemories,
+    "",
     "## Assertion Seeds",
     assertions,
     "",
@@ -114,7 +133,7 @@ export function buildEvidenceContext(result: MemoryRetrievalResult): string {
 }
 
 export function countSeedMapItems(seedMap: StructuredSeedMap): number {
-  return seedMap.objects.length + seedMap.assertions.length;
+  return seedMap.objects.length + (seedMap.higherMemories?.length ?? 0) + seedMap.assertions.length;
 }
 
 export function sliceSeedMapAssertions(
@@ -136,6 +155,9 @@ export function sliceSeedMapAssertions(
     facets: seedMap.facets,
     ...(seedMap.sourceTime ? { sourceTime: seedMap.sourceTime } : {}),
     objects,
+    ...(seedMap.higherMemories?.length
+      ? { higherMemories: seedMap.higherMemories.map((item) => ({ ...item })) }
+      : {}),
     assertions,
     connections: seedMap.connections.filter(
       (connection) =>

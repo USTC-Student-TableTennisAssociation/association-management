@@ -558,6 +558,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     ? input.facets
     : [{ id: "facet-0", text: input.query, source: "query" as const }]
   ).slice(0, 4);
+  const objectFacets = (input.objectFacets?.length ? input.objectFacets : facets).slice(0, 4);
   const warnings = [...(input.facetWarnings ?? [])];
   const minimumLexicalScore = environmentScore("MEMORY_MIN_LEXICAL_SCORE", 0.18);
   const minimumVectorScore = environmentScore("MEMORY_MIN_VECTOR_SCORE", 0.35);
@@ -567,7 +568,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     loadAssertions(snapshot.id),
   ]);
   const assertionsById = new Map(assertions.map((item) => [item.id, item]));
-  const objectLexicalHits = rankObjectLexical(facets, objects, minimumLexicalScore);
+  const objectLexicalHits = rankObjectLexical(objectFacets, objects, minimumLexicalScore);
   const assertionLexicalHits = rankAssertionLexical(facets, assertions, minimumLexicalScore);
 
   let assertionVectorHits: RankedAssertionHit[] = [];
@@ -764,7 +765,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     },
     facets,
     objectLexical: channelTrace({
-      facets,
+      facets: objectFacets,
       hits: objectLexicalHits,
       targetRef: (hit) => objectRefById.get(hit.object.id) ?? objectStableKey(hit.object),
       label: (hit) => hit.object.canonicalName,

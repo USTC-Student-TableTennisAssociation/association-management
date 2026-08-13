@@ -7,9 +7,17 @@ import {
   searchMemory,
 } from "@/memory/explore";
 import { getMemoryRetriever } from "@/memory/retriever";
+import {
+  curateRetrievalAssertions,
+  resolveRetrievalTargets,
+} from "@/memory/retrieval-curator";
 
 vi.mock("@/db", () => ({ getDatabase: vi.fn() }));
 vi.mock("@/memory/retriever", () => ({ getMemoryRetriever: vi.fn() }));
+vi.mock("@/memory/retrieval-curator", () => ({
+  resolveRetrievalTargets: vi.fn(),
+  curateRetrievalAssertions: vi.fn(),
+}));
 
 function locatedSeedMap() {
   const objects = Array.from({ length: 18 }, (_, index) => ({
@@ -28,6 +36,7 @@ function locatedSeedMap() {
   }));
   const assertions = Array.from({ length: 14 }, (_, index) => ({
     ref: `A${index + 1}`,
+    id: `assertion-${index + 1}`,
     kind: "grounded" as const,
     dereferenceRequired: false,
     sourceNodeId: `source-node-${index + 1}`,
@@ -156,6 +165,20 @@ function followAssertionRows(includeSemanticReference = false) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(resolveRetrievalTargets).mockResolvedValue({
+    targetObjectIds: ["global-1"],
+    mode: "deterministic",
+    reasons: [{ id: "global-1", reason: "exact" }],
+    candidateObjectIds: ["global-1"],
+  });
+  vi.mocked(curateRetrievalAssertions).mockResolvedValue({
+    selectedAssertionIds: ["assertion-1"],
+    mode: "model",
+    coverage: "partial",
+    missingAspects: [],
+    reasons: [{ id: "assertion-1", reason: "direct" }],
+    candidateAssertionIds: ["assertion-1"],
+  });
 });
 
 describe("searchMemory", () => {
@@ -173,6 +196,9 @@ describe("searchMemory", () => {
       mode: "object-assertion",
       retrieve,
     });
+    vi.mocked(getDatabase).mockReturnValue({
+      memoryObjectHigherMemory: { findMany: vi.fn().mockResolvedValue([]) },
+    } as never);
 
     const onLocate = vi.fn();
     const result = await searchMemory("  继往开来  ", { onLocate });
@@ -211,8 +237,11 @@ describe("searchMemory", () => {
     expect(retrieve).not.toHaveBeenCalled();
   });
 
-  it("keeps Assertion-connected GlobalObjects ahead of lexical-only hits", async () => {
+  it("keeps lexical target candidates ahead of Assertion-only related Objects", async () => {
     const seedMap = locatedSeedMap();
+    seedMap.objects.forEach((object, index) => {
+      object.lexicalMatch = index === 0;
+    });
     const connectedObject = seedMap.objects[17];
     seedMap.assertions = seedMap.assertions.slice(0, 1);
     seedMap.connections = [{
@@ -229,15 +258,19 @@ describe("searchMemory", () => {
       mode: "object-assertion",
       retrieve,
     });
+    vi.mocked(getDatabase).mockReturnValue({
+      memoryObjectHigherMemory: { findMany: vi.fn().mockResolvedValue([]) },
+    } as never);
 
     const result = await searchMemory("connected object");
 
-    expect(result.objects[0].id).toBe(connectedObject.id);
+    expect(result.objects[0].id).toBe("global-1");
+    expect(result.objects.some((object) => object.id === connectedObject.id)).toBe(true);
     expect(result.connections).toEqual([{
       assertionRef: "A1",
       objectRef: connectedObject.ref,
     }]);
-    expect(result.truncated.objects).toBe(true);
+    expect(result.truncated.objects).toBe(false);
   });
 
   it("does not invoke Locate after the request has been aborted", async () => {
@@ -249,6 +282,192 @@ describe("searchMemory", () => {
     await expect(searchMemory("query", { signal: controller.signal }))
       .rejects.toThrow("client stopped");
     expect(retrieve).not.toHaveBeenCalled();
+  });
+
+  it("returns complete Higher Memory and hides its ordinary Assertions by default", async () => {
+    const retrieve = vi.fn().mockResolvedValue({
+      query: "Global Object 1",
+      mode: "object-assertion",
+      compilationId: "compilation-current",
+      seedMap: locatedSeedMap(),
+      trace: { snapshot: { id: "compilation-current" }, warnings: [] },
+    });
+    vi.mocked(getMemoryRetriever).mockReturnValue({
+      mode: "object-assertion",
+      retrieve,
+    });
+    vi.mocked(getDatabase).mockReturnValue({
+      memoryObjectHigherMemory: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: "higher-memory-1",
+          globalObjectId: "global-1",
+          contentMarkdown: "这是完整的高层认知，不应同时返回底层 Assertion。",
+          maintainedAt: new Date("2026-08-14T00:00:00.000Z"),
+        }]),
+      },
+      memoryAssertion: { findMany: vi.fn().mockResolvedValue([]) },
+    } as never);
+
+    const result = await searchMemory("Global Object 1");
+
+    expect(result.higherMemories).toEqual([expect.objectContaining({
+      ref: "H1",
+      globalObjectId: "global-1",
+      contentMarkdown: expect.stringContaining("完整的高层认知"),
+    })]);
+    expect(result.assertions.some((assertion) => assertion.ref === "A1")).toBe(false);
+    expect(result.assertions).toEqual([]);
+    expect(result.connections).toEqual([]);
+    expect(result.warnings).toContainEqual(expect.stringContaining("优先返回完整 Higher Memory"));
+  });
+
+  it("returns matching Assertions alongside a stale Higher Memory", async () => {
+    const retrieve = vi.fn().mockResolvedValue({
+      query: "Global Object 1 当前状态",
+      mode: "object-assertion",
+      compilationId: "compilation-current",
+      seedMap: locatedSeedMap(),
+      trace: { snapshot: { id: "compilation-current" }, warnings: [] },
+    });
+    vi.mocked(getMemoryRetriever).mockReturnValue({ mode: "object-assertion", retrieve });
+    vi.mocked(getDatabase).mockReturnValue({
+      memoryObjectHigherMemory: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: "higher-memory-1",
+          globalObjectId: "global-1",
+          contentMarkdown: "这是刷新前的旧高层认知。",
+          maintainedAt: new Date("2026-08-14T00:00:00.000Z"),
+        }]),
+      },
+      memoryAssertion: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: "assertion-1",
+          createdAt: new Date("2026-08-14T01:00:00.000Z"),
+          literalGlobalReferences: [{ globalObjectId: "global-1" }],
+          fragmentReferences: [],
+          semanticObjectLinks: [],
+        }]),
+      },
+    } as never);
+
+    const result = await searchMemory("Global Object 1 当前状态");
+
+    expect(result.higherMemories).toHaveLength(1);
+    expect(result.assertions).not.toHaveLength(0);
+    expect(result.assertions.some((assertion) => assertion.id === "assertion-1")).toBe(true);
+    expect(result.warnings).toContainEqual(expect.stringContaining("出现了新的关联 Assertion"));
+  });
+
+  it("can explicitly bypass Higher Memory for background fact maintenance", async () => {
+    const retrieve = vi.fn().mockResolvedValue({
+      query: "Global Object 1",
+      mode: "object-assertion",
+      compilationId: "compilation-current",
+      seedMap: locatedSeedMap(),
+      trace: { snapshot: { id: "compilation-current" }, warnings: [] },
+    });
+    vi.mocked(getMemoryRetriever).mockReturnValue({ mode: "object-assertion", retrieve });
+    const findMany = vi.fn();
+    vi.mocked(getDatabase).mockReturnValue({
+      memoryObjectHigherMemory: { findMany },
+    } as never);
+
+    const result = await searchMemory("Global Object 1", { preferHigherMemory: false });
+
+    expect(findMany).not.toHaveBeenCalled();
+    expect(result.higherMemories).toBeUndefined();
+    expect(result.assertions.some((assertion) => assertion.ref === "A1")).toBe(true);
+  });
+
+  it("queries Higher Memory only for Curator-selected target Objects", async () => {
+    const retrieve = vi.fn().mockResolvedValue({
+      query: "组织现状",
+      mode: "object-assertion",
+      compilationId: "compilation-current",
+      seedMap: locatedSeedMap(),
+      trace: { snapshot: { id: "compilation-current" }, warnings: [] },
+    });
+    vi.mocked(getMemoryRetriever).mockReturnValue({ mode: "object-assertion", retrieve });
+    vi.mocked(resolveRetrievalTargets).mockResolvedValue({
+      targetObjectIds: ["global-4"],
+      mode: "model",
+      reasons: [{ id: "global-4", reason: "conversation target" }],
+      candidateObjectIds: ["global-1", "global-4"],
+    });
+    const findMany = vi.fn().mockResolvedValue([]);
+    vi.mocked(getDatabase).mockReturnValue({
+      memoryObjectHigherMemory: { findMany },
+    } as never);
+
+    await searchMemory({
+      query: "组织现状",
+      targetHints: ["乒协组织本身"],
+    }, {
+      curatorContext: {
+        conversation: [],
+        originalUserMessage: "乒协现在怎么样",
+        currentInstant: "2026-08-14T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+      },
+    });
+
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ globalObjectId: { in: ["global-4"] } }),
+    }));
+    expect(retrieve).toHaveBeenCalledWith(expect.objectContaining({
+      query: "组织现状",
+      objectFacets: [expect.objectContaining({ text: "乒协组织本身" })],
+    }));
+    expect(resolveRetrievalTargets).toHaveBeenCalledWith(expect.objectContaining({
+      targetHints: ["乒协组织本身"],
+    }));
+  });
+
+  it("returns the selected target first and only Curator-selected Assertions", async () => {
+    const seedMap = locatedSeedMap();
+    // Both assertions mention global-4; Curator keeps only assertion-2.
+    seedMap.connections.push({ assertionRef: "A1", objectRef: "O4" });
+    seedMap.connections.push({ assertionRef: "A2", objectRef: "O4" });
+    const retrieve = vi.fn().mockResolvedValue({
+      query: "组织现状",
+      mode: "object-assertion",
+      compilationId: "compilation-current",
+      seedMap,
+      trace: { snapshot: { id: "compilation-current" }, warnings: [] },
+    });
+    vi.mocked(getMemoryRetriever).mockReturnValue({ mode: "object-assertion", retrieve });
+    vi.mocked(resolveRetrievalTargets).mockResolvedValue({
+      targetObjectIds: ["global-4"],
+      mode: "model",
+      reasons: [{ id: "global-4", reason: "conversation target" }],
+      candidateObjectIds: ["global-1", "global-4"],
+    });
+    vi.mocked(curateRetrievalAssertions).mockResolvedValue({
+      selectedAssertionIds: ["assertion-2"],
+      mode: "model",
+      coverage: "partial",
+      missingAspects: [],
+      reasons: [{ id: "assertion-2", reason: "direct" }],
+      candidateAssertionIds: ["assertion-1", "assertion-2"],
+    });
+    vi.mocked(getDatabase).mockReturnValue({
+      memoryObjectHigherMemory: { findMany: vi.fn().mockResolvedValue([]) },
+    } as never);
+
+    const result = await searchMemory({ query: "组织现状", targetHints: ["乒协"] }, {
+      curatorContext: {
+        conversation: [],
+        originalUserMessage: "乒协现在怎么样",
+        currentInstant: "2026-08-14T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+      },
+    });
+
+    expect(result.objects[0]).toMatchObject({ ref: "O1", id: "global-4" });
+    expect(result.assertions).toEqual([
+      expect.objectContaining({ ref: "A1", id: "assertion-2" }),
+    ]);
+    expect(result.connections).toContainEqual({ assertionRef: "A1", objectRef: "O1" });
   });
 });
 

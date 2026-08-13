@@ -52,6 +52,7 @@ model MemoryCompilation {
   assertions              MemoryAssertion[]
   chatEvidence            MemoryChatEvidence[]
   chatAssertionCaptures   MemoryChatAssertionCapture[]
+  objectHigherMemories    MemoryObjectHigherMemory[]
   globalObjects           MemoryGlobalObject[]
   assertionEmbeddingIndex MemoryAssertionEmbeddingIndex?
   semanticCards           SemanticCard[]
@@ -275,11 +276,32 @@ model MemoryGlobalObject {
   referenceResolutions   MemoryGlobalAssertionReferenceResolution[]
   literalReferences      MemoryGlobalAssertionLiteralReference[]
   semanticAssertionLinks MemoryAssertionSemanticObjectLink[]
+  higherMemory           MemoryObjectHigherMemory?
   semanticCards          SemanticCard[]
 
   @@unique([compilationId, globalObjectKey])
   @@index([compilationId])
   @@map("memory_global_objects")
+}
+
+/// 只为对话中少数重要 GlobalObject 按需维护的高优先级认知文档。
+/// 它基于 Assertion 和完整对话生成，但不持久化 Assertion 索引或逐句来源绑定。
+model MemoryObjectHigherMemory {
+  id                String   @id @default(uuid()) @db.Uuid
+  compilationId     String   @map("compilation_id") @db.Uuid
+  globalObjectId    String   @unique @map("global_object_id") @db.Uuid
+  contentMarkdown   String   @map("content_markdown") @db.Text
+  maintainedAt      DateTime @map("maintained_at") @db.Timestamptz(3)
+  triggerMessageId  String   @map("trigger_message_id") @db.Text
+  maintenanceReason String   @map("maintenance_reason") @db.Text
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  compilation  MemoryCompilation  @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  globalObject MemoryGlobalObject @relation(fields: [globalObjectId], references: [id], onDelete: Cascade)
+
+  @@index([compilationId, maintainedAt])
+  @@map("memory_object_higher_memories")
 }
 
 /// Reference Assertion 对 Global Object 的语义覆盖；不要求 Object 名称出现在 Assertion 正文中。
