@@ -17,6 +17,9 @@ function renderMatchSummary(seed: MemoryObjectSeed | MemoryAssertionSeed): strin
 }
 
 function renderSource(source: MemorySourceReference): string {
+  if (source.kind === "chat") {
+    return `${source.actorDisplayName} 的聊天陈述，submittedAt=${source.submittedAt}，timezone=${source.timezone}`;
+  }
   const pages = source.pages.length ? `，页码 ${source.pages.join(", ")}` : "";
   return `${source.sourceTitle}，block=${source.sourceBlockId}${pages}，sourceNode=${source.sourceNodeId}`;
 }
@@ -84,8 +87,8 @@ export function buildEvidenceContext(result: MemoryRetrievalResult): string {
 
   return [
     "以下是程序 Locate 得到的只读 Object–Assertion Structured Seed Map。",
-    "其中只包含 Assertion 知识与最小来源标识，不包含 SourceBlock 原文。",
-    "来源标题、页码、block 和 sourceNode 只用于引用追溯，不作为额外事实内容。",
+    "其中只包含 Assertion 知识与最小来源标识，不包含 SourceBlock 原文，也不包含聊天 Evidence 原文。",
+    "来源标题、页码、block、sourceNode、Actor 和提交时间只用于引用追溯，不作为额外事实内容。",
     "Object 的 canonical identity 和 surface forms 只用于识别“指向哪个对象”，不是事实证据。",
     "回答中的事实必须依据 kind=grounded 的 Assertion。Object 名称命中或 Object–Assertion Connection 本身不证明 Assertion 之外的任何事实。",
     "kind=reference 只说明应去哪个 SourceRegion/SourceBlock 继续读取；在目标原文未被 dereference 前，不得将它当成最终事实证据。",

@@ -50,6 +50,8 @@ model MemoryCompilation {
   sourceBlocks            MemorySourceBlock[]
   objectFragments         MemorySourceObjectFragment[]
   assertions              MemoryAssertion[]
+  chatEvidence            MemoryChatEvidence[]
+  chatAssertionCaptures   MemoryChatAssertionCapture[]
   globalObjects           MemoryGlobalObject[]
   assertionEmbeddingIndex MemoryAssertionEmbeddingIndex?
   semanticCards           SemanticCard[]
@@ -132,7 +134,8 @@ model MemorySourceObjectFragment {
 model MemoryAssertion {
   id                              String              @id @default(uuid()) @db.Uuid
   compilationId                   String              @map("compilation_id") @db.Uuid
-  sourceRegionId                  String              @map("source_region_id") @db.Uuid
+  sourceRegionId                  String?             @map("source_region_id") @db.Uuid
+  chatCaptureId                   String?             @map("chat_capture_id") @db.Uuid
   sourceClaimId                   String              @map("source_claim_id") @db.Text
   kind                            MemoryAssertionKind @default(grounded)
   statementTemplateMarkdown       String              @map("statement_template_markdown") @db.Text
@@ -141,7 +144,9 @@ model MemoryAssertion {
   createdAt                       DateTime            @default(now()) @map("created_at")
 
   compilation              MemoryCompilation                       @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  sourceRegion             MemorySourceRegion                      @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  sourceRegion             MemorySourceRegion?                     @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  chatCapture              MemoryChatAssertionCapture?             @relation(fields: [chatCaptureId], references: [id], onDelete: Cascade)
+  chatEvidenceLinks        MemoryAssertionChatEvidenceLink[]
   fragmentReferences       MemoryAssertionFragmentReference[]
   literalGlobalReferences  MemoryGlobalAssertionLiteralReference[]
   semanticObjectLinks      MemoryAssertionSemanticObjectLink[]
@@ -151,7 +156,81 @@ model MemoryAssertion {
   slotBindingSupports      SemanticSlotBindingSupport[]
 
   @@unique([sourceRegionId, sourceClaimId])
+  @@unique([chatCaptureId, sourceClaimId])
+  @@index([chatCaptureId])
   @@map("memory_assertions")
+}
+
+/// 一次由主回答模型显式排队、并在回答后执行的 Assertion 提取事务。
+/// 完整主对话语义转录属于解释上下文，不是事实 Evidence。
+model MemoryChatAssertionCapture {
+  id                String   @id @default(uuid()) @db.Uuid
+  compilationId     String   @map("compilation_id") @db.Uuid
+  queuedByActorId   String   @map("queued_by_actor_id") @db.Uuid
+  queuedByMessageId String   @map("queued_by_message_id") @db.Text
+  queueReason       String   @map("queue_reason") @db.Text
+  submittedAt       DateTime @map("submitted_at") @db.Timestamptz(3)
+  timezone          String   @db.Text
+  semanticContext   Json     @map("semantic_context") @db.JsonB
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  queuedBy    MemoryActor       @relation(fields: [queuedByActorId], references: [id], onDelete: Restrict)
+  assertions  MemoryAssertion[]
+
+  @@unique([queuedByActorId, queuedByMessageId])
+  @@index([compilationId, submittedAt])
+  @@map("memory_chat_assertion_captures")
+}
+
+/// 被至少一条已发布 Assertion 使用的用户聊天 Evidence；Assistant 上下文只用于解释，不是事实依据。
+model MemoryChatEvidence {
+  id                 String   @id @default(uuid()) @db.Uuid
+  compilationId      String   @map("compilation_id") @db.Uuid
+  clientMessageId    String   @map("client_message_id") @db.Text
+  submittedByActorId String   @map("submitted_by_actor_id") @db.Uuid
+  submittedAt        DateTime @map("submitted_at") @db.Timestamptz(3)
+  timezone           String   @db.Text
+  rawUserMessage     String   @map("raw_user_message") @db.Text
+  submittedAtBasis   String   @default("server_received") @map("submitted_at_basis") @db.Text
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  compilation    MemoryCompilation                 @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  submittedBy    MemoryActor                       @relation(fields: [submittedByActorId], references: [id], onDelete: Restrict)
+  assertionLinks MemoryAssertionChatEvidenceLink[]
+
+  @@unique([submittedByActorId, clientMessageId])
+  @@index([compilationId, submittedAt])
+  @@map("memory_chat_evidence")
+}
+
+/// 一条 Assertion 可以由多条用户消息共同支持；逐字引文记录在关联上。
+model MemoryAssertionChatEvidenceLink {
+  assertionId    String   @map("assertion_id") @db.Uuid
+  chatEvidenceId String   @map("chat_evidence_id") @db.Uuid
+  ordinal        Int
+  evidenceQuotes String[] @map("evidence_quotes")
+
+  assertion    MemoryAssertion    @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  chatEvidence MemoryChatEvidence @relation(fields: [chatEvidenceId], references: [id], onDelete: Restrict)
+
+  @@id([assertionId, chatEvidenceId])
+  @@unique([assertionId, ordinal])
+  @@index([chatEvidenceId])
+  @@map("memory_assertion_chat_evidence_links")
+}
+
+/// 第一版由服务端解析出的稳定 Actor identity；认证产品以后只需替换 Actor 获取方式。
+model MemoryActor {
+  id          String   @id @db.Uuid
+  displayName String   @map("display_name") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  chatEvidence          MemoryChatEvidence[]
+  chatAssertionCaptures MemoryChatAssertionCapture[]
+
+  @@map("memory_actors")
 }
 
 /// Assertion template 中一次 `{{fragment:...}}` 引用；ordinal 保留重复引用及出现顺序。
@@ -244,7 +323,7 @@ model MemoryGlobalAssertionReferenceResolution {
   @@map("memory_global_assertion_reference_resolutions")
 }
 
-/// Global Resolver 完成后由无歧义字符串匹配补出的 Assertion 文本 reference atom。
+/// Assertion 文本中一次已经绑定到 GlobalObject 的直接 reference atom；保留出现顺序与 source template span。
 model MemoryGlobalAssertionLiteralReference {
   atomId         String @id @map("atom_id") @db.Text
   assertionId    String @map("assertion_id") @db.Uuid

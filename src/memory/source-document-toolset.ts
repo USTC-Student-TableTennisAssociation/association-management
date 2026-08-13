@@ -21,7 +21,7 @@ const maxCharactersSchema = z.number().int()
   .optional()
   .describe("本次最多返回的原文字符数；长文可以通过 continuationCursor 继续读取");
 
-const sourceReadInputSchema = z.discriminatedUnion("mode", [
+const sourceReadVariantSchema = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("outline"),
     assertionRef: assertionRefSchema,
@@ -61,6 +61,37 @@ const sourceReadInputSchema = z.discriminatedUnion("mode", [
   }),
 ]);
 
+// DeepSeek requires every function input schema to have a top-level
+// `type: "object"`. A discriminated union converts to a top-level `anyOf`, so
+// expose one object to the model and retain the mode-specific union as the
+// authoritative server-side validator.
+export const sourceReadInputSchema = z.object({
+  mode: z.enum(["outline", "around", "section", "range", "full", "continue"]),
+  assertionRef: assertionRefSchema.optional(),
+  sourceBlockId: z.string().trim().min(1).max(500).optional()
+    .describe("目标 SourceBlock；省略时使用 Assertion 的第一处来源"),
+  beforeBlocks: z.number().int().min(0).max(sourceDocumentLimits.maxContextBlocks).optional(),
+  afterBlocks: z.number().int().min(0).max(sourceDocumentLimits.maxContextBlocks).optional(),
+  headingBlockId: z.string().trim().min(1).max(500).optional()
+    .describe("outline 返回的章节标题 SourceBlock id"),
+  startBlockId: z.string().trim().min(1).max(500).optional(),
+  endBlockId: z.string().trim().min(1).max(500).optional(),
+  continuationCursor: z.string().trim().min(1).max(100).optional(),
+  maxCharacters: maxCharactersSchema,
+}).superRefine((value, context) => {
+  const result = sourceReadVariantSchema.safeParse(value);
+  if (result.success) return;
+  for (const issue of result.error.issues) {
+    context.addIssue({
+      code: "custom",
+      path: issue.path,
+      message: issue.message,
+    });
+  }
+});
+
+type SourceReadInput = z.infer<typeof sourceReadVariantSchema>;
+
 type Continuation = {
   assertionRef: string;
   compilationId: string;
@@ -73,6 +104,13 @@ export class UnknownSourceAssertionError extends Error {
   constructor(assertionRef: string) {
     super(`${assertionRef} 尚未出现在本轮记忆检索结果中，请先调用 searchMemory`);
     this.name = "UnknownSourceAssertionError";
+  }
+}
+
+export class ChatEvidenceIsNotDocumentError extends Error {
+  constructor(assertionRef: string) {
+    super(`${assertionRef} 来自用户聊天 Evidence，不属于可展开阅读的 Source Document`);
+    this.name = "ChatEvidenceIsNotDocumentError";
   }
 }
 
@@ -127,15 +165,20 @@ export function createSourceDocumentToolset(input: {
     if (!compilationId) {
       throw new UnknownSourceAssertionError(assertionRef);
     }
-    const sourceBlockId = assertion.sources.at(0)?.sourceBlockId;
+    const source = assertion.sources.at(0);
+    if (source?.kind === "chat") {
+      throw new ChatEvidenceIsNotDocumentError(assertionRef);
+    }
+    const sourceBlockId = source?.sourceBlockId;
     if (!sourceBlockId) {
       throw new UnknownSourceAssertionError(assertionRef);
     }
     return { compilationId, sourceBlockId };
   }
 
-  async function executeRead(args: z.infer<typeof sourceReadInputSchema>) {
+  async function executeRead(rawArgs: z.infer<typeof sourceReadInputSchema>) {
     reserveRead();
+    const args: SourceReadInput = sourceReadVariantSchema.parse(rawArgs);
 
     let continuation: Continuation | undefined;
     let assertionRef: string;
@@ -214,6 +257,7 @@ export function createSourceDocumentToolset(input: {
     tool: tool({
       description: [
         "按需读取当前 Shared Brain Assertion 所属的原始 Source Document。",
+        "只适用于文档来源；聊天来源的 Assertion 已携带用户 Evidence，不能作为 Source Document 展开。",
         "AI 自己判断阅读粒度：outline 看目录；around 看某个 Block 前后；section 看完整章节；",
         "range 看连续范围；full 看全文；结果未完整返回时用 continue 和 continuationCursor 续读。",
         "Assertion contextDependent=true、命题过于零散、需要拼接多条命题、缺少限定语、",

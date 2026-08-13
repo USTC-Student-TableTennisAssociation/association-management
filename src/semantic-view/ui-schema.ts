@@ -3,14 +3,22 @@ import { z } from "zod";
 const supportSchema = z.object({
   id: z.string(),
   statement: z.string(),
-  sources: z.array(z.object({
+  sources: z.array(z.union([z.object({
+    kind: z.literal("document").optional(),
     sourceTitle: z.string(),
     sourceNodeId: z.string(),
     sourceRegionLabel: z.string(),
     sourceBlockId: z.string(),
     pages: z.array(z.number()),
     excerpt: z.string(),
-  })),
+  }), z.object({
+    kind: z.literal("chat"),
+    evidenceId: z.string(),
+    actorDisplayName: z.string(),
+    submittedAt: z.string(),
+    timezone: z.string(),
+    excerpt: z.string(),
+  })])),
 });
 
 const proposalCardTargetSchema = z.object({

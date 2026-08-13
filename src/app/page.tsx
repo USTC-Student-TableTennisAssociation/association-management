@@ -451,7 +451,9 @@ function SeedMapPanel({ seedMap }: { seedMap: StructuredSeedMap }) {
                 <p>
                   {assertion.contextDependent ? "上下文依赖" : "自足命题"} · Facets：
                   {assertion.matchedFacets.join(", ") || "无"} · 来源：
-                  {assertion.sources.map((source) => source.sourceBlockId).join(", ") || "无"}
+                  {assertion.sources.map((source) =>
+                    source.kind === "chat" ? `聊天 ${source.evidenceId}` : source.sourceBlockId
+                  ).join(", ") || "无"}
                 </p>
               </li>
             ))}
@@ -575,9 +577,13 @@ function ChatSurface({
                       <summary className="cursor-pointer font-medium text-emerald-800">Assertion / Sources（{sources.length}）</summary>
                       <ul className="mt-2 space-y-2">
                         {sources.map(({ assertion, source }) => (
-                          <li key={`${assertion.ref}-${source.sourceBlockId}-${source.ordinal}`} className="rounded-md bg-white p-2">
+                          <li key={`${assertion.ref}-${source.kind === "chat" ? source.evidenceId : source.sourceBlockId}-${source.ordinal}`} className="rounded-md bg-white p-2">
                             <p className="font-medium text-zinc-800">{assertion.ref} · {assertion.renderedStatement}</p>
-                            <p className="text-zinc-500">{source.sourceTitle} · {source.sourceBlockId}{source.pages.length ? ` · p.${source.pages.join(",")}` : ""}</p>
+                            <p className="text-zinc-500">
+                              {source.kind === "chat"
+                                ? `${source.actorDisplayName} 的聊天陈述 · ${source.submittedAt} · ${source.timezone}`
+                                : `${source.sourceTitle} · ${source.sourceBlockId}${source.pages.length ? ` · p.${source.pages.join(",")}` : ""}`}
+                            </p>
                             {source.excerpt ? <p className="mt-1 max-h-36 overflow-y-auto whitespace-pre-wrap text-zinc-500">{source.excerpt}</p> : null}
                           </li>
                         ))}

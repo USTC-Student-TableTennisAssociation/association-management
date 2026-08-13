@@ -51,7 +51,8 @@ export const viewChangePayloadSchema = z.object({
 export type ViewChangePayload = z.infer<typeof viewChangePayloadSchema>;
 export type ViewChange = z.infer<typeof viewChangeSchema>;
 
-export type AssertionSourceView = {
+export type AssertionDocumentSourceView = {
+  kind?: "document";
   sourceTitle: string;
   sourceNodeId: string;
   sourceRegionLabel: string;
@@ -59,6 +60,19 @@ export type AssertionSourceView = {
   pages: number[];
   excerpt: string;
 };
+
+export type AssertionChatSourceView = {
+  kind: "chat";
+  evidenceId: string;
+  actorDisplayName: string;
+  submittedAt: string;
+  timezone: string;
+  excerpt: string;
+};
+
+export type AssertionSourceView =
+  | AssertionDocumentSourceView
+  | AssertionChatSourceView;
 
 export type AssertionSupportView = {
   id: string;
