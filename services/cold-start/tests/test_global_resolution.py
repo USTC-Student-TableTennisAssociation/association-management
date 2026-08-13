@@ -46,6 +46,7 @@ from cold_start.global_resolution.models import (
     surface_atom_id,
     validate_region_integration_plan,
 )
+from cold_start.global_resolution.prompts import GLOBAL_IDENTITY_SYSTEM_PROMPT
 from cold_start.global_resolution.retrieval import (
     GlobalObjectCandidateRetriever,
     lexical_match_kinds,
@@ -222,6 +223,17 @@ async def test_fragment_candidates_are_recalled_without_auto_identity() -> None:
 
     assert candidates == [existing]
     assert "compact_exact" in lexical_match_kinds(incoming, existing)
+
+
+def test_person_identity_prompt_requires_direct_evidence() -> None:
+    assert "都只能用于召回候选，不能单独证明是同一人" in GLOBAL_IDENTITY_SYSTEM_PROMPT
+    assert "仍依赖“可能”“很可能”“符合背景”等合理性推测，必须 create" in (
+        GLOBAL_IDENTITY_SYSTEM_PROMPT
+    )
+    assert "脚注明确写明“钟轹弘，24-25级乒协会长”时，可以与“钟轹弘” attach" in (
+        GLOBAL_IDENTITY_SYSTEM_PROMPT
+    )
+    assert "仅有\n“刘畅”和“刘畅学长”" in GLOBAL_IDENTITY_SYSTEM_PROMPT
 
 
 def test_one_region_plan_can_create_and_attach_together() -> None:
