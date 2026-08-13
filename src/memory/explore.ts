@@ -39,7 +39,7 @@ export type MemoryExploreAssertion = {
   id?: string;
   kind: MemoryAssertionKind;
   dereferenceRequired: boolean;
-  sourceNodeId: string;
+  sourceNodeId?: string;
   sourceClaimId: string;
   renderedStatement: string;
   contextDependent: boolean;
@@ -99,15 +99,28 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 function safeSources(sources: MemorySourceReference[]): MemorySourceReference[] {
-  return sources.slice(0, SOURCE_LIMIT_PER_ASSERTION).map((source) => ({
-    sourceTitle: source.sourceTitle,
-    sourceSha256: source.sourceSha256,
-    sourceNodeId: source.sourceNodeId,
-    sourceRegionLabel: source.sourceRegionLabel,
-    sourceBlockId: source.sourceBlockId,
-    ordinal: source.ordinal,
-    pages: [...source.pages],
-  }));
+  return sources.slice(0, SOURCE_LIMIT_PER_ASSERTION).map((source) =>
+    source.kind === "chat"
+      ? {
+          kind: "chat" as const,
+          evidenceId: source.evidenceId,
+          actorId: source.actorId,
+          actorDisplayName: source.actorDisplayName,
+          submittedAt: source.submittedAt,
+          timezone: source.timezone,
+          ordinal: source.ordinal,
+        }
+      : {
+          ...(source.kind ? { kind: source.kind } : {}),
+          sourceTitle: source.sourceTitle,
+          sourceSha256: source.sourceSha256,
+          sourceNodeId: source.sourceNodeId,
+          sourceRegionLabel: source.sourceRegionLabel,
+          sourceBlockId: source.sourceBlockId,
+          ordinal: source.ordinal,
+          pages: [...source.pages],
+        },
+  );
 }
 
 function compactObject(input: {
@@ -135,7 +148,7 @@ function compactAssertion(input: {
   id?: string;
   kind: MemoryAssertionKind;
   dereferenceRequired: boolean;
-  sourceNodeId: string;
+  sourceNodeId?: string;
   sourceClaimId: string;
   renderedStatement: string;
   contextDependent: boolean;
@@ -146,7 +159,7 @@ function compactAssertion(input: {
     ...(input.id ? { id: input.id } : {}),
     kind: input.kind,
     dereferenceRequired: input.dereferenceRequired,
-    sourceNodeId: input.sourceNodeId,
+    ...(input.sourceNodeId ? { sourceNodeId: input.sourceNodeId } : {}),
     sourceClaimId: input.sourceClaimId,
     renderedStatement: input.renderedStatement,
     contextDependent: input.contextDependent,
@@ -349,6 +362,20 @@ async function loadFollowAssertions(compilationId: string, assertionIds: string[
       contextDependent: true,
       compilation: { select: { sourceTitle: true, sourceSha256: true } },
       sourceRegion: { select: { sourceNodeId: true, label: true } },
+      chatEvidenceLinks: {
+        orderBy: { ordinal: "asc" },
+        select: {
+          ordinal: true,
+          chatEvidence: {
+            select: {
+              id: true,
+              submittedAt: true,
+              timezone: true,
+              submittedBy: { select: { id: true, displayName: true } },
+            },
+          },
+        },
+      },
       fragmentReferences: {
         orderBy: { ordinal: "asc" },
         select: {
@@ -405,7 +432,7 @@ async function loadFollowAssertions(compilationId: string, assertionIds: string[
 }
 
 function resolvedReferences(assertion: FollowAssertionRecord): ResolvedAssertionReference[] {
-  const assertionKey = `${assertion.sourceRegion.sourceNodeId}\u0000${assertion.sourceClaimId}`;
+  const assertionKey = assertion.id;
   const fragmentReferences = assertion.fragmentReferences.map((reference) => {
     if (reference.globalResolutions.length !== 1) {
       throw new ResolvedAssertionIntegrityError(
@@ -447,21 +474,33 @@ function renderFollowAssertion(assertion: FollowAssertionRecord): {
     renderedStatement: renderResolvedAssertion({
       globalStatementTemplateMarkdown: assertion.globalStatementTemplateMarkdown,
       references,
-      assertionKey: `${assertion.sourceRegion.sourceNodeId}\u0000${assertion.sourceClaimId}`,
+      assertionKey: assertion.id,
     }),
   };
 }
 
 function assertionSources(assertion: FollowAssertionRecord): MemorySourceReference[] {
-  return assertion.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
-    sourceTitle: assertion.compilation.sourceTitle,
-    sourceSha256: assertion.compilation.sourceSha256,
-    sourceNodeId: assertion.sourceRegion.sourceNodeId,
-    sourceRegionLabel: assertion.sourceRegion.label,
-    sourceBlockId: sourceBlock.sourceBlockId,
-    ordinal,
-    pages: sourceBlock.sourcePages,
-  }));
+  if (assertion.sourceRegion) {
+    return assertion.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
+      kind: "document",
+      sourceTitle: assertion.compilation.sourceTitle,
+      sourceSha256: assertion.compilation.sourceSha256,
+      sourceNodeId: assertion.sourceRegion!.sourceNodeId,
+      sourceRegionLabel: assertion.sourceRegion!.label,
+      sourceBlockId: sourceBlock.sourceBlockId,
+      ordinal,
+      pages: sourceBlock.sourcePages,
+    }));
+  }
+  return assertion.chatEvidenceLinks.map(({ ordinal, chatEvidence }) => ({
+        kind: "chat",
+        evidenceId: chatEvidence.id,
+        actorId: chatEvidence.submittedBy.id,
+        actorDisplayName: chatEvidence.submittedBy.displayName,
+        submittedAt: chatEvidence.submittedAt.toISOString(),
+        timezone: chatEvidence.timezone,
+        ordinal,
+      }));
 }
 
 function emptyFollowResult(input: {
@@ -567,8 +606,8 @@ export async function followObject(
     .sort(
       (left, right) =>
         right.focusScore - left.focusScore ||
-        left.row.sourceRegion.sourceNodeId.localeCompare(
-          right.row.sourceRegion.sourceNodeId,
+        (left.row.sourceRegion?.sourceNodeId ?? left.row.id).localeCompare(
+          right.row.sourceRegion?.sourceNodeId ?? right.row.id,
         ) ||
         left.row.sourceClaimId.localeCompare(right.row.sourceClaimId),
     );
@@ -608,7 +647,9 @@ export async function followObject(
     id: assertion.row.id,
     kind: assertion.row.kind,
     dereferenceRequired: assertion.row.kind === "reference",
-    sourceNodeId: assertion.row.sourceRegion.sourceNodeId,
+    ...(assertion.row.sourceRegion
+      ? { sourceNodeId: assertion.row.sourceRegion.sourceNodeId }
+      : {}),
     sourceClaimId: assertion.row.sourceClaimId,
     renderedStatement: assertion.renderedStatement,
     contextDependent: assertion.row.contextDependent,

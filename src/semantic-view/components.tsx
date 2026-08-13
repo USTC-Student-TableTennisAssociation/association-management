@@ -68,10 +68,11 @@ function SupportList({ supports }: { supports: AssertionSupportView[] }) {
           <li key={support.id} className="rounded-md border border-zinc-200 bg-white p-2.5">
             <p className="text-zinc-700">{support.statement}</p>
             {support.sources.map((source) => (
-              <details key={`${support.id}-${source.sourceBlockId}`} className="mt-2 border-t border-zinc-100 pt-2">
+              <details key={`${support.id}-${source.kind === "chat" ? source.evidenceId : source.sourceBlockId}`} className="mt-2 border-t border-zinc-100 pt-2">
                 <summary className="cursor-pointer text-zinc-500">
-                  {source.sourceTitle} · {source.sourceRegionLabel}
-                  {source.pages.length ? ` · p.${source.pages.join(",")}` : ""}
+                  {source.kind === "chat"
+                    ? `${source.actorDisplayName} 的聊天陈述 · ${source.submittedAt}`
+                    : `${source.sourceTitle} · ${source.sourceRegionLabel}${source.pages.length ? ` · p.${source.pages.join(",")}` : ""}`}
                 </summary>
                 <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-zinc-50 p-2 text-zinc-600">
                   {source.excerpt}

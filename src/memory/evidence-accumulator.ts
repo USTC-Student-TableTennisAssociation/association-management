@@ -7,10 +7,11 @@ import type {
 } from "@/memory/types";
 
 function assertionKey(input: {
-  sourceNodeId: string;
+  id?: string;
+  sourceNodeId?: string;
   sourceClaimId: string;
 }): string {
-  return `${input.sourceNodeId}\u0000${input.sourceClaimId}`;
+  return input.id ?? `${input.sourceNodeId ?? "unknown"}\u0000${input.sourceClaimId}`;
 }
 
 function numberedRef(ref: string, prefix: "A" | "O"): number {
@@ -19,11 +20,26 @@ function numberedRef(ref: string, prefix: "A" | "O"): number {
 }
 
 function sourceKey(source: MemorySourceReference): string {
+  if (source.kind === "chat") {
+    return `chat\u0000${source.evidenceId}\u0000${source.ordinal}`;
+  }
   return `${source.sourceNodeId}\u0000${source.sourceBlockId}\u0000${source.ordinal}`;
 }
 
 function withoutExcerpt(source: MemorySourceReference): MemorySourceReference {
+  if (source.kind === "chat") {
+    return {
+      kind: "chat",
+      evidenceId: source.evidenceId,
+      actorId: source.actorId,
+      actorDisplayName: source.actorDisplayName,
+      submittedAt: source.submittedAt,
+      timezone: source.timezone,
+      ordinal: source.ordinal,
+    };
+  }
   return {
+    ...(source.kind ? { kind: source.kind } : {}),
     sourceTitle: source.sourceTitle,
     sourceSha256: source.sourceSha256,
     sourceNodeId: source.sourceNodeId,
@@ -160,7 +176,7 @@ export class MemoryEvidenceAccumulator {
           ...(item.id ? { id: item.id } : {}),
           kind: item.kind,
           dereferenceRequired: item.dereferenceRequired,
-          sourceNodeId: item.sourceNodeId,
+          ...(item.sourceNodeId ? { sourceNodeId: item.sourceNodeId } : {}),
           sourceClaimId: item.sourceClaimId,
           renderedStatement: item.renderedStatement,
           contextDependent: item.contextDependent,

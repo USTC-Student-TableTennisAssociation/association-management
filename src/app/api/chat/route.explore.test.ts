@@ -212,6 +212,28 @@ function directProposalToolCallStep() {
   };
 }
 
+function assertionQueueToolCallStep() {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        {
+          type: "tool-call" as const,
+          toolCallId: "call-queue-chat-assertion",
+          toolName: "queueChatAssertionCapture",
+          input: JSON.stringify({
+            reason: "用户陈述了新的活动安排",
+          }),
+        },
+        {
+          type: "finish" as const,
+          finishReason: { unified: "tool-calls" as const, raw: undefined },
+          usage,
+        },
+      ],
+    }),
+  };
+}
+
 function fixtureRetrieval(): MemoryRetrievalResult {
   return {
     query: "测试记忆",
@@ -386,15 +408,43 @@ describe("POST /api/chat Explore", () => {
         "readSourceDocument",
         "readSemanticView",
         "proposeViewChange",
+        "queueChatAssertionCapture",
       ]),
     );
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("本轮开始时尚未执行搜索");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("本轮时间锚点");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("组织时区：Asia/Shanghai");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("每个具有时效性的组织结论");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("无法确认今天是否仍然有效");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("contextDependent=true");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("Assertion 很零散");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
+      "纯问候、闲聊、问题、假设",
+    );
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain(
       "没有找到足以支持回答的组织事实",
     );
     expect(body).toContain("你好！");
+    expect(body).not.toContain("data-memorySearch");
+  });
+
+  it("lets the main model explicitly queue a factual user statement without memory search", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        assertionQueueToolCallStep(),
+        answerStep("明白了，这是一项计划中的迎新活动。"),
+      ],
+    });
+    providerState.model = model;
+
+    const response = await POST(chatRequest("我们九月份准备举办迎新活动。"));
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(retrieverState.retrieve).not.toHaveBeenCalled();
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(body).toContain('"toolName":"queueChatAssertionCapture"');
+    expect(body).toContain("明白了，这是一项计划中的迎新活动");
     expect(body).not.toContain("data-memorySearch");
   });
 

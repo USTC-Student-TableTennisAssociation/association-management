@@ -149,7 +149,7 @@ function objectStableKey(item: ObjectRecord): string {
 }
 
 function assertionStableKey(item: AssertionRecord): string {
-  return `${item.sourceRegion.sourceNodeId}\u0000${item.sourceClaimId}`;
+  return item.id;
 }
 
 function renderAssertion(assertion: AssertionRecord): string {
@@ -253,7 +253,7 @@ async function loadAssertions(compilationId: string) {
     },
   });
   return rows.map((row) => {
-    const assertionKey = `${row.sourceRegion.sourceNodeId}\u0000${row.sourceClaimId}`;
+    const assertionKey = row.id;
     const fragmentReferences = row.fragmentReferences.map<ResolvedAssertionReference>((reference) => {
       if (reference.globalResolutions.length !== 1) {
         throw new ResolvedAssertionIntegrityError(
@@ -424,6 +424,20 @@ async function loadSources(
       id: true,
       compilation: { select: { sourceTitle: true, sourceSha256: true } },
       sourceRegion: { select: { sourceNodeId: true, label: true } },
+      chatEvidenceLinks: {
+        orderBy: { ordinal: "asc" },
+        select: {
+          ordinal: true,
+          chatEvidence: {
+            select: {
+              id: true,
+              submittedAt: true,
+              timezone: true,
+              submittedBy: { select: { id: true, displayName: true } },
+            },
+          },
+        },
+      },
       sourceBlockLinks: {
         orderBy: { ordinal: "asc" },
         select: {
@@ -439,18 +453,29 @@ async function loadSources(
     },
   });
   return new Map(
-    rows.map((row) => [
-      row.id,
-      row.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
-        sourceTitle: row.compilation.sourceTitle,
-        sourceSha256: row.compilation.sourceSha256,
-        sourceNodeId: row.sourceRegion.sourceNodeId,
-        sourceRegionLabel: row.sourceRegion.label,
-        sourceBlockId: sourceBlock.sourceBlockId,
-        ordinal,
-        pages: sourceBlock.sourcePages,
-      })),
-    ]),
+    rows.map((row) => {
+      const sources: MemorySourceReference[] = row.sourceRegion
+        ? row.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
+            kind: "document",
+            sourceTitle: row.compilation.sourceTitle,
+            sourceSha256: row.compilation.sourceSha256,
+            sourceNodeId: row.sourceRegion!.sourceNodeId,
+            sourceRegionLabel: row.sourceRegion!.label,
+            sourceBlockId: sourceBlock.sourceBlockId,
+            ordinal,
+            pages: sourceBlock.sourcePages,
+          }))
+        : row.chatEvidenceLinks.map(({ ordinal, chatEvidence }) => ({
+              kind: "chat",
+              evidenceId: chatEvidence.id,
+              actorId: chatEvidence.submittedBy.id,
+              actorDisplayName: chatEvidence.submittedBy.displayName,
+              submittedAt: chatEvidence.submittedAt.toISOString(),
+              timezone: chatEvidence.timezone,
+              ordinal,
+            }));
+      return [row.id, sources];
+    }),
   );
 }
 
@@ -671,7 +696,9 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
       id: item.assertion.id,
       kind: item.assertion.kind,
       dereferenceRequired: item.assertion.kind === "reference",
-      sourceNodeId: item.assertion.sourceRegion.sourceNodeId,
+      ...(item.assertion.sourceRegion
+        ? { sourceNodeId: item.assertion.sourceRegion.sourceNodeId }
+        : {}),
       sourceClaimId: item.assertion.sourceClaimId,
       renderedStatement: renderAssertion(item.assertion),
       contextDependent: item.assertion.contextDependent,

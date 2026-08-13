@@ -73,6 +73,20 @@ async function loadAssertions(
       globalStatementTemplateMarkdown: true,
       compilation: { select: { sourceTitle: true } },
       sourceRegion: { select: { sourceNodeId: true, label: true } },
+      chatEvidenceLinks: {
+        orderBy: { ordinal: "asc" },
+        select: {
+          chatEvidence: {
+            select: {
+              id: true,
+              rawUserMessage: true,
+              submittedAt: true,
+              timezone: true,
+              submittedBy: { select: { displayName: true } },
+            },
+          },
+        },
+      },
       sourceBlockLinks: {
         orderBy: { ordinal: "asc" },
         select: {
@@ -126,17 +140,27 @@ async function loadAssertions(
       statement: renderResolvedAssertion({
         globalStatementTemplateMarkdown: assertion.globalStatementTemplateMarkdown,
         references,
-        assertionKey: `${assertion.sourceRegion.sourceNodeId}\u0000${assertion.sourceClaimId}`,
+        assertionKey: assertion.id,
       }),
       objectIds: new Set(references.map((reference) => reference.globalObjectId)),
-      sources: assertion.sourceBlockLinks.map(({ sourceBlock }) => ({
-        sourceTitle: assertion.compilation.sourceTitle,
-        sourceNodeId: assertion.sourceRegion.sourceNodeId,
-        sourceRegionLabel: assertion.sourceRegion.label,
-        sourceBlockId: sourceBlock.sourceBlockId,
-        pages: sourceBlock.sourcePages,
-        excerpt: sourceBlock.markdown,
-      })),
+      sources: assertion.sourceRegion
+        ? assertion.sourceBlockLinks.map(({ sourceBlock }) => ({
+            kind: "document" as const,
+            sourceTitle: assertion.compilation.sourceTitle,
+            sourceNodeId: assertion.sourceRegion!.sourceNodeId,
+            sourceRegionLabel: assertion.sourceRegion!.label,
+            sourceBlockId: sourceBlock.sourceBlockId,
+            pages: sourceBlock.sourcePages,
+            excerpt: sourceBlock.markdown,
+          }))
+        : assertion.chatEvidenceLinks.map(({ chatEvidence }) => ({
+              kind: "chat" as const,
+              evidenceId: chatEvidence.id,
+              actorDisplayName: chatEvidence.submittedBy.displayName,
+              submittedAt: chatEvidence.submittedAt.toISOString(),
+              timezone: chatEvidence.timezone,
+              excerpt: chatEvidence.rawUserMessage,
+            })),
     }];
   }));
 }
