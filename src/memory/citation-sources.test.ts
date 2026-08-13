@@ -16,13 +16,14 @@ function retrieval(): MemoryRetrievalResult {
       connections: [],
       assertions: ["A1", "A2"].map((ref, index) => ({
         ref,
+        kind: "grounded" as const,
+        dereferenceRequired: false,
         sourceNodeId: `region-${index + 1}`,
         sourceClaimId: `claim-${index + 1}`,
         renderedStatement: `Assertion ${index + 1}`,
         contextDependent: false,
         matchedBy: [],
         matchedFacets: [],
-        temporalAnnotations: [],
         sources: [{
           sourceTitle: "Source",
           sourceSha256: "sha",

@@ -27,13 +27,14 @@ function initial(): MemoryRetrievalResult {
       }],
       assertions: [{
         ref: "A1",
+        kind: "grounded",
+        dereferenceRequired: false,
         sourceNodeId: "region-1",
         sourceClaimId: "claim-1",
         renderedStatement: "继往开来是换届活动。",
         contextDependent: false,
         matchedBy: [],
         matchedFacets: ["facet-0"],
-        temporalAnnotations: [],
         sources: [{
           sourceTitle: "手册",
           sourceSha256: "sha",
@@ -113,20 +114,22 @@ function explored(): MemoryExploreResult {
     assertions: [
       {
         ref: "A1",
+        kind: "grounded",
+        dereferenceRequired: false,
         sourceNodeId: "region-1",
         sourceClaimId: "claim-1",
         renderedStatement: "继往开来是换届活动。",
         contextDependent: false,
-        temporalAnnotations: [],
         sources: [],
       },
       {
         ref: "A2",
+        kind: "grounded",
+        dereferenceRequired: false,
         sourceNodeId: "region-2",
         sourceClaimId: "claim-2",
         renderedStatement: "换届包含工作交接。",
         contextDependent: false,
-        temporalAnnotations: [],
         sources: [{
           sourceTitle: "手册",
           sourceSha256: "sha",

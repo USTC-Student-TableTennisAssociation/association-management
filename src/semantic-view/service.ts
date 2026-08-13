@@ -30,6 +30,7 @@ type VirtualCard = {
 
 type LoadedAssertion = {
   id: string;
+  kind: "grounded" | "reference";
   statement: string;
   objectIds: Set<string>;
   sources: AssertionSupportView["sources"];
@@ -67,6 +68,7 @@ async function loadAssertions(
     where: { id: { in: [...new Set(assertionIds)] } },
     select: {
       id: true,
+      kind: true,
       sourceClaimId: true,
       globalStatementTemplateMarkdown: true,
       compilation: { select: { sourceTitle: true } },
@@ -120,6 +122,7 @@ async function loadAssertions(
     ];
     return [assertion.id, {
       id: assertion.id,
+      kind: assertion.kind,
       statement: renderResolvedAssertion({
         globalStatementTemplateMarkdown: assertion.globalStatementTemplateMarkdown,
         references,
@@ -136,6 +139,20 @@ async function loadAssertions(
       })),
     }];
   }));
+}
+
+export function assertGroundedAssertionSupports(
+  assertions: Iterable<{ id: string; kind: "grounded" | "reference" }>,
+): void {
+  const referenceIds = [...assertions]
+    .filter((assertion) => assertion.kind === "reference")
+    .map((assertion) => assertion.id);
+  if (referenceIds.length) {
+    throw new SemanticViewValidationError(
+      "Reference Assertion 只能用于定位原文，不能直接作为 Business View support：" +
+        referenceIds.join(", "),
+    );
+  }
 }
 
 function allSupportingAssertionIds(payload: ViewChangePayload): string[] {
@@ -290,6 +307,7 @@ async function validateProposal(
       `Assertion 不存在：${missingAssertions.join(", ")}`,
     );
   }
+  assertGroundedAssertionSupports(assertionsById.values());
 
   const touchedDimensions = new Set<string>();
   const touchedSlots = new Set<string>();

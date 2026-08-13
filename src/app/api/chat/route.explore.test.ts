@@ -234,6 +234,8 @@ function fixtureRetrieval(): MemoryRetrievalResult {
       assertions: [{
         ref: "A1",
         id: "00000000-0000-4000-8000-000000000011",
+        kind: "grounded",
+        dereferenceRequired: false,
         sourceNodeId: "fixture-region",
         sourceClaimId: "fixture-claim",
         renderedStatement:
@@ -241,7 +243,6 @@ function fixtureRetrieval(): MemoryRetrievalResult {
         contextDependent: false,
         matchedBy: [],
         matchedFacets: ["facet-0"],
-        temporalAnnotations: [],
         sources: [{
           sourceTitle: "聊天框架测试 fixture",
           sourceSha256: "fixture",

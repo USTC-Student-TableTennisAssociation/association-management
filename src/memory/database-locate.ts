@@ -16,7 +16,6 @@ import {
   type MemorySeedMatch,
   type MemorySearchTrace,
   type MemorySourceReference,
-  type MemoryTemporalAnnotation,
 } from "@/memory/types";
 
 const OBJECT_HITS_PER_FACET = 32;
@@ -208,6 +207,7 @@ async function loadAssertions(compilationId: string) {
     select: {
       id: true,
       sourceClaimId: true,
+      kind: true,
       globalStatementTemplateMarkdown: true,
       contextDependent: true,
       sourceRegion: { select: { sourceNodeId: true, label: true } },
@@ -239,17 +239,15 @@ async function loadAssertions(compilationId: string) {
           },
         },
       },
-      temporalAnnotations: {
-        orderBy: { ordinal: "asc" },
+      semanticObjectLinks: {
+        orderBy: { globalObjectId: "asc" },
         select: {
-          rawExpression: true,
-          kind: true,
-          normalizedText: true,
-          start: true,
-          end: true,
-          precision: true,
-          derivation: true,
-          basisMarkdown: true,
+          globalObject: {
+            select: {
+              id: true,
+              canonicalName: true,
+            },
+          },
         },
       },
     },
@@ -275,16 +273,27 @@ async function loadAssertions(compilationId: string) {
         canonicalName: globalObject.canonicalName,
       }),
     );
+    const semanticReferences = row.semanticObjectLinks.map<ResolvedAssertionReference>(
+      ({ globalObject }) => ({
+        globalObjectId: globalObject.id,
+        canonicalName: globalObject.canonicalName,
+      }),
+    );
     return {
       id: row.id,
       sourceClaimId: row.sourceClaimId,
+      kind: row.kind,
       globalStatementTemplateMarkdown: row.globalStatementTemplateMarkdown,
       contextDependent: row.contextDependent,
       sourceRegion: row.sourceRegion,
       references: [...fragmentReferences, ...literalReferences],
-      temporalAnnotations: row.temporalAnnotations,
+      semanticReferences,
     };
   });
+}
+
+function associatedReferences(assertion: AssertionRecord): ResolvedAssertionReference[] {
+  return [...assertion.references, ...assertion.semanticReferences];
 }
 
 function rankObjectLexical(
@@ -479,6 +488,8 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
       id: true,
       sourceTitle: true,
       sourceSha256: true,
+      sourceTimeText: true,
+      sourceTimeSupportingBlockIds: true,
       compiledAt: true,
       objectFragmentCount: true,
       surfaceFormCount: true,
@@ -495,6 +506,28 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     },
   });
   if (!snapshot) throw new Error("数据库中没有来源语义 Compilation");
+  const sourceTimeBlocks = snapshot.sourceTimeSupportingBlockIds.length
+    ? await database.memorySourceBlock.findMany({
+        where: {
+          compilationId: snapshot.id,
+          sourceBlockId: { in: snapshot.sourceTimeSupportingBlockIds },
+        },
+        select: { sourceBlockId: true, sourcePages: true },
+      })
+    : [];
+  const sourceTimeBlockById = new Map(
+    sourceTimeBlocks.map((item) => [item.sourceBlockId, item]),
+  );
+  const sourceTime = {
+    sourceTitle: snapshot.sourceTitle,
+    sourceSha256: snapshot.sourceSha256,
+    text: snapshot.sourceTimeText,
+    supportingBlocks: snapshot.sourceTimeSupportingBlockIds.map((sourceBlockId) => {
+      const block = sourceTimeBlockById.get(sourceBlockId);
+      if (!block) throw new Error(`Source Time evidence block 不存在：${sourceBlockId}`);
+      return { sourceBlockId, pages: block.sourcePages };
+    }),
+  };
 
   const facets = (input.facets?.length
     ? input.facets
@@ -583,7 +616,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
   for (const selected of selectedAssertions) {
     const assertionRef = assertionRefById.get(selected.id)!;
     const matches = matchesForAssertion(selected.hits);
-    for (const objectId of new Set(selected.assertion.references.map((reference) => reference.globalObjectId))) {
+    for (const objectId of new Set(associatedReferences(selected.assertion).map((reference) => reference.globalObjectId))) {
       const refs = supportingAssertionsByObject.get(objectId) ?? new Set<string>();
       refs.add(assertionRef);
       supportingAssertionsByObject.set(objectId, refs);
@@ -636,24 +669,14 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     return {
       ref: assertionRefById.get(item.id)!,
       id: item.assertion.id,
+      kind: item.assertion.kind,
+      dereferenceRequired: item.assertion.kind === "reference",
       sourceNodeId: item.assertion.sourceRegion.sourceNodeId,
       sourceClaimId: item.assertion.sourceClaimId,
       renderedStatement: renderAssertion(item.assertion),
       contextDependent: item.assertion.contextDependent,
       matchedBy,
       matchedFacets: [...new Set(matchedBy.map((match) => match.facetId))].sort(),
-      temporalAnnotations: item.assertion.temporalAnnotations.map<MemoryTemporalAnnotation>(
-        (annotation) => ({
-          rawExpression: annotation.rawExpression,
-          kind: annotation.kind,
-          normalizedText: annotation.normalizedText,
-          ...(annotation.start === null ? {} : { start: annotation.start }),
-          ...(annotation.end === null ? {} : { end: annotation.end }),
-          precision: annotation.precision,
-          derivation: annotation.derivation,
-          basis: annotation.basisMarkdown,
-        }),
-      ),
       sources: sourcesByAssertion.get(item.id) ?? [],
     };
   });
@@ -680,7 +703,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
   for (const selected of selectedAssertions) {
     const assertionRef = assertionRefById.get(selected.id)!;
     const resolvedObjectIds = new Set(
-      selected.assertion.references.map((reference) => reference.globalObjectId),
+      associatedReferences(selected.assertion).map((reference) => reference.globalObjectId),
     );
     for (const objectId of resolvedObjectIds) {
       const objectRef = objectRefById.get(objectId);
@@ -764,6 +787,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     mode: "object-assertion",
     seedMap: {
       facets,
+      sourceTime,
       objects: objectSeeds,
       assertions: assertionSeeds,
       connections,

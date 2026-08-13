@@ -36,13 +36,15 @@ function retrieval(): MemoryRetrievalResult {
       objects: [],
       assertions: [{
         ref: "A1",
+        id: "00000000-0000-4000-8000-000000000011",
+        kind: "grounded",
+        dereferenceRequired: false,
         sourceNodeId: "region-1",
         sourceClaimId: "claim-1",
         renderedStatement: "一条需要上下文的命题",
         contextDependent: true,
         matchedBy: [],
         matchedFacets: [],
-        temporalAnnotations: [],
         sources: [{
           sourceTitle: "测试原文",
           sourceSha256: "sha",

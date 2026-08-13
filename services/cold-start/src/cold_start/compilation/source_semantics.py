@@ -1,18 +1,25 @@
-"""把叶子来源编译为原子命题、Object Fragment 与时间标注。"""
+"""把整份来源定位到 Source Time，并把区域编译为 Assertion 与 Object Fragment。"""
 
 from __future__ import annotations
 
 import asyncio
-import calendar
 import json
 import re
+import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from cold_start.document.blocks import format_blocks
 from cold_start.document.models import ParsedBlock
@@ -28,16 +35,31 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class AtomicClaimDraft(StrictModel):
-    """模型提交的一条忠实原子命题，不含最终记忆协议字段。"""
+AssertionKind = Literal["grounded", "reference"]
 
+
+def _normalize_source_time_text(value: str) -> str:
+    """只规整格式空白，不解释或改写 Source Time 的时间语义。"""
+
+    normalized = re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value).strip())
+    return re.sub(
+        r"(?<=[\u3400-\u9fff\d])\s+(?=[\u3400-\u9fff\d])",
+        "",
+        normalized,
+    )
+
+
+class AtomicClaimDraft(StrictModel):
+    """模型提交的一条完整知识单元或来源导航索引。"""
+
+    kind: AssertionKind = "grounded"
     statement_markdown: str = Field(min_length=1, max_length=3_000)
     supporting_block_ids: list[BlockId] = Field(min_length=1, max_length=32)
     context_dependent: bool
 
 
 class SameReferentMentionDraft(StrictModel):
-    """Atomic 阶段从来源原文定位出的一个同指称字面表达。"""
+    """首遍来源扫描定位出的一个同指称字面表达。"""
 
     span_text: str = Field(min_length=1, max_length=150)
     occurrence_index: int = Field(ge=0, le=1_000)
@@ -88,10 +110,12 @@ class ObjectFragmentDraft(StrictModel):
 
 
 class FragmentAssertionTemplateDraft(StrictModel):
-    """模型直接生成的、引用临时 Fragment key 的命题模板。"""
+    """模型生成的 Assertion 模板与语义 Object 链接。"""
 
     claim_id: str = Field(pattern=r"^claim-\d+$")
+    kind: AssertionKind = "grounded"
     statement_template_markdown: str = Field(min_length=1, max_length=3_000)
+    semantic_fragment_keys: list[str] = Field(default_factory=list, max_length=100)
 
 
 class ObjectFragmentSubmission(StrictModel):
@@ -117,65 +141,58 @@ class ObjectFragment(StrictModel):
 
 class SourceAssertionDraft(StrictModel):
     claim_id: str = Field(pattern=r"^claim-\d+$")
+    kind: AssertionKind = "grounded"
     statement_template_markdown: str = Field(min_length=1, max_length=3_000)
+    semantic_fragment_ids: list[str] = Field(default_factory=list, max_length=100)
     supporting_block_ids: list[BlockId] = Field(min_length=1, max_length=32)
     context_dependent: bool
 
-
-TemporalKind = Literal["point", "range", "recurring", "relative", "contextual", "unknown"]
-TemporalPrecision = Literal[
-    "day", "month", "year", "academic_year", "semester", "unspecified"
-]
-TemporalDerivation = Literal[
-    "source_explicit", "contextual_inference", "unresolved"
-]
-
-
-class TemporalAnnotation(StrictModel):
-    """来源中时间表达的可检索标准化，不表示事实真实性。"""
-
-    raw_expression: str = Field(min_length=1, max_length=300)
-    kind: TemporalKind
-    normalized_text: str = Field(min_length=1, max_length=300)
-    start: str | None
-    end: str | None
-    precision: TemporalPrecision
-    derivation: TemporalDerivation
-    basis_markdown: str = Field(min_length=1, max_length=2_000)
-
     @model_validator(mode="after")
-    def validate_absolute_bounds(self) -> TemporalAnnotation:
-        if self.start is not None:
-            _validate_absolute_time(self.start, "start")
-        if self.end is not None:
-            _validate_absolute_time(self.end, "end")
-        if self.start is not None and self.end is not None:
-            if _time_lower_bound(self.start) > _time_upper_bound(self.end):
-                raise ValueError("start 不能晚于 end")
-        if self.derivation == "unresolved" and (
-            self.start is not None or self.end is not None
-        ):
-            raise ValueError("unresolved 时间不能填写 start/end")
+    def validate_reference_mode(self) -> SourceAssertionDraft:
+        if len(set(self.semantic_fragment_ids)) != len(self.semantic_fragment_ids):
+            raise ValueError("semantic_fragment_ids 不能重复")
+        if self.kind == "grounded" and self.semantic_fragment_ids:
+            raise ValueError("grounded Assertion 不能使用 semantic Fragment 链接")
+        if self.kind == "reference" and not self.semantic_fragment_ids:
+            raise ValueError("Reference Assertion 至少需要一个 semantic Fragment 链接")
+        if self.kind == "reference" and "{{fragment:" in self.statement_template_markdown:
+            raise ValueError("Reference Assertion 不能使用 anchored Fragment token")
         return self
 
 
-class TemporalClaimAnnotations(StrictModel):
-    claim_id: str = Field(pattern=r"^claim-\d+$")
-    temporal_annotations: list[TemporalAnnotation] = Field(
-        default_factory=list, max_length=100
-    )
-
-
-class TemporalAnnotationSubmission(StrictModel):
-    claims: list[TemporalClaimAnnotations] = Field(max_length=1_000)
-
-
 class SourceAssertion(SourceAssertionDraft):
-    temporal_annotations: list[TemporalAnnotation] = Field(default_factory=list)
+    """最终 Leaf Assertion；必要时间语境保留在正文，不另建 Temporal metadata。"""
+
+
+class SourceTimeSubmission(StrictModel):
+    """模型对整份 Source 给出的保守时间锚点。"""
+
+    source_time_text: str | None = Field(default=None, min_length=1, max_length=300)
+    supporting_block_ids: list[BlockId] = Field(default_factory=list, max_length=32)
+
+    @field_validator("source_time_text")
+    @classmethod
+    def normalize_source_time_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = _normalize_source_time_text(value)
+        if not normalized:
+            raise ValueError("source_time_text 不能仅包含空白")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_null_evidence(self) -> SourceTimeSubmission:
+        if self.source_time_text is None and self.supporting_block_ids:
+            raise ValueError("source_time_text 为 null 时 supporting_block_ids 必须为空")
+        if self.source_time_text is not None and not self.supporting_block_ids:
+            raise ValueError("非空 source_time_text 必须提供 supporting_block_ids")
+        if len(set(self.supporting_block_ids)) != len(self.supporting_block_ids):
+            raise ValueError("supporting_block_ids 不能重复")
+        return self
 
 
 class SourceClaimCheckpoint(StrictModel):
-    schema_version: Literal["source-claims.v4"] = "source-claims.v4"
+    schema_version: Literal["source-claims.v6"] = "source-claims.v6"
     source_sha256: str
     region_node_id: str = Field(pattern=r"^region-\d{4,}$")
     claims: list[SourceClaim]
@@ -184,23 +201,19 @@ class SourceClaimCheckpoint(StrictModel):
 
 
 class SourceObjectFragmentCheckpoint(StrictModel):
-    schema_version: Literal["source-object-fragments.v2"] = (
-        "source-object-fragments.v2"
+    schema_version: Literal["source-object-fragments.v4"] = (
+        "source-object-fragments.v4"
     )
     source_sha256: str
     region_node_id: str = Field(pattern=r"^region-\d{4,}$")
     fragments: list[ObjectFragment]
-    assertions: list[SourceAssertionDraft]
+    assertions: list[SourceAssertion]
     model_calls: int = Field(ge=0)
 
 
-class SourceTemporalAnnotationCheckpoint(StrictModel):
-    schema_version: Literal["source-temporal-annotations.v1"] = (
-        "source-temporal-annotations.v1"
-    )
+class SourceTimeCheckpoint(SourceTimeSubmission):
+    schema_version: Literal["source-time.v1"] = "source-time.v1"
     source_sha256: str
-    region_node_id: str = Field(pattern=r"^region-\d{4,}$")
-    claims: list[TemporalClaimAnnotations]
     model_calls: int = Field(ge=0)
 
 
@@ -209,22 +222,22 @@ class SourceStageStatus(StrictModel):
     initial_claims: bool
     reviewed_claims: bool
     object_fragments: bool
-    temporal_annotations: bool
     complete: bool
     error: str | None = None
 
 
 class FullSourceSemanticWorking(StrictModel):
-    schema_version: Literal["source-semantics-working.v7"] = "source-semantics-working.v7"
+    schema_version: Literal["source-semantics-working.v9"] = "source-semantics-working.v9"
     source_sha256: str
     source_node_ids: list[str]
+    source_time: bool
     stages: list[SourceStageStatus]
 
 
 class SourceSemanticSnapshot(StrictModel):
-    """来源命题、Leaf Object Fragment 与来源锚定时间。"""
+    """来源 Assertion、Leaf Object Fragment 与来源锚定时间。"""
 
-    schema_version: Literal["source-semantics.v7"] = "source-semantics.v7"
+    schema_version: Literal["source-semantics.v9"] = "source-semantics.v9"
     created_at: datetime
     source: SourceMetadata
     region_tree_schema_version: str
@@ -243,9 +256,11 @@ class SourceSemanticSnapshot(StrictModel):
 
 
 class FullSourceSemanticSnapshot(StrictModel):
-    schema_version: Literal["source-semantics-full.v7"] = "source-semantics-full.v7"
+    schema_version: Literal["source-semantics-full.v9"] = "source-semantics-full.v9"
     created_at: datetime
     source: SourceMetadata
+    source_time_text: str | None
+    source_time_supporting_block_ids: list[BlockId]
     region_tree_schema_version: str
     source_node_ids: list[str]
     sources: list[SourceSemanticSnapshot]
@@ -253,6 +268,32 @@ class FullSourceSemanticSnapshot(StrictModel):
     total_object_fragments: int
     total_surface_forms: int
     model_calls: int
+
+    @field_validator("source_time_text")
+    @classmethod
+    def normalize_source_time_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = _normalize_source_time_text(value)
+        if not normalized:
+            raise ValueError("source_time_text 不能仅包含空白")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_source_time_evidence(self) -> FullSourceSemanticSnapshot:
+        if self.source_time_text is None and self.source_time_supporting_block_ids:
+            raise ValueError(
+                "source_time_text 为 null 时 source_time_supporting_block_ids 必须为空"
+            )
+        if self.source_time_text is not None and not self.source_time_supporting_block_ids:
+            raise ValueError(
+                "非空 source_time_text 必须提供 source_time_supporting_block_ids"
+            )
+        if len(set(self.source_time_supporting_block_ids)) != len(
+            self.source_time_supporting_block_ids
+        ):
+            raise ValueError("source_time_supporting_block_ids 不能重复")
+        return self
 
 
 @dataclass(frozen=True)
@@ -262,7 +303,6 @@ class SourceSemanticPaths:
     initial_claims_json: Path
     reviewed_claims_json: Path
     object_fragments_json: Path
-    temporal_annotations_json: Path
     snapshot_json: Path
     report_markdown: Path
 
@@ -272,32 +312,53 @@ class FullSourceSemanticPaths:
     directory: Path
     model_streams: Path
     sources: Path
+    source_time_json: Path
     working_json: Path
     snapshot_json: Path
     report_markdown: Path
 
 
 CLAIM_EXTRACTION_SYSTEM_PROMPT = """
-你只负责从当前来源原文提取两类基础语义：现实世界中的原子事实命题，以及来源明确表达的
-同指称字面称呼。一次有限扫描完成二者，处理完最后一个 block 后立即提交。
+你只负责从当前来源原文提取三类基础语义：可独立理解的 grounded Assertion、
+指向明确来源区域的 Reference Assertion，以及来源明确表达的同指称字面称呼。
+一次有限扫描完成它们，处理完最后一个 block 后立即提交。
 
 一次只做这一个核心判断：原文对现实中的组织、人物、活动、工作、制度、历史、状态、
 做法、结果、目标或观点明确说了什么。目录、章节导航、承接语和“本章将介绍……”之类
 只描述文档结构的文字不形成命题。
 
-要求：
-- 每条 statement_markdown 保存原文明确表达的一项有价值事实；能用当前句子或当前 block 中
-  明确无歧义的信息自然、低成本地补齐主语时，可以整理为独立命题，并标记
-  context_dependent=false；
+一、grounded Assertion 的颗粒度：
+- 目标不是“一个最小事实一条”，而是一个语义边界清晰、上下文完整、能被下游 AI
+  直接理解的知识单元；可以是一句，也可以是相互依赖的数句；
+- 同一规则、机制、流程步骤链、完整表格行或共享条件/例外的内容，如果理解其中一句
+  需要另一句、它们通常会一起被查询，应优先保持在一条 Assertion 中；
+- 只在主题、来源或变化边界明显不同时拆分。例如长期赛制/季节与“本届负责人”
+  生命周期不同，应分开；
+- 不要默认按句、每个谓词、列表项或表格单元格切分；不要用字数阈值作为主要标准；
+- 能用当前句子或 block 明确无歧义的信息自然补齐主语时，可整理为独立知识
+  单元并标记 context_dependent=false；
 - 如果独立化需要明显的代词消解、跨句或跨 block 身份推断、省略补全、复制大段前文或复杂
   语义重建，不要强行解决。保留合理的上下文依赖表达，并标记 context_dependent=true；该字段
   只表示阅读这条 Claim 时需要回到所属 SourceRegion，不要求输出 antecedent 或 context span；
 - 例如“25-26届会长深感有责任改变这一现状。”是可接受的 context_dependent=true Claim，
   不要为展开“这一现状”复制前文，也不要跨 block 把“25-26届会长”解析成具体人物；
-- 两项信息明显具有不同主语或谓词、且无需显著上下文重建即可分别成立时可以拆开；条件、否定、
-  例外、数量、时间表达和“建议”“计划”“可能”等原文语气必须保留，不能擅自补足；
-- 两种合理拆分都成立时，优先选择较少拆分、较少上下文重建的可用结果并结束，不追求理论唯一的
-  原子边界；
+- 条件、否定、例外、数量、时间表达和“建议”“计划”“可能”等原文语气必须保留，
+  不能擅自补足。
+
+二、Reference Assertion：
+- kind=reference 不承载表格/章节的全部事实，而用自然语言说明“关于什么信息，
+  应去哪个当前来源区域继续读取”；
+- 只对表格、名单、人员分工、流程清单等明显适合导航的区域生成，不按每个文件或
+  每个 Object 机械生成；
+- 颗粒度是“用户可能独立询问的信息主题 + 足够小、能直接继续读取的来源区域”。
+  拆分后没有产生不同检索路径时，就保持一条；允许覆盖范围重叠；
+- 对一组同类 Object 的表格或名单，正文优先使用“主要品牌赛事”“本届岗位安排”等集合性
+  主题描述，不要为了关联成员而在 Reference 正文中逐一枚举所有 Object 名称；
+- supporting_block_ids 必须精确指向要回看的表格/列表/章节原文块；如果信息全部在表格 block，
+  不要仅因标题提供主题就额外把 heading block 列为依据；
+- 此阶段只写导航描述，Object 的 semantic links 由后续 Fragment 阶段基于当前来源确定。
+
+三、共同规则：
 - supporting_block_ids 只列直接支持该命题的当前来源块；
 - 如果来源明确通过名称括注、简称、英文名、又称、以下简称、即、别名等方式，把两个或多个
   字面表达作为同一 referent 使用，不要把这层名称共指改写成 factual claim，而应提交到
@@ -314,7 +375,8 @@ CLAIM_EXTRACTION_SYSTEM_PROMPT = """
 - 例如来源写“中国科学技术大学学生乒乓球协会（USTC TTA）”，后文另写“乒协”，只提交
   “中国科学技术大学学生乒乓球协会”与“USTC TTA”；不得把“乒协”加入该草稿；
 - 不寻找跨来源 identity，不重新讨论 Objecthood，不生成 alias、canonical label 或 Object ID；
-- 不判断 Object，不建立 Relation，不分类 record/viewpoint，不结构化时间，不评价长期价值；
+- 不判断全局 Object identity，不建立 Relation，不分类 record/viewpoint，不结构化时间，
+  不评价长期价值；
 - 不分配任何 ID，不输出最终数据库协议，也不进行全局自检；
 - context_dependent 不是质量、置信度或重要性评价；不要为了把它改成 false 而重新打开已经完成的
   Claim 判断。处理完最后一个 block 后立即提交。
@@ -338,6 +400,7 @@ JSON 字符串要求：
 {
   "claims":[
     {
+      "kind":"grounded",
       "statement_markdown":"可用事实命题",
       "supporting_block_ids":["p0001-b0001"],
       "context_dependent":false
@@ -357,11 +420,12 @@ JSON 字符串要求：
 
 
 CONSERVATIVE_ATOMIC_FALLBACK_SYSTEM_PROMPT = """
-上一轮完整原子化推理发生重复。本轮只使用保守策略稳定完成第一次来源语义抽取，
-不寻找唯一最优的原子化方案。
+上一轮来源语义推理发生重复。本轮只使用保守策略稳定完成第一次抽取，
+不寻找唯一最优的拆分方案。
 
-按当前 source 原文 block 的顺序处理，每个 block 只处理一次。只提取原文明确表达的现实命题；
-标题、目录、纯导航和交叉引用不形成现实命题。明显具有不同主语或不同谓词的独立事实可以拆开。
+按当前 source 原文 block 的顺序处理，每个 block 只处理一次。提取原文明确支持的
+grounded Assertion，并对适合导航的表格、名单、分工或流程清单提取 Reference Assertion。
+纯标题、目录和承接语自身不形成 grounded Assertion。
 
 如果进一步拆分需要判断以下任何问题，立即停止拆分并保留较完整、较接近原文的表达：
 - 是否因为信息能够分别成立或分别变化而继续拆分；
@@ -371,7 +435,8 @@ CONSERVATIVE_ATOMIC_FALLBACK_SYSTEM_PROMPT = """
 - 是否需要反复处理代词回指；
 - 是否需要判断文档元数据还能否继续细拆。
 
-不追求最小原子粒度。两种表达都合理时，选择更接近原文、信息保留更多、改写更少的一种。
+不追求最小粒度。同一规则、机制、流程链或表格行应优先保持内聚；只有主题、来源或
+生命周期边界明显不同时拆分。两种表达都合理时，选择更接近原文、更完整的一种。
 不要返回已经处理过的 block，不做第二轮全局检查，不证明是否还有遗漏；遗漏事实由后续 Missing
 阶段检查。处理完最后一个 block 后立即提交。
 
@@ -400,6 +465,7 @@ same_referent_drafts 只提交原文连续 span、按 supporting blocks 顺序�
 可以保留为一条完整目标命题，不再讨论记录→提供参考→终结失忆是否需要拆成三条。
 
 每条 claim 只使用：
+- kind：grounded 或 reference；
 - statement_markdown：忠实、可用的现实命题；
 - supporting_block_ids：直接支持该命题的当前来源块。
 - context_dependent：是否必须回到所属 SourceRegion 才能正确理解命题中的代词、省略或身份指代。
@@ -413,6 +479,7 @@ JSON 字符串要求：
 {
   "claims":[
     {
+      "kind":"grounded",
       "statement_markdown":"较完整且贴近原文的命题",
       "supporting_block_ids":["p0001-b0001"],
       "context_dependent":false
@@ -432,18 +499,23 @@ JSON 字符串要求：
 
 
 MISSING_CLAIMS_SYSTEM_PROMPT = """
-你只负责检查已有原子命题是否遗漏了当前来源明确表达的现实命题。
+你只负责检查已有 Assertion 是否遗漏了当前来源明确支持的完整知识单元，
+或者适合指向表格、名单、人员分工、流程清单的 Reference Assertion。
 
 已有命题已经冻结：不得删除、改写、合并、重排或重新分类它们。只提交原文明确支持、
 且现有命题尚未表达的增量命题；没有遗漏时提交空数组。不要为了覆盖标题、目录、承接语、
 例子标签或文档说明而制造命题。
 
-新增命题沿用 Atomic 的轻量上下文规则：能自然、低成本独立化时标记 context_dependent=false；
+一个 cohesive grounded Assertion 已经完整表达的列表项、条件、步骤和子结论都视为 covered。
+不要因为一条 Assertion 包含多个相互依赖的事实，就把其中每个 bullet 再次作为遗漏提交。
+只有确实未表达的条件、例外、新事实内容或重要关系才能新增。
+
+新增 grounded Assertion 沿用轻量上下文规则：能自然、低成本独立化时标记 context_dependent=false；
 需要明显代词消解、跨句/跨 block 身份推断、省略补全或复杂语义重建时，保留可用的上下文依赖
 表达并标记 context_dependent=true，不要为了得到独立命题而重新求解整段上下文。
 
 不判断 Object、Relation、record/viewpoint、结构化时间或业务价值，不重新输出已有命题。
-每个 claims 元素只能使用 statement_markdown、supporting_block_ids 和 context_dependent，不得
+每个 claims 元素只能使用 kind、statement_markdown、supporting_block_ids 和 context_dependent，不得
 输出 id、claim_id、text、content、source，也不得自行发明其他字段。
 
 只输出一个 JSON 对象，不要输出 Markdown 代码块、说明或其他正文。
@@ -455,7 +527,8 @@ MISSING_CLAIMS_SYSTEM_PROMPT = """
 {
   "claims": [
     {
-      "statement_markdown": "完整原子命题",
+      "kind": "grounded",
+      "statement_markdown": "完整、内聚的知识单元",
       "supporting_block_ids": ["p0001-b0001"],
       "context_dependent": false
     }
@@ -465,7 +538,7 @@ MISSING_CLAIMS_SYSTEM_PROMPT = """
 
 
 OBJECT_FRAGMENT_SYSTEM_PROMPT = """
-你只负责把一个 SourceRegion 中已经冻结的事实命题与名称语境编译成 Leaf Object Fragment IR。
+你只负责把一个 SourceRegion 中已经冻结的 Assertion 与名称语境编译成 Leaf Object Fragment IR。
 一次调用同时完成两件高度相关的工作：构造 source-local ObjectFragment，并直接为每条 frozen
 claim 生成引用 Fragment 的 Assertion template。处理完成后立即提交，不做全局 identity 判断。
 
@@ -478,26 +551,43 @@ Fragment 构造规则：
   稳定群体等都可以形成 Fragment；明显只是数量、时间、属性、结果、程度、评价或修辞不形成；
 - “它”“该协会”“本会”“这个组织”“上述活动”“该赛事”等临时代词通常不是 reusable name，
   不要求成为 surface form；
-- 同一 SourceRegion 中明确称呼同一个对象的 reusable names 放入同一 Fragment；只做局部名称
-  同指整合，不因语义相似、主题相关、业务关系或可能连接而合并不同对象；
-- 输入中的 Atomic naming hints 是 hard grouping hint：同一 hint 内所有名称必须完整进入同一个
+- 同一 SourceRegion 中明确称呼同一个对象的 reusable names 放入同一 Fragment；surface forms
+  必须能够作为同一实体的名称、别名或直接指称互相替换。一个 span 即使最终 referent 相同，
+  只要相比实体名称还包含角色、任期、时间、关系、状态、数量、范围或描述性限定，就不是 alias，
+  不得与实体名称合并；只做局部名称同指整合，不因语义相似、主题相关、业务关系或可能连接而
+  合并不同对象；
+- 输入中的 source naming hints 是 hard grouping hint：同一 hint 内所有名称必须完整进入同一个
   Fragment，不得遗漏或拆开；不需要重新判断这些名称是否同指；
 - 在 hard hint 之外，可以根据当前 SourceRegion 整体语境，把“乒协”等后续 reusable name 加入
   已有 Fragment；
 - surface_forms 必须有当前编译上下文依据：逐字出现在当前 SourceRegion、reviewed/frozen claims
-  或 Atomic naming hint 中。不得发明新别名、纠错名称或输出 canonical/preferred label；
+  或 source naming hint 中。不得发明新别名、纠错名称或输出 canonical/preferred label；
 - 每个 surface form 只能属于一个 Fragment；会长与副会长等相关但不同的角色必须分开；
 - fragment_key 只使用本次输出内临时键 F1、F2、F3……，不得输出 Global Object ID。
 
-Assertion template 规则：
+Assertion template 与 Object link 规则：
 - assertions 必须覆盖输入中的每个 claim_id，恰好一次，顺序与 frozen claims 相同；
-- 由你直接输出完整 statement_template_markdown，不提交 span、start、end 或 occurrence_index；
-- 在命题中具有明确语义位置的 Fragment 名称应改写成 {{fragment:F1}} 形式；同一命题可以引用
+- kind 必须与 frozen claim 一致，只能是 grounded 或 reference；
+- grounded Assertion 由你直接输出完整 statement_template_markdown，不提交 span、start、end
+  或 occurrence_index；
+- grounded Assertion 中具有明确语义位置的 Fragment 名称应改写成 {{fragment:F1}} 形式；同一条可以引用
   零个、一个或多个 Fragment；未被 Fragment 化的其余命题内容保留为可理解的完整命题；
 - 模板不要求替换后逐字还原 frozen claim，可以做不改变事实含义的轻微语法整理，但不得新增、
   删除或改变原命题的事实、数量、条件、否定、例外、时间与语气；
 - context_dependent=true 的 frozen claim 允许继续依赖所属 SourceRegion；不要在本阶段消解代词、
   补全省略或跨 block 绑定身份，程序会原样继承该标记；
+- grounded Assertion 的 semantic_fragment_keys 必须为 []；它与 Object 的连接仍只来自正文
+  {{fragment:...}} 的 anchored references；
+- Reference Assertion 的 statement_template_markdown 是可检索的导航描述，不需要写入被关联
+  Object 的名称，也不要为了建立关联强行加入 {{fragment:...}}；有集合性主题描述可用时，
+  不得逐一枚举成员名称来替代 semantic links；
+- Reference Assertion 的 semantic_fragment_keys 必须列出该来源区域语义覆盖的所有相关
+  Fragment key，至少一个；“相关”指表格/名单直接编目且用户会通过其反查该来源的对象，
+  不包括仅作为归属背景的组织，也不包括某一单元格中的属性对象；这些名称必须由当前来源
+  支持，但无需出现在 Reference 正文中；
+- 例如一张表有五个品牌赛事，可以保留五个赛事 Fragment，但只产生一条说明
+  “主要品牌赛事的名称、形式和定位记录于该表”的 Reference，并将五个 key 放入
+  semantic_fragment_keys；不要再加入“乒协”或某行历史定位中出现的群体 Fragment；
 - 名称只存在于 SourceRegion、frozen claim 或 naming hint，没有出现在其他 factual claim 中，
   也仍可合法进入 Fragment；不得为它制造 fake claim；
 - 不输出 supporting blocks、时间、Relation、Object type、confidence、business role、alias evidence
@@ -517,97 +607,36 @@ JSON 字符串要求：
     {"fragment_key":"F2","surface_forms":["会长"]}
   ],
   "assertions":[
-    {"claim_id":"claim-1","statement_template_markdown":"{{fragment:F1}}协助{{fragment:F2}}工作。"}
+    {"claim_id":"claim-1","kind":"grounded","statement_template_markdown":"{{fragment:F1}}协助{{fragment:F2}}工作。","semantic_fragment_keys":[]}
   ]
 }
 
 只输出一个严格 JSON 对象，不要输出 Markdown 代码块、说明或其他正文：
 {
   "fragments":[{"fragment_key":"F1","surface_forms":["来源名称","来源简称"]}],
-  "assertions":[{"claim_id":"claim-1","statement_template_markdown":"{{fragment:F1}}成立于……"}]
+  "assertions":[{"claim_id":"claim-1","kind":"grounded","statement_template_markdown":"{{fragment:F1}}成立于……","semantic_fragment_keys":[]}]
 }
 """.strip()
 
 
-TEMPORAL_ANNOTATION_SYSTEM_PROMPT = """
-你只负责对已经冻结的 Assertions 做来源锚定的时间表达标准化。
+SOURCE_TIME_SYSTEM_PROMPT = """
+你只负责从整份 Source 中保守提取一个来源自身明确提供的时间锚点。
 
-基础层保存的是“来源声称了什么”，不是系统确认现实一定如此。你只回答来源怎样描述
-每条 Assertion 的时间，以及这个时间表达如何被保守地标准化。不得判断事实真假、来源质量、
-Assertion 当前是否仍有效，也不得输出 fact_confidence、truth_confidence、source_reliability、
-source_quality、可信度评分或任何 confidence 字段。
+Source Time 用来帮助系统理解这份来源处在什么历史位置，以及来源中的“目前”“本届”等相对
+表达；它不表示来源中全部 Assertion 在该时点成立，也不是 Assertion validity。
 
-按 frozen claims 当前顺序处理：
-1. 每条 claim 只处理一次，并且必须在输出中恰好出现一次；
-2. 只识别当前 claim 或其 supporting blocks 中实际出现的时间表达；
-3. 同一 claim 可以有零个、一个或多个 temporal_annotations；
-4. 没有时间表达时返回空数组，不得根据一般现在时、定义句或规则句生成“持续适用”、
-   “长期有效”“当前有效”或 general；
-5. 来源日期不是 Assertion 时间。只有 claim/supporting blocks 出现“目前”“本届”“当时”
-   等表达时，才可以使用可靠的文档背景、来源元数据或区域路径作为 contextual anchor；
-6. raw_expression 必须逐字来自当前 claim 或其 supporting blocks；标准化后仍须保留来源的
-   “约”“前后”等模糊性；
-7. 对每个时间表达只分类和标准化一次，不回到之前 claim，不做第二轮全局检查，
-   不证明没有遗漏；最后一条 claim 完成后立即输出 JSON。
+只有成文日期、署名日期、修订日期或“截至……”等明确描述来源自身时间的文字才可以采用。
+非空 source_time_text 必须能在 supporting_block_ids 的原文中直接找到，只允许必要的空白或格式
+规整。证据不充分或候选互相冲突时返回 null。
 
-kind 只允许：
-- point：明确或近似时点，例如“2026年1月28日”“约2025年”；
-- range：可标准化范围，例如“2025-2026学年”“2022年至2023年”；
-- recurring：周期时间，例如“每周”“每年五月”“每学期末”；
-- relative：相对事件时间，例如“活动前至少7天”“卸任前”“结项后”；
-- contextual：必须依赖可靠来源上下文理解，例如“目前”“本届”“当时”；
-- unknown：明确具有时间含义但无法安全定位，例如“长期以来”“早期”“曾经”。
+严禁根据正文事件的最大年份推断；严禁使用文件系统时间、PDF metadata、上传时间、编译时间、
+当前系统时间或外部知识。不要输出 start/end、precision、kind、confidence、basis 或 validity。
 
-precision 只允许 day、month、year、academic_year、semester、unspecified。
+只输出一个严格 JSON 对象，不要输出 Markdown 代码块、解释或其他字段：
+{"source_time_text":"2026年春","supporting_block_ids":["p0006-b0008"]}
 
-derivation 只允许：
-- source_explicit：来源时间文字本身足以完成标准化，包括无法绝对化的 recurring/relative；
-- contextual_inference：来源有相对表达，绝对化还使用了可靠上下文；basis_markdown 必须说明
-  原始表达、anchor 和推导；
-- unresolved：存在时间表达但上下文不足；start/end 必须为 null，不能猜年份。
-
-start/end 只在可以安全得到绝对时间时填写，只允许 YYYY、YYYY-MM、YYYY-MM-DD；其余填 null。
-当“保留模糊表达”和“猜一个具体时间”都可行时，始终保留模糊表达。即使 derivation 是
-source_explicit，也必须填写非空 basis_markdown，解释标准化直接依据的来源文字。
-
-JSON 字符串要求：
-- basis_markdown 等自然语言字段引用来源文字时优先使用中文弯引号“”，不要直接写未转义的
-  ASCII 双引号 "；
-- 字符串内容确实需要 ASCII 双引号时，必须按 JSON string 规则写成 \\\"；
-- JSON 结构边界的双引号与自然语言内容中的 ASCII 双引号必须区分；
-- 输出必须是标准 JSON parser 可以直接解析的完整对象。
-
-错误：
-{"basis_markdown":"表格中"继往开来"的举办时间为"秋季学期"。"}
-
-正确之一：
-{"basis_markdown":"表格中“继往开来”的举办时间为“秋季学期”。"}
-
-或合法转义：
-{"basis_markdown":"表格中\\\"继往开来\\\"的举办时间为\\\"秋季学期\\\"。"}
-
-不得新增、删除或修改 claim_id，不得输出或修改 statement、supporting_block_ids、Object、
-Mention 或其他字段。只输出一个严格 JSON 对象，不要输出 Markdown 代码块、说明或其他正文：
-{
-  "claims": [
-    {"claim_id":"claim-1","temporal_annotations":[]},
-    {
-      "claim_id":"claim-2",
-      "temporal_annotations":[
-        {
-          "raw_expression":"2025-2026学年",
-          "kind":"range",
-          "normalized_text":"2025-2026学年",
-          "start":"2025",
-          "end":"2026",
-          "precision":"academic_year",
-          "derivation":"source_explicit",
-          "basis_markdown":"来源明确写出“2025-2026学年”。"
-        }
-      ]
-    }
-  ]
-}
+没有可靠来源时间：
+{"source_time_text":null,"supporting_block_ids":[]}
 """.strip()
 
 
@@ -615,7 +644,7 @@ OutputModel = TypeVar("OutputModel", bound=BaseModel)
 
 
 class SourceSemanticCompiler:
-    """以四遍流程编译一个内容来源节点；第三遍生成 Leaf Fragment IR。"""
+    """以三遍流程编译一个内容来源节点；第三遍生成 Leaf Fragment IR。"""
 
     def __init__(
         self,
@@ -658,12 +687,12 @@ class SourceSemanticCompiler:
         )
         rebuilt_initial = initial is None
         if initial is None:
-            self.progress.report(label, "第一遍：开始提取原子现实命题")
+            self.progress.report(label, "第一遍：开始提取内聚知识单元与 Reference")
             submission, initial_calls = await self._request_atomic_json(
                 system_prompt=CLAIM_EXTRACTION_SYSTEM_PROMPT,
                 user_prompt=source_prompt,
                 output_model=AtomicClaimSubmission,
-                request_label=f"{label}·原子命题",
+                request_label=f"{label}·Assertion Discovery",
                 validate=lambda value: _validate_atomic_submission(
                     value, source_blocks
                 ),
@@ -702,8 +731,8 @@ class SourceSemanticCompiler:
                 user_prompt=_review_prompt(source_prompt, initial.claims),
                 output_model=MissingClaimSubmission,
                 request_label=f"{label}·遗漏扫描",
-                validate=lambda value: _validate_claim_blocks(
-                    value.claims, source_blocks
+                validate=lambda value: _validate_missing_claims(
+                    value, initial.claims, source_blocks
                 ),
             )
             reviewed = self._claim_checkpoint(
@@ -767,41 +796,6 @@ class SourceSemanticCompiler:
             ),
         )
 
-        temporal = None
-        if not rebuilt_reviewed:
-            temporal = self._load_temporal_checkpoint(
-                node, reviewed.claims, source_blocks
-            )
-        if temporal is None:
-            self.progress.report(label, "第四遍：开始来源锚定的时间表达标准化")
-            temporal_submission, temporal_calls = await self._request_json(
-                system_prompt=TEMPORAL_ANNOTATION_SYSTEM_PROMPT,
-                user_prompt=_temporal_prompt(source_prompt, reviewed.claims, source_blocks),
-                output_model=TemporalAnnotationSubmission,
-                request_label=f"{label}·Temporal Annotation",
-                validate=lambda value: _validate_temporal_submission(
-                    value, reviewed.claims, source_blocks
-                ),
-            )
-            temporal = SourceTemporalAnnotationCheckpoint(
-                source_sha256=self.exploration.source.sha256,
-                region_node_id=node.node_id,
-                claims=temporal_submission.claims,
-                model_calls=temporal_calls,
-            )
-            self._write_json(self.paths.temporal_annotations_json, temporal)
-        temporal_count = sum(
-            len(item.temporal_annotations) for item in temporal.claims
-        )
-        self.progress.report(
-            label,
-            f"第四遍完成：{temporal_count} 个 Temporal Annotation",
-        )
-
-        assertions_with_temporal = _attach_temporal_annotations(
-            object_fragments.assertions, temporal.claims
-        )
-
         covered = _covered_block_ids(
             reviewed.claims,
             source_blocks,
@@ -812,7 +806,6 @@ class SourceSemanticCompiler:
             initial.model_calls
             + reviewed.model_calls
             + object_fragments.model_calls
-            + temporal.model_calls
         )
         snapshot = SourceSemanticSnapshot(
             created_at=datetime.now(UTC),
@@ -827,7 +820,7 @@ class SourceSemanticCompiler:
             unclaimed_block_ids=[item for item in source_ids if item not in covered],
             initial_claim_count=len(initial.claims),
             review_addition_count=review_additions,
-            assertions=assertions_with_temporal,
+            assertions=object_fragments.assertions,
             object_fragments=object_fragments.fragments,
             model_calls=model_calls,
         )
@@ -840,7 +833,6 @@ class SourceSemanticCompiler:
             (
                 f"完成：命题 {len(snapshot.assertions)}，"
                 f"Object Fragment {len(snapshot.object_fragments)}，"
-                f"Temporal Annotation {temporal_count}，"
                 f"本次模型调用 {model_calls} 次"
             ),
         )
@@ -1018,6 +1010,7 @@ class SourceSemanticCompiler:
         normalized = [
             SourceClaim(
                 claim_id=f"claim-{position}",
+                kind=item.kind,
                 statement_markdown=item.statement_markdown.strip(),
                 supporting_block_ids=list(dict.fromkeys(item.supporting_block_ids)),
                 context_dependent=item.context_dependent,
@@ -1051,7 +1044,7 @@ class SourceSemanticCompiler:
         if not path.exists():
             return None
         raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or raw.get("schema_version") != "source-claims.v4":
+        if not isinstance(raw, dict) or raw.get("schema_version") != "source-claims.v6":
             return None
         checkpoint = SourceClaimCheckpoint.model_validate(raw)
         self._validate_checkpoint_identity(
@@ -1072,9 +1065,15 @@ class SourceSemanticCompiler:
     ) -> SourceObjectFragmentCheckpoint | None:
         if not self.paths.object_fragments_json.exists():
             return None
-        checkpoint = SourceObjectFragmentCheckpoint.model_validate_json(
+        raw = json.loads(
             self.paths.object_fragments_json.read_text(encoding="utf-8")
         )
+        if (
+            not isinstance(raw, dict)
+            or raw.get("schema_version") != "source-object-fragments.v4"
+        ):
+            return None
+        checkpoint = SourceObjectFragmentCheckpoint.model_validate(raw)
         self._validate_checkpoint_identity(
             checkpoint.source_sha256, checkpoint.region_node_id, node
         )
@@ -1083,27 +1082,6 @@ class SourceSemanticCompiler:
             claims,
             same_referent_drafts=same_referent_drafts,
             source_blocks=source_blocks,
-        )
-        return checkpoint
-
-    def _load_temporal_checkpoint(
-        self,
-        node: RegionNode,
-        claims: Sequence[SourceClaim],
-        source_blocks: Sequence[ParsedBlock],
-    ) -> SourceTemporalAnnotationCheckpoint | None:
-        if not self.paths.temporal_annotations_json.exists():
-            return None
-        checkpoint = SourceTemporalAnnotationCheckpoint.model_validate_json(
-            self.paths.temporal_annotations_json.read_text(encoding="utf-8")
-        )
-        self._validate_checkpoint_identity(
-            checkpoint.source_sha256, checkpoint.region_node_id, node
-        )
-        _validate_temporal_submission(
-            TemporalAnnotationSubmission(claims=checkpoint.claims),
-            claims,
-            source_blocks,
         )
         return checkpoint
 
@@ -1155,6 +1133,17 @@ class FullSourceSemanticRunner:
             raise ValueError("区域树尚未冻结，不能开始全部来源语义编译")
         cached = _load_current_full_snapshot(self.paths.snapshot_json)
         if cached is not None:
+            source_time = self._load_source_time_checkpoint()
+            if source_time is not None:
+                self.paths.source_time_json.write_text(
+                    source_time.model_dump_json(indent=2), encoding="utf-8"
+                )
+            self.paths.snapshot_json.write_text(
+                cached.model_dump_json(indent=2), encoding="utf-8"
+            )
+            self.paths.report_markdown.write_text(
+                _render_full_report(cached), encoding="utf-8"
+            )
             return cached
 
         available_source_ids = [
@@ -1165,6 +1154,22 @@ class FullSourceSemanticRunner:
         ]
         source_ids = self._select_source_ids(available_source_ids)
         self._validate_resume(source_ids)
+        source_time = self._load_source_time_checkpoint()
+        if source_time is None:
+            self.progress.report("Source Time", "开始整份来源的一次保守时间锚点提取")
+            source_time = await self._extract_source_time()
+        self.paths.source_time_json.write_text(
+            source_time.model_dump_json(indent=2), encoding="utf-8"
+        )
+        self.progress.report(
+            "Source Time",
+            (
+                f"完成：{source_time.source_time_text}｜证据 "
+                f"{', '.join(source_time.supporting_block_ids)}"
+                if source_time.source_time_text is not None
+                else "完成：来源未提供足够明确的时间锚点"
+            ),
+        )
         completed = [
             node_id
             for node_id in source_ids
@@ -1231,6 +1236,8 @@ class FullSourceSemanticRunner:
         full = FullSourceSemanticSnapshot(
             created_at=datetime.now(UTC),
             source=self.exploration.source,
+            source_time_text=source_time.source_time_text,
+            source_time_supporting_block_ids=source_time.supporting_block_ids,
             region_tree_schema_version=self.exploration.region_tree.schema_version,
             source_node_ids=source_ids,
             sources=snapshots,
@@ -1243,7 +1250,9 @@ class FullSourceSemanticRunner:
                 for item in snapshots
                 for fragment in item.object_fragments
             ),
-            model_calls=sum(item.model_calls for item in snapshots),
+            model_calls=(
+                source_time.model_calls + sum(item.model_calls for item in snapshots)
+            ),
         )
         self.paths.snapshot_json.write_text(full.model_dump_json(indent=2), encoding="utf-8")
         self.paths.report_markdown.write_text(_render_full_report(full), encoding="utf-8")
@@ -1256,6 +1265,70 @@ class FullSourceSemanticRunner:
             ),
         )
         return full
+
+    async def _extract_source_time(self) -> SourceTimeCheckpoint:
+        user_prompt = _source_time_prompt(self.exploration.source, self.blocks)
+        last_error: Exception | None = None
+        for attempt in range(1, 3):
+            retry_note = ""
+            if last_error is not None:
+                retry_note = (
+                    "\n\n上一次提交未通过确定性校验："
+                    f"{_short_validation_error(last_error)}\n"
+                    "请从原始全文重新判断一次，不要修补上一次正文。"
+                )
+                self.progress.report(
+                    "Source Time",
+                    "输出校验失败，进行唯一一次 clean retry："
+                    + _short_validation_error(last_error),
+                )
+            try:
+                turn = await self.model.complete_turn(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": SOURCE_TIME_SYSTEM_PROMPT + retry_note,
+                        },
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    request_label=(
+                        "Source Time"
+                        if attempt == 1
+                        else "Source Time·clean-retry"
+                    ),
+                    thinking="enabled",
+                )
+                if turn.tool_calls or not turn.content:
+                    raise ValueError("Source Time 没有返回 JSON 正文")
+                submission = SourceTimeSubmission.model_validate_json(
+                    normalize_json_fence(turn.content)
+                )
+                _validate_source_time(submission, self.blocks)
+                return SourceTimeCheckpoint(
+                    source_sha256=self.exploration.source.sha256,
+                    source_time_text=submission.source_time_text,
+                    supporting_block_ids=submission.supporting_block_ids,
+                    model_calls=attempt,
+                )
+            except (ModelRepetitionError, ValidationError, ValueError) as error:
+                last_error = error
+        assert last_error is not None
+        raise ValueError(
+            "Source Time 初次输出和唯一一次 clean retry 均失败："
+            + _short_validation_error(last_error)
+        ) from last_error
+
+    def _load_source_time_checkpoint(self) -> SourceTimeCheckpoint | None:
+        if not self.paths.source_time_json.exists():
+            return None
+        raw = json.loads(self.paths.source_time_json.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or raw.get("schema_version") != "source-time.v1":
+            return None
+        checkpoint = SourceTimeCheckpoint.model_validate(raw)
+        if checkpoint.source_sha256 != self.exploration.source.sha256:
+            raise ValueError("Source Time 断点属于另一份来源文件")
+        _validate_source_time(checkpoint, self.blocks)
+        return checkpoint
 
     def _select_source_ids(self, available: Sequence[str]) -> list[str]:
         if not self.requested_source_node_ids:
@@ -1274,13 +1347,7 @@ class FullSourceSemanticRunner:
             return
         raw = json.loads(self.paths.working_json.read_text(encoding="utf-8"))
         version = raw.get("schema_version") if isinstance(raw, dict) else None
-        if version not in {
-            "source-semantics-working.v3",
-            "source-semantics-working.v4",
-            "source-semantics-working.v5",
-            "source-semantics-working.v6",
-            "source-semantics-working.v7",
-        }:
+        if version != "source-semantics-working.v9":
             raise ValueError(f"不支持的来源语义工作断点版本：{version}")
         if raw.get("source_sha256") != self.exploration.source.sha256:
             raise ValueError("批量恢复目录属于另一份来源文件")
@@ -1291,7 +1358,6 @@ class FullSourceSemanticRunner:
         stages: list[SourceStageStatus] = []
         for node_id in source_ids:
             paths = _source_paths(self.paths, node_id)
-            temporal_exists = paths.temporal_annotations_json.exists()
             complete = _load_current_source_snapshot(paths) is not None
             stages.append(
                 SourceStageStatus(
@@ -1299,7 +1365,6 @@ class FullSourceSemanticRunner:
                     initial_claims=paths.initial_claims_json.exists(),
                     reviewed_claims=paths.reviewed_claims_json.exists(),
                     object_fragments=paths.object_fragments_json.exists(),
-                    temporal_annotations=temporal_exists,
                     complete=complete,
                     error=self.errors.get(node_id),
                 )
@@ -1307,6 +1372,7 @@ class FullSourceSemanticRunner:
         working = FullSourceSemanticWorking(
             source_sha256=self.exploration.source.sha256,
             source_node_ids=list(source_ids),
+            source_time=self._load_source_time_checkpoint() is not None,
             stages=stages,
         )
         self.paths.working_json.write_text(working.model_dump_json(indent=2), encoding="utf-8")
@@ -1368,7 +1434,6 @@ def _paths(directory: Path, *, model_streams: Path | None = None) -> SourceSeman
         initial_claims_json=directory / "01-initial-claims.json",
         reviewed_claims_json=directory / "02-reviewed-claims.json",
         object_fragments_json=directory / "03-object-fragments.json",
-        temporal_annotations_json=directory / "04-temporal-annotations.json",
         snapshot_json=directory / "source-semantics.json",
         report_markdown=directory / "source-semantics.md",
     )
@@ -1379,6 +1444,7 @@ def _full_paths(directory: Path) -> FullSourceSemanticPaths:
         directory=directory,
         model_streams=directory / "model-streams",
         sources=directory / "sources",
+        source_time_json=directory / "source-time.json",
         working_json=directory / "working.json",
         snapshot_json=directory / "source-semantics-full.json",
         report_markdown=directory / "source-semantics-full.md",
@@ -1395,14 +1461,14 @@ def _load_current_source_snapshot(
     paths: SourceSemanticPaths,
     source_blocks: Sequence[ParsedBlock] | None = None,
 ) -> SourceSemanticSnapshot | None:
-    if not paths.snapshot_json.exists() or not paths.temporal_annotations_json.exists():
+    if not paths.snapshot_json.exists() or not paths.object_fragments_json.exists():
         return None
     if not paths.initial_claims_json.exists() or not paths.reviewed_claims_json.exists():
         return None
     initial_raw = json.loads(paths.initial_claims_json.read_text(encoding="utf-8"))
     if (
         not isinstance(initial_raw, dict)
-        or initial_raw.get("schema_version") != "source-claims.v4"
+        or initial_raw.get("schema_version") != "source-claims.v6"
     ):
         return None
     try:
@@ -1419,7 +1485,7 @@ def _load_current_source_snapshot(
     reviewed_raw = json.loads(paths.reviewed_claims_json.read_text(encoding="utf-8"))
     if (
         not isinstance(reviewed_raw, dict)
-        or reviewed_raw.get("schema_version") != "source-claims.v4"
+        or reviewed_raw.get("schema_version") != "source-claims.v6"
     ):
         return None
     try:
@@ -1440,7 +1506,7 @@ def _load_current_source_snapshot(
     except ValueError:
         return None
     raw = json.loads(paths.snapshot_json.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict) or raw.get("schema_version") != "source-semantics.v7":
+    if not isinstance(raw, dict) or raw.get("schema_version") != "source-semantics.v9":
         return None
     try:
         snapshot = SourceSemanticSnapshot.model_validate(raw)
@@ -1456,7 +1522,7 @@ def _load_current_full_snapshot(path: Path) -> FullSourceSemanticSnapshot | None
     if not path.exists():
         return None
     raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict) or raw.get("schema_version") != "source-semantics-full.v7":
+    if not isinstance(raw, dict) or raw.get("schema_version") != "source-semantics-full.v9":
         return None
     try:
         return FullSourceSemanticSnapshot.model_validate(raw)
@@ -1476,7 +1542,7 @@ def _source_prompt(
         for item in [*lineage, node]
     )
     return f"""
-[STAGE: extract_atomic_source_semantics]
+[STAGE: extract_cohesive_source_assertions]
 
 文档背景（只用于理解简称和省略，不能作为新命题依据）：
 {document_context}
@@ -1492,14 +1558,14 @@ def _source_prompt(
 def _review_prompt(source_prompt: str, claims: Sequence[SourceClaim]) -> str:
     rendered = "\n".join(
         (
-            f"- {item.claim_id}｜{item.statement_markdown}｜"
+            f"- {item.claim_id}｜kind={item.kind}｜{item.statement_markdown}｜"
             f"context_dependent={str(item.context_dependent).lower()}｜"
             f"依据 {', '.join(item.supporting_block_ids)}"
         )
         for item in claims
     ) or "（第一次没有提取出命题）"
     return f"""
-[STAGE: find_missing_atomic_claims]
+[STAGE: find_missing_source_assertions]
 
 第一次阅读材料：
 {source_prompt}
@@ -1518,7 +1584,7 @@ def _fragment_prompt(
 ) -> str:
     rendered = "\n".join(
         (
-            f"- {item.claim_id}｜{item.statement_markdown}｜"
+            f"- {item.claim_id}｜kind={item.kind}｜{item.statement_markdown}｜"
             f"context_dependent={str(item.context_dependent).lower()}"
         )
         for item in claims
@@ -1529,7 +1595,7 @@ def _fragment_prompt(
             + " = ".join(mention.span_text for mention in item.mentions)
         )
         for item in same_referent_drafts
-    ) or "（没有 Atomic hard grouping hint）"
+    ) or "（没有 source hard grouping hint）"
     return f"""
 [STAGE: construct_object_fragments]
 
@@ -1539,137 +1605,60 @@ def _fragment_prompt(
 已经冻结的命题：
 {rendered}
 
-Atomic naming hints（同一行中的名称必须进入同一个 Fragment）：
+source naming hints（同一行中的名称必须进入同一个 Fragment）：
 {naming_hints}
 
 一次完成 reusable names 的 source-local 同指分组与所有命题的 Fragment template。
-surface_forms 只能来自当前 SourceRegion、reviewed/frozen claims 或 Atomic naming hints 中已有的
+surface_forms 只能来自当前 SourceRegion、reviewed/frozen claims 或 source naming hints 中已有的
 名称表达；不得发明当前编译上下文没有的名称。
 """.strip()
 
 
-def _temporal_prompt(
-    source_prompt: str,
-    claims: Sequence[SourceClaim],
-    source_blocks: Sequence[ParsedBlock],
-) -> str:
-    del source_blocks  # 原文及 block_id 已完整包含在 source_prompt 中。
-    rendered = "\n".join(
-        (
-            f"- {item.claim_id}｜{item.statement_markdown}｜"
-            f"context_dependent={str(item.context_dependent).lower()}｜"
-            f"supporting blocks: {', '.join(item.supporting_block_ids)}"
+def _source_time_prompt(source: SourceMetadata, blocks: Sequence[ParsedBlock]) -> str:
+    rendered_blocks = format_blocks(list(blocks))
+    if len(rendered_blocks) > 200_000:
+        raise ValueError(
+            "整份 Source 超过 Source Time 单次调用的安全上下文预算；"
+            "本轮不会退化为逐区域时间提取"
         )
-        for item in claims
-    ) or "（当前来源没有 frozen claim，必须提交空 claims）"
     return f"""
-[STAGE: annotate_source_temporals]
+[STAGE: extract_source_time]
 
-来源上下文：
-{source_prompt}
+来源标题：{source.title}
+来源路径仅用于标识，不是时间证据：{source.path}
 
-已经冻结的 plain claims：
-{rendered}
-
-只为以上每条 frozen claim 返回 temporal_annotations。时间理解只能使用该 claim 的正文、
-它列出的 supporting blocks，以及解释相对表达所必需的可靠来源上下文。
+整份来源原文（唯一时间证据）：
+{rendered_blocks}
 """.strip()
 
 
-_ABSOLUTE_TIME_PATTERN = re.compile(
-    r"^(?P<year>\d{4})(?:-(?P<month>\d{2})(?:-(?P<day>\d{2}))?)?$"
-)
+def _source_time_comparable(value: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", value))
 
 
-def _absolute_time_parts(value: str, field_name: str) -> tuple[int, int | None, int | None]:
-    match = _ABSOLUTE_TIME_PATTERN.fullmatch(value)
-    if match is None:
-        raise ValueError(f"{field_name} 只允许 YYYY、YYYY-MM 或 YYYY-MM-DD")
-    year = int(match.group("year"))
-    month_text = match.group("month")
-    day_text = match.group("day")
-    month = int(month_text) if month_text is not None else None
-    day = int(day_text) if day_text is not None else None
-    if month is not None and not 1 <= month <= 12:
-        raise ValueError(f"{field_name} 的月份无效")
-    if day is not None:
-        assert month is not None
-        if not 1 <= day <= calendar.monthrange(year, month)[1]:
-            raise ValueError(f"{field_name} 的日期无效")
-    return year, month, day
-
-
-def _validate_absolute_time(value: str, field_name: str) -> None:
-    _absolute_time_parts(value, field_name)
-
-
-def _time_lower_bound(value: str) -> tuple[int, int, int]:
-    year, month, day = _absolute_time_parts(value, "时间")
-    return year, month or 1, day or 1
-
-
-def _time_upper_bound(value: str) -> tuple[int, int, int]:
-    year, month, day = _absolute_time_parts(value, "时间")
-    if month is None:
-        return year, 12, 31
-    if day is None:
-        return year, month, calendar.monthrange(year, month)[1]
-    return year, month, day
-
-
-def _validate_temporal_submission(
-    submission: TemporalAnnotationSubmission,
-    claims: Sequence[SourceClaim],
-    source_blocks: Sequence[ParsedBlock],
+def _validate_source_time(
+    submission: SourceTimeSubmission,
+    blocks: Sequence[ParsedBlock],
 ) -> None:
-    expected_ids = [claim.claim_id for claim in claims]
-    submitted_ids = [item.claim_id for item in submission.claims]
-    duplicates = sorted(
-        {claim_id for claim_id in submitted_ids if submitted_ids.count(claim_id) > 1}
-    )
-    if duplicates:
-        raise ValueError("Temporal 重复提交 claim_id：" + ", ".join(duplicates))
-    unknown = sorted(set(submitted_ids) - set(expected_ids))
-    if unknown:
-        raise ValueError("Temporal 提交了未知 claim_id：" + ", ".join(unknown))
-    missing = [claim_id for claim_id in expected_ids if claim_id not in submitted_ids]
-    if missing:
-        raise ValueError("Temporal 遗漏 claim_id：" + ", ".join(missing))
-
-    claim_map = {claim.claim_id: claim for claim in claims}
-    block_map = {block.block_id: block for block in source_blocks}
-    for item in submission.claims:
-        claim = claim_map[item.claim_id]
-        evidence_texts = [
-            block_map[block_id].markdown
-            for block_id in claim.supporting_block_ids
-            if block_id in block_map
-        ]
-        for annotation in item.temporal_annotations:
-            grounded = annotation.raw_expression in claim.statement_markdown or any(
-                annotation.raw_expression in text for text in evidence_texts
-            )
-            if not grounded:
-                raise ValueError(
-                    f"{item.claim_id} 的 raw_expression "
-                    f"{annotation.raw_expression!r} 不存在于 claim 或 supporting blocks"
-                )
-
-
-def _attach_temporal_annotations(
-    assertions: Sequence[SourceAssertionDraft],
-    temporal_claims: Sequence[TemporalClaimAnnotations],
-) -> list[SourceAssertion]:
-    annotations = {
-        item.claim_id: item.temporal_annotations for item in temporal_claims
-    }
-    return [
-        SourceAssertion(
-            **assertion.model_dump(),
-            temporal_annotations=annotations[assertion.claim_id],
+    block_by_id = {item.block_id: item for item in blocks}
+    evidence = []
+    for block_id in submission.supporting_block_ids:
+        block = block_by_id.get(block_id)
+        if block is None:
+            raise ValueError(f"Source Time 引用了不存在的 SourceBlock：{block_id}")
+        evidence.append(block)
+    if [item.order for item in evidence] != sorted(item.order for item in evidence):
+        raise ValueError("Source Time supporting_block_ids 必须按原文顺序排列")
+    if submission.source_time_text is None:
+        return
+    expected = _source_time_comparable(submission.source_time_text)
+    if not expected or not any(
+        expected in _source_time_comparable(item.markdown) for item in evidence
+    ):
+        raise ValueError(
+            "source_time_text 必须能在至少一个 supporting SourceBlock 中直接找到，"
+            "只允许空白或 Unicode 格式规整"
         )
-        for assertion in assertions
-    ]
 
 
 def _validate_snapshot_fragments(
@@ -1678,7 +1667,7 @@ def _validate_snapshot_fragments(
     *,
     source_blocks: Sequence[ParsedBlock] | None = None,
 ) -> None:
-    """确认 v7 快照仍满足 reviewed claims 与 Atomic naming hints。"""
+    """确认当前快照仍满足 reviewed claims 与 naming hints。"""
 
     if snapshot.source.sha256 != reviewed.source_sha256:
         raise ValueError("最终快照与 reviewed claims 断点属于不同来源")
@@ -1689,9 +1678,11 @@ def _validate_snapshot_fragments(
         region_node_id=snapshot.region_node_id,
         fragments=snapshot.object_fragments,
         assertions=[
-            SourceAssertionDraft(
+            SourceAssertion(
                 claim_id=item.claim_id,
+                kind=item.kind,
                 statement_template_markdown=item.statement_template_markdown,
+                semantic_fragment_ids=item.semantic_fragment_ids,
                 supporting_block_ids=item.supporting_block_ids,
                 context_dependent=item.context_dependent,
             )
@@ -1870,16 +1861,48 @@ def _validate_fragment_submission(
             ):
                 raise ValueError(
                     f"surface form {surface_form!r} 未在当前 SourceRegion、"
-                    "frozen claims 或 Atomic naming hints 出现"
+                    "frozen claims 或 source naming hints 出现"
                 )
 
     for assertion in submission.assertions:
-        unknown = set(_fragment_reference_ids(assertion.statement_template_markdown))
+        claim = next(item for item in claims if item.claim_id == assertion.claim_id)
+        if assertion.kind != claim.kind:
+            raise ValueError(f"{assertion.claim_id} 的 kind 与 frozen claim 不一致")
+        anchored_keys = _fragment_reference_ids(
+            assertion.statement_template_markdown
+        )
+        if assertion.kind == "reference" and anchored_keys:
+            raise ValueError(
+                f"{assertion.claim_id} 是 Reference Assertion，不能使用 anchored Fragment token"
+            )
+        unknown = set(anchored_keys)
         unknown -= allowed_keys
         if unknown:
             raise ValueError(
                 f"{assertion.claim_id} 引用了不存在的 Fragment："
                 + ", ".join(sorted(unknown))
+            )
+        semantic_keys = assertion.semantic_fragment_keys
+        if len(set(semantic_keys)) != len(semantic_keys):
+            raise ValueError(f"{assertion.claim_id} 重复提交 semantic_fragment_keys")
+        unknown_semantic = set(semantic_keys) - allowed_keys
+        if unknown_semantic:
+            raise ValueError(
+                f"{assertion.claim_id} 引用了不存在的 semantic Fragment："
+                + ", ".join(sorted(unknown_semantic))
+            )
+        if assertion.kind == "grounded" and semantic_keys:
+            raise ValueError(
+                f"{assertion.claim_id} 是 grounded Assertion，不能使用 semantic links"
+            )
+        if assertion.kind == "reference" and not semantic_keys:
+            raise ValueError(
+                f"{assertion.claim_id} 是 Reference Assertion，至少需要一个 semantic link"
+            )
+        if assertion.kind == "grounded":
+            _validate_no_self_identity_collapse(
+                assertion.statement_template_markdown,
+                assertion.claim_id,
             )
 
     _validate_hard_grouping_hints(same_referent_drafts, surface_to_key)
@@ -1914,7 +1937,7 @@ def _materialize_fragments(
     claims: Sequence[SourceClaim],
     *,
     source_region_id: str,
-) -> tuple[list[ObjectFragment], list[SourceAssertionDraft]]:
+) -> tuple[list[ObjectFragment], list[SourceAssertion]]:
     """只稳定化 Fragment ID；不进行任何语义 substring replacement。"""
 
     claim_map = {item.claim_id: item for item in claims}
@@ -1931,7 +1954,7 @@ def _materialize_fragments(
         for item in submission.fragments
     ]
 
-    assertions: list[SourceAssertionDraft] = []
+    assertions: list[SourceAssertion] = []
     for item in submission.assertions:
         claim = claim_map[item.claim_id]
         template = _FRAGMENT_REFERENCE_PATTERN.sub(
@@ -1939,9 +1962,13 @@ def _materialize_fragments(
             item.statement_template_markdown,
         )
         assertions.append(
-            SourceAssertionDraft(
+            SourceAssertion(
                 claim_id=item.claim_id,
+                kind=item.kind,
                 statement_template_markdown=template,
+                semantic_fragment_ids=[
+                    key_to_id[key] for key in item.semantic_fragment_keys
+                ],
                 supporting_block_ids=claim.supporting_block_ids,
                 context_dependent=claim.context_dependent,
             )
@@ -1987,7 +2014,7 @@ def _validate_fragment_checkpoint(
             ):
                 raise ValueError(
                     f"surface form {surface_form!r} 未在当前 SourceRegion、"
-                    "frozen claims 或 Atomic naming hints 出现"
+                    "frozen claims 或 source naming hints 出现"
                 )
 
     expected_claim_ids = [item.claim_id for item in claims]
@@ -2002,12 +2029,30 @@ def _validate_fragment_checkpoint(
             raise ValueError(f"{assertion.claim_id} 的 supporting blocks 已发生变化")
         if assertion.context_dependent != claim.context_dependent:
             raise ValueError(f"{assertion.claim_id} 的 context_dependent 已发生变化")
-        unknown = set(_fragment_reference_ids(assertion.statement_template_markdown))
+        if assertion.kind != claim.kind:
+            raise ValueError(f"{assertion.claim_id} 的 kind 已发生变化")
+        anchored_ids = _fragment_reference_ids(assertion.statement_template_markdown)
+        if assertion.kind == "reference" and anchored_ids:
+            raise ValueError(
+                f"{assertion.claim_id} 是 Reference Assertion，不能使用 anchored Fragment token"
+            )
+        unknown = set(anchored_ids)
         unknown -= allowed_fragment_ids
         if unknown:
             raise ValueError(
                 f"{assertion.claim_id} 引用了不存在的稳定 Fragment："
                 + ", ".join(sorted(unknown))
+            )
+        unknown_semantic = set(assertion.semantic_fragment_ids) - allowed_fragment_ids
+        if unknown_semantic:
+            raise ValueError(
+                f"{assertion.claim_id} 引用了不存在的 semantic Fragment："
+                + ", ".join(sorted(unknown_semantic))
+            )
+        if assertion.kind == "grounded":
+            _validate_no_self_identity_collapse(
+                assertion.statement_template_markdown,
+                assertion.claim_id,
             )
     _validate_hard_grouping_hints(same_referent_drafts, surface_to_fragment)
 
@@ -2027,9 +2072,51 @@ def _merge_claims(
     return merged
 
 
-def _claim_signature(item: AtomicClaimDraft | SourceClaim) -> tuple[str, tuple[str, ...]]:
-    text = re.sub(r"\s+", "", item.statement_markdown).casefold()
-    return text, tuple(dict.fromkeys(item.supporting_block_ids))
+def _validate_missing_claims(
+    submission: MissingClaimSubmission,
+    existing: Sequence[SourceClaim],
+    source_blocks: Sequence[ParsedBlock],
+) -> None:
+    _validate_claim_blocks(submission.claims, source_blocks)
+    existing_normalized = [
+        (
+            item.kind,
+            _claim_text_normalized(item.statement_markdown),
+            set(item.supporting_block_ids),
+        )
+        for item in existing
+    ]
+    for addition in submission.claims:
+        addition_text = _claim_text_normalized(addition.statement_markdown)
+        addition_blocks = set(addition.supporting_block_ids)
+        for kind, existing_text, existing_blocks in existing_normalized:
+            if kind != addition.kind or not addition_blocks.issubset(existing_blocks):
+                continue
+            if addition_text == existing_text or addition_text in existing_text:
+                raise ValueError(
+                    "Missing Review 新增命题已由同一 supporting blocks 的 frozen "
+                    "Assertion 明确覆盖"
+                )
+
+
+def _claim_text_normalized(value: str) -> str:
+    return re.sub(r"[\s，,。.!！?？:：;；、]", "", value).casefold()
+
+
+def _validate_no_self_identity_collapse(template: str, claim_id: str) -> None:
+    token = r"\{\{fragment:([^{}]+)\}\}"
+    match = re.search(rf"{token}\s*(?:为|是)\s*{token}", template)
+    if match is not None and match.group(1) == match.group(2):
+        raise ValueError(
+            f"{claim_id} 的 Fragment template 把不同语义边界折叠为 self-identity"
+        )
+
+
+def _claim_signature(
+    item: AtomicClaimDraft | SourceClaim,
+) -> tuple[str, str, tuple[str, ...]]:
+    text = _claim_text_normalized(item.statement_markdown)
+    return item.kind, text, tuple(dict.fromkeys(item.supporting_block_ids))
 
 
 def _covered_block_ids(
@@ -2055,9 +2142,6 @@ def _render_report(
     snapshot: SourceSemanticSnapshot,
     blocks: Sequence[ParsedBlock],
 ) -> str:
-    temporal_count = sum(
-        len(item.temporal_annotations) for item in snapshot.assertions
-    )
     lines = [
         f"# {snapshot.label}",
         "",
@@ -2071,27 +2155,22 @@ def _render_report(
         f"> 最终命题：{len(snapshot.assertions)}",
         f"> Object Fragment：{len(snapshot.object_fragments)}",
         f"> Surface form：{sum(len(item.surface_forms) for item in snapshot.object_fragments)}",
-        f"> Temporal Annotation：{temporal_count}",
         "",
-        "## 引用 Object Fragment 的原子命题",
+        "## Assertion",
         "",
     ]
     for claim in snapshot.assertions:
         context_marker = "｜依赖 SourceRegion 上下文" if claim.context_dependent else ""
-        lines.append(
-            f"- `{claim.claim_id}` {claim.statement_template_markdown}｜"
-            f"依据 `{ '`, `'.join(claim.supporting_block_ids) }`{context_marker}"
+        semantic_links = (
+            "｜semantic links " + ", ".join(claim.semantic_fragment_ids)
+            if claim.semantic_fragment_ids
+            else ""
         )
-        for annotation in claim.temporal_annotations:
-            bounds = ""
-            if annotation.start is not None or annotation.end is not None:
-                bounds = f"｜{annotation.start or '?'} → {annotation.end or '?'}"
-            lines.append(
-                f"  - 时间 `{annotation.raw_expression}` → "
-                f"`{annotation.kind}/{annotation.precision}`｜"
-                f"{annotation.normalized_text}{bounds}｜{annotation.derivation}｜"
-                f"{annotation.basis_markdown}"
-            )
+        lines.append(
+            f"- `{claim.claim_id}` `{claim.kind}` {claim.statement_template_markdown}｜"
+            f"依据 `{ '`, `'.join(claim.supporting_block_ids) }`"
+            f"{semantic_links}{context_marker}"
+        )
     if not snapshot.assertions:
         lines.append("无。")
 
@@ -2126,19 +2205,21 @@ def _render_report(
 
 
 def _render_full_report(snapshot: FullSourceSemanticSnapshot) -> str:
-    temporal_count = sum(
-        len(assertion.temporal_annotations)
-        for source in snapshot.sources
-        for assertion in source.assertions
-    )
     lines = [
         "# 全部来源语义编译",
         "",
+        f"> Source Time：{snapshot.source_time_text or '未提取到明确时间锚点'}",
+        (
+            "> Source Time evidence："
+            + (
+                ", ".join(f"`{item}`" for item in snapshot.source_time_supporting_block_ids)
+                or "无"
+            )
+        ),
         f"> 来源节点：{len(snapshot.sources)}",
-        f"> 原子命题：{snapshot.total_assertions}",
+        f"> Assertion：{snapshot.total_assertions}",
         f"> Object Fragment：{snapshot.total_object_fragments}",
         f"> Surface form：{snapshot.total_surface_forms}",
-        f"> Temporal Annotation：{temporal_count}",
         f"> 模型调用：{snapshot.model_calls}",
         "",
         "## 来源索引",

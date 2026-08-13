@@ -35,6 +35,7 @@ from cold_start.global_resolution.models import (
     RegistryState,
     ResolutionGroup,
     ResolutionTarget,
+    SourceBlockEvidence,
     SourceFragmentDossier,
     SourceRegionDossier,
     SurfaceAtom,
@@ -45,6 +46,7 @@ from cold_start.global_resolution.models import (
     surface_atom_id,
     validate_region_integration_plan,
 )
+from cold_start.global_resolution.prompts import GLOBAL_IDENTITY_SYSTEM_PROMPT
 from cold_start.global_resolution.retrieval import (
     GlobalObjectCandidateRetriever,
     lexical_match_kinds,
@@ -61,13 +63,19 @@ def assertion(
     claim_id: str,
     *,
     statement: str = "一条来源命题",
+    kind: str = "grounded",
+    semantic_fragment_ids: list[str] | None = None,
+    supporting_blocks: list[SourceBlockEvidence] | None = None,
 ) -> AssertionEvidence:
     return AssertionEvidence(
         assertion_id=assertion_key(source_node_id, claim_id),
         source_node_id=source_node_id,
         source_claim_id=claim_id,
+        kind=kind,
         statement_template_markdown=statement,
+        semantic_fragment_ids=semantic_fragment_ids or [],
         context_dependent=False,
+        supporting_blocks=supporting_blocks or [],
     )
 
 
@@ -181,7 +189,7 @@ def dataset(
     snapshot = cast(
         FullSourceSemanticSnapshot,
         SimpleNamespace(
-            schema_version="source-semantics-full.v7",
+            schema_version="source-semantics-full.v9",
             source=SimpleNamespace(sha256="a" * 64),
             source_node_ids=[item.source_node_id for item in regions],
         ),
@@ -215,6 +223,17 @@ async def test_fragment_candidates_are_recalled_without_auto_identity() -> None:
 
     assert candidates == [existing]
     assert "compact_exact" in lexical_match_kinds(incoming, existing)
+
+
+def test_person_identity_prompt_requires_direct_evidence() -> None:
+    assert "都只能用于召回候选，不能单独证明是同一人" in GLOBAL_IDENTITY_SYSTEM_PROMPT
+    assert "仍依赖“可能”“很可能”“符合背景”等合理性推测，必须 create" in (
+        GLOBAL_IDENTITY_SYSTEM_PROMPT
+    )
+    assert "脚注明确写明“钟轹弘，24-25级乒协会长”时，可以与“钟轹弘” attach" in (
+        GLOBAL_IDENTITY_SYSTEM_PROMPT
+    )
+    assert "仅有\n“刘畅”和“刘畅学长”" in GLOBAL_IDENTITY_SYSTEM_PROMPT
 
 
 def test_one_region_plan_can_create_and_attach_together() -> None:
@@ -563,7 +582,6 @@ def test_local_loader_preserves_repeated_reference_ordinals(tmp_path: Path) -> N
                 ),
                 supporting_block_ids=[block.block_id],
                 context_dependent=False,
-                temporal_annotations=[],
             )
         ],
         object_fragments=[
@@ -578,6 +596,8 @@ def test_local_loader_preserves_repeated_reference_ordinals(tmp_path: Path) -> N
     snapshot = FullSourceSemanticSnapshot(
         created_at=datetime.now(UTC),
         source=metadata,
+        source_time_text=None,
+        source_time_supporting_block_ids=[],
         region_tree_schema_version="region-tree.v5",
         source_node_ids=["region-0001"],
         sources=[source],
@@ -687,6 +707,66 @@ def test_global_assertion_finalization_replaces_fragments_and_adds_literal_atoms
         "二课系统",
         "报销",
     ]
+
+
+def test_case_c_reference_finalization_links_five_objects_without_span_replacement() -> None:
+    event_names = ["继往开来", "四国大战", "萍水相逢", "会员大赛", "院系杯"]
+    source_fragments = [
+        fragment("region-0001", f"fragment-{index}", [name])
+        for index, name in enumerate(event_names, start=1)
+    ]
+    reference_evidence = assertion(
+        "region-0001",
+        "claim-1",
+        kind="reference",
+        statement="乒协主要品牌赛事的名称、比赛形式和基本定位集中记录于“品牌活动”表格。",
+        semantic_fragment_ids=[item.source_fragment_id for item in source_fragments],
+        supporting_blocks=[
+            SourceBlockEvidence(
+                source_block_id="p0010-b0004",
+                markdown="品牌活动表格原文",
+            )
+        ],
+    )
+    incoming = region(
+        "region-0001",
+        source_fragments,
+        assertions=[reference_evidence],
+    )
+    source_dataset = dataset([incoming], [reference_evidence])
+    state = registry(
+        ["region-0001"],
+        cursor=1,
+        objects=[
+            global_object(
+                f"global-event-{index}",
+                f"global-000001-{index:02d}",
+                name,
+                source_fragment.surface_atoms,
+            )
+            for index, (name, source_fragment) in enumerate(
+                zip(event_names, source_fragments, strict=True),
+                start=1,
+            )
+        ],
+    )
+
+    artifact = build_global_assertions_artifact(source_dataset, state)
+    finalized = artifact.assertions[0]
+
+    assert finalized.kind == "reference"
+    assert (
+        finalized.global_statement_template_markdown
+        == reference_evidence.statement_template_markdown
+    )
+    assert all(name not in finalized.global_statement_template_markdown for name in event_names)
+    assert finalized.reference_atoms == []
+    assert finalized.linked_global_object_ids == [
+        f"global-event-{index}" for index in range(1, 6)
+    ]
+    assert artifact.total_reference_atoms == 0
+    assert artifact.total_semantic_object_links == 5
+    assert reference_evidence.supporting_blocks[0].source_block_id == "p0010-b0004"
 
 
 def test_global_assertion_literal_matching_is_longest_and_skips_ambiguous_surfaces() -> None:

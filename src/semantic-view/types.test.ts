@@ -6,6 +6,7 @@ import {
   societyInformationCardTypes,
 } from "@/semantic-view/card-types";
 import {
+  assertGroundedAssertionSupports,
   assertSameBusinessView,
   SemanticViewValidationError,
 } from "@/semantic-view/service";
@@ -109,5 +110,15 @@ describe("society_information change protocol", () => {
       { selector: "source", viewKey: "society_information" },
       { selector: "target", viewKey: "activity_operations" },
     )).toThrow(SemanticViewValidationError);
+  });
+
+  it("rejects Reference Assertions as formal Business View support", () => {
+    expect(() => assertGroundedAssertionSupports([
+      { id: assertionId, kind: "reference" },
+    ])).toThrow(/Reference Assertion 只能用于定位原文/);
+
+    expect(() => assertGroundedAssertionSupports([
+      { id: assertionId, kind: "grounded" },
+    ])).not.toThrow();
   });
 });

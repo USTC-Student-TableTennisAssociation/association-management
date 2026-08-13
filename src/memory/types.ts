@@ -26,15 +26,16 @@ export type MemorySeedMatch = {
   distance?: number;
 };
 
-export type MemoryTemporalAnnotation = {
-  rawExpression: string;
-  kind: "point" | "range" | "recurring" | "relative" | "contextual" | "unknown";
-  normalizedText: string;
-  start?: string;
-  end?: string;
-  precision: "day" | "month" | "year" | "academic_year" | "semester" | "unspecified";
-  derivation: "source_explicit" | "contextual_inference" | "unresolved";
-  basis: string;
+export type MemoryAssertionKind = "grounded" | "reference";
+
+export type MemorySourceTime = {
+  sourceTitle: string;
+  sourceSha256: string;
+  text: string | null;
+  supportingBlocks: Array<{
+    sourceBlockId: string;
+    pages: number[];
+  }>;
 };
 
 export type MemorySourceReference = {
@@ -65,13 +66,14 @@ export type MemoryAssertionSeed = {
   ref: string;
   /** Database identity is present for the real Object–Assertion retriever. */
   id?: string;
+  kind: MemoryAssertionKind;
+  dereferenceRequired: boolean;
   sourceNodeId: string;
   sourceClaimId: string;
   renderedStatement: string;
   contextDependent: boolean;
   matchedBy: MemorySeedMatch[];
   matchedFacets: string[];
-  temporalAnnotations: MemoryTemporalAnnotation[];
   sources: MemorySourceReference[];
 };
 
@@ -82,6 +84,7 @@ export type MemoryObjectAssertionConnection = {
 
 export type StructuredSeedMap = {
   facets: MemoryFacet[];
+  sourceTime?: MemorySourceTime;
   objects: MemoryObjectSeed[];
   assertions: MemoryAssertionSeed[];
   connections: MemoryObjectAssertionConnection[];

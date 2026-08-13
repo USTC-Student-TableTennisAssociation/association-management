@@ -28,6 +28,12 @@ class FixtureMemoryRetriever implements MemoryRetriever {
       seedMap: matched
         ? {
             facets,
+            sourceTime: {
+              sourceTitle: "聊天框架测试 fixture",
+              sourceSha256: "fixture",
+              text: null,
+              supportingBlocks: [],
+            },
             objects: [
               {
                 ref: "O1",
@@ -53,6 +59,8 @@ class FixtureMemoryRetriever implements MemoryRetriever {
             assertions: [
               {
                 ref: "A1",
+                kind: "grounded",
+                dereferenceRequired: false,
                 sourceNodeId: "fixture-region",
                 sourceClaimId: "fixture-claim",
                 renderedStatement:
@@ -68,7 +76,6 @@ class FixtureMemoryRetriever implements MemoryRetriever {
                   },
                 ],
                 matchedFacets: [facets[0].id],
-                temporalAnnotations: [],
                 sources: [
                   {
                     sourceTitle: "聊天框架测试 fixture",

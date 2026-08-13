@@ -13,6 +13,7 @@ const originalMinimumLexicalScore = process.env.MEMORY_MIN_LEXICAL_SCORE;
 
 type MockDatabase = {
   memoryCompilation: { findFirst: ReturnType<typeof vi.fn> };
+  memorySourceBlock: { findMany: ReturnType<typeof vi.fn> };
   memoryGlobalObject: { findMany: ReturnType<typeof vi.fn> };
   memoryAssertion: { findMany: ReturnType<typeof vi.fn> };
   $queryRaw: ReturnType<typeof vi.fn>;
@@ -23,6 +24,8 @@ function snapshot(globalObjectCount: number, assertionCount: number) {
     id: "00000000-0000-4000-8000-000000000001",
     sourceTitle: "GlobalObject test source",
     sourceSha256: "test-sha256",
+    sourceTimeText: null,
+    sourceTimeSupportingBlockIds: [],
     compiledAt: new Date("2026-08-10T00:00:00.000Z"),
     objectFragmentCount: 4,
     surfaceFormCount: 6,
@@ -129,16 +132,18 @@ function assertions() {
     {
       id: "assertion-1",
       sourceClaimId: "claim-1",
+      kind: "grounded",
       globalStatementTemplateMarkdown: "{{object:global-event}}是校园文化活动。",
       contextDependent: true,
       sourceRegion: { sourceNodeId: "region-1", label: "活动定义" },
       fragmentReferences: [resolution(0, "fragment-event-1", event)],
       literalGlobalReferences: [],
-      temporalAnnotations: [],
+      semanticObjectLinks: [],
     },
     {
       id: "assertion-2",
       sourceClaimId: "claim-2",
+      kind: "grounded",
       globalStatementTemplateMarkdown:
         "{{object:global-event}}由{{object:global-student-union}}与{{object:global-club}}联合举办。",
       contextDependent: false,
@@ -148,11 +153,12 @@ function assertions() {
         literalReference(studentUnion),
         literalReference(club),
       ],
-      temporalAnnotations: [],
+      semanticObjectLinks: [],
     },
     {
       id: "assertion-3",
       sourceClaimId: "claim-3",
+      kind: "grounded",
       globalStatementTemplateMarkdown:
         "{{object:global-event}}与{{object:global-event}}都强调传承。",
       contextDependent: false,
@@ -162,7 +168,7 @@ function assertions() {
         resolution(1, "fragment-event-1", event),
       ],
       literalGlobalReferences: [],
-      temporalAnnotations: [],
+      semanticObjectLinks: [],
     },
   ];
 }
@@ -195,6 +201,7 @@ function useMockDatabase(input: {
 }): MockDatabase {
   const database: MockDatabase = {
     memoryCompilation: { findFirst: vi.fn().mockResolvedValue(snapshot(input.objects.length, input.assertions.length)) },
+    memorySourceBlock: { findMany: vi.fn().mockResolvedValue([]) },
     memoryGlobalObject: { findMany: vi.fn().mockResolvedValue(input.objects) },
     memoryAssertion: {
       findMany: vi.fn().mockImplementation(async (args: {
@@ -313,6 +320,80 @@ describe("GlobalObject-backed Locate", () => {
     expect(embedMemoryQueries).not.toHaveBeenCalled();
   });
 
+  it("case F returns a Reference from the Assertion vector retrieval path", async () => {
+    const referenceAssertion = {
+      id: "assertion-reference",
+      sourceClaimId: "claim-reference",
+      kind: "reference",
+      globalStatementTemplateMarkdown:
+        "负责人、裁判、宣传、签到和器材岗位安排记录于“人员分工”部分。",
+      contextDependent: false,
+      sourceRegion: { sourceNodeId: "region-reference", label: "人员分工" },
+      fragmentReferences: [],
+      literalGlobalReferences: [],
+      semanticObjectLinks: [{
+        globalObject: { id: "global-event", canonicalName: "继往开来" },
+      }],
+    };
+    const database = useMockDatabase({
+      objects: globalObjects(),
+      assertions: [referenceAssertion],
+      sources: [{
+        id: "assertion-reference",
+        compilation: {
+          sourceTitle: "GlobalObject test source",
+          sourceSha256: "test-sha256",
+        },
+        sourceRegion: { sourceNodeId: "region-reference", label: "人员分工" },
+        sourceBlockLinks: [{
+          ordinal: 0,
+          sourceBlock: { sourceBlockId: "table-personnel", sourcePages: [6] },
+        }],
+      }],
+    });
+    database.memoryCompilation.findFirst.mockResolvedValue({
+      ...snapshot(globalObjects().length, 1),
+      assertionEmbeddingIndex: {
+        modelKey: "test-embedding",
+        modelRevision: "v1",
+        dimension: 3,
+        indexedAssertionCount: 1,
+      },
+    });
+    vi.mocked(embedMemoryQueries).mockResolvedValue({
+      model: "test-embedding",
+      modelRevision: "v1",
+      dimension: 3,
+      vectors: [[0.1, 0.2, 0.3]],
+    });
+    database.$queryRaw.mockResolvedValue([
+      { assertionId: "assertion-reference", distance: 0.05, score: 0.95 },
+    ]);
+
+    const result = await locateObjectAssertions({ query: "谁负责签到？" });
+
+    expect(result.seedMap.assertions).toEqual([
+      expect.objectContaining({
+        kind: "reference",
+        dereferenceRequired: true,
+        sourceClaimId: "claim-reference",
+        matchedBy: expect.arrayContaining([
+          expect.objectContaining({ channel: "assertion-vector", method: "vector" }),
+        ]),
+        sources: [expect.objectContaining({ sourceBlockId: "table-personnel" })],
+      }),
+    ]);
+    const referenceRef = result.seedMap.assertions[0].ref;
+    const eventRef = result.seedMap.objects.find((item) => item.id === "global-event")?.ref;
+    expect(result.seedMap.connections).toContainEqual({
+      assertionRef: referenceRef,
+      objectRef: eventRef,
+    });
+    expect(embedMemoryQueries).toHaveBeenCalledWith(["谁负责签到？"], {
+      signal: undefined,
+    });
+  });
+
   it.each([
     { name: "missing", resolutions: [] },
     {
@@ -341,6 +422,7 @@ describe("GlobalObject-backed Locate", () => {
         {
           id: "assertion-invalid",
           sourceClaimId: "claim-invalid",
+          kind: "grounded",
           globalStatementTemplateMarkdown: "{{object:global-event}}是活动。",
           contextDependent: false,
           sourceRegion: { sourceNodeId: "region-1", label: "测试区域" },
@@ -352,7 +434,7 @@ describe("GlobalObject-backed Locate", () => {
             },
           ],
           literalGlobalReferences: [],
-          temporalAnnotations: [],
+          semanticObjectLinks: [],
         },
       ],
     });

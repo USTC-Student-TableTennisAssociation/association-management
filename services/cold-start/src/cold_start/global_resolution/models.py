@@ -25,9 +25,23 @@ class AssertionEvidence(StrictModel):
     assertion_id: str = Field(min_length=1)
     source_node_id: str = Field(min_length=1)
     source_claim_id: str = Field(min_length=1)
+    kind: Literal["grounded", "reference"] = "grounded"
     statement_template_markdown: str = Field(min_length=1, max_length=3_000)
+    semantic_fragment_ids: list[str] = Field(default_factory=list, max_length=100)
     context_dependent: bool
     supporting_blocks: list[SourceBlockEvidence] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_semantic_links(self) -> AssertionEvidence:
+        if len(set(self.semantic_fragment_ids)) != len(self.semantic_fragment_ids):
+            raise ValueError("semantic_fragment_ids 不能重复")
+        if self.kind == "grounded" and self.semantic_fragment_ids:
+            raise ValueError("grounded Assertion 不能使用 semantic Fragment links")
+        if self.kind == "reference" and not self.semantic_fragment_ids:
+            raise ValueError("Reference Assertion 至少需要一个 semantic Fragment link")
+        if self.kind == "reference" and "{{fragment:" in self.statement_template_markdown:
+            raise ValueError("Reference Assertion 不能使用 anchored Fragment token")
+        return self
 
 
 class SurfaceAtom(StrictModel):
@@ -225,8 +239,8 @@ class RegistryState(StrictModel):
 
 
 class GlobalResolutionWorking(StrictModel):
-    schema_version: Literal["global-resolution-working.v1"] = "global-resolution-working.v1"
-    source_semantics_schema_version: Literal["source-semantics-full.v7"]
+    schema_version: Literal["global-resolution-working.v2"] = "global-resolution-working.v2"
+    source_semantics_schema_version: Literal["source-semantics-full.v9"]
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
     next_source_region_ordinal: int = Field(ge=0)
@@ -234,9 +248,9 @@ class GlobalResolutionWorking(StrictModel):
 
 
 class GlobalResolutionArtifact(StrictModel):
-    schema_version: Literal["global-resolution.v1"] = "global-resolution.v1"
+    schema_version: Literal["global-resolution.v2"] = "global-resolution.v2"
     created_at: datetime
-    source_semantics_schema_version: Literal["source-semantics-full.v7"]
+    source_semantics_schema_version: Literal["source-semantics-full.v9"]
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
     source_region_count: int = Field(ge=0)
@@ -264,8 +278,10 @@ class GlobalAssertionReferenceAtom(StrictModel):
 
 class GlobalizedAssertion(StrictModel):
     assertion_id: str = Field(min_length=1)
+    kind: Literal["grounded", "reference"] = "grounded"
     global_statement_template_markdown: str = Field(min_length=1, max_length=10_000)
     reference_atoms: list[GlobalAssertionReferenceAtom] = Field(default_factory=list)
+    linked_global_object_ids: list[str] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
     def validate_references(self) -> GlobalizedAssertion:
@@ -274,14 +290,24 @@ class GlobalizedAssertion(StrictModel):
         ):
             raise ValueError("Global Assertion reference ordinals 必须从 0 连续递增")
         _validate_unique_atom_ids([item.atom_id for item in self.reference_atoms])
+        if len(set(self.linked_global_object_ids)) != len(
+            self.linked_global_object_ids
+        ):
+            raise ValueError("linked_global_object_ids 不能重复")
+        if self.kind == "grounded" and self.linked_global_object_ids:
+            raise ValueError("grounded Assertion 不能使用 semantic Object links")
+        if self.kind == "reference" and not self.linked_global_object_ids:
+            raise ValueError("Reference Assertion 至少需要一个 semantic Object link")
+        if self.kind == "reference" and self.reference_atoms:
+            raise ValueError("Reference Assertion 不能使用 anchored reference atoms")
         return self
 
 
 class GlobalAssertionsArtifact(StrictModel):
-    schema_version: Literal["global-assertions.v1"] = "global-assertions.v1"
+    schema_version: Literal["global-assertions.v3"] = "global-assertions.v3"
     created_at: datetime
-    source_semantics_schema_version: Literal["source-semantics-full.v7"]
-    global_resolution_schema_version: Literal["global-resolution.v1"]
+    source_semantics_schema_version: Literal["source-semantics-full.v9"]
+    global_resolution_schema_version: Literal["global-resolution.v2"]
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
     assertions: list[GlobalizedAssertion]
@@ -289,6 +315,7 @@ class GlobalAssertionsArtifact(StrictModel):
     total_source_reference_atoms: int = Field(ge=0)
     total_literal_reference_atoms: int = Field(ge=0)
     total_reference_atoms: int = Field(ge=0)
+    total_semantic_object_links: int = Field(ge=0)
 
     @model_validator(mode="after")
     def validate_totals(self) -> GlobalAssertionsArtifact:
@@ -305,6 +332,11 @@ class GlobalAssertionsArtifact(StrictModel):
             != self.total_reference_atoms
         ):
             raise ValueError("Global Assertions reference atom 分类 totals 不一致")
+        actual_semantic_links = sum(
+            len(item.linked_global_object_ids) for item in self.assertions
+        )
+        if self.total_semantic_object_links != actual_semantic_links:
+            raise ValueError("Global Assertions total_semantic_object_links 不一致")
         return self
 
 

@@ -28,13 +28,14 @@ function locatedSeedMap() {
   }));
   const assertions = Array.from({ length: 14 }, (_, index) => ({
     ref: `A${index + 1}`,
+    kind: "grounded" as const,
+    dereferenceRequired: false,
     sourceNodeId: `source-node-${index + 1}`,
     sourceClaimId: `source-claim-${index + 1}`,
     renderedStatement: `Global Object ${index + 1} 有一条可检索 Assertion。`,
     contextDependent: false,
     matchedBy: [],
     matchedFacets: ["facet-0"],
-    temporalAnnotations: [],
     sources: [
       {
         sourceTitle: "Test source",
@@ -92,12 +93,13 @@ function resolution(
   };
 }
 
-function followAssertionRows() {
+function followAssertionRows(includeSemanticReference = false) {
   const common = {
+    kind: "grounded" as const,
     contextDependent: false,
     compilation: { sourceTitle: "Follow test source", sourceSha256: "follow-sha" },
     sourceRegion: { sourceNodeId: "region-1", label: "Follow region" },
-    temporalAnnotations: [],
+    semanticObjectLinks: [],
     sourceBlockLinks: [
       {
         ordinal: 0,
@@ -109,7 +111,7 @@ function followAssertionRows() {
       },
     ],
   };
-  return [
+  const assertions = [
     {
       ...common,
       id: "assertion-definition",
@@ -134,6 +136,22 @@ function followAssertionRows() {
       ],
     },
   ];
+  if (includeSemanticReference) {
+    return [...assertions, {
+      ...common,
+      id: "assertion-reference",
+      sourceClaimId: "claim-reference",
+      kind: "reference",
+      globalStatementTemplateMarkdown:
+        "乒协主要品牌赛事的名称、比赛形式和基本定位集中记录于“品牌活动”表格。",
+      fragmentReferences: [],
+      literalGlobalReferences: [],
+      semanticObjectLinks: [
+        { globalObject: { id: "global-event", canonicalName: "继往开来" } },
+      ],
+    }];
+  }
+  return assertions;
 }
 
 beforeEach(() => {
@@ -235,7 +253,10 @@ describe("searchMemory", () => {
 });
 
 describe("followObject", () => {
-  function useFollowDatabase(input: { includeTarget?: boolean } = {}) {
+  function useFollowDatabase(input: {
+    includeTarget?: boolean;
+    includeSemanticReference?: boolean;
+  } = {}) {
     const allObjects = [
       globalObject("global-event", "event-key", "继往开来", ["继往开来", "该活动"]),
       globalObject("global-student-union", "student-union-key", "学生会", ["学生会"]),
@@ -248,8 +269,15 @@ describe("followObject", () => {
     ));
     const database = {
       memoryCompilation: {
-        findFirst: vi.fn().mockResolvedValue({ id: "compilation-current" }),
+        findFirst: vi.fn().mockResolvedValue({
+          id: "compilation-current",
+          sourceTitle: "Follow test source",
+          sourceSha256: "follow-sha",
+          sourceTimeText: null,
+          sourceTimeSupportingBlockIds: [],
+        }),
       },
+      memorySourceBlock: { findMany: vi.fn().mockResolvedValue([]) },
       memoryGlobalObject: { findMany: memoryGlobalObjectFindMany },
       memoryGlobalAssertionReferenceResolution: {
         findMany: vi.fn().mockImplementation(async (args: {
@@ -268,10 +296,17 @@ describe("followObject", () => {
           ? [{ assertionId: "assertion-organizer" }]
           : []),
       },
+      memoryAssertionSemanticObjectLink: {
+        findMany: vi.fn().mockImplementation(async (args: {
+          where: { globalObjectId: string };
+        }) => input.includeSemanticReference && args.where.globalObjectId === "global-event"
+          ? [{ assertionId: "assertion-reference" }]
+          : []),
+      },
       memoryAssertion: {
         findMany: vi.fn().mockImplementation(async (args: {
           where: { id: { in: string[] } };
-        }) => followAssertionRows().filter((assertion) =>
+        }) => followAssertionRows(input.includeSemanticReference).filter((assertion) =>
           args.where.id.in.includes(assertion.id),
         )),
       },
@@ -358,6 +393,33 @@ describe("followObject", () => {
     expect(database.memoryGlobalAssertionLiteralReference.findMany)
       .toHaveBeenCalledWith(expect.objectContaining({
         where: expect.objectContaining({ globalObjectId: "global-student-union" }),
+      }));
+  });
+
+  it("case E reverse-lookups a Reference through its semantic Object link", async () => {
+    const database = useFollowDatabase({ includeSemanticReference: true });
+
+    const result = await followObject("global-event", "品牌活动");
+    const reference = result.assertions.find(
+      (assertion) => assertion.sourceClaimId === "claim-reference",
+    );
+
+    expect(reference).toMatchObject({
+      kind: "reference",
+      dereferenceRequired: true,
+      renderedStatement:
+        "乒协主要品牌赛事的名称、比赛形式和基本定位集中记录于“品牌活动”表格。",
+    });
+    expect(reference?.sources[0]).toMatchObject({
+      sourceNodeId: "region-1",
+      sourceBlockId: "block-1",
+    });
+    expect(database.memoryAssertionSemanticObjectLink.findMany)
+      .toHaveBeenCalledWith(expect.objectContaining({
+        where: {
+          globalObjectId: "global-event",
+          globalObject: { compilationId: "compilation-current" },
+        },
       }));
   });
 

@@ -7,10 +7,11 @@ import {
 } from "@/memory/resolved-assertion";
 import { getMemoryRetriever } from "@/memory/retriever";
 import type {
+  MemoryAssertionKind,
   MemoryObjectAssertionConnection,
   MemoryRetrievalResult,
   MemorySourceReference,
-  MemoryTemporalAnnotation,
+  MemorySourceTime,
   StructuredSeedMap,
 } from "@/memory/types";
 
@@ -36,11 +37,12 @@ export type MemoryExploreObject = {
 export type MemoryExploreAssertion = {
   ref: string;
   id?: string;
+  kind: MemoryAssertionKind;
+  dereferenceRequired: boolean;
   sourceNodeId: string;
   sourceClaimId: string;
   renderedStatement: string;
   contextDependent: boolean;
-  temporalAnnotations: MemoryTemporalAnnotation[];
   sources: MemorySourceReference[];
 };
 
@@ -51,6 +53,7 @@ export type MemoryExploreResult = {
   query?: string;
   globalObjectId?: string;
   focus?: string;
+  sourceTime?: MemorySourceTime;
   objects: MemoryExploreObject[];
   assertions: MemoryExploreAssertion[];
   connections: MemoryObjectAssertionConnection[];
@@ -130,21 +133,23 @@ function compactObject(input: {
 function compactAssertion(input: {
   ref: string;
   id?: string;
+  kind: MemoryAssertionKind;
+  dereferenceRequired: boolean;
   sourceNodeId: string;
   sourceClaimId: string;
   renderedStatement: string;
   contextDependent: boolean;
-  temporalAnnotations: MemoryTemporalAnnotation[];
   sources: MemorySourceReference[];
 }): MemoryExploreAssertion {
   return {
     ref: input.ref,
     ...(input.id ? { id: input.id } : {}),
+    kind: input.kind,
+    dereferenceRequired: input.dereferenceRequired,
     sourceNodeId: input.sourceNodeId,
     sourceClaimId: input.sourceClaimId,
     renderedStatement: input.renderedStatement,
     contextDependent: input.contextDependent,
-    temporalAnnotations: input.temporalAnnotations,
     sources: safeSources(input.sources),
   };
 }
@@ -165,7 +170,7 @@ function resultWithCounts(
 function compactLocatedSeedMap(
   seedMap: StructuredSeedMap,
   assertionLimit: number,
-): Pick<MemoryExploreResult, "objects" | "assertions" | "connections" | "truncated"> {
+): Pick<MemoryExploreResult, "sourceTime" | "objects" | "assertions" | "connections" | "truncated"> {
   const selectedAssertionSeeds = seedMap.assertions.slice(0, assertionLimit);
   const assertionRefs = new Set(selectedAssertionSeeds.map((assertion) => assertion.ref));
   const connectionsByAssertion = new Map<string, string[]>();
@@ -212,6 +217,7 @@ function compactLocatedSeedMap(
   });
 
   return {
+    ...(seedMap.sourceTime ? { sourceTime: seedMap.sourceTime } : {}),
     objects: selectedObjectSeeds.map(compactObject),
     assertions: selectedAssertionSeeds.map(compactAssertion),
     connections,
@@ -250,13 +256,41 @@ export async function searchMemory(
   });
 }
 
-async function latestCompilationId(): Promise<string> {
+async function latestCompilation(): Promise<{ id: string; sourceTime: MemorySourceTime }> {
   const compilation = await getDatabase().memoryCompilation.findFirst({
     orderBy: { importedAt: "desc" },
-    select: { id: true },
+    select: {
+      id: true,
+      sourceTitle: true,
+      sourceSha256: true,
+      sourceTimeText: true,
+      sourceTimeSupportingBlockIds: true,
+    },
   });
   if (!compilation) throw new Error("数据库中没有来源语义 Compilation");
-  return compilation.id;
+  const evidence = compilation.sourceTimeSupportingBlockIds.length
+    ? await getDatabase().memorySourceBlock.findMany({
+        where: {
+          compilationId: compilation.id,
+          sourceBlockId: { in: compilation.sourceTimeSupportingBlockIds },
+        },
+        select: { sourceBlockId: true, sourcePages: true },
+      })
+    : [];
+  const byId = new Map(evidence.map((item) => [item.sourceBlockId, item]));
+  return {
+    id: compilation.id,
+    sourceTime: {
+      sourceTitle: compilation.sourceTitle,
+      sourceSha256: compilation.sourceSha256,
+      text: compilation.sourceTimeText,
+      supportingBlocks: compilation.sourceTimeSupportingBlockIds.map((sourceBlockId) => {
+        const block = byId.get(sourceBlockId);
+        if (!block) throw new Error(`Source Time evidence block 不存在：${sourceBlockId}`);
+        return { sourceBlockId, pages: block.sourcePages };
+      }),
+    },
+  };
 }
 
 async function loadGlobalObjects(compilationId: string, objectIds: string[]) {
@@ -310,6 +344,7 @@ async function loadFollowAssertions(compilationId: string, assertionIds: string[
     select: {
       id: true,
       sourceClaimId: true,
+      kind: true,
       globalStatementTemplateMarkdown: true,
       contextDependent: true,
       compilation: { select: { sourceTitle: true, sourceSha256: true } },
@@ -342,17 +377,15 @@ async function loadFollowAssertions(compilationId: string, assertionIds: string[
           },
         },
       },
-      temporalAnnotations: {
-        orderBy: { ordinal: "asc" },
+      semanticObjectLinks: {
+        orderBy: { globalObjectId: "asc" },
         select: {
-          rawExpression: true,
-          kind: true,
-          normalizedText: true,
-          start: true,
-          end: true,
-          precision: true,
-          derivation: true,
-          basisMarkdown: true,
+          globalObject: {
+            select: {
+              id: true,
+              canonicalName: true,
+            },
+          },
         },
       },
       sourceBlockLinks: {
@@ -393,34 +426,30 @@ function resolvedReferences(assertion: FollowAssertionRecord): ResolvedAssertion
   return [...fragmentReferences, ...literalReferences];
 }
 
+function semanticReferences(assertion: FollowAssertionRecord): ResolvedAssertionReference[] {
+  return assertion.semanticObjectLinks.map(({ globalObject }) => ({
+    globalObjectId: globalObject.id,
+    canonicalName: globalObject.canonicalName,
+  }));
+}
+
 function renderFollowAssertion(assertion: FollowAssertionRecord): {
   row: FollowAssertionRecord;
   renderedStatement: string;
   references: ResolvedAssertionReference[];
+  associatedReferences: ResolvedAssertionReference[];
 } {
   const references = resolvedReferences(assertion);
   return {
     row: assertion,
     references,
+    associatedReferences: [...references, ...semanticReferences(assertion)],
     renderedStatement: renderResolvedAssertion({
       globalStatementTemplateMarkdown: assertion.globalStatementTemplateMarkdown,
       references,
       assertionKey: `${assertion.sourceRegion.sourceNodeId}\u0000${assertion.sourceClaimId}`,
     }),
   };
-}
-
-function temporalAnnotations(assertion: FollowAssertionRecord): MemoryTemporalAnnotation[] {
-  return assertion.temporalAnnotations.map((annotation) => ({
-    rawExpression: annotation.rawExpression,
-    kind: annotation.kind,
-    normalizedText: annotation.normalizedText,
-    ...(annotation.start === null ? {} : { start: annotation.start }),
-    ...(annotation.end === null ? {} : { end: annotation.end }),
-    precision: annotation.precision,
-    derivation: annotation.derivation,
-    basis: annotation.basisMarkdown,
-  }));
 }
 
 function assertionSources(assertion: FollowAssertionRecord): MemorySourceReference[] {
@@ -439,6 +468,7 @@ function emptyFollowResult(input: {
   compilationId: string;
   globalObjectId: string;
   focus?: string;
+  sourceTime: MemorySourceTime;
   warning: string;
 }): MemoryExploreResult {
   return resultWithCounts({
@@ -447,6 +477,7 @@ function emptyFollowResult(input: {
     compilationId: input.compilationId,
     globalObjectId: input.globalObjectId,
     ...(input.focus === undefined ? {} : { focus: input.focus }),
+    sourceTime: input.sourceTime,
     objects: [],
     assertions: [],
     connections: [],
@@ -468,9 +499,10 @@ export async function followObject(
   const normalizedFocus = optionalText(focus, "focus", FOCUS_CHAR_LIMIT);
   throwIfAborted(runtime.signal);
 
-  const compilationId = await latestCompilationId();
+  const compilation = await latestCompilation();
+  const compilationId = compilation.id;
   throwIfAborted(runtime.signal);
-  const [targetObjects, fragmentResolutionRows, literalReferenceRows] = await Promise.all([
+  const [targetObjects, fragmentResolutionRows, literalReferenceRows, semanticLinkRows] = await Promise.all([
     loadGlobalObjects(compilationId, [normalizedObjectId]),
     getDatabase().memoryGlobalAssertionReferenceResolution.findMany({
       where: {
@@ -492,6 +524,16 @@ export async function followObject(
       orderBy: { assertionId: "asc" },
       take: FOLLOW_ASSERTION_SCAN_LIMIT + 1,
     }),
+    getDatabase().memoryAssertionSemanticObjectLink.findMany({
+      where: {
+        globalObjectId: normalizedObjectId,
+        globalObject: { compilationId },
+      },
+      select: { assertionId: true },
+      distinct: ["assertionId"],
+      orderBy: { assertionId: "asc" },
+      take: FOLLOW_ASSERTION_SCAN_LIMIT + 1,
+    }),
   ]);
   throwIfAborted(runtime.signal);
   const targetObject = targetObjects[0];
@@ -500,12 +542,14 @@ export async function followObject(
       compilationId,
       globalObjectId: normalizedObjectId,
       focus: normalizedFocus,
+      sourceTime: compilation.sourceTime,
       warning: `GlobalObject ${normalizedObjectId} 不存在于当前 Compilation`,
     });
   }
   const allAssertionIds = [...new Set([
     ...fragmentResolutionRows.map((row) => row.assertionId),
     ...literalReferenceRows.map((row) => row.assertionId),
+    ...semanticLinkRows.map((row) => row.assertionId),
   ])].sort();
   const scanTruncated = allAssertionIds.length > FOLLOW_ASSERTION_SCAN_LIMIT;
   const scannedAssertionIds = allAssertionIds.slice(0, FOLLOW_ASSERTION_SCAN_LIMIT);
@@ -531,7 +575,7 @@ export async function followObject(
   const selectedAssertions = rankedAssertions.slice(0, FOLLOW_ASSERTION_LIMIT);
   const relatedObjectIds = new Set<string>([normalizedObjectId]);
   for (const assertion of selectedAssertions) {
-    for (const reference of assertion.references) relatedObjectIds.add(reference.globalObjectId);
+    for (const reference of assertion.associatedReferences) relatedObjectIds.add(reference.globalObjectId);
   }
 
   const allObjects = await loadGlobalObjects(compilationId, [...relatedObjectIds]);
@@ -556,24 +600,25 @@ export async function followObject(
     ...object,
     lexicalMatch: false,
     semanticMatch: selectedAssertions.some((assertion) =>
-      assertion.references.some((reference) => reference.globalObjectId === object.id),
+      assertion.associatedReferences.some((reference) => reference.globalObjectId === object.id),
     ),
   }));
   const assertions = selectedAssertions.map((assertion) => compactAssertion({
     ref: assertionRefById.get(assertion.row.id)!,
     id: assertion.row.id,
+    kind: assertion.row.kind,
+    dereferenceRequired: assertion.row.kind === "reference",
     sourceNodeId: assertion.row.sourceRegion.sourceNodeId,
     sourceClaimId: assertion.row.sourceClaimId,
     renderedStatement: assertion.renderedStatement,
     contextDependent: assertion.row.contextDependent,
-    temporalAnnotations: temporalAnnotations(assertion.row),
     sources: assertionSources(assertion.row),
   }));
   const connections: MemoryObjectAssertionConnection[] = [];
   const seenConnections = new Set<string>();
   for (const assertion of selectedAssertions) {
     const assertionRef = assertionRefById.get(assertion.row.id)!;
-    for (const objectId of new Set(assertion.references.map((reference) => reference.globalObjectId))) {
+    for (const objectId of new Set(assertion.associatedReferences.map((reference) => reference.globalObjectId))) {
       const objectRef = objectRefById.get(objectId);
       if (!objectRef) continue;
       const key = `${assertionRef}\u0000${objectRef}`;
@@ -589,6 +634,7 @@ export async function followObject(
     compilationId,
     globalObjectId: normalizedObjectId,
     ...(normalizedFocus === undefined ? {} : { focus: normalizedFocus }),
+    sourceTime: compilation.sourceTime,
     objects,
     assertions,
     connections,

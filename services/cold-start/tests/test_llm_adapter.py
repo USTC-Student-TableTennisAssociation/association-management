@@ -564,11 +564,9 @@ async def test_adapter_allows_repeated_structured_content() -> None:
 async def test_adapter_allows_reused_json_schema_in_reasoning() -> None:
     items = [
         (
-            f'{{"claim_id":"claim-{index}","temporal_annotations":['
-            '{"raw_expression":"秋季学期","kind":"recurring",'
-            '"normalized_text":"秋季学期","start":null,"end":null,'
-            '"precision":"semester","derivation":"source_explicit",'
-            f'"basis_markdown":"赛事{index}在秋季学期举办。"}}]}}'
+            f'{{"claim_id":"claim-{index}","supporting_block_ids":['
+            f'"p0001-b{index:04d}"],"context_dependent":false,'
+            f'"statement_markdown":"赛事{index}在秋季学期举办。"}}'
         )
         for index in range(1, 7)
     ]

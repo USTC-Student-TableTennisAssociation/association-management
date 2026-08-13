@@ -78,7 +78,8 @@ export function createMemoryExploreToolset(input: {
         "当回答需要 Echo 的协会、人物、活动、历史、时间、状态、制度或来源等组织事实时使用；" +
         "问候、闲聊、改写、翻译和不依赖组织资料的任务不应调用。" +
         "获得证据后，如问题仍包含未覆盖的子问题，可以换一种聚焦表述再次检索。" +
-        "结果中只有 GlobalObject identity、Assertion 与最小 provenance；只有 Assertion 是事实证据。",
+        "结果中只有 GlobalObject identity、Assertion 与最小 provenance；" +
+        "只有 kind=grounded 的 Assertion 是事实证据，kind=reference 只是需要回读来源的导航索引。",
       inputSchema: z.object({
         query: z.string().trim().min(1).max(memoryExploreLimits.queryChars)
           .describe("独立、聚焦的记忆检索问题"),
@@ -96,7 +97,7 @@ export function createMemoryExploreToolset(input: {
 
     followObject: tool({
       description:
-        "沿一个已知 GlobalObject 的 resolved Assertion 连接继续查找，" +
+        "沿一个已知 GlobalObject 的 anchored 或 semantic Assertion 连接继续查找，" +
         "并返回这些 Assertion 所连接的 GlobalObject。" +
         "globalObjectId 必须原样取自本轮初始 Context 或之前工具结果。" +
         "focus 只用于排序，不会创造或扩张事实。",

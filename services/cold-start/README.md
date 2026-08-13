@@ -4,8 +4,8 @@
 基础上编译“ObjectFragment—Assertion—SourceBlock”叶子来源 IR。
 
 旧的固定卡片数据库和 `full-basic-compilation.v5` 数据库协议已经移除，不保留兼容入口。
-基础来源编译现在输出 `source-semantics-full.v7`。Atomic naming hints 会在第三阶段被吸收进
-Object Fragment，不再生成长期 `SameReferentEvidence`。v7 产物可以导入来源记忆数据库，
+基础来源编译现在输出 `source-semantics-full.v9`。Atomic naming hints 会在第三阶段被吸收进
+Object Fragment，不再生成长期 `SameReferentEvidence`。v9 产物可以导入来源记忆数据库，
 再由增量 Global Resolver 解析为后续 Search 应消费的 Global Object Registry。Assertion 的
 依据始终连接回稳定原文块。
 
@@ -21,7 +21,7 @@ Object Fragment，不再生成长期 `SameReferentEvidence`。v7 产物可以导
             → Atomic 同时提取事实命题与来源明示同指称草稿
             → 只对事实命题做遗漏复核
             → Object Fragment Construction 同时完成局部名称分组与命题模板生成
-            → 来源时间表达标准化
+       → 整份 Source 一次保守提取 Source Time 及其证据块
        → Global Resolver 将 Fragment 归并为当前 Global Object Registry
        → 活动运营视角草稿
             → 局部高召回属性与关系投影
@@ -41,12 +41,14 @@ Assertion 不重复保存对象名称和 `about_object_ids`。正文使用
 修改 Assertion。只有“原文把某个名称写成什么”本身就是叙述内容时，该名称才作为引号
 中的字面值留在模板内。
 
-每条 Assertion 还必须携带结构化 `temporal_scope` 和简短
-`temporal_basis_markdown`。前者明确时间类型、起止边界、精度和置信度，后者披露时间来自
-原文明示、文档成文背景、章节时期还是无法判断。无法定位时显式使用 `unknown`，没有明确
-起止的常设身份或一般规则使用 `general`，不得为填时间而虚构年份。活动视角中的属性和关系
-完整保留来源 Assertion，因此自动继承同一套时间与依据；Object 本身是被指认实体，不重复
-挂一份容易冲突的时间。
+必要的年份、届次、阶段、周期、相对时间与先后关系直接保留在 Assertion 正文中，不再生成
+Assertion 级 Temporal metadata。整份来源只提取一次保守的 `sourceTimeText`，连同 supporting
+SourceBlock 保存在 Compilation 层。Source Time 只帮助解释来源所处的历史位置及“目前”“本届”
+等相对表达；它不表示该来源中的全部 Assertion 在该时点都成立，也不是 Assertion validity，
+不参与 embedding、rank 或当前性判断。
+
+旧 `compile` / activity-view 实验仍有名为 `TemporalScope` 的另一套协议；它不属于当前
+`source-semantics → global-resolution → memory importer → search` 主链，本轮不改动。
 
 提取、覆盖复核和修复调用共享同一份严格输出协议。Object 固定使用 `object_id`、
 `label`、`aliases`，不直接保存 Evidence；Evidence 固定使用 `evidence_id`、
@@ -225,18 +227,18 @@ uv run cold-start compile-sources \
   --max-parallel-sources 8
 ```
 
-批量运行目录按来源隔离四个阶段断点：
+批量运行目录在根层保存一次 Source Time，并按来源隔离三个阶段断点：
 
 ```text
 source-semantic-compilations/<UTC 时间>-full/
   model-streams/
+  source-time.json
   working.json
   sources/
     region-0063/
       01-initial-claims.json
       02-reviewed-claims.json
       03-object-fragments.json
-      04-temporal-annotations.json
       source-semantics.json
       source-semantics.md
   source-semantics-full.json
@@ -252,8 +254,8 @@ uv run cold-start compile-sources \
   --resume "../../.cold-start/runs/20260808T054110Z-107ebc775f/source-semantic-compilations/<未完成目录>-full"
 ```
 
-为了单独调试某个节点，也可以对任意拥有 `content_source` 自有原文的节点运行同样的四遍
-式来源编译：
+为了单独调试某个节点，也可以对任意拥有 `content_source` 自有原文的节点运行同样的三遍
+式区域编译；单节点诊断不会伪造整份 Source 的 Source Time：
 
 ```bash
 uv run cold-start compile-source \
@@ -261,7 +263,7 @@ uv run cold-start compile-source \
   --source-id "region-0063"
 ```
 
-四个阶段彼此隔离，并且模型调用都直接输出 JSON 正文：
+三个区域阶段彼此隔离，并且模型调用都直接输出 JSON 正文：
 
 1. 一次 Atomic 阅读同时提取有原文依据的现实命题和来源明示的同指称字面草稿。能自然、
    低成本独立化的 Claim 正常独立化；需要明显代词消解、跨句/跨 block 身份推断、省略补全或
@@ -276,9 +278,11 @@ uv run cold-start compile-source \
    `same_referent_drafts` 是必须同组的 hard grouping hint；名称可以只来自 SourceRegion 的
    naming context，不要求附着在 factual claim 上。该阶段不做全局 identity、canonical label、
    Object type、Relation 或业务价值判断。
-4. 只根据 frozen plain claims、`supporting_block_ids` 对应原文和必要来源上下文，标准化
-   来源实际写出的时间表达。每条命题返回 `temporal_annotations` 列表；无时间表达时为空，
-   不自动生成“持续适用”，也不判断事实可信度、来源质量或当前是否仍有效。
+
+批量编译还会在所有区域开始前只调用一次模型，从整份原文保守提取 `source_time_text` 和
+`source_time_supporting_block_ids`。非空时间必须能在证据块中直接找到；不使用文件元数据、
+编译时间或正文事件最大年份推断。Source Time 只定位来源的历史位置，不表示其中全部
+Assertion 的有效期，也不参与 embedding、搜索排序或当前性判断。
 
 程序只负责 Strict JSON/schema、claim 全覆盖、Fragment key/引用完整性、surface form 在当前
 SourceRegion、reviewed/frozen claims 或 Atomic naming hints 中的轻量来源存在性，以及 Atomic
@@ -291,7 +295,6 @@ source-semantic-compilations/<UTC 时间>-<来源节点>/
   01-initial-claims.json
   02-reviewed-claims.json
   03-object-fragments.json
-  04-temporal-annotations.json
   source-semantics.json
   source-semantics.md
 ```
@@ -305,16 +308,14 @@ uv run cold-start compile-source \
   --resume "../../.cold-start/runs/20260808T054110Z-107ebc775f/source-semantic-compilations/<未完成目录>"
 ```
 
-Temporal 阶段对 JSON Schema、claim 全覆盖、枚举、绝对时间格式、范围顺序和
-`raw_expression` 来源锚点做确定性校验；失败时最多进行一次不携带旧正文或 reasoning 的
-clean retry。带 `context_dependent` 的 Atomic 与 Missing 断点升级为 `source-claims.v4`，旧 v3
-断点不会被复用；由 Claim 派生的 Fragment 断点升级为 `source-object-fragments.v2`，因此恢复旧
-目录时会从 Atomic 重新运行四个阶段。Temporal 协议本身仍为 v1。最终快照升级为
-`source-semantics.v7` / `source-semantics-full.v7`，working 升为 v7；旧最终快照不会被当作当前
-完成结果，但 v3—v6 working 目录仍可用于核对来源与节点集合并逐来源重建。
+Source Time 对 JSON Schema、证据块存在性、顺序及原文直接包含关系做确定性校验；失败时最多
+进行一次不携带旧正文或 reasoning 的 clean retry。Atomic/Missing 断点为 `source-claims.v6`，
+Fragment 断点为 `source-object-fragments.v4`，最终快照为 `source-semantics.v9` /
+`source-semantics-full.v9`，working 为 v9。旧 v8 Temporal checkpoint、区域快照、批量 working
+和 Global Resolution 均不会被复用，旧运行目录保持不变。
 
 这是 Global Resolver 之前的 Leaf compiler IR：它包含 Object Fragment、引用 Fragment
-语义位置的 Assertion template、原文块依据和来源锚定时间。Fragment 不是长期 Object；v7
+语义位置的 Assertion template、原文块依据以及 source-level 时间锚点。Fragment 不是长期 Object；v9
 产物导入数据库后，由 Resolver 将 surface atom 和 Assertion reference atom 解析到当前
 Global Object Registry。Resolver 不修改这里的 Fragment 或 Assertion template。
 

@@ -8,28 +8,9 @@ datasource db {
   provider = "postgresql"
 }
 
-enum MemoryTemporalKind {
-  point
-  range
-  recurring
-  relative
-  contextual
-  unknown
-}
-
-enum MemoryTemporalPrecision {
-  day
-  month
-  year
-  academic_year
-  semester
-  unspecified
-}
-
-enum MemoryTemporalDerivation {
-  source_explicit
-  contextual_inference
-  unresolved
+enum MemoryAssertionKind {
+  grounded
+  reference
 }
 
 enum SemanticCardProposalStatus {
@@ -43,24 +24,27 @@ enum SemanticCardProposalStatus {
 /// 一次已完成 Global Resolution 的 cold-start package。
 /// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个记忆层。
 model MemoryCompilation {
-  id                      String   @id @default(uuid()) @db.Uuid
-  schemaVersion           String   @map("schema_version") @db.Text
-  compiledAt              DateTime @map("compiled_at")
-  importedAt              DateTime @default(now()) @map("imported_at")
-  sourcePath              String   @map("source_path") @db.Text
-  sourceTitle             String   @map("source_title") @db.Text
-  sourceSha256            String   @map("source_sha256") @db.Text
-  sourceParser            String   @map("source_parser") @db.Text
-  sourcePageCount         Int      @map("source_page_count")
-  sourceBlockCount        Int      @map("source_block_count")
-  regionTreeSchemaVersion String   @map("region_tree_schema_version") @db.Text
-  sourceNodeIds           String[] @map("source_node_ids")
-  sourceNodeCount         Int      @map("source_node_count")
-  assertionCount          Int      @map("assertion_count")
-  objectFragmentCount     Int      @map("object_fragment_count")
-  surfaceFormCount        Int      @map("surface_form_count")
-  fragmentReferenceCount  Int      @map("fragment_reference_count")
-  modelCalls              Int      @map("model_calls")
+  id                           String   @id @default(uuid()) @db.Uuid
+  schemaVersion                String   @map("schema_version") @db.Text
+  compiledAt                   DateTime @map("compiled_at")
+  importedAt                   DateTime @default(now()) @map("imported_at")
+  sourcePath                   String   @map("source_path") @db.Text
+  sourceTitle                  String   @map("source_title") @db.Text
+  sourceSha256                 String   @map("source_sha256") @db.Text
+  sourceParser                 String   @map("source_parser") @db.Text
+  sourcePageCount              Int      @map("source_page_count")
+  sourceBlockCount             Int      @map("source_block_count")
+  /// 来源自身明确提供的时间锚点；不是其中全部 Assertion 的 validity。
+  sourceTimeText               String?  @map("source_time_text") @db.Text
+  sourceTimeSupportingBlockIds String[] @default([]) @map("source_time_supporting_block_ids")
+  regionTreeSchemaVersion      String   @map("region_tree_schema_version") @db.Text
+  sourceNodeIds                String[] @map("source_node_ids")
+  sourceNodeCount              Int      @map("source_node_count")
+  assertionCount               Int      @map("assertion_count")
+  objectFragmentCount          Int      @map("object_fragment_count")
+  surfaceFormCount             Int      @map("surface_form_count")
+  fragmentReferenceCount       Int      @map("fragment_reference_count")
+  modelCalls                   Int      @map("model_calls")
 
   sourceRegions           MemorySourceRegion[]
   sourceBlocks            MemorySourceBlock[]
@@ -144,23 +128,24 @@ model MemorySourceObjectFragment {
   @@map("memory_source_object_fragments")
 }
 
-/// 来源关于一个或多个 Object 作出的冻结原子命题。
+/// 来源中的内聚知识单元，或指向明确来源区域的导航索引。
 model MemoryAssertion {
-  id                              String   @id @default(uuid()) @db.Uuid
-  compilationId                   String   @map("compilation_id") @db.Uuid
-  sourceRegionId                  String   @map("source_region_id") @db.Uuid
-  sourceClaimId                   String   @map("source_claim_id") @db.Text
-  statementTemplateMarkdown       String   @map("statement_template_markdown") @db.Text
-  globalStatementTemplateMarkdown String   @map("global_statement_template_markdown") @db.Text
-  contextDependent                Boolean  @map("context_dependent")
-  createdAt                       DateTime @default(now()) @map("created_at")
+  id                              String              @id @default(uuid()) @db.Uuid
+  compilationId                   String              @map("compilation_id") @db.Uuid
+  sourceRegionId                  String              @map("source_region_id") @db.Uuid
+  sourceClaimId                   String              @map("source_claim_id") @db.Text
+  kind                            MemoryAssertionKind @default(grounded)
+  statementTemplateMarkdown       String              @map("statement_template_markdown") @db.Text
+  globalStatementTemplateMarkdown String              @map("global_statement_template_markdown") @db.Text
+  contextDependent                Boolean             @map("context_dependent")
+  createdAt                       DateTime            @default(now()) @map("created_at")
 
   compilation              MemoryCompilation                       @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   sourceRegion             MemorySourceRegion                      @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
   fragmentReferences       MemoryAssertionFragmentReference[]
   literalGlobalReferences  MemoryGlobalAssertionLiteralReference[]
+  semanticObjectLinks      MemoryAssertionSemanticObjectLink[]
   sourceBlockLinks         MemoryAssertionSourceBlock[]
-  temporalAnnotations      MemoryTemporalAnnotation[]
   embedding                MemoryAssertionEmbedding?
   contentDimensionSupports SemanticContentDimensionSupport[]
   slotBindingSupports      SemanticSlotBindingSupport[]
@@ -198,27 +183,6 @@ model MemoryAssertionSourceBlock {
   @@map("memory_assertion_source_blocks")
 }
 
-/// Assertion 中一项来源锚定的结构化时间表达，不表示事实真实性或当前有效性。
-model MemoryTemporalAnnotation {
-  id             String                   @id @default(uuid()) @db.Uuid
-  assertionId    String                   @map("assertion_id") @db.Uuid
-  ordinal        Int
-  rawExpression  String                   @map("raw_expression") @db.Text
-  kind           MemoryTemporalKind
-  normalizedText String                   @map("normalized_text") @db.Text
-  start          String?                  @db.Text
-  end            String?                  @db.Text
-  precision      MemoryTemporalPrecision
-  derivation     MemoryTemporalDerivation
-  basisMarkdown  String                   @map("basis_markdown") @db.Text
-
-  assertion MemoryAssertion @relation(fields: [assertionId], references: [id], onDelete: Cascade)
-
-  @@unique([assertionId, ordinal])
-  @@index([kind, precision])
-  @@map("memory_temporal_annotations")
-}
-
 /// 完整 cold-start package 最终导入的 Global Object；Resolver runtime 不读写数据库。
 model MemoryGlobalObject {
   id                      String @id @default(uuid()) @db.Uuid
@@ -227,15 +191,29 @@ model MemoryGlobalObject {
   canonicalName           String @map("canonical_name") @db.Text
   identitySummaryMarkdown String @map("identity_summary_markdown") @db.Text
 
-  compilation          MemoryCompilation                          @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  surfaceMemberships   MemoryGlobalObjectSurfaceMembership[]
-  referenceResolutions MemoryGlobalAssertionReferenceResolution[]
-  literalReferences    MemoryGlobalAssertionLiteralReference[]
-  semanticCards        SemanticCard[]
+  compilation            MemoryCompilation                          @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  surfaceMemberships     MemoryGlobalObjectSurfaceMembership[]
+  referenceResolutions   MemoryGlobalAssertionReferenceResolution[]
+  literalReferences      MemoryGlobalAssertionLiteralReference[]
+  semanticAssertionLinks MemoryAssertionSemanticObjectLink[]
+  semanticCards          SemanticCard[]
 
   @@unique([compilationId, globalObjectKey])
   @@index([compilationId])
   @@map("memory_global_objects")
+}
+
+/// Reference Assertion 对 Global Object 的语义覆盖；不要求 Object 名称出现在 Assertion 正文中。
+model MemoryAssertionSemanticObjectLink {
+  assertionId    String @map("assertion_id") @db.Uuid
+  globalObjectId String @map("global_object_id") @db.Uuid
+
+  assertion    MemoryAssertion    @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  globalObject MemoryGlobalObject @relation(fields: [globalObjectId], references: [id], onDelete: Restrict)
+
+  @@id([assertionId, globalObjectId])
+  @@index([globalObjectId])
+  @@map("memory_assertion_semantic_object_links")
 }
 
 /// 一个 source-local surface form 当前归属哪个 Global Object。

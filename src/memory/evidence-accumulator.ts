@@ -4,7 +4,6 @@ import type {
   MemoryObjectSeed,
   MemoryRetrievalResult,
   MemorySourceReference,
-  MemoryTemporalAnnotation,
 } from "@/memory/types";
 
 function assertionKey(input: {
@@ -21,10 +20,6 @@ function numberedRef(ref: string, prefix: "A" | "O"): number {
 
 function sourceKey(source: MemorySourceReference): string {
   return `${source.sourceNodeId}\u0000${source.sourceBlockId}\u0000${source.ordinal}`;
-}
-
-function temporalKey(annotation: MemoryTemporalAnnotation): string {
-  return JSON.stringify(annotation);
 }
 
 function withoutExcerpt(source: MemorySourceReference): MemorySourceReference {
@@ -86,7 +81,6 @@ export class MemoryEvidenceAccumulator {
       ...item,
       matchedBy: item.matchedBy.map((match) => ({ ...match })),
       matchedFacets: [...item.matchedFacets],
-      temporalAnnotations: item.temporalAnnotations.map((entry) => ({ ...entry })),
       sources: item.sources.map(withoutExcerpt),
     }));
     this.connections = initial.seedMap.connections.map((item) => ({ ...item }));
@@ -164,22 +158,24 @@ export class MemoryEvidenceAccumulator {
         this.assertions.push({
           ref,
           ...(item.id ? { id: item.id } : {}),
+          kind: item.kind,
+          dereferenceRequired: item.dereferenceRequired,
           sourceNodeId: item.sourceNodeId,
           sourceClaimId: item.sourceClaimId,
           renderedStatement: item.renderedStatement,
           contextDependent: item.contextDependent,
           matchedBy: [],
           matchedFacets: [],
-          temporalAnnotations: item.temporalAnnotations.map((entry) => ({ ...entry })),
           sources: item.sources.map(withoutExcerpt),
         });
       } else if (existing) {
         existing.id ??= item.id;
-        existing.temporalAnnotations = mergeUnique(
-          existing.temporalAnnotations,
-          item.temporalAnnotations,
-          temporalKey,
-        );
+        if (
+          existing.kind !== item.kind ||
+          existing.dereferenceRequired !== item.dereferenceRequired
+        ) {
+          throw new Error(`Assertion ${key} 的 kind/dereference 标记不一致`);
+        }
         existing.sources = mergeUnique(
           existing.sources,
           item.sources.map(withoutExcerpt),
@@ -227,6 +223,16 @@ export class MemoryEvidenceAccumulator {
       ...(this.compilationId ? { compilationId: this.compilationId } : {}),
       seedMap: {
         facets: this.initial.seedMap.facets.map((item) => ({ ...item })),
+        ...(this.initial.seedMap.sourceTime
+          ? {
+              sourceTime: {
+                ...this.initial.seedMap.sourceTime,
+                supportingBlocks: this.initial.seedMap.sourceTime.supportingBlocks.map(
+                  (item) => ({ ...item, pages: [...item.pages] }),
+                ),
+              },
+            }
+          : {}),
         objects: this.objects.map((item) => ({
           ...item,
           surfaceForms: [...item.surfaceForms],
@@ -238,7 +244,6 @@ export class MemoryEvidenceAccumulator {
           ...item,
           matchedBy: item.matchedBy.map((match) => ({ ...match })),
           matchedFacets: [...item.matchedFacets],
-          temporalAnnotations: item.temporalAnnotations.map((entry) => ({ ...entry })),
           sources: item.sources.map(withoutExcerpt),
         })),
         connections: this.connections.map((item) => ({ ...item })),
