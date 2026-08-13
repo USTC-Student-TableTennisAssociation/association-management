@@ -15,6 +15,7 @@
     "types": ["node"]
   },
   "include": [
+    "./business-view-import-protection.ts",
     "./import-source-semantics.ts",
     "./index-assertions.ts",
     "../src/memory/embedding-client.ts",

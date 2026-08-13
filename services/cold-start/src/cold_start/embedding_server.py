@@ -11,11 +11,17 @@ from typing import Any
 from cold_start.progress import ConsoleProgressReporter
 from cold_start.region_tree.runtime import BgeM3Embedder
 
+DEFAULT_EMBEDDING_MODEL_REVISION = "huggingface-main"
+
 
 class BgeM3EmbeddingService:
     """串行访问模型；HTTP 线程只负责连接，不并发操作 torch 模型。"""
 
-    def __init__(self, model_name: str, model_revision: str = "local") -> None:
+    def __init__(
+        self,
+        model_name: str,
+        model_revision: str = DEFAULT_EMBEDDING_MODEL_REVISION,
+    ) -> None:
         self.model_name = model_name
         self.model_revision = model_revision
         self.embedder = BgeM3Embedder(model_name, ConsoleProgressReporter())

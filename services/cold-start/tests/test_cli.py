@@ -335,3 +335,26 @@ def test_cli_exposes_activity_operations_mapping_command() -> None:
     assert args.command == "map-activity"
     assert args.compilation == Path("basic-compilation-directory")
     assert args.max_parallel_groups == 8
+
+
+def test_embedding_server_defaults_to_stable_hugging_face_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.delenv("COLD_START_EMBEDDING_MODEL_REVISION", raising=False)
+    monkeypatch.setattr(cli, "_report_environment", lambda args, progress: None)
+    monkeypatch.setattr(
+        cli,
+        "serve_embeddings",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        ["cold-start", "serve-embeddings", "--embedding-model", "BAAI/bge-m3"],
+    )
+
+    cli.main()
+
+    assert captured["model_name"] == "BAAI/bge-m3"
+    assert captured["model_revision"] == "huggingface-main"

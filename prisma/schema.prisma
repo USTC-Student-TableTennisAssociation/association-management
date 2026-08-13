@@ -13,6 +13,14 @@ enum MemoryAssertionKind {
   reference
 }
 
+enum SemanticCardProposalStatus {
+  pending
+  approved
+  rejected
+  applied
+  failed
+}
+
 /// 一次已完成 Global Resolution 的 cold-start package。
 /// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个记忆层。
 model MemoryCompilation {
@@ -44,6 +52,8 @@ model MemoryCompilation {
   assertions              MemoryAssertion[]
   globalObjects           MemoryGlobalObject[]
   assertionEmbeddingIndex MemoryAssertionEmbeddingIndex?
+  semanticCards           SemanticCard[]
+  semanticCardProposals   SemanticCardProposal[]
 
   @@index([sourceSha256])
   @@map("memory_compilations")
@@ -130,13 +140,15 @@ model MemoryAssertion {
   contextDependent                Boolean             @map("context_dependent")
   createdAt                       DateTime            @default(now()) @map("created_at")
 
-  compilation             MemoryCompilation                       @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  sourceRegion            MemorySourceRegion                      @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
-  fragmentReferences      MemoryAssertionFragmentReference[]
-  literalGlobalReferences MemoryGlobalAssertionLiteralReference[]
-  semanticObjectLinks     MemoryAssertionSemanticObjectLink[]
-  sourceBlockLinks        MemoryAssertionSourceBlock[]
-  embedding               MemoryAssertionEmbedding?
+  compilation              MemoryCompilation                       @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  sourceRegion             MemorySourceRegion                      @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  fragmentReferences       MemoryAssertionFragmentReference[]
+  literalGlobalReferences  MemoryGlobalAssertionLiteralReference[]
+  semanticObjectLinks      MemoryAssertionSemanticObjectLink[]
+  sourceBlockLinks         MemoryAssertionSourceBlock[]
+  embedding                MemoryAssertionEmbedding?
+  contentDimensionSupports SemanticContentDimensionSupport[]
+  slotBindingSupports      SemanticSlotBindingSupport[]
 
   @@unique([sourceRegionId, sourceClaimId])
   @@map("memory_assertions")
@@ -184,6 +196,7 @@ model MemoryGlobalObject {
   referenceResolutions   MemoryGlobalAssertionReferenceResolution[]
   literalReferences      MemoryGlobalAssertionLiteralReference[]
   semanticAssertionLinks MemoryAssertionSemanticObjectLink[]
+  semanticCards          SemanticCard[]
 
   @@unique([compilationId, globalObjectKey])
   @@index([compilationId])
@@ -275,4 +288,104 @@ model MemoryAssertionEmbedding {
   assertion MemoryAssertion @relation(fields: [assertionId], references: [id], onDelete: Cascade)
 
   @@map("memory_assertion_embeddings")
+}
+
+/// 某个业务 View 对一个当前 Compilation 中 Global Object 的正式语义投影。
+model SemanticCard {
+  id             String   @id @default(uuid()) @db.Uuid
+  compilationId  String   @map("compilation_id") @db.Uuid
+  sourceObjectId String   @map("source_object_id") @db.Uuid
+  viewKey        String   @map("view_key") @db.Text
+  cardTypeKey    String   @map("card_type_key") @db.Text
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  compilation       MemoryCompilation          @relation(fields: [compilationId], references: [id], onDelete: Restrict)
+  sourceObject      MemoryGlobalObject         @relation(fields: [sourceObjectId], references: [id], onDelete: Restrict)
+  contentDimensions SemanticContentDimension[]
+  outgoingSlots     SemanticSlotBinding[]      @relation("SemanticSlotSource")
+  incomingSlots     SemanticSlotBinding[]      @relation("SemanticSlotTarget")
+
+  @@index([viewKey, cardTypeKey])
+  @@index([sourceObjectId])
+  @@map("semantic_cards")
+}
+
+/// Card 中开放、可由 Chat AI 提议演化的认知内容。
+model SemanticContentDimension {
+  id              String   @id @default(uuid()) @db.Uuid
+  cardId          String   @map("card_id") @db.Uuid
+  name            String   @db.Text
+  contentMarkdown String   @map("content_markdown") @db.Text
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  card     SemanticCard                      @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  supports SemanticContentDimensionSupport[]
+
+  @@unique([cardId, name])
+  @@map("semantic_content_dimensions")
+}
+
+/// 旧版可选来源关联；正式 ContentDimension 本身不依赖 Assertion 才成立。
+model SemanticContentDimensionSupport {
+  contentDimensionId String @map("content_dimension_id") @db.Uuid
+  assertionId        String @map("assertion_id") @db.Uuid
+
+  contentDimension SemanticContentDimension @relation(fields: [contentDimensionId], references: [id], onDelete: Cascade)
+  assertion        MemoryAssertion          @relation(fields: [assertionId], references: [id], onDelete: Restrict)
+
+  @@id([contentDimensionId, assertionId])
+  @@index([assertionId])
+  @@map("semantic_content_dimension_supports")
+}
+
+/// 开发者定义 Slot schema；数据库仅保存当前正式 Card-to-Card binding。
+model SemanticSlotBinding {
+  sourceCardId String   @map("source_card_id") @db.Uuid
+  slotKey      String   @map("slot_key") @db.Text
+  targetCardId String   @map("target_card_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  sourceCard SemanticCard                 @relation("SemanticSlotSource", fields: [sourceCardId], references: [id], onDelete: Cascade)
+  targetCard SemanticCard                 @relation("SemanticSlotTarget", fields: [targetCardId], references: [id], onDelete: Restrict)
+  supports   SemanticSlotBindingSupport[]
+
+  @@id([sourceCardId, slotKey, targetCardId])
+  @@index([targetCardId])
+  @@map("semantic_slot_bindings")
+}
+
+/// 旧版可选来源关联；正式 SlotBinding 本身不依赖 Assertion 才成立。
+model SemanticSlotBindingSupport {
+  sourceCardId String @map("source_card_id") @db.Uuid
+  slotKey      String @map("slot_key") @db.Text
+  targetCardId String @map("target_card_id") @db.Uuid
+  assertionId  String @map("assertion_id") @db.Uuid
+
+  binding   SemanticSlotBinding @relation(fields: [sourceCardId, slotKey, targetCardId], references: [sourceCardId, slotKey, targetCardId], onDelete: Cascade)
+  assertion MemoryAssertion     @relation(fields: [assertionId], references: [id], onDelete: Restrict)
+
+  @@id([sourceCardId, slotKey, targetCardId, assertionId])
+  @@index([assertionId])
+  @@map("semantic_slot_binding_supports")
+}
+
+/// Chat 中等待用户明确批准或拒绝的最薄 Proposal 持久化。
+model SemanticCardProposal {
+  id            String                     @id @default(uuid()) @db.Uuid
+  compilationId String                     @map("compilation_id") @db.Uuid
+  viewKey       String                     @map("view_key") @db.Text
+  status        SemanticCardProposalStatus @default(pending)
+  reason        String                     @db.Text
+  payload       Json                       @db.JsonB
+  createdAt     DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  decidedAt     DateTime?                  @map("decided_at") @db.Timestamptz(3)
+  appliedAt     DateTime?                  @map("applied_at") @db.Timestamptz(3)
+  failureReason String?                    @map("failure_reason") @db.Text
+
+  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Restrict)
+
+  @@index([viewKey, status, createdAt])
+  @@map("semantic_card_proposals")
 }

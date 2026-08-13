@@ -38,7 +38,10 @@ from cold_start.config import (
     ModelSettings,
 )
 from cold_start.document import MinerUPdfLoader
-from cold_start.embedding_server import serve_embeddings
+from cold_start.embedding_server import (
+    DEFAULT_EMBEDDING_MODEL_REVISION,
+    serve_embeddings,
+)
 from cold_start.environment import load_environment_file
 from cold_start.global_exploration import (
     GlobalExplorationRunner,
@@ -819,7 +822,7 @@ def main() -> None:
                 model_revision=(
                     args.model_revision
                     or os.getenv("COLD_START_EMBEDDING_MODEL_REVISION")
-                    or "local"
+                    or DEFAULT_EMBEDDING_MODEL_REVISION
                 ),
             )
             return

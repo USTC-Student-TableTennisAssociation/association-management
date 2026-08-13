@@ -1,6 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 
+import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import {
   followObject as followMemoryObject,
@@ -11,11 +12,6 @@ import {
 import type { MemoryRetrievalResult, MemorySearchTrace } from "@/memory/types";
 
 const MAX_TOOL_CALLS_PER_ANSWER = 6;
-
-function estimateSerializedTokens(value: unknown): number {
-  const bytes = new TextEncoder().encode(JSON.stringify(value)).length;
-  return Math.max(1, Math.ceil(bytes / 3));
-}
 
 export class MemoryExploreBudgetError extends Error {
   constructor() {
@@ -47,6 +43,7 @@ export class MemoryExploreContextBudgetError extends Error {
 export function createMemoryExploreToolset(input: {
   evidence: MemoryEvidenceAccumulator;
   resultTokenBudget: number;
+  sharedResultBudget?: ToolResultTokenBudget;
   signal?: AbortSignal;
   onLocateTrace?: (trace: MemorySearchTrace) => void;
   onEvidence?: (
@@ -55,7 +52,8 @@ export function createMemoryExploreToolset(input: {
   ) => void;
 }) {
   let toolCalls = 0;
-  let resultTokens = 0;
+  const resultBudget = input.sharedResultBudget ??
+    new ToolResultTokenBudget(input.resultTokenBudget);
 
   function reserveCall(): void {
     toolCalls += 1;
@@ -65,11 +63,9 @@ export function createMemoryExploreToolset(input: {
   }
 
   function merge(result: MemoryExploreResult): MemoryExploreResult {
-    const tokens = estimateSerializedTokens(result);
-    if (resultTokens + tokens > input.resultTokenBudget) {
+    if (!resultBudget.reserve(result)) {
       throw new MemoryExploreContextBudgetError(input.resultTokenBudget);
     }
-    resultTokens += tokens;
     const discovered = input.evidence.merge(result);
     input.onEvidence?.(input.evidence.snapshot(), discovered);
     return discovered;

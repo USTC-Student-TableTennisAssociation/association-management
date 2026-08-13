@@ -157,6 +157,7 @@ export class MemoryEvidenceAccumulator {
         this.assertionRefByKey.set(key, ref);
         this.assertions.push({
           ref,
+          ...(item.id ? { id: item.id } : {}),
           kind: item.kind,
           dereferenceRequired: item.dereferenceRequired,
           sourceNodeId: item.sourceNodeId,
@@ -168,6 +169,7 @@ export class MemoryEvidenceAccumulator {
           sources: item.sources.map(withoutExcerpt),
         });
       } else if (existing) {
+        existing.id ??= item.id;
         if (
           existing.kind !== item.kind ||
           existing.dereferenceRequired !== item.dereferenceRequired
