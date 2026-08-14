@@ -309,8 +309,8 @@ uv run cold-start compile-source \
 ```
 
 Source Time 对 JSON Schema、证据块存在性、顺序及原文直接包含关系做确定性校验；失败时最多
-进行一次不携带旧正文或 reasoning 的 clean retry。Atomic/Missing 断点为 `source-claims.v6`，
-Fragment 断点为 `source-object-fragments.v4`，最终快照为 `source-semantics.v9` /
+进行一次不携带旧正文或 reasoning 的 clean retry。Atomic/Missing 断点为 `source-claims.v7`，
+Fragment 断点为 `source-object-fragments.v5`，最终快照为 `source-semantics.v9` /
 `source-semantics-full.v9`，working 为 v9。旧 v8 Temporal checkpoint、区域快照、批量 working
 和 Global Resolution 均不会被复用，旧运行目录保持不变。
 

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { generateText, Output, stepCountIs } from "ai";
+import { generateText, Output, stepCountIs, tool } from "ai";
 import { z } from "zod";
 
 import {
@@ -13,11 +13,14 @@ import {
 import { getChatModel } from "@/ai/provider";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
 import { getDatabase } from "@/db";
+import { transactionAdvisoryLockQuery } from "@/db-advisory-lock";
 import { Prisma } from "@/generated/prisma/client";
 import type { ChatAssertionQueueDecision } from "@/memory/chat-assertion-queue";
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import { embedMemoryQueries } from "@/memory/embedding-client";
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
+import { inspectObjectIdentity } from "@/memory/object-management-service";
+import type { ObjectIdentityInspection } from "@/memory/object-management-types";
 import type { MemoryRetrievalResult } from "@/memory/types";
 
 const DEFAULT_ACTOR_ID = "00000000-0000-4000-8000-000000000001";
@@ -49,6 +52,12 @@ const extractedObjectSchema = z.discriminatedUnion("resolution", [
 
 const extractionSchema = z.object({
   objects: z.array(extractedObjectSchema).max(MAX_OBJECT_BINDINGS),
+  surfaceCorrections: z.array(z.object({
+    objectId: z.string().uuid(),
+    surfaceId: z.string().trim().min(1).max(500),
+    surfaceForm: z.string().trim().min(1).max(200),
+    reason: z.string().trim().min(1).max(500),
+  })).max(4).optional().default([]),
   assertions: z.array(z.object({
     globalStatementTemplateMarkdown: z.string().trim().min(1).max(4_000),
     objectRefs: z.array(localObjectRefSchema).min(1).max(MAX_OBJECT_BINDINGS),
@@ -132,6 +141,13 @@ type ExistingObjectIdentity = {
   id: string;
   canonicalName: string;
   surfaceForms: string[];
+};
+
+type AutomaticSurfaceCorrection = {
+  objectId: string;
+  surfaceId: string;
+  surfaceForm: string;
+  reason: string;
 };
 
 type PreparedReference = {
@@ -231,40 +247,13 @@ function identityText(value: string): string {
     .replace(/[\s“”"'《》〈〉【】（）()，,。.!！?？:：;；·—_\-]/g, "");
 }
 
-function bigrams(value: string): string[] {
-  const units = Array.from(identityText(value));
-  if (units.length < 2) return units;
-  return units.slice(0, -1).map((unit, index) => `${unit}${units[index + 1]}`);
-}
-
-function nameSimilarity(left: string, right: string): number {
-  const leftPairs = bigrams(left);
-  const rightPairs = bigrams(right);
-  if (!leftPairs.length || !rightPairs.length) return 0;
-  const remaining = new Map<string, number>();
-  for (const pair of rightPairs) remaining.set(pair, (remaining.get(pair) ?? 0) + 1);
-  let intersection = 0;
-  for (const pair of leftPairs) {
-    const count = remaining.get(pair) ?? 0;
-    if (count > 0) {
-      intersection += 1;
-      remaining.set(pair, count - 1);
-    }
-  }
-  return (2 * intersection) / (leftPairs.length + rightPairs.length);
-}
-
 function namesMayConflict(left: string, right: string): boolean {
   const normalizedLeft = identityText(left);
   const normalizedRight = identityText(right);
   if (!normalizedLeft || !normalizedRight) return false;
-  if (normalizedLeft === normalizedRight) return true;
-  if (
-    Math.min(codePointLength(normalizedLeft), codePointLength(normalizedRight)) >= 2 &&
-    (normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft))
-  ) return true;
-  return Math.min(codePointLength(normalizedLeft), codePointLength(normalizedRight)) >= 3 &&
-    nameSimilarity(normalizedLeft, normalizedRight) >= 0.86;
+  // 确定性拒绝只处理真实名称或别名的规范化完全相同。
+  // 包含关系和模糊相似只适合召回候选，不能单独证明两个 Object 身份相同。
+  return normalizedLeft === normalizedRight;
 }
 
 const GENERIC_OBJECT_NAMES = new Set([
@@ -272,6 +261,13 @@ const GENERIC_OBJECT_NAMES = new Set([
   "会长", "主席", "负责人", "指导老师", "老师", "同学", "成员", "干事", "社团", "协会", "组织",
   "活动", "比赛", "平台", "文档", "手册", "学校", "学院", "部门", "学年", "现在", "目前",
 ]);
+
+function clearlyContextualSurface(value: string): boolean {
+  const normalized = identityText(value);
+  return GENERIC_OBJECT_NAMES.has(normalized) ||
+    /^(?:该|本|这个|那个)(?:人|老师|同学|会长|主席|负责人|社团|协会|组织|学校|学院|部门|活动|比赛|平台|文档|手册)$/u
+      .test(normalized);
+}
 
 function invalidCreatableObjectName(value: string): string | undefined {
   const normalized = identityText(value);
@@ -327,14 +323,15 @@ function extractionPrompt(input: ChatAssertionCaptureInput): string {
     "优先检查 initialRetrieval，它是主对话已经积累的 Shared Brain 检索结果。若其中没有足以确认身份的 Object，由你根据完整上下文自行决定 searchMemory 查询；必要时可以改写查询或 followObject。",
     "搜索只用于定位数据库中真实存在的 Object 和理解背景。搜索到的旧 Assertion 不是本轮用户 Evidence，也不要因为旧知识与用户新陈述冲突就悄悄改写用户陈述。",
     "先搜索、后决定 Object：只要库中可能已有同一 Object，就必须继续搜索并使用 resolution=existing；只有搜索后仍没有准确对象，且用户 Evidence 逐字给出了稳定专名时，才可提出 resolution=create。查重有歧义时不要猜、不要合并，也不要创建该 Object 或相关 Assertion。",
-    "objects 是本轮局部绑定表。每项 ref 是简短局部标识（如 association、new-president）；existing 项填写工具实际返回的 globalObjectId；create 项填写 canonicalName 和 surfaceForms。create 的 canonicalName 与每个 surface form 都必须逐字出现在引用它的成功 Assertion 的用户 Evidence quote 中，不能润色、补全、翻译或从 Assistant/搜索结果生成。代词、职务、时间、“某人/这个社团”等泛称不能创建 Object。",
+    "如果搜索候选与待创建 Object 发生名称重叠，先调用 inspectObjectIdentity 查看旧 Object 的逐项 Surface 来源。你可以在 surfaceCorrections 中要求同轮移除明显错误的泛称 Surface，但权限非常窄：只允许“负责人、会长、老师、学校、协会、部门、该校、这个社团”等不能独立识别身份的上下文称呼；必须填写 inspect 返回的精确 surfaceId 和原文 surfaceForm；该泛称必须是本轮新 Object 专名的一部分；只有新 Object 与至少一条 Assertion 同时成功发布时才会原子纠正。surfaceCorrections 每一项必须是扁平对象，精确格式为 {\"objectId\":\"旧 Object UUID\",\"surfaceId\":\"inspect 返回的 Surface id\",\"surfaceForm\":\"原文 Surface\",\"reason\":\"为何不能独立指向旧 Object\"}；不要创建 removedSurfaces、surfaces、changes 等嵌套字段。这里的 Surface 来源只证明旧 Resolver 曾经这样归属，不证明该词能脱离来源语境独立识别 Object；上述职务/类别泛称即使来自文档或聊天，也按系统定义视为 context-only，不得因为“有来源”就保留为具体 Object 的合法别名。真实别名、专名、合并、拆分或有歧义的归属不要处理，留给主对话 Object Change Proposal。",
+    "objects 是本轮局部绑定表。每项 ref 是简短局部标识（如 association、new-president），并且必须显式填写 resolution。existing 项精确格式为 {\"ref\":\"局部标识\",\"resolution\":\"existing\",\"globalObjectId\":\"工具返回的 UUID\"}；create 项精确格式为 {\"ref\":\"局部标识\",\"resolution\":\"create\",\"canonicalName\":\"完整专名\",\"surfaceForms\":[\"完整专名或真实别名\"]}。不要仅凭是否存在 globalObjectId 猜省 resolution。create 的 canonicalName 与每个 surface form 都必须逐字出现在引用它的成功 Assertion 的用户 Evidence quote 中，不能润色、补全、翻译或从 Assistant/搜索结果生成。必须选择用户原话中最具体、可脱离当前句子独立识别该 Object 的完整名称；不得为了简短而从完整专名中截取“协会、负责人、部门”等通用后缀或较宽泛的局部片段。代词、职务、时间、“某人/这个社团”等泛称不能创建 Object。",
     "每个 create Object 必须至少被一条最终 Assertion 使用；没有成功 Assertion 就不得提出或保留孤立 Object。",
     "globalStatementTemplateMarkdown 必须自足，并把每次 Object 出现只写成 {{object:局部ref}}；不要在占位符前后再写该 Object 的全名、简称、别名或括号注释。例如只能写“{{object:association}}在……”，不能写“乒协（{{object:association}}）在……”。objectRefs 是模板中使用的去重局部 ref。",
     "严格遵循用户原话，采用最小规范化，不要为了正式、顺畅或好看而润色事实。只允许：(1) 用经用户原话支撑的 Object 占位符补全省略主语；(2) 展开明确的年份/学年缩写；(3) 删除“其实、确实、呢”等不改变事实的会话语气；(4) 做不改变含义的必要语法拼接。不得改变动作、事实强度、因果、范围、确定程度或状态类型。例如用户说“是四星社团”，就写“是四星社团”，不能改成“获评四星级社团”；用户说“准备举办”，不能改成“将举办”或“已确定举办”。不确定是否忠实时，宁可不输出。",
     "转述来源属于事实强度，必须保留。若用户说“我问了魏汉东，他说 X”，应忠实写成“魏汉东说 X”或“据用户转述，魏汉东称 X”，不能把它提升成无来源限定的确定事实 X。",
     "保留计划、预计、建议、观察、可能等确定程度。",
     "不要提取问题、假设、头脑风暴、操作指令、纯闲聊；不要把 25-26 学年等历史限定状态改写成现在仍有效。相对时间以给定服务器时间解释，但 submittedAt 只是审计时间，不是命题有效期。",
-    "最终必须严格输出符合 JSON Schema 的 JSON 对象，不要输出 JSON 之外的文字。顶层字段只能是 objects、assertions；Assertion 每项字段严格为 globalStatementTemplateMarkdown、objectRefs、evidence；evidence 每项严格为 messageId、quotes。",
+    "最终必须严格输出符合 JSON Schema 的 JSON 对象，不要输出 JSON 之外的文字。顶层字段只能是 objects、surfaceCorrections、assertions；没有安全纠正时 surfaceCorrections=[]。Assertion 每项字段严格为 globalStatementTemplateMarkdown、objectRefs、evidence；evidence 每项严格为 messageId、quotes。",
     JSON.stringify({
       queueDecision: input.queueDecision,
       currentInstant: currentInstant.toISOString(),
@@ -391,6 +388,93 @@ function conflictingObject(
       existingNames.some((existingName) => namesMayConflict(candidateName, existingName))
     );
   });
+}
+
+function validateAutomaticSurfaceCorrections(
+  requested: z.infer<typeof extractionSchema>["surfaceCorrections"],
+  inspections: ReadonlyMap<string, ObjectIdentityInspection>,
+  usedNewObjects: NewObjectCandidate[],
+): { accepted: AutomaticSurfaceCorrection[]; rejected: string[] } {
+  const accepted: AutomaticSurfaceCorrection[] = [];
+  const rejected: string[] = [];
+  const seen = new Set<string>();
+  for (const correction of requested) {
+    const key = `${correction.objectId}\u0000${correction.surfaceId}`;
+    if (seen.has(key)) {
+      rejected.push(`${correction.surfaceId}：同一 Surface 被重复提出。`);
+      continue;
+    }
+    seen.add(key);
+    const inspection = inspections.get(correction.objectId);
+    if (!inspection) {
+      rejected.push(`${correction.surfaceId}：Agent 没有先 inspect 该 Object。`);
+      continue;
+    }
+    const surface = inspection.surfaces.find((item) => item.id === correction.surfaceId);
+    if (!surface || surface.surfaceForm !== correction.surfaceForm) {
+      rejected.push(`${correction.surfaceId}：Surface id、归属或逐字名称已不匹配。`);
+      continue;
+    }
+    if (!clearlyContextualSurface(surface.surfaceForm)) {
+      rejected.push(`${correction.surfaceId}：“${surface.surfaceForm}”不是可自动移除的明显泛称。`);
+      continue;
+    }
+    const normalizedSurface = identityText(surface.surfaceForm);
+    const connectedNewObject = usedNewObjects.find((object) =>
+      objectNames(object).some((name) => {
+        const normalizedCandidate = identityText(name);
+        return normalizedCandidate !== normalizedSurface &&
+          normalizedCandidate.includes(normalizedSurface);
+      })
+    );
+    if (!connectedNewObject) {
+      rejected.push(
+        `${correction.surfaceId}：没有与“${surface.surfaceForm}”直接组成名称的本轮新 Object，不能静默纠正。`,
+      );
+      continue;
+    }
+    accepted.push(correction);
+  }
+  return { accepted, rejected };
+}
+
+async function applyAutomaticSurfaceCorrection(
+  transaction: Prisma.TransactionClient,
+  correction: AutomaticSurfaceCorrection,
+): Promise<void> {
+  if (correction.surfaceId.startsWith("document:")) {
+    const [, objectFragmentId, ordinalText] = correction.surfaceId.split(":");
+    const result = await transaction.memoryGlobalObjectSurfaceMembership.deleteMany({
+      where: {
+        globalObjectId: correction.objectId,
+        objectFragmentId,
+        surfaceFormOrdinal: Number(ordinalText),
+      },
+    });
+    if (result.count !== 1) {
+      throw new ObjectCreationConflictError(
+        `待纠正 Surface“${correction.surfaceForm}”在发布前发生变化`,
+      );
+    }
+    return;
+  }
+  if (correction.surfaceId.startsWith("chat:")) {
+    const [, chatEvidenceId, ordinalText] = correction.surfaceId.split(":");
+    const result = await transaction.memoryChatObjectMention.deleteMany({
+      where: {
+        globalObjectId: correction.objectId,
+        chatEvidenceId,
+        ordinal: Number(ordinalText),
+      },
+    });
+    if (result.count !== 1) {
+      throw new ObjectCreationConflictError(
+        `待纠正 Surface“${correction.surfaceForm}”在发布前发生变化`,
+      );
+    }
+    return;
+  }
+  throw new ObjectCreationConflictError(`未知 Surface id：${correction.surfaceId}`);
 }
 
 function quotedEvidenceForObjectRef(
@@ -473,7 +557,7 @@ function resolveObjectBindings(
     if (conflict) {
       rejectedByRef.set(
         object.ref,
-        `名称与现有 Object“${conflict.canonicalName}”（${conflict.id}）重复或近似，拒绝猜测创建。`,
+        `名称或别名与现有 Object“${conflict.canonicalName}”（${conflict.id}）相同，拒绝重复创建。`,
       );
       continue;
     }
@@ -497,7 +581,7 @@ function resolveObjectBindings(
       if (objectNames(left).some((leftName) =>
         objectNames(right).some((rightName) => namesMayConflict(leftName, rightName))
       )) {
-        const reason = `本轮新 Object“${left.canonicalName}”与“${right.canonicalName}”重复或近似，拒绝猜测创建。`;
+        const reason = `本轮新 Object“${left.canonicalName}”与“${right.canonicalName}”存在相同名称或别名，拒绝重复创建。`;
         rejectedByRef.set(left.localRef, reason);
         rejectedByRef.set(right.localRef, reason);
         bindingsByRef.delete(left.localRef);
@@ -809,20 +893,37 @@ export async function captureChatAssertions(
       );
     },
   });
+  const inspectedObjectIdentities = new Map<string, ObjectIdentityInspection>();
+  const identityInspectTool = tool({
+    description:
+      "检查一个搜索已发现 GlobalObject 的身份来源。只在怀疑旧 Surface 是错误泛称、需要判断新 Object 是否重复时调用；返回的 Surface id 可用于 surfaceCorrections。",
+    inputSchema: z.object({ objectId: z.string().uuid() }),
+    execute: async ({ objectId }) => {
+      if (!searchEvidence.hasObject(objectId)) {
+        throw new Error("只能检查主对话或后台搜索已经返回的 Object");
+      }
+      const inspection = await inspectObjectIdentity(objectId);
+      if (inspection.compilationId !== compilation.id) {
+        throw new Error("Object 身份检查结果与当前 Compilation 不一致");
+      }
+      inspectedObjectIdentities.set(objectId, inspection);
+      return inspection;
+    },
+  });
   const prompt = extractionPrompt(input);
   await trace?.appendSection(
     "后台 Assertion 提取 Agent · 初始输入",
     [
       debugCodeBlock(prompt),
       "",
-      "> Agent 可自行调用与主对话相同的 searchMemory / followObject；queue 不强迫输出。",
+      "> Agent 可自行调用与主对话相同的 searchMemory / followObject，并在必要时 inspectObjectIdentity；queue 不强迫输出。",
     ].join("\n"),
   );
 
   let extractionCallNumber = 0;
   const extraction = await generateText({
     model: getChatModel(),
-    tools: searchTools,
+    tools: { ...searchTools, inspectObjectIdentity: identityInspectTool },
     toolChoice: "auto",
     stopWhen: stepCountIs(MAX_EXTRACTION_STEPS),
     prepareStep: ({ stepNumber }) => stepNumber === MAX_EXTRACTION_STEPS - 1
@@ -997,6 +1098,24 @@ export async function captureChatAssertions(
   const usedNewObjects = proposedNewObjects.filter((object) =>
     bindingsByRef.get(object.localRef) === object && usedLocalObjectRefs.has(object.localRef)
   );
+  const correctionValidation = validateAutomaticSurfaceCorrections(
+    extraction.output.surfaceCorrections ?? [],
+    inspectedObjectIdentities,
+    usedNewObjects,
+  );
+  const automaticSurfaceCorrections = correctionValidation.accepted;
+  await trace?.appendSection(
+    "Object Surface 自动纠错校验",
+    [
+      `- 模型提出：${extraction.output.surfaceCorrections?.length ?? 0} 项`,
+      `- 允许随新 Object 原子执行：${automaticSurfaceCorrections.length} 项`,
+      `- 拒绝：${correctionValidation.rejected.length} 项`,
+      "",
+      correctionValidation.rejected.length
+        ? correctionValidation.rejected.map((reason) => `- ${reason}`).join("\n")
+        : "没有被确定性校验拒绝的 Surface 纠错。",
+    ].join("\n"),
+  );
   const objectMentions = prepareObjectMentions(usedNewObjects, prepared);
   const renderingCandidates = [
     ...candidates,
@@ -1047,11 +1166,32 @@ export async function captureChatAssertions(
       if (current.assertionEmbeddingIndex.indexedAssertionCount !== assertionCount) {
         throw new Error("当前 Assertion embedding index 不完整，拒绝发布 Chat Assertion");
       }
-      if (usedNewObjects.length) {
+      if (usedNewObjects.length || automaticSurfaceCorrections.length) {
         const lockKey = `chat-object-creation:${compilation.id}`;
-        await transaction.$queryRaw(Prisma.sql`
-          SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))
-        `);
+        await transaction.$queryRaw(transactionAdvisoryLockQuery(lockKey));
+        for (const correction of automaticSurfaceCorrections) {
+          await applyAutomaticSurfaceCorrection(transaction, correction);
+        }
+        if (automaticSurfaceCorrections.length) {
+          const appliedAt = new Date();
+          await transaction.memoryObjectChangeProposal.create({
+            data: {
+              compilationId: compilation.id,
+              status: "applied",
+              reason: "Assertion Agent 在新 Object 成功发布时自动纠正了已检查的明显泛称 Surface。",
+              payload: {
+                reason: "Assertion Agent 安全 Surface 纠错",
+                changes: automaticSurfaceCorrections.map((correction) => ({
+                  type: "REMOVE_SURFACE",
+                  objectId: correction.objectId,
+                  surfaceId: correction.surfaceId,
+                })),
+              },
+              decidedAt: appliedAt,
+              appliedAt,
+            },
+          });
+        }
         const lockedIdentityRows = await transaction.memoryGlobalObject.findMany({
           where: { compilationId: compilation.id },
           select: {
@@ -1071,7 +1211,7 @@ export async function captureChatAssertions(
           const conflict = conflictingObject(objectNames(object), lockedIdentities);
           if (conflict) {
             throw new ObjectCreationConflictError(
-              `Object“${object.canonicalName}”在发布前与“${conflict.canonicalName}”发生重复或歧义，已回滚本轮写入`,
+              `Object“${object.canonicalName}”在发布前与“${conflict.canonicalName}”出现相同名称或别名，已回滚本轮写入`,
             );
           }
         }
@@ -1233,7 +1373,7 @@ export async function captureChatAssertions(
       "",
       renderPreparedAssertions(prepared, renderingCandidates),
       "",
-      `同时原子写入：1 次 Capture、${usedMessageIds.length} 条被实际使用/复用的用户 Evidence、${usedNewObjects.length} 个新 Object、${objectMentions.length} 条逐字名称来源、Object 引用和 embedding。`,
+      `同时原子写入：1 次 Capture、${usedMessageIds.length} 条被实际使用/复用的用户 Evidence、${usedNewObjects.length} 个新 Object、${objectMentions.length} 条逐字名称来源、${automaticSurfaceCorrections.length} 项安全 Surface 纠错、Object 引用和 embedding。`,
       "未被任何成功 Assertion 使用的对话消息不会成为 Evidence。",
     ].join("\n"),
   );

@@ -192,7 +192,7 @@ class SourceTimeSubmission(StrictModel):
 
 
 class SourceClaimCheckpoint(StrictModel):
-    schema_version: Literal["source-claims.v6"] = "source-claims.v6"
+    schema_version: Literal["source-claims.v7"] = "source-claims.v7"
     source_sha256: str
     region_node_id: str = Field(pattern=r"^region-\d{4,}$")
     claims: list[SourceClaim]
@@ -201,8 +201,8 @@ class SourceClaimCheckpoint(StrictModel):
 
 
 class SourceObjectFragmentCheckpoint(StrictModel):
-    schema_version: Literal["source-object-fragments.v4"] = (
-        "source-object-fragments.v4"
+    schema_version: Literal["source-object-fragments.v5"] = (
+        "source-object-fragments.v5"
     )
     source_sha256: str
     region_node_id: str = Field(pattern=r"^region-\d{4,}$")
@@ -370,6 +370,10 @@ CLAIM_EXTRACTION_SYSTEM_PROMPT = """
   说明后仍完整成立的事实。例如“A（B）成立于2005年”应得到 A/B 共指草稿与“A成立于2005年”；
 - 只保存当前来源明确表达的 referential equivalence。不得因为名称相似、常识、主题相近、共同
   出现或未来可能相连而推断；不得补充原文没有写出的全称、简称或标准名；
+- 即使来源使用“以下简称”明确建立文内共指，也只提交能够脱离当前句子、独立指向同一对象的
+  真实名称、简称、缩写或别名；“本会”“该校”“协会”“学校”“负责人”“会长”等临时泛称
+  不能成为 same_referent_drafts mention。明确的“中国科学技术大学”“中国科大”“中科大”
+  可以保留；“项目负责人”“负责人”和“魏汉东”“会长”不能因此组成同指称名称组；
 - “明确表达”要求同一处直接命名构式把这些字面称呼作为等价名称呈现。先出现全称，后文另句
   使用一个看似简称的词，只属于语篇指代，不足以进入 same_referent_drafts；不要跨句搜集别称；
 - 例如来源写“中国科学技术大学学生乒乓球协会（USTC TTA）”，后文另写“乒协”，只提交
@@ -449,7 +453,9 @@ grounded Assertion，并对适合导航的表格、名单、分工或流程清�
 改写成 factual claim。混合句的普通事实仍进入 claims，但去掉名称说明后必须完整成立。
 same_referent_drafts 只提交原文连续 span、按 supporting blocks 顺序计算的 occurrence_index 和
 真实 supporting_block_ids。只认同一处直接命名构式；后文另句使用的疑似简称不算显式共指。
-不得根据相似性、常识或跨来源背景猜测，不补全名称，不生成 Object ID。
+不得根据相似性、常识或跨来源背景猜测，不补全名称，不生成 Object ID。只保存脱离当前句子后
+仍能独立指向同一对象的名称；“本会”“该校”“协会”“学校”“负责人”“会长”等临时泛称
+即使在当前语境中共指，也不要提交。
 
 粒度示例一：
 原文：随着社团规模的发展，长久以来存在的组织架构不合理、经验传承断层等问题日益凸显，
@@ -552,10 +558,18 @@ Fragment 构造规则：
 - “它”“该协会”“本会”“这个组织”“上述活动”“该赛事”等临时代词通常不是 reusable name，
   不要求成为 surface form；
 - 同一 SourceRegion 中明确称呼同一个对象的 reusable names 放入同一 Fragment；surface forms
-  必须能够作为同一实体的名称、别名或直接指称互相替换。一个 span 即使最终 referent 相同，
+  必须能够脱离当前句子后，仍作为同一实体的名称或别名独立指向它。一个 span 即使在当前句子中
+  最终 referent 相同，只要必须依赖省略补全、临时角色、上下文或当前文档范围才能完成指代，
+  就不是 surface form。一个 span 即使最终 referent 相同，
   只要相比实体名称还包含角色、任期、时间、关系、状态、数量、范围或描述性限定，就不是 alias，
   不得与实体名称合并；只做局部名称同指整合，不因语义相似、主题相关、业务关系或可能连接而
   合并不同对象；
+- 真实全称、稳定简称、缩写和明确别名可以共同保留，例如“中国科学技术大学”“中国科大”
+  “中科大”可以属于同一 Fragment；但“项目负责人”在后文被省略为“负责人”时，“负责人”
+  不能独立识别该角色，不得加入 surface_forms；“魏汉东”在当前语境中被称为“会长”时，
+  “会长”也不是人物别名；“中国科学技术大学”被称为“学校”“该校”时同理；
+- “负责人”“协会”“学校”“会长”等泛称只有在它本身就是当前命题讨论的独立角色或类别 Object
+  时，才可以单独形成只包含自身的 Fragment；不得作为更具体 Object 的附加别名；
 - 输入中的 source naming hints 是 hard grouping hint：同一 hint 内所有名称必须完整进入同一个
   Fragment，不得遗漏或拆开；不需要重新判断这些名称是否同指；
 - 在 hard hint 之外，可以根据当前 SourceRegion 整体语境，把“乒协”等后续 reusable name 加入
@@ -1044,7 +1058,7 @@ class SourceSemanticCompiler:
         if not path.exists():
             return None
         raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or raw.get("schema_version") != "source-claims.v6":
+        if not isinstance(raw, dict) or raw.get("schema_version") != "source-claims.v7":
             return None
         checkpoint = SourceClaimCheckpoint.model_validate(raw)
         self._validate_checkpoint_identity(
@@ -1070,7 +1084,7 @@ class SourceSemanticCompiler:
         )
         if (
             not isinstance(raw, dict)
-            or raw.get("schema_version") != "source-object-fragments.v4"
+            or raw.get("schema_version") != "source-object-fragments.v5"
         ):
             return None
         checkpoint = SourceObjectFragmentCheckpoint.model_validate(raw)
@@ -1468,7 +1482,7 @@ def _load_current_source_snapshot(
     initial_raw = json.loads(paths.initial_claims_json.read_text(encoding="utf-8"))
     if (
         not isinstance(initial_raw, dict)
-        or initial_raw.get("schema_version") != "source-claims.v6"
+        or initial_raw.get("schema_version") != "source-claims.v7"
     ):
         return None
     try:
@@ -1485,7 +1499,7 @@ def _load_current_source_snapshot(
     reviewed_raw = json.loads(paths.reviewed_claims_json.read_text(encoding="utf-8"))
     if (
         not isinstance(reviewed_raw, dict)
-        or reviewed_raw.get("schema_version") != "source-claims.v6"
+        or reviewed_raw.get("schema_version") != "source-claims.v7"
     ):
         return None
     try:
@@ -1744,6 +1758,7 @@ def _validate_same_referent_drafts(
         distinct_span_texts = {item.span_text for item in draft.mentions}
         if len(distinct_span_texts) < 2:
             raise ValueError(f"{draft_label} 至少需要两个不同字面称呼")
+        _validate_independent_surface_forms(list(distinct_span_texts))
         mention_keys = [
             (item.span_text, item.occurrence_index) for item in draft.mentions
         ]
@@ -1829,6 +1844,59 @@ def _fragment_grounding_texts(
     )
 
 
+_CONTEXT_ONLY_SURFACE_FORMS = {
+    "他", "她", "它", "他们", "她们", "它们", "其", "该对象", "这个对象", "那个对象",
+    "该协会", "本会", "这个协会", "该组织", "这个组织", "上述组织", "该校", "本校",
+    "这所学校", "该活动", "这个活动", "上述活动", "该赛事", "这个赛事", "上述赛事",
+    "该同学", "这位同学", "该老师", "这位老师", "相关负责人", "该负责人", "这位负责人",
+}
+
+_GENERIC_ADDITIONAL_SURFACE_FORMS = {
+    "负责人", "会长", "主席", "指导老师", "老师", "同学", "成员", "干事", "社团", "协会",
+    "组织", "学校", "学院", "部门", "活动", "比赛", "赛事", "平台", "文档", "手册", "系统",
+}
+
+_CONTEXTUAL_REFERENCE_PREFIXES = (
+    "该", "本", "这个", "那个", "这位", "上述", "前述", "相关",
+)
+
+_CONTEXTUAL_REFERENCE_NOUNS = _GENERIC_ADDITIONAL_SURFACE_FORMS | {
+    "对象", "单位", "个人", "人员", "人选", "事项", "制度", "工作", "情况", "内容",
+}
+
+_RELATIVE_ROLE_PREFIXES = ("现任", "前任", "时任", "本届", "上届", "下届")
+_RELATIVE_ROLE_SUFFIXES = ("负责人", "会长", "主席", "老师", "成员", "干事", "部长", "主任")
+
+
+def _validate_independent_surface_forms(surface_forms: Sequence[str]) -> None:
+    """拒绝只能依赖当前句子完成指代的名称；不替代模型的完整语义判断。"""
+
+    for surface_form in surface_forms:
+        if surface_form in _CONTEXT_ONLY_SURFACE_FORMS:
+            raise ValueError(
+                f"surface form {surface_form!r} 只能依赖当前语境指代，不能作为独立名称或别名"
+            )
+        if any(
+            surface_form == f"{prefix}{noun}"
+            for prefix in _CONTEXTUAL_REFERENCE_PREFIXES
+            for noun in _CONTEXTUAL_REFERENCE_NOUNS
+        ) or any(
+            surface_form.startswith(prefix) and surface_form.endswith(_RELATIVE_ROLE_SUFFIXES)
+            for prefix in _RELATIVE_ROLE_PREFIXES
+        ):
+            raise ValueError(
+                f"surface form {surface_form!r} 含临时语境、任期或关系限定，不能作为独立名称或别名"
+            )
+
+    if len(surface_forms) <= 1:
+        return
+    for surface_form in surface_forms:
+        if surface_form in _GENERIC_ADDITIONAL_SURFACE_FORMS:
+            raise ValueError(
+                f"surface form {surface_form!r} 是泛称，不能作为更具体 Object 的附加别名"
+            )
+
+
 def _validate_fragment_submission(
     submission: ObjectFragmentSubmission,
     claims: Sequence[SourceClaim],
@@ -1850,6 +1918,7 @@ def _validate_fragment_submission(
         source_blocks, claims, same_referent_drafts
     )
     for fragment in submission.fragments:
+        _validate_independent_surface_forms(fragment.surface_forms)
         for surface_form in fragment.surface_forms:
             previous = surface_to_key.setdefault(surface_form, fragment.fragment_key)
             if previous != fragment.fragment_key:
@@ -2001,6 +2070,7 @@ def _validate_fragment_checkpoint(
         source_blocks, claims, same_referent_drafts
     )
     for fragment in checkpoint.fragments:
+        _validate_independent_surface_forms(fragment.surface_forms)
         for surface_form in fragment.surface_forms:
             previous = surface_to_fragment.setdefault(
                 surface_form, fragment.fragment_id

@@ -22,6 +22,7 @@ import type {
   SourceDocumentBlock,
   SourceDocumentReference,
 } from "@/memory/source-document-types";
+import { ObjectChangeProposalCard } from "@/memory/object-management-components";
 import {
   SemanticViewWorkspace,
   ViewProposalCard,
@@ -549,6 +550,9 @@ function ChatSurface({
             const activities = toolActivities(message, isActiveAssistant);
             const search = message.parts.filter((part) => part.type === "data-memorySearch").at(-1)?.data;
             const proposals = message.parts.filter((part) => part.type === "data-viewProposal");
+            const objectChangeProposals = message.parts.filter(
+              (part) => part.type === "data-objectChangeProposal",
+            );
             const viewReferences = message.parts
               .filter((part) => part.type === "data-viewReferences")
               .at(-1)?.data.references ?? [];
@@ -588,6 +592,12 @@ function ChatSurface({
                       key={part.data.id}
                       proposal={part.data}
                       onPreview={onPreviewProposal}
+                    />
+                  ))}
+                  {objectChangeProposals.map((part) => (
+                    <ObjectChangeProposalCard
+                      key={part.data.id}
+                      proposal={part.data}
                     />
                   ))}
                   {sources.length ? (

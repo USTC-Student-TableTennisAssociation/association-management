@@ -54,6 +54,8 @@ import { createChatMemoryMaintenanceScheduler } from "@/memory/chat-assertion-li
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
 import { getMemoryRetriever } from "@/memory/retriever";
 import { createObjectHigherMemoryQueueTool } from "@/memory/object-higher-memory-queue";
+import { createObjectManagementToolset } from "@/memory/object-management-toolset";
+import { objectChangeProposalPresentationSchema } from "@/memory/object-management-types";
 import { createSourceDocumentToolset } from "@/memory/source-document-toolset";
 import { sourceDocumentReferenceBundleSchema } from "@/memory/source-document-ui-schema";
 import type {
@@ -82,6 +84,9 @@ const EXPLORE_INSTRUCTIONS = `
 当且仅当当前用户原话自身陈述了值得后续检索的新组织事实时，调用一次 queueChatAssertionCapture；纯问候、闲聊、问题、假设、头脑风暴、操作指令本身以及仅来自 Assistant 历史的事实不要调用。若操作指令同时明确确认了组织事实，只针对事实部分触发。该工具会使用完整对话上下文选择逐字用户 Evidence，并可自主复用或继续 Shared Brain 搜索；稳定专名在成功 Assertion 中实际使用、没有重复或歧义时，可以原子创建新 Object。
 普通事实使用 execution=background，在回答完成后静默提取。只有用户明确要求修改正式 Business View、且本轮 proposeViewChange 被缺失 Object 阻塞时，才使用 execution=foreground_for_view：必须等待其返回，成功后使用返回的真实 Object/Assertion IDs 继续本轮 Proposal；若没有发布安全结果，不得伪造 ID 或提出依赖缺失 Object 的 Proposal。代词可以由完整对话消歧，但新 Object 名称仍必须逐字来自一条真实 user Evidence，不能从 Assistant、Higher Memory 或搜索结果补写。两种模式都不会自动应用 Business View。
 当当前消息同时包含事实确认和正式 View 修改请求时，先 readSemanticView 并完成必要搜索，判断 Proposal 所需 Object 是否存在；在判断完成前不要抢先选择 background。缺少必要 Object 就选 foreground_for_view；所需 Object 已齐全时可直接 Proposal，并按事实是否值得长期检索决定是否用 background。
+当新名称与已有 Object 重叠、用户指出 surface_forms 错误，或用户要求改名、合并、拆分 Object 时，先用 searchMemory 找到候选，再对每个候选调用 inspectObjectIdentity 阅读真实名称来源、Assertion 引用与正式 View 依赖。名称包含、相似或共现只用于发现候选，不能单独证明同一身份。
+Object 管理分为 use existing、create、纠正 Surface、合并、拆分和暂缓。普通新事实仍优先由 queueChatAssertionCapture 复用/创建 Object；只有身份归属本身需要改变时才调用 proposeObjectChange。proposeObjectChange 只生成可审计建议，用户批准前不会改变数据库。合并/拆分会让相关 Higher Memory 失效并在后续重新维护，绝不能拼接旧文本；若检查结果显示存在正式 Business View Card，当前版本不能安全自动重绑定，应明确告诉用户依赖而不要声称已经完成。
+REMOVE_SURFACE 必须使用 inspectObjectIdentity 返回的精确 Surface id；SPLIT_OBJECT 必须明确哪些 Surface 和 Assertion Reference 移到新身份，不能把同一事实复制给两个 Object。没有足够来源完成分区时选择暂缓，不要猜测合并或拆分。
 系统可能在本轮输入中提供此前消息的 Chat → Assertion 处理回执。回执是操作状态，不是组织事实或 Evidence：只有 published 表示已实际写入；queued/running 尚未完成；skipped 表示处理完成但没有写入；failed 表示处理失败。用户追问“刚才是否记住/Assertion 是否进去”时，优先依据回执回答；需要精确 ID 或刷新状态时调用 readMemoryWriteStatus，不要为此调用组织记忆搜索。
 只有当本轮围绕少数重要 GlobalObject 进行了实质讨论，并值得维护其长期高层认知时，才调用 queueHigherMemoryMaintenance。普通搜索命中、顺带提及或一次性问题不触发。该工具与 Assertion queue 相互独立，只登记 Object id 和原因；后台自动获得同一份完整语义上下文，并固定在本轮 Assertion 阶段结束后才维护。
 Higher Memory 是重要 Object 的高优先级认知文档。searchMemory 返回 [H#] 时，默认直接阅读完整 Higher Memory 并据此回答，不要同时要求其底层 Assertions；只有 Higher Memory 未覆盖用户问题、用户要求细节/原话/来源、内容标明冲突或你明确需要核查时，才继续 followObject 或改写 searchMemory 下钻 Assertions。如果工具警告 Higher Memory 维护后出现了新 Assertion，则这是陈旧保护：必须同时核对返回的 [A#]，当前状态以保留来源强度和时间限定的较新证据为准，不得让旧 [H#] 遮住它。
@@ -412,6 +417,7 @@ export async function POST(request: Request) {
       sourceReferences: zodSchema(sourceDocumentReferenceBundleSchema),
       viewReferences: zodSchema(semanticViewReferenceBundleSchema),
       viewProposal: zodSchema(viewProposalPresentationSchema),
+      objectChangeProposal: zodSchema(objectChangeProposalPresentationSchema),
     },
   });
   if (!validation.success) return jsonError("消息格式错误。", 400);
@@ -620,6 +626,11 @@ export async function POST(request: Request) {
           writer.write({ type: "data-viewProposal", data: proposal });
         },
       });
+      const objectManagementToolset = createObjectManagementToolset({
+        onProposal: (proposal) => {
+          writer.write({ type: "data-objectChangeProposal", data: proposal });
+        },
+      });
       const sourceDocumentToolset = createSourceDocumentToolset({
         evidence,
         resultTokenBudget: exploreResultTokenBudget,
@@ -682,13 +693,15 @@ export async function POST(request: Request) {
         },
         onForegroundResult: (captureResult) => {
           semanticViewToolset.registerPublishedMemory(captureResult);
+          objectManagementToolset.registerPublishedMemory(captureResult);
         },
       });
       const higherMemoryQueueToolset = createObjectHigherMemoryQueueTool({
         trace: debugTrace,
         hasObject: (globalObjectId) =>
           evidence.hasObject(globalObjectId) ||
-          semanticViewToolset.hasInspectedObject(globalObjectId),
+          semanticViewToolset.hasInspectedObject(globalObjectId) ||
+          objectManagementToolset.hasInspectedObject(globalObjectId),
       });
       const tools = {
         ...memoryTools,
@@ -698,6 +711,7 @@ export async function POST(request: Request) {
         }),
         readSourceDocument: sourceDocumentToolset.tool,
         ...semanticViewToolset.tools,
+        ...objectManagementToolset.tools,
         queueChatAssertionCapture: assertionQueueToolset.tool,
         queueHigherMemoryMaintenance: higherMemoryQueueToolset.tool,
       };
