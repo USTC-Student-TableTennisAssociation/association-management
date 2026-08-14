@@ -21,6 +21,14 @@ enum SemanticCardProposalStatus {
   failed
 }
 
+enum MemoryChatAssertionReceiptStatus {
+  queued
+  running
+  published
+  skipped
+  failed
+}
+
 /// 一次已完成 Global Resolution 的 cold-start package。
 /// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个记忆层。
 model MemoryCompilation {
@@ -50,6 +58,10 @@ model MemoryCompilation {
   sourceBlocks            MemorySourceBlock[]
   objectFragments         MemorySourceObjectFragment[]
   assertions              MemoryAssertion[]
+  chatEvidence            MemoryChatEvidence[]
+  chatAssertionCaptures   MemoryChatAssertionCapture[]
+  chatAssertionReceipts   MemoryChatAssertionReceipt[]
+  objectHigherMemories    MemoryObjectHigherMemory[]
   globalObjects           MemoryGlobalObject[]
   assertionEmbeddingIndex MemoryAssertionEmbeddingIndex?
   semanticCards           SemanticCard[]
@@ -132,7 +144,8 @@ model MemorySourceObjectFragment {
 model MemoryAssertion {
   id                              String              @id @default(uuid()) @db.Uuid
   compilationId                   String              @map("compilation_id") @db.Uuid
-  sourceRegionId                  String              @map("source_region_id") @db.Uuid
+  sourceRegionId                  String?             @map("source_region_id") @db.Uuid
+  chatCaptureId                   String?             @map("chat_capture_id") @db.Uuid
   sourceClaimId                   String              @map("source_claim_id") @db.Text
   kind                            MemoryAssertionKind @default(grounded)
   statementTemplateMarkdown       String              @map("statement_template_markdown") @db.Text
@@ -141,7 +154,9 @@ model MemoryAssertion {
   createdAt                       DateTime            @default(now()) @map("created_at")
 
   compilation              MemoryCompilation                       @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  sourceRegion             MemorySourceRegion                      @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  sourceRegion             MemorySourceRegion?                     @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  chatCapture              MemoryChatAssertionCapture?             @relation(fields: [chatCaptureId], references: [id], onDelete: Cascade)
+  chatEvidenceLinks        MemoryAssertionChatEvidenceLink[]
   fragmentReferences       MemoryAssertionFragmentReference[]
   literalGlobalReferences  MemoryGlobalAssertionLiteralReference[]
   semanticObjectLinks      MemoryAssertionSemanticObjectLink[]
@@ -151,7 +166,114 @@ model MemoryAssertion {
   slotBindingSupports      SemanticSlotBindingSupport[]
 
   @@unique([sourceRegionId, sourceClaimId])
+  @@unique([chatCaptureId, sourceClaimId])
+  @@index([chatCaptureId])
   @@map("memory_assertions")
+}
+
+/// 一次由主回答模型显式排队、并在回答后执行的 Assertion 提取事务。
+/// 完整主对话语义转录属于解释上下文，不是事实 Evidence。
+model MemoryChatAssertionCapture {
+  id                String   @id @default(uuid()) @db.Uuid
+  compilationId     String   @map("compilation_id") @db.Uuid
+  queuedByActorId   String   @map("queued_by_actor_id") @db.Uuid
+  queuedByMessageId String   @map("queued_by_message_id") @db.Text
+  queueReason       String   @map("queue_reason") @db.Text
+  submittedAt       DateTime @map("submitted_at") @db.Timestamptz(3)
+  timezone          String   @db.Text
+  semanticContext   Json     @map("semantic_context") @db.JsonB
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  queuedBy    MemoryActor       @relation(fields: [queuedByActorId], references: [id], onDelete: Restrict)
+  assertions  MemoryAssertion[]
+
+  @@unique([queuedByActorId, queuedByMessageId])
+  @@index([compilationId, submittedAt])
+  @@map("memory_chat_assertion_captures")
+}
+
+/// Chat → Assertion 的操作回执；供后续主对话读取真实处理状态，不属于组织事实或 Evidence。
+/// Capture 只在成功发布时存在，而回执也会保留 queued/running/skipped/failed 结果。
+model MemoryChatAssertionReceipt {
+  id                    String                           @id @default(uuid()) @db.Uuid
+  compilationId         String                           @map("compilation_id") @db.Uuid
+  actorId               String                           @map("actor_id") @db.Uuid
+  clientMessageId       String                           @map("client_message_id") @db.Text
+  execution             String                           @db.Text
+  queueReason           String                           @map("queue_reason") @db.Text
+  status                MemoryChatAssertionReceiptStatus @default(queued)
+  submittedAt           DateTime                         @map("submitted_at") @db.Timestamptz(3)
+  startedAt             DateTime?                        @map("started_at") @db.Timestamptz(3)
+  completedAt           DateTime?                        @map("completed_at") @db.Timestamptz(3)
+  publishedAssertions   Int                              @default(0) @map("published_assertions")
+  publishedAssertionIds String[]                         @default([]) @map("published_assertion_ids")
+  affectedObjectIds     String[]                         @default([]) @map("affected_object_ids")
+  affectedObjects       Json                             @default("[]") @map("affected_objects") @db.JsonB
+  outcomeSummary        String?                          @map("outcome_summary") @db.Text
+  errorMessage          String?                          @map("error_message") @db.Text
+  createdAt             DateTime                         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  actor       MemoryActor       @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@unique([actorId, clientMessageId])
+  @@index([compilationId, submittedAt])
+  @@index([actorId, updatedAt])
+  @@map("memory_chat_assertion_receipts")
+}
+
+/// 被至少一条已发布 Assertion 使用的用户聊天 Evidence；Assistant 上下文只用于解释，不是事实依据。
+model MemoryChatEvidence {
+  id                 String   @id @default(uuid()) @db.Uuid
+  compilationId      String   @map("compilation_id") @db.Uuid
+  clientMessageId    String   @map("client_message_id") @db.Text
+  submittedByActorId String   @map("submitted_by_actor_id") @db.Uuid
+  submittedAt        DateTime @map("submitted_at") @db.Timestamptz(3)
+  timezone           String   @db.Text
+  rawUserMessage     String   @map("raw_user_message") @db.Text
+  submittedAtBasis   String   @default("server_received") @map("submitted_at_basis") @db.Text
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  compilation    MemoryCompilation                 @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  submittedBy    MemoryActor                       @relation(fields: [submittedByActorId], references: [id], onDelete: Restrict)
+  assertionLinks MemoryAssertionChatEvidenceLink[]
+  objectMentions MemoryChatObjectMention[]
+
+  @@unique([submittedByActorId, clientMessageId])
+  @@index([compilationId, submittedAt])
+  @@map("memory_chat_evidence")
+}
+
+/// 一条 Assertion 可以由多条用户消息共同支持；逐字引文记录在关联上。
+model MemoryAssertionChatEvidenceLink {
+  assertionId    String   @map("assertion_id") @db.Uuid
+  chatEvidenceId String   @map("chat_evidence_id") @db.Uuid
+  ordinal        Int
+  evidenceQuotes String[] @map("evidence_quotes")
+
+  assertion    MemoryAssertion    @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  chatEvidence MemoryChatEvidence @relation(fields: [chatEvidenceId], references: [id], onDelete: Restrict)
+
+  @@id([assertionId, chatEvidenceId])
+  @@unique([assertionId, ordinal])
+  @@index([chatEvidenceId])
+  @@map("memory_assertion_chat_evidence_links")
+}
+
+/// 第一版由服务端解析出的稳定 Actor identity；认证产品以后只需替换 Actor 获取方式。
+model MemoryActor {
+  id          String   @id @db.Uuid
+  displayName String   @map("display_name") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  chatEvidence          MemoryChatEvidence[]
+  chatAssertionCaptures MemoryChatAssertionCapture[]
+  chatAssertionReceipts MemoryChatAssertionReceipt[]
+
+  @@map("memory_actors")
 }
 
 /// Assertion template 中一次 `{{fragment:...}}` 引用；ordinal 保留重复引用及出现顺序。
@@ -193,14 +315,58 @@ model MemoryGlobalObject {
 
   compilation            MemoryCompilation                          @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   surfaceMemberships     MemoryGlobalObjectSurfaceMembership[]
+  chatMentions           MemoryChatObjectMention[]
   referenceResolutions   MemoryGlobalAssertionReferenceResolution[]
   literalReferences      MemoryGlobalAssertionLiteralReference[]
   semanticAssertionLinks MemoryAssertionSemanticObjectLink[]
+  higherMemory           MemoryObjectHigherMemory?
   semanticCards          SemanticCard[]
 
   @@unique([compilationId, globalObjectKey])
   @@index([compilationId])
   @@map("memory_global_objects")
+}
+
+/// 对话 Evidence 中逐字出现、并被成功 Assertion 使用的 GlobalObject 名称。
+/// 它让聊天创建的 Object 保留可读来源，也让后续检索能够命中用户使用过的名称或简称。
+model MemoryChatObjectMention {
+  globalObjectId        String   @map("global_object_id") @db.Uuid
+  chatEvidenceId        String   @map("chat_evidence_id") @db.Uuid
+  ordinal               Int
+  surfaceForm           String   @map("surface_form") @db.Text
+  normalizedSurfaceForm String   @map("normalized_surface_form") @db.Text
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  globalObject MemoryGlobalObject @relation(fields: [globalObjectId], references: [id], onDelete: Cascade)
+  chatEvidence MemoryChatEvidence @relation(fields: [chatEvidenceId], references: [id], onDelete: Restrict)
+
+  @@id([globalObjectId, chatEvidenceId, ordinal])
+  @@unique([chatEvidenceId, ordinal])
+  @@unique([globalObjectId, chatEvidenceId, surfaceForm])
+  @@index([globalObjectId])
+  @@index([chatEvidenceId])
+  @@index([normalizedSurfaceForm])
+  @@map("memory_chat_object_mentions")
+}
+
+/// 只为对话中少数重要 GlobalObject 按需维护的高优先级认知文档。
+/// 它基于 Assertion 和完整对话生成，但不持久化 Assertion 索引或逐句来源绑定。
+model MemoryObjectHigherMemory {
+  id                String   @id @default(uuid()) @db.Uuid
+  compilationId     String   @map("compilation_id") @db.Uuid
+  globalObjectId    String   @unique @map("global_object_id") @db.Uuid
+  contentMarkdown   String   @map("content_markdown") @db.Text
+  maintainedAt      DateTime @map("maintained_at") @db.Timestamptz(3)
+  triggerMessageId  String   @map("trigger_message_id") @db.Text
+  maintenanceReason String   @map("maintenance_reason") @db.Text
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  compilation  MemoryCompilation  @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  globalObject MemoryGlobalObject @relation(fields: [globalObjectId], references: [id], onDelete: Cascade)
+
+  @@index([compilationId, maintainedAt])
+  @@map("memory_object_higher_memories")
 }
 
 /// Reference Assertion 对 Global Object 的语义覆盖；不要求 Object 名称出现在 Assertion 正文中。
@@ -244,7 +410,7 @@ model MemoryGlobalAssertionReferenceResolution {
   @@map("memory_global_assertion_reference_resolutions")
 }
 
-/// Global Resolver 完成后由无歧义字符串匹配补出的 Assertion 文本 reference atom。
+/// Assertion 文本中一次已经绑定到 GlobalObject 的直接 reference atom；保留出现顺序与 source template span。
 model MemoryGlobalAssertionLiteralReference {
   atomId         String @id @map("atom_id") @db.Text
   assertionId    String @map("assertion_id") @db.Uuid

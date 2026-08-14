@@ -66,14 +66,13 @@ async function main(): Promise<void> {
         id: true,
         sourceTitle: true,
         sourceSha256: true,
-        assertionCount: true,
       },
     });
     if (!compilation) throw new Error("数据库中没有可索引的 MemoryCompilation");
 
     const assertions = await database.memoryAssertion.findMany({
       where: { compilationId: compilation.id },
-      orderBy: [{ sourceRegion: { sourceNodeId: "asc" } }, { sourceClaimId: "asc" }],
+      orderBy: { id: "asc" },
       select: {
         id: true,
         sourceClaimId: true,
@@ -99,18 +98,13 @@ async function main(): Promise<void> {
         },
       },
     });
-    if (assertions.length !== compilation.assertionCount) {
-      throw new Error(
-        `Compilation 声明 ${compilation.assertionCount} 条 Assertion，实际读取 ${assertions.length} 条`,
-      );
-    }
     if (assertions.length === 0) throw new Error("当前 Compilation 没有 Assertion，无法建立向量索引");
 
     const prepared: PreparedAssertion[] = assertions.map((assertion) => {
       const fragmentReferences = assertion.fragmentReferences.map((reference) => {
         if (reference.globalResolutions.length !== 1) {
           throw new Error(
-            `${assertion.sourceRegion.sourceNodeId}/${assertion.sourceClaimId} 的 reference ordinal ` +
+            `${assertion.id}/${assertion.sourceClaimId} 的 reference ordinal ` +
               `${reference.ordinal} 应有且只有一个 Global Object resolution，实际为 ` +
               `${reference.globalResolutions.length}`,
           );
@@ -128,7 +122,7 @@ async function main(): Promise<void> {
       const renderedText = renderResolvedAssertion({
         globalStatementTemplateMarkdown: assertion.globalStatementTemplateMarkdown,
         references: [...fragmentReferences, ...literalReferences],
-        assertionKey: `${assertion.sourceRegion.sourceNodeId}/${assertion.sourceClaimId}`,
+        assertionKey: assertion.id,
       });
       return {
         assertionId: assertion.id,
@@ -169,12 +163,12 @@ async function main(): Promise<void> {
       async (transaction) => {
         const current = await transaction.memoryCompilation.findFirst({
           orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-          select: { id: true, assertionCount: true },
+          select: { id: true, _count: { select: { assertions: true } } },
         });
         if (
           !current ||
           current.id !== compilation.id ||
-          current.assertionCount !== indexed.length
+          current._count.assertions !== indexed.length
         ) {
           throw new Error("生成 embedding 期间当前 Compilation 已改变，拒绝写入过期索引");
         }

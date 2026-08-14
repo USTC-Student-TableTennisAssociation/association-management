@@ -80,4 +80,43 @@ describe("createMemoryExploreToolset", () => {
     )).rejects.toBeInstanceOf(UnknownExploreObjectError);
     expect(exploreMocks.followObject).not.toHaveBeenCalled();
   });
+
+  it("allows a Higher Memory maintainer to follow an explicitly selected Object", async () => {
+    exploreMocks.followObject.mockResolvedValue({
+      ...explored(),
+      kind: "follow-object",
+      globalObjectId: "important-object",
+    });
+    const tools = createMemoryExploreToolset({
+      evidence: new MemoryEvidenceAccumulator(initial()),
+      resultTokenBudget: 1_000,
+      allowKnownObjectIds: ["important-object"],
+      preferHigherMemory: false,
+    });
+
+    await expect(tools.followObject.execute!({
+      globalObjectId: "important-object",
+    }, executionOptions)).resolves.toEqual(expect.objectContaining({
+      globalObjectId: "important-object",
+    }));
+    expect(exploreMocks.followObject).toHaveBeenCalledWith(
+      "important-object",
+      undefined,
+      expect.any(Object),
+    );
+  });
+
+  it("passes Higher Memory preference through to Locate", async () => {
+    const tools = createMemoryExploreToolset({
+      evidence: new MemoryEvidenceAccumulator(initial()),
+      resultTokenBudget: 1_000,
+      preferHigherMemory: false,
+    });
+
+    await tools.searchMemory.execute!({ query: "test" }, executionOptions);
+    expect(exploreMocks.searchMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "test", targetHints: [] }),
+      expect.objectContaining({ preferHigherMemory: false }),
+    );
+  });
 });

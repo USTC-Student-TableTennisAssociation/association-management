@@ -6,18 +6,15 @@ import type {
 } from "@/memory/types";
 
 export type CitedSourceExcerpt = {
-  sourceNodeId: string;
-  sourceClaimId: string;
-  sourceBlockId: string;
+  assertionId: string;
+  sourceKey: string;
   excerpt: string;
 };
 
-function sourceKey(
-  sourceNodeId: string,
-  sourceClaimId: string,
-  sourceBlockId: string,
-): string {
-  return `${sourceNodeId}\u0000${sourceClaimId}\u0000${sourceBlockId}`;
+function sourceKey(source: MemorySourceReference): string {
+  return source.kind === "chat"
+    ? `chat\u0000${source.evidenceId}`
+    : `document\u0000${source.sourceNodeId}\u0000${source.sourceBlockId}`;
 }
 
 function withoutExcerpt(source: MemorySourceReference): MemorySourceReference {
@@ -33,10 +30,7 @@ export function citedAssertionRefs(
   const valid = new Set(seedMap.assertions.map((item) => item.ref));
   return [...text.matchAll(/\[(A\d+)\]/g)]
     .map((match) => match[1])
-    .filter(
-      (ref, index, values) =>
-        valid.has(ref) && values.indexOf(ref) === index,
-    );
+    .filter((ref, index, values) => valid.has(ref) && values.indexOf(ref) === index);
 }
 
 export function attachCitedSourceExcerpts(
@@ -46,12 +40,8 @@ export function attachCitedSourceExcerpts(
 ): MemoryRetrievalResult {
   const citedRefs = new Set(citedAssertionRefs);
   const excerptBySource = new Map(
-    excerpts.map((item) => [
-      sourceKey(item.sourceNodeId, item.sourceClaimId, item.sourceBlockId),
-      item.excerpt,
-    ]),
+    excerpts.map((item) => [`${item.assertionId}\u0000${item.sourceKey}`, item.excerpt]),
   );
-
   return {
     ...result,
     seedMap: {
@@ -60,13 +50,9 @@ export function attachCitedSourceExcerpts(
         ...assertion,
         sources: assertion.sources.map((source) => {
           const provenance = withoutExcerpt(source);
-          if (!citedRefs.has(assertion.ref)) return provenance;
+          if (!citedRefs.has(assertion.ref) || !assertion.id) return provenance;
           const excerpt = excerptBySource.get(
-            sourceKey(
-              assertion.sourceNodeId,
-              assertion.sourceClaimId,
-              source.sourceBlockId,
-            ),
+            `${assertion.id}\u0000${sourceKey(source)}`,
           );
           return excerpt === undefined ? provenance : { ...provenance, excerpt };
         }),
@@ -82,47 +68,45 @@ export async function hydrateCitedSourceExcerpts(
   if (result.mode !== "object-assertion" || !citedAssertionRefs.length) {
     return attachCitedSourceExcerpts(result, [], []);
   }
-
   const citedRefs = new Set(citedAssertionRefs);
-  const citedAssertions = result.seedMap.assertions.filter((assertion) =>
-    citedRefs.has(assertion.ref),
-  );
-  if (!citedAssertions.length) return attachCitedSourceExcerpts(result, [], []);
+  const assertionIds = result.seedMap.assertions
+    .filter((assertion) => citedRefs.has(assertion.ref))
+    .flatMap((assertion) => assertion.id ? [assertion.id] : []);
+  if (!assertionIds.length) return attachCitedSourceExcerpts(result, [], []);
 
   const compilationId = result.compilationId ?? result.trace?.snapshot.id;
   if (!compilationId) return attachCitedSourceExcerpts(result, [], []);
 
   const rows = await getDatabase().memoryAssertion.findMany({
-    where: {
-      compilationId,
-      OR: citedAssertions.map((assertion) => ({
-        sourceClaimId: assertion.sourceClaimId,
-        sourceRegion: { is: { sourceNodeId: assertion.sourceNodeId } },
-      })),
-    },
+    where: { compilationId, id: { in: assertionIds } },
     select: {
-      sourceClaimId: true,
+      id: true,
       sourceRegion: { select: { sourceNodeId: true } },
+      chatEvidenceLinks: {
+        select: {
+          chatEvidence: { select: { id: true, rawUserMessage: true } },
+        },
+      },
       sourceBlockLinks: {
         select: {
-          sourceBlock: {
-            select: {
-              sourceBlockId: true,
-              markdown: true,
-            },
-          },
+          sourceBlock: { select: { sourceBlockId: true, markdown: true } },
         },
       },
     },
   });
-
-  const excerpts = rows.flatMap((row) =>
-    row.sourceBlockLinks.map(({ sourceBlock }) => ({
-      sourceNodeId: row.sourceRegion.sourceNodeId,
-      sourceClaimId: row.sourceClaimId,
-      sourceBlockId: sourceBlock.sourceBlockId,
-      excerpt: sourceBlock.markdown,
-    })),
-  );
+  const excerpts: CitedSourceExcerpt[] = rows.flatMap((row) => {
+    if (row.sourceRegion) {
+      return row.sourceBlockLinks.map(({ sourceBlock }) => ({
+        assertionId: row.id,
+        sourceKey: `document\u0000${row.sourceRegion!.sourceNodeId}\u0000${sourceBlock.sourceBlockId}`,
+        excerpt: sourceBlock.markdown,
+      }));
+    }
+    return row.chatEvidenceLinks.map(({ chatEvidence }) => ({
+          assertionId: row.id,
+          sourceKey: `chat\u0000${chatEvidence.id}`,
+          excerpt: chatEvidence.rawUserMessage,
+        }));
+  });
   return attachCitedSourceExcerpts(result, citedAssertionRefs, excerpts);
 }

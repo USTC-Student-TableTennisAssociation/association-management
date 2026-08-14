@@ -16,6 +16,7 @@ function retrieval(): MemoryRetrievalResult {
       connections: [],
       assertions: ["A1", "A2"].map((ref, index) => ({
         ref,
+        id: `assertion-${index + 1}`,
         kind: "grounded" as const,
         dereferenceRequired: false,
         sourceNodeId: `region-${index + 1}`,
@@ -42,9 +43,8 @@ function retrieval(): MemoryRetrievalResult {
 describe("attachCitedSourceExcerpts", () => {
   it("attaches source text only to cited Assertions and strips all stale excerpts", () => {
     const result = attachCitedSourceExcerpts(retrieval(), ["A1"], [{
-      sourceNodeId: "region-1",
-      sourceClaimId: "claim-1",
-      sourceBlockId: "block-1",
+      assertionId: "assertion-1",
+      sourceKey: "document\u0000region-1\u0000block-1",
       excerpt: "hydrated after answer",
     }]);
 

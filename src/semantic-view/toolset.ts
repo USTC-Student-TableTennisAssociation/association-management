@@ -1,6 +1,7 @@
 import { tool } from "ai";
 
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
+import type { ChatAssertionCaptureResult } from "@/memory/chat-assertion";
 import {
   businessViewDefinitions,
   cardTypePromptContract,
@@ -22,6 +23,9 @@ export function createSemanticViewToolset(input: {
   onProposal?: (proposal: ViewProposalPresentation) => void;
 }) {
   const inspectedViewKeys = new Set<BusinessViewKey>();
+  const inspectedObjectIds = new Set<string>();
+  const foregroundObjectIds = new Set<string>();
+  const foregroundAssertionIds = new Set<string>();
   const viewReferences = createSemanticViewReferenceRegistry();
 
   const tools = {
@@ -36,6 +40,14 @@ export function createSemanticViewToolset(input: {
       execute: async ({ viewKey }) => {
         const view = await getSemanticView(viewKey);
         inspectedViewKeys.add(viewKey);
+        for (const card of view.cards) {
+          if (card.objectId) inspectedObjectIds.add(card.objectId);
+          for (const slot of card.slots) {
+            for (const target of slot.targets) {
+              if (target.objectId) inspectedObjectIds.add(target.objectId);
+            }
+          }
+        }
         return viewReferences.buildSnapshot(view);
       },
     }),
@@ -46,7 +58,7 @@ export function createSemanticViewToolset(input: {
         "这是一个笨工具：它不检索、不分析、不调用另一个模型，也绝不会修改正式 View。",
         "调用前必须先读取 readSemanticView。用户在当前对话中明确确认的业务修改可以直接提议，",
         "不要求先检索 Assertion；如果建议来自 Shared Brain fallback，可以把本轮真实 Assertion ids",
-        "作为本次 Proposal 的可选依据。source-backed Card 使用本轮 GlobalObject id；activity_operations",
+        "作为本次 Proposal 的可选依据。source-backed Card 使用本轮检索到、或由前台 Chat → Assertion 成功发布后返回的 GlobalObject id；activity_operations",
         "的原生 Runtime Card 可以直接使用 name 建立业务身份。",
         "只有稳定、可复用且属于当前 View 职责的缺口才应主动吸收；ContentDimension 是开放结构；",
         "Slot key 只能使用开发者合同。",
@@ -67,12 +79,18 @@ export function createSemanticViewToolset(input: {
           payload,
           evidenceCompilationId: evidence.compilationId,
           allowedObjectIds: new Set(
-            evidence.seedMap.objects.map((object) => object.id),
+            [
+              ...evidence.seedMap.objects.map((object) => object.id),
+              ...foregroundObjectIds,
+            ],
           ),
           allowedAssertionIds: new Set(
-            evidence.seedMap.assertions.flatMap((assertion) =>
-              assertion.id ? [assertion.id] : []
-            ),
+            [
+              ...evidence.seedMap.assertions.flatMap((assertion) =>
+                assertion.id ? [assertion.id] : []
+              ),
+              ...foregroundAssertionIds,
+            ],
           ),
         });
         input.onProposal?.(proposal);
@@ -87,6 +105,14 @@ export function createSemanticViewToolset(input: {
 
   return {
     tools,
+    registerPublishedMemory: (result: ChatAssertionCaptureResult) => {
+      for (const objectId of result.affectedObjectIds) foregroundObjectIds.add(objectId);
+      for (const assertionId of result.publishedAssertionIds) {
+        foregroundAssertionIds.add(assertionId);
+      }
+    },
+    hasInspectedObject: (globalObjectId: string) =>
+      inspectedObjectIds.has(globalObjectId) || foregroundObjectIds.has(globalObjectId),
     citedReferences: viewReferences.citedReferences,
   };
 }

@@ -1,29 +1,46 @@
 import type { MemoryExploreResult } from "@/memory/explore";
 import type {
   MemoryAssertionSeed,
+  MemoryHigherMemorySeed,
   MemoryObjectSeed,
   MemoryRetrievalResult,
   MemorySourceReference,
 } from "@/memory/types";
 
 function assertionKey(input: {
-  sourceNodeId: string;
+  id?: string;
+  sourceNodeId?: string;
   sourceClaimId: string;
 }): string {
-  return `${input.sourceNodeId}\u0000${input.sourceClaimId}`;
+  return input.id ?? `${input.sourceNodeId ?? "unknown"}\u0000${input.sourceClaimId}`;
 }
 
-function numberedRef(ref: string, prefix: "A" | "O"): number {
+function numberedRef(ref: string, prefix: "A" | "O" | "H"): number {
   const match = new RegExp(`^${prefix}(\\d+)$`).exec(ref);
   return match ? Number(match[1]) : 0;
 }
 
 function sourceKey(source: MemorySourceReference): string {
+  if (source.kind === "chat") {
+    return `chat\u0000${source.evidenceId}\u0000${source.ordinal}`;
+  }
   return `${source.sourceNodeId}\u0000${source.sourceBlockId}\u0000${source.ordinal}`;
 }
 
 function withoutExcerpt(source: MemorySourceReference): MemorySourceReference {
+  if (source.kind === "chat") {
+    return {
+      kind: "chat",
+      evidenceId: source.evidenceId,
+      actorId: source.actorId,
+      actorDisplayName: source.actorDisplayName,
+      submittedAt: source.submittedAt,
+      timezone: source.timezone,
+      ordinal: source.ordinal,
+    };
+  }
   return {
+    ...(source.kind ? { kind: source.kind } : {}),
     sourceTitle: source.sourceTitle,
     sourceSha256: source.sourceSha256,
     sourceNodeId: source.sourceNodeId,
@@ -61,12 +78,15 @@ export class MemoryExploreSnapshotError extends Error {
 export class MemoryEvidenceAccumulator {
   private readonly objects: MemoryObjectSeed[];
   private readonly assertions: MemoryAssertionSeed[];
+  private readonly higherMemories: MemoryHigherMemorySeed[];
   private readonly connections: Array<{ assertionRef: string; objectRef: string }>;
   private readonly objectRefById: Map<string, string>;
   private readonly assertionRefByKey: Map<string, string>;
+  private readonly higherMemoryRefByObjectId: Map<string, string>;
   private readonly connectionKeys: Set<string>;
   private nextObjectNumber: number;
   private nextAssertionNumber: number;
+  private nextHigherMemoryNumber: number;
   private compilationId?: string;
 
   constructor(private readonly initial: MemoryRetrievalResult) {
@@ -83,10 +103,16 @@ export class MemoryEvidenceAccumulator {
       matchedFacets: [...item.matchedFacets],
       sources: item.sources.map(withoutExcerpt),
     }));
+    this.higherMemories = (initial.seedMap.higherMemories ?? []).map((item) => ({
+      ...item,
+    }));
     this.connections = initial.seedMap.connections.map((item) => ({ ...item }));
     this.objectRefById = new Map(this.objects.map((item) => [item.id, item.ref]));
     this.assertionRefByKey = new Map(
       this.assertions.map((item) => [assertionKey(item), item.ref]),
+    );
+    this.higherMemoryRefByObjectId = new Map(
+      this.higherMemories.map((item) => [item.globalObjectId, item.ref]),
     );
     this.connectionKeys = new Set(
       this.connections.map((item) => `${item.assertionRef}\u0000${item.objectRef}`),
@@ -95,6 +121,8 @@ export class MemoryEvidenceAccumulator {
       Math.max(0, ...this.objects.map((item) => numberedRef(item.ref, "O"))) + 1;
     this.nextAssertionNumber =
       Math.max(0, ...this.assertions.map((item) => numberedRef(item.ref, "A"))) + 1;
+    this.nextHigherMemoryNumber =
+      Math.max(0, ...this.higherMemories.map((item) => numberedRef(item.ref, "H"))) + 1;
     this.compilationId = initial.compilationId ?? initial.trace?.snapshot.id;
     this.refreshObjectSupport();
   }
@@ -160,7 +188,7 @@ export class MemoryEvidenceAccumulator {
           ...(item.id ? { id: item.id } : {}),
           kind: item.kind,
           dereferenceRequired: item.dereferenceRequired,
-          sourceNodeId: item.sourceNodeId,
+          ...(item.sourceNodeId ? { sourceNodeId: item.sourceNodeId } : {}),
           sourceClaimId: item.sourceClaimId,
           renderedStatement: item.renderedStatement,
           contextDependent: item.contextDependent,
@@ -190,6 +218,23 @@ export class MemoryEvidenceAccumulator {
       };
     });
 
+    const mappedHigherMemories = (result.higherMemories ?? []).map((item) => {
+      let ref = this.higherMemoryRefByObjectId.get(item.globalObjectId);
+      const existing = ref
+        ? this.higherMemories.find((candidate) => candidate.ref === ref)
+        : undefined;
+      if (!ref) {
+        ref = `H${this.nextHigherMemoryNumber++}`;
+        this.higherMemoryRefByObjectId.set(item.globalObjectId, ref);
+        this.higherMemories.push({ ...item, ref });
+      } else if (existing) {
+        existing.id = item.id;
+        existing.contentMarkdown = item.contentMarkdown;
+        existing.maintainedAt = item.maintainedAt;
+      }
+      return { ...item, ref };
+    });
+
     const mappedConnections = result.connections.flatMap((item) => {
       const assertionRef = localAssertionRefs.get(item.assertionRef);
       const objectRef = localObjectRefs.get(item.objectRef);
@@ -207,6 +252,7 @@ export class MemoryEvidenceAccumulator {
     return {
       ...result,
       objects: mappedObjects,
+      ...(mappedHigherMemories.length ? { higherMemories: mappedHigherMemories } : {}),
       assertions: mappedAssertions,
       connections: mappedConnections,
       counts: {
@@ -240,6 +286,9 @@ export class MemoryEvidenceAccumulator {
           matchedFacets: [...item.matchedFacets],
           supportingAssertions: [...item.supportingAssertions],
         })),
+        ...(this.higherMemories.length
+          ? { higherMemories: this.higherMemories.map((item) => ({ ...item })) }
+          : {}),
         assertions: this.assertions.map((item) => ({
           ...item,
           matchedBy: item.matchedBy.map((match) => ({ ...match })),

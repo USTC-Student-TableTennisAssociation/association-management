@@ -152,6 +152,13 @@ function selectMemories(
   retrieval: MemoryRetrievalResult,
   maximumTokens: number,
 ): MemoryRetrievalResult {
+  const higherMemoryOnly = {
+    ...retrieval,
+    seedMap: sliceSeedMapAssertions(retrieval.seedMap, 0),
+  };
+  if (estimateTokens(buildEvidenceContext(higherMemoryOnly)) > maximumTokens) {
+    return higherMemoryOnly;
+  }
   let assertionCount = 0;
 
   for (let count = 1; count <= retrieval.seedMap.assertions.length; count += 1) {

@@ -38,7 +38,8 @@ export type MemorySourceTime = {
   }>;
 };
 
-export type MemorySourceReference = {
+export type MemoryDocumentSourceReference = {
+  kind?: "document";
   sourceTitle: string;
   sourceSha256: string;
   sourceNodeId: string;
@@ -48,6 +49,21 @@ export type MemorySourceReference = {
   pages: number[];
   excerpt?: string;
 };
+
+export type MemoryChatSourceReference = {
+  kind: "chat";
+  evidenceId: string;
+  actorId: string;
+  actorDisplayName: string;
+  submittedAt: string;
+  timezone: string;
+  ordinal: number;
+  excerpt?: string;
+};
+
+export type MemorySourceReference =
+  | MemoryDocumentSourceReference
+  | MemoryChatSourceReference;
 
 export type MemoryObjectSeed = {
   ref: string;
@@ -68,7 +84,7 @@ export type MemoryAssertionSeed = {
   id?: string;
   kind: MemoryAssertionKind;
   dereferenceRequired: boolean;
-  sourceNodeId: string;
+  sourceNodeId?: string;
   sourceClaimId: string;
   renderedStatement: string;
   contextDependent: boolean;
@@ -82,10 +98,20 @@ export type MemoryObjectAssertionConnection = {
   objectRef: string;
 };
 
+export type MemoryHigherMemorySeed = {
+  ref: string;
+  id: string;
+  globalObjectId: string;
+  contentMarkdown: string;
+  maintainedAt: string;
+};
+
 export type StructuredSeedMap = {
   facets: MemoryFacet[];
   sourceTime?: MemorySourceTime;
   objects: MemoryObjectSeed[];
+  /** Only present for the small set of conversation-maintained important Objects. */
+  higherMemories?: MemoryHigherMemorySeed[];
   assertions: MemoryAssertionSeed[];
   connections: MemoryObjectAssertionConnection[];
 };
@@ -156,7 +182,10 @@ export type MemorySearchTrace = {
 
 export type MemoryQuery = {
   query: string;
+  /** Assertion retrieval facets. */
   facets?: MemoryFacet[];
+  /** Entity-only facets; target names must not pollute Assertion ranking. */
+  objectFacets?: MemoryFacet[];
   facetWarnings?: string[];
   signal?: AbortSignal;
 };
@@ -175,6 +204,7 @@ export type MemorySearchBundle = {
   seedMap: StructuredSeedMap;
   /** Final answer citations. Kept outside the optional Locate trace. */
   answerUsedAssertionRefs?: string[];
+  answerUsedHigherMemoryRefs?: string[];
   trace?: MemorySearchTrace;
 };
 

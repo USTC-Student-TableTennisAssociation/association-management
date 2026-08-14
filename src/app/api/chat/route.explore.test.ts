@@ -9,6 +9,14 @@ const providerState = vi.hoisted(() => ({ model: undefined as unknown }));
 const retrieverState = vi.hoisted(() => ({ retrieve: vi.fn() }));
 const proposalState = vi.hoisted(() => ({ create: vi.fn(), read: vi.fn() }));
 const sourceDocumentState = vi.hoisted(() => ({ read: vi.fn() }));
+const assertionCaptureState = vi.hoisted(() => ({ capture: vi.fn() }));
+const assertionReceiptState = vi.hoisted(() => ({
+  list: vi.fn(),
+  queue: vi.fn(),
+  running: vi.fn(),
+  complete: vi.fn(),
+  fail: vi.fn(),
+}));
 
 vi.mock("@/ai/provider", () => ({
   getChatModel: () => providerState.model,
@@ -20,6 +28,23 @@ vi.mock("@/memory/retriever", () => ({
     retrieve: retrieverState.retrieve,
   }),
 }));
+
+vi.mock("@/memory/chat-assertion", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/memory/chat-assertion")>();
+  return { ...original, captureChatAssertions: assertionCaptureState.capture };
+});
+
+vi.mock("@/memory/chat-assertion-receipt", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/memory/chat-assertion-receipt")>();
+  return {
+    ...original,
+    listChatAssertionReceipts: assertionReceiptState.list,
+    queueChatAssertionReceipt: assertionReceiptState.queue,
+    markChatAssertionReceiptRunning: assertionReceiptState.running,
+    completeChatAssertionReceipt: assertionReceiptState.complete,
+    failChatAssertionReceipt: assertionReceiptState.fail,
+  };
+});
 
 vi.mock("@/memory/source-document", () => ({
   readSourceDocumentSelection: sourceDocumentState.read,
@@ -212,6 +237,80 @@ function directProposalToolCallStep() {
   };
 }
 
+function assertionQueueToolCallStep() {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        {
+          type: "tool-call" as const,
+          toolCallId: "call-queue-chat-assertion",
+          toolName: "queueChatAssertionCapture",
+          input: JSON.stringify({
+            reason: "用户陈述了新的活动安排",
+          }),
+        },
+        {
+          type: "finish" as const,
+          finishReason: { unified: "tool-calls" as const, raw: undefined },
+          usage,
+        },
+      ],
+    }),
+  };
+}
+
+function foregroundAssertionToolCallStep() {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        {
+          type: "tool-call" as const,
+          toolCallId: "call-foreground-chat-assertion",
+          toolName: "queueChatAssertionCapture",
+          input: JSON.stringify({
+            reason: "用户明确确认新会长并要求收录进正式档案",
+            execution: "foreground_for_view",
+          }),
+        },
+        {
+          type: "finish" as const,
+          finishReason: { unified: "tool-calls" as const, raw: undefined },
+          usage,
+        },
+      ],
+    }),
+  };
+}
+
+function foregroundPersonProposalToolCallStep() {
+  return {
+    stream: simulateReadableStream({
+      chunks: [
+        {
+          type: "tool-call" as const,
+          toolCallId: "call-foreground-person-proposal",
+          toolName: "proposeViewChange",
+          input: JSON.stringify({
+            viewKey: "society_information",
+            reason: "用户明确确认雷岳鑫并要求收录进正式档案。",
+            changes: [{
+              type: "CREATE_CARD",
+              cardRef: "lei-yuexin",
+              sourceObjectId: "00000000-0000-4000-8000-000000000052",
+              cardTypeKey: "PersonCard",
+            }],
+          }),
+        },
+        {
+          type: "finish" as const,
+          finishReason: { unified: "tool-calls" as const, raw: undefined },
+          usage,
+        },
+      ],
+    }),
+  };
+}
+
 function fixtureRetrieval(): MemoryRetrievalResult {
   return {
     query: "测试记忆",
@@ -311,8 +410,45 @@ function chatRequest(
   });
 }
 
+function chatHistoryRequest(currentText: string): Request {
+  return new Request("http://localhost/api/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      messages: [{
+        id: "user-previous",
+        role: "user",
+        parts: [{ type: "text", text: "我问了一下魏汉东，他说26-27会长是雷岳鑫" }],
+      }, {
+        id: "assistant-previous",
+        role: "assistant",
+        parts: [{ type: "text", text: "明白，我会按规则处理。" }],
+      }, {
+        id: "user-current",
+        role: "user",
+        parts: [{ type: "text", text: currentText }],
+      }],
+    }),
+  });
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  assertionReceiptState.list.mockResolvedValue([]);
+  assertionReceiptState.queue.mockResolvedValue(undefined);
+  assertionReceiptState.running.mockResolvedValue(undefined);
+  assertionReceiptState.complete.mockResolvedValue(undefined);
+  assertionReceiptState.fail.mockResolvedValue(undefined);
+  assertionCaptureState.capture.mockResolvedValue({
+    publishedAssertions: 1,
+    publishedAssertionIds: ["00000000-0000-4000-8000-000000000051"],
+    affectedObjectIds: ["00000000-0000-4000-8000-000000000052"],
+    affectedObjects: [{
+      id: "00000000-0000-4000-8000-000000000052",
+      canonicalName: "雷岳鑫",
+      resolution: "created",
+    }],
+  });
   retrieverState.retrieve.mockResolvedValue(fixtureRetrieval());
   sourceDocumentState.read.mockResolvedValue({
     document: {
@@ -383,19 +519,148 @@ describe("POST /api/chat Explore", () => {
       expect.arrayContaining([
         "searchMemory",
         "followObject",
+        "readMemoryWriteStatus",
         "readSourceDocument",
         "readSemanticView",
         "proposeViewChange",
+        "queueChatAssertionCapture",
+        "queueHigherMemoryMaintenance",
       ]),
     );
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("本轮开始时尚未执行搜索");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("本轮时间锚点");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("组织时区：Asia/Shanghai");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("每个具有时效性的组织结论");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("无法确认今天是否仍然有效");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("contextDependent=true");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("Assertion 很零散");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
+      "纯问候、闲聊、问题、假设",
+    );
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
+      "可以原子创建新 Object",
+    );
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain(
       "没有找到足以支持回答的组织事实",
     );
     expect(body).toContain("你好！");
     expect(body).not.toContain("data-memorySearch");
+  });
+
+  it("injects the previous turn's persisted Assertion receipt into the main model", async () => {
+    assertionReceiptState.list.mockResolvedValue([{
+      actorId: "00000000-0000-4000-8000-000000000001",
+      clientMessageId: "user-previous",
+      execution: "background",
+      queueReason: "用户提供了新任会长信息",
+      status: "published",
+      submittedAt: "2026-08-14T01:00:00.000Z",
+      startedAt: "2026-08-14T01:00:01.000Z",
+      completedAt: "2026-08-14T01:00:03.000Z",
+      publishedAssertions: 1,
+      publishedAssertionIds: ["assertion-1"],
+      affectedObjectIds: ["object-1"],
+      affectedObjects: [{
+        id: "object-1",
+        canonicalName: "雷岳鑫",
+        resolution: "created",
+      }],
+      outcomeSummary: "成功发布 1 条 Assertion，关联 1 个 Object。",
+      updatedAt: "2026-08-14T01:00:03.000Z",
+    }]);
+    const model = new MockLanguageModelV4({
+      doStream: [answerStep("上一轮已经成功发布 1 条 Assertion。")],
+    });
+    providerState.model = model;
+
+    const response = await POST(chatHistoryRequest("刚才的 Assertion 进去了吗？"));
+    await response.text();
+
+    expect(assertionReceiptState.list).toHaveBeenCalledWith({
+      actorId: "00000000-0000-4000-8000-000000000001",
+      clientMessageIds: ["user-previous"],
+      limit: 3,
+    });
+    const prompt = JSON.stringify(model.doStreamCalls[0].prompt);
+    expect(prompt).toContain("Chat → Assertion 处理回执");
+    expect(prompt).toContain("状态：已发布");
+    expect(prompt).toContain("关联 Object：雷岳鑫");
+    expect(prompt).toContain("不是组织事实、不是 Evidence");
+  });
+
+  it("lets the main model explicitly queue a factual user statement without memory search", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        assertionQueueToolCallStep(),
+        answerStep("明白了，这是一项计划中的迎新活动。"),
+      ],
+    });
+    providerState.model = model;
+
+    const response = await POST(chatRequest("我们九月份准备举办迎新活动。"));
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(retrieverState.retrieve).not.toHaveBeenCalled();
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(assertionReceiptState.queue).toHaveBeenCalledWith(expect.objectContaining({
+      clientMessageId: "user-1",
+      execution: "background",
+      queueReason: "用户陈述了新的活动安排",
+    }));
+    expect(body).toContain('"toolName":"queueChatAssertionCapture"');
+    expect(body).toContain("明白了，这是一项计划中的迎新活动");
+    expect(body).not.toContain("data-memorySearch");
+  });
+
+  it("publishes a missing Object before creating a same-turn Business View Proposal", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        viewToolCallStep(),
+        foregroundAssertionToolCallStep(),
+        foregroundPersonProposalToolCallStep(),
+        answerStep("我已创建雷岳鑫的记忆实体，并整理成待批准的人物档案 Proposal。"),
+      ],
+    });
+    providerState.model = model;
+
+    const response = await POST(chatRequest("雷岳鑫确实是会长，你可以收录进档案。"));
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(assertionCaptureState.capture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientMessageId: "user-1",
+        queueDecision: { reason: "用户明确确认新会长并要求收录进正式档案" },
+        semanticContext: expect.objectContaining({
+          finalAnswer: "（前台 Assertion/Object 发布发生在主回答完成之前）",
+        }),
+      }),
+      expect.anything(),
+    );
+    expect(assertionReceiptState.queue).toHaveBeenCalledWith(expect.objectContaining({
+      clientMessageId: "user-1",
+      execution: "foreground_for_view",
+    }));
+    expect(assertionReceiptState.running).toHaveBeenCalledWith(expect.objectContaining({
+      clientMessageId: "user-1",
+    }));
+    expect(assertionReceiptState.complete).toHaveBeenCalledWith(
+      expect.objectContaining({ clientMessageId: "user-1" }),
+      expect.objectContaining({ publishedAssertions: 1 }),
+    );
+    expect(proposalState.create).toHaveBeenCalledWith(expect.objectContaining({
+      allowedObjectIds: new Set(["00000000-0000-4000-8000-000000000052"]),
+      allowedAssertionIds: new Set(["00000000-0000-4000-8000-000000000051"]),
+      payload: expect.objectContaining({
+        changes: [expect.objectContaining({
+          sourceObjectId: "00000000-0000-4000-8000-000000000052",
+          cardTypeKey: "PersonCard",
+        })],
+      }),
+    }));
+    expect(body).toContain("data-viewProposal");
+    expect(body).toContain("雷岳鑫的记忆实体");
   });
 
   it("passes the active Business View presentation as soft context", async () => {

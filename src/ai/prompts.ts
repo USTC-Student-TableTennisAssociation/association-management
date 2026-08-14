@@ -17,7 +17,7 @@ export function buildSystemPromptParts(
   base: string;
   memory: string;
 } {
-  if (result.seedMap.assertions.length === 0) {
+  if (result.seedMap.assertions.length === 0 && !(result.seedMap.higherMemories?.length)) {
     if (state === "not-searched") {
       return { base: BASE_SYSTEM_PROMPT, memory: "" };
     }

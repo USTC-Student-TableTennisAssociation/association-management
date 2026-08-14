@@ -149,7 +149,7 @@ function objectStableKey(item: ObjectRecord): string {
 }
 
 function assertionStableKey(item: AssertionRecord): string {
-  return `${item.sourceRegion.sourceNodeId}\u0000${item.sourceClaimId}`;
+  return item.id;
 }
 
 function renderAssertion(assertion: AssertionRecord): string {
@@ -178,6 +178,7 @@ async function loadObjects(compilationId: string) {
           },
         },
       },
+      chatMentions: { select: { surfaceForm: true } },
     },
   });
   return rows.map((row) => {
@@ -191,6 +192,9 @@ async function loadObjects(compilationId: string) {
         );
       }
       if (surfaceForm.trim()) surfaceForms.add(surfaceForm);
+    }
+    for (const mention of row.chatMentions ?? []) {
+      if (mention.surfaceForm.trim()) surfaceForms.add(mention.surfaceForm);
     }
     return {
       id: row.id,
@@ -253,7 +257,7 @@ async function loadAssertions(compilationId: string) {
     },
   });
   return rows.map((row) => {
-    const assertionKey = `${row.sourceRegion.sourceNodeId}\u0000${row.sourceClaimId}`;
+    const assertionKey = row.id;
     const fragmentReferences = row.fragmentReferences.map<ResolvedAssertionReference>((reference) => {
       if (reference.globalResolutions.length !== 1) {
         throw new ResolvedAssertionIntegrityError(
@@ -424,6 +428,20 @@ async function loadSources(
       id: true,
       compilation: { select: { sourceTitle: true, sourceSha256: true } },
       sourceRegion: { select: { sourceNodeId: true, label: true } },
+      chatEvidenceLinks: {
+        orderBy: { ordinal: "asc" },
+        select: {
+          ordinal: true,
+          chatEvidence: {
+            select: {
+              id: true,
+              submittedAt: true,
+              timezone: true,
+              submittedBy: { select: { id: true, displayName: true } },
+            },
+          },
+        },
+      },
       sourceBlockLinks: {
         orderBy: { ordinal: "asc" },
         select: {
@@ -439,18 +457,29 @@ async function loadSources(
     },
   });
   return new Map(
-    rows.map((row) => [
-      row.id,
-      row.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
-        sourceTitle: row.compilation.sourceTitle,
-        sourceSha256: row.compilation.sourceSha256,
-        sourceNodeId: row.sourceRegion.sourceNodeId,
-        sourceRegionLabel: row.sourceRegion.label,
-        sourceBlockId: sourceBlock.sourceBlockId,
-        ordinal,
-        pages: sourceBlock.sourcePages,
-      })),
-    ]),
+    rows.map((row) => {
+      const sources: MemorySourceReference[] = row.sourceRegion
+        ? row.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
+            kind: "document",
+            sourceTitle: row.compilation.sourceTitle,
+            sourceSha256: row.compilation.sourceSha256,
+            sourceNodeId: row.sourceRegion!.sourceNodeId,
+            sourceRegionLabel: row.sourceRegion!.label,
+            sourceBlockId: sourceBlock.sourceBlockId,
+            ordinal,
+            pages: sourceBlock.sourcePages,
+          }))
+        : row.chatEvidenceLinks.map(({ ordinal, chatEvidence }) => ({
+              kind: "chat",
+              evidenceId: chatEvidence.id,
+              actorId: chatEvidence.submittedBy.id,
+              actorDisplayName: chatEvidence.submittedBy.displayName,
+              submittedAt: chatEvidence.submittedAt.toISOString(),
+              timezone: chatEvidence.timezone,
+              ordinal,
+            }));
+      return [row.id, sources];
+    }),
   );
 }
 
@@ -533,6 +562,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     ? input.facets
     : [{ id: "facet-0", text: input.query, source: "query" as const }]
   ).slice(0, 4);
+  const objectFacets = (input.objectFacets?.length ? input.objectFacets : facets).slice(0, 4);
   const warnings = [...(input.facetWarnings ?? [])];
   const minimumLexicalScore = environmentScore("MEMORY_MIN_LEXICAL_SCORE", 0.18);
   const minimumVectorScore = environmentScore("MEMORY_MIN_VECTOR_SCORE", 0.35);
@@ -542,7 +572,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     loadAssertions(snapshot.id),
   ]);
   const assertionsById = new Map(assertions.map((item) => [item.id, item]));
-  const objectLexicalHits = rankObjectLexical(facets, objects, minimumLexicalScore);
+  const objectLexicalHits = rankObjectLexical(objectFacets, objects, minimumLexicalScore);
   const assertionLexicalHits = rankAssertionLexical(facets, assertions, minimumLexicalScore);
 
   let assertionVectorHits: RankedAssertionHit[] = [];
@@ -671,7 +701,9 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
       id: item.assertion.id,
       kind: item.assertion.kind,
       dereferenceRequired: item.assertion.kind === "reference",
-      sourceNodeId: item.assertion.sourceRegion.sourceNodeId,
+      ...(item.assertion.sourceRegion
+        ? { sourceNodeId: item.assertion.sourceRegion.sourceNodeId }
+        : {}),
       sourceClaimId: item.assertion.sourceClaimId,
       renderedStatement: renderAssertion(item.assertion),
       contextDependent: item.assertion.contextDependent,
@@ -737,7 +769,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     },
     facets,
     objectLexical: channelTrace({
-      facets,
+      facets: objectFacets,
       hits: objectLexicalHits,
       targetRef: (hit) => objectRefById.get(hit.object.id) ?? objectStableKey(hit.object),
       label: (hit) => hit.object.canonicalName,

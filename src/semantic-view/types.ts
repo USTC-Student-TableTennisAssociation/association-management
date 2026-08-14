@@ -20,7 +20,7 @@ export const createCardChangeSchema = z.object({
   cardRef: z.string().trim().regex(/^[a-z][a-z0-9_-]*$/).max(50)
     .describe("供同一 proposal 后续 change 以 new:<cardRef> 引用的局部名字"),
   sourceObjectId: z.string().uuid().optional()
-    .describe("source-backed Card 使用本轮 Shared Brain 检索结果中的 GlobalObject database id"),
+    .describe("source-backed Card 使用本轮 Shared Brain 检索结果或前台 Chat → Assertion 发布结果中的 GlobalObject database id"),
   name: z.string().trim().min(1).max(200).optional()
     .describe("activity_operations 原生 Runtime Card 的名称"),
   cardTypeKey: z.string().trim().min(1).max(100),
@@ -59,7 +59,8 @@ export const viewChangePayloadSchema = z.object({
 export type ViewChangePayload = z.infer<typeof viewChangePayloadSchema>;
 export type ViewChange = z.infer<typeof viewChangeSchema>;
 
-export type AssertionSourceView = {
+export type AssertionDocumentSourceView = {
+  kind?: "document";
   sourceTitle: string;
   sourceNodeId: string;
   sourceRegionLabel: string;
@@ -67,6 +68,19 @@ export type AssertionSourceView = {
   pages: number[];
   excerpt: string;
 };
+
+export type AssertionChatSourceView = {
+  kind: "chat";
+  evidenceId: string;
+  actorDisplayName: string;
+  submittedAt: string;
+  timezone: string;
+  excerpt: string;
+};
+
+export type AssertionSourceView =
+  | AssertionDocumentSourceView
+  | AssertionChatSourceView;
 
 export type AssertionSupportView = {
   id: string;

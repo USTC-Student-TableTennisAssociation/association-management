@@ -1,3 +1,4 @@
+import { zodSchema } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sourceState = vi.hoisted(() => ({ read: vi.fn() }));
@@ -15,6 +16,7 @@ vi.mock("@/memory/source-document", () => ({
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import {
   createSourceDocumentToolset,
+  sourceReadInputSchema,
   UnknownSourceAssertionError,
 } from "@/memory/source-document-toolset";
 import type { MemoryRetrievalResult } from "@/memory/types";
@@ -99,6 +101,38 @@ beforeEach(() => {
 });
 
 describe("createSourceDocumentToolset", () => {
+  it("exposes a DeepSeek-compatible top-level object schema", async () => {
+    const jsonSchema = await zodSchema(sourceReadInputSchema).jsonSchema;
+
+    expect(jsonSchema).toMatchObject({
+      type: "object",
+      properties: expect.objectContaining({
+        mode: expect.any(Object),
+      }),
+      required: expect.arrayContaining(["mode"]),
+    });
+  });
+
+  it("keeps mode-specific required fields in server-side validation", () => {
+    expect(sourceReadInputSchema.safeParse({
+      mode: "around",
+      assertionRef: "A1",
+    }).success).toBe(false);
+    expect(sourceReadInputSchema.safeParse({
+      mode: "around",
+      assertionRef: "A1",
+      beforeBlocks: 1,
+      afterBlocks: 2,
+    }).success).toBe(true);
+    expect(sourceReadInputSchema.safeParse({
+      mode: "continue",
+    }).success).toBe(false);
+    expect(sourceReadInputSchema.safeParse({
+      mode: "continue",
+      continuationCursor: "source-1",
+    }).success).toBe(true);
+  });
+
   it("anchors a full-document read to a real A# and registers only real S# citations", async () => {
     const toolset = createSourceDocumentToolset({
       evidence: new MemoryEvidenceAccumulator(retrieval()),
