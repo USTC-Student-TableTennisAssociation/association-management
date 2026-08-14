@@ -42,6 +42,7 @@ function globalObjects() {
       globalObjectKey: "global-object-event",
       canonicalName: "继往开来",
       identitySummaryMarkdown: "持续存在的校园活动。",
+      chatMentions: [{ surfaceForm: "传统赛" }],
       surfaceMemberships: [
         {
           surfaceFormOrdinal: 0,
@@ -64,6 +65,7 @@ function globalObjects() {
       globalObjectKey: "global-object-student-union",
       canonicalName: "学生会",
       identitySummaryMarkdown: "学生组织。",
+      chatMentions: [],
       surfaceMemberships: [
         {
           surfaceFormOrdinal: 0,
@@ -79,6 +81,7 @@ function globalObjects() {
       globalObjectKey: "global-object-club",
       canonicalName: "社团",
       identitySummaryMarkdown: "学生社团。",
+      chatMentions: [],
       surfaceMemberships: [
         {
           surfaceFormOrdinal: 0,
@@ -232,6 +235,28 @@ afterEach(() => {
 });
 
 describe("GlobalObject-backed Locate", () => {
+  it("finds a GlobalObject by a literal name learned from chat Evidence", async () => {
+    useMockDatabase({
+      objects: globalObjects(),
+      assertions: assertions(),
+      sources: sourceRows(),
+    });
+
+    const result = await locateObjectAssertions({
+      query: "传统赛",
+      facets: [{ id: "facet-chat-name", text: "传统赛", source: "query" }],
+    });
+
+    expect(result.seedMap.objects).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "global-event",
+        canonicalName: "继往开来",
+        surfaceForms: expect.arrayContaining(["传统赛"]),
+        lexicalMatch: true,
+      }),
+    ]));
+  });
+
   it("collapses source fragments into GlobalObject seeds and preserves resolved connections", async () => {
     const database = useMockDatabase({
       objects: globalObjects(),
@@ -260,7 +285,7 @@ describe("GlobalObject-backed Locate", () => {
       semanticMatch: true,
     });
     expect(new Set(eventSeeds[0].surfaceForms)).toEqual(
-      new Set(["继往开来", "传承活动"]),
+      new Set(["继往开来", "传承活动", "传统赛"]),
     );
 
     const assertionByClaim = new Map(

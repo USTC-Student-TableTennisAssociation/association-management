@@ -760,6 +760,7 @@ async function loadGlobalObjects(compilationId: string, objectIds: string[]) {
           objectFragment: { select: { surfaceForms: true } },
         },
       },
+      chatMentions: { select: { surfaceForm: true } },
     },
   });
   return rows.map((row) => {
@@ -772,6 +773,9 @@ async function loadGlobalObjects(compilationId: string, objectIds: string[]) {
         );
       }
       if (surfaceForm.trim()) surfaceForms.add(surfaceForm);
+    }
+    for (const mention of row.chatMentions ?? []) {
+      if (mention.surfaceForm.trim()) surfaceForms.add(mention.surfaceForm);
     }
     return {
       id: row.id,

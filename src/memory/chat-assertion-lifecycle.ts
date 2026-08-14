@@ -4,7 +4,14 @@ import type { EchoDebugTrace } from "@/ai/debug-trace";
 import {
   captureChatAssertions,
   type ChatAssertionCaptureInput,
+  type ChatAssertionCaptureResult,
 } from "@/memory/chat-assertion";
+import {
+  completeChatAssertionReceipt,
+  failChatAssertionReceipt,
+  markChatAssertionReceiptRunning,
+  type ChatAssertionReceiptKey,
+} from "@/memory/chat-assertion-receipt";
 import {
   findExistingHigherMemoryObjectIds,
   maintainObjectHigherMemories,
@@ -13,6 +20,11 @@ import {
 
 export type ChatMemoryMaintenanceInput = {
   assertion?: ChatAssertionCaptureInput;
+  assertionReceipt?: ChatAssertionReceiptKey;
+  completedAssertion?: {
+    input: ChatAssertionCaptureInput;
+    result: ChatAssertionCaptureResult;
+  };
   higherMemory?: ObjectHigherMemoryMaintenanceInput;
 };
 
@@ -48,9 +60,31 @@ export function createChatMemoryMaintenanceScheduler(
             "固定顺序：Chat → Assertion 完整结束后，才允许 Higher Memory 开始维护。",
           ].join("\n"),
         );
-        let captureResult = { publishedAssertions: 0, affectedObjectIds: [] as string[] };
-        if (input.assertion) {
+        let captureResult: ChatAssertionCaptureResult = input.completedAssertion?.result ?? {
+          publishedAssertions: 0,
+          publishedAssertionIds: [],
+          affectedObjectIds: [],
+          affectedObjects: [],
+        };
+        if (input.completedAssertion) {
+          await trace?.appendSection(
+            "后台 Chat → Assertion 跳过",
+            [
+              "本轮 Assertion/Object 已在正式 View Proposal 前完成发布，不重复提取。",
+              `- 已发布 Assertion：${captureResult.publishedAssertions} 条`,
+              `- 关联 Object：${captureResult.affectedObjectIds.length} 个`,
+            ].join("\n"),
+          );
+        } else if (input.assertion) {
           try {
+            if (input.assertionReceipt) {
+              try {
+                await markChatAssertionReceiptRunning(input.assertionReceipt);
+              } catch (error) {
+                console.error("[chat.assertion-receipt.running]", error);
+                await trace?.appendError("Assertion 回执更新为处理中失败", error);
+              }
+            }
             await trace?.appendSection(
               "后台 Chat → Assertion 开始",
               "主回答模型已登记 Assertion 提取意图。",
@@ -60,9 +94,25 @@ export function createChatMemoryMaintenanceScheduler(
               clientMessageId: input.assertion.clientMessageId,
               ...captureResult,
             }));
+            if (input.assertionReceipt) {
+              try {
+                await completeChatAssertionReceipt(input.assertionReceipt, captureResult);
+              } catch (error) {
+                console.error("[chat.assertion-receipt.complete]", error);
+                await trace?.appendError("Assertion 回执写入处理结果失败", error);
+              }
+            }
           } catch (error) {
             console.error("[chat.assertion-capture]", error);
             await trace?.appendError("后台 Chat → Assertion 失败", error);
+            if (input.assertionReceipt) {
+              try {
+                await failChatAssertionReceipt(input.assertionReceipt, error);
+              } catch (receiptError) {
+                console.error("[chat.assertion-receipt.failed]", receiptError);
+                await trace?.appendError("Assertion 回执写入失败状态失败", receiptError);
+              }
+            }
           }
         } else {
           await trace?.appendSection(
@@ -72,10 +122,11 @@ export function createChatMemoryMaintenanceScheduler(
         }
 
         let higherMemoryInput = input.higherMemory;
-        if (input.assertion && captureResult.publishedAssertions > 0) {
+        const assertionContext = input.assertion ?? input.completedAssertion?.input;
+        if (assertionContext && captureResult.publishedAssertions > 0) {
           try {
-            const compilationId = input.assertion.retrieval.compilationId ??
-              input.assertion.retrieval.trace?.snapshot.id;
+            const compilationId = assertionContext.retrieval.compilationId ??
+              assertionContext.retrieval.trace?.snapshot.id;
             const automaticallyAffected = await findExistingHigherMemoryObjectIds({
               objectIds: captureResult.affectedObjectIds,
               compilationId,
@@ -85,11 +136,11 @@ export function createChatMemoryMaintenanceScheduler(
               const objectIds = [...new Set([...explicitIds, ...automaticallyAffected])].slice(0, 6);
               const automaticReason = "本轮新发布 Assertion 涉及已有 Higher Memory，自动刷新以避免旧高层认知遮住新事实。";
               higherMemoryInput = {
-                clientMessageId: higherMemoryInput?.clientMessageId ?? input.assertion.clientMessageId,
-                submittedAt: higherMemoryInput?.submittedAt ?? input.assertion.submittedAt,
-                timezone: higherMemoryInput?.timezone ?? input.assertion.timezone,
-                semanticContext: higherMemoryInput?.semanticContext ?? input.assertion.semanticContext,
-                retrieval: higherMemoryInput?.retrieval ?? input.assertion.retrieval,
+                clientMessageId: higherMemoryInput?.clientMessageId ?? assertionContext.clientMessageId,
+                submittedAt: higherMemoryInput?.submittedAt ?? assertionContext.submittedAt,
+                timezone: higherMemoryInput?.timezone ?? assertionContext.timezone,
+                semanticContext: higherMemoryInput?.semanticContext ?? assertionContext.semanticContext,
+                retrieval: higherMemoryInput?.retrieval ?? assertionContext.retrieval,
                 queueDecision: {
                   objectIds,
                   reason: higherMemoryInput

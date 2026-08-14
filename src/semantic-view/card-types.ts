@@ -80,7 +80,7 @@ export const societyInformationCardTypes = {
     key: "PositionCard",
     viewKey: SOCIETY_INFORMATION_VIEW,
     label: "职位",
-    meaning: "某个学年中的具体职位实例及其任职人员。",
+    meaning: "职位 Object 在某个学年中的具体业务实例及其任职人员；同一职位可按不同学年形成多张 Card。",
     seedContentDimensions: ["职位名称", "学年", "简介 / 职责"],
     slots: {
       holders: {
@@ -121,7 +121,8 @@ export const societyInformationViewDefinition = {
   aiSemanticInstructions:
     "Card identity 必须来自 Shared Brain Object。ContentDimension 是开放结构；" +
     "Slot schema 只允许使用本 View 定义的 advisor、positions、activities、platforms 和 holders。" +
-    "职位按具体学年形成 Position Object/Card；PositionCard.holders 是任职关系的 canonical direction。",
+    "职位 Object 可以跨学年复用；PositionCard 必须设置学年，同一职位 Object 与同一学年只能有一张 Card；" +
+    "PositionCard.holders 是任职关系的 canonical direction。",
   cardTypes: societyInformationCardTypes,
 } as const satisfies BusinessViewDefinition;
 
