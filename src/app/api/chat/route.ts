@@ -27,6 +27,7 @@ import { getChatModel } from "@/ai/provider";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import { modelHistoryMessageText } from "@/ai/ui-message-text";
+import { saveChatMessage } from "@/chat/persistence";
 import {
   citedAssertionRefs,
   hydrateCitedSourceExcerpts,
@@ -445,6 +446,19 @@ export async function POST(request: Request) {
     userMessage: query,
     pageContext,
   });
+  if (latestUserMessage) {
+    try {
+      await saveChatMessage({
+        actor: requestActor,
+        message: latestUserMessage,
+        position: latestUserMessageIndex,
+      });
+    } catch (error) {
+      console.error("[chat.history.write-user]", error);
+      await debugTrace.appendError("保存用户消息失败", error);
+      return jsonError("无法保存对话，请稍后重试。", 503);
+    }
+  }
   const currentTimeInstruction = buildCurrentTimeInstruction(
     submittedAt,
     requestTimezone,
@@ -1002,6 +1016,24 @@ export async function POST(request: Request) {
           return "AI 服务响应失败，请稍后重试。";
         },
       }));
+    },
+    onEnd: async ({ messages: completedMessages, responseMessage }) => {
+      if (responseMessage.parts.length === 0) return;
+      const responsePosition = completedMessages.findLastIndex(
+        (message) => message.id === responseMessage.id,
+      );
+      if (responsePosition < 0) return;
+
+      try {
+        await saveChatMessage({
+          actor: requestActor,
+          message: responseMessage,
+          position: responsePosition,
+        });
+      } catch (error) {
+        console.error("[chat.history.write-assistant]", error);
+        await debugTrace.appendError("保存助手消息失败", error);
+      }
     },
     onError: (error) => {
       console.error(

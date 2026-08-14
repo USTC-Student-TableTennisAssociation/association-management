@@ -10,6 +10,7 @@ const retrieverState = vi.hoisted(() => ({ retrieve: vi.fn() }));
 const proposalState = vi.hoisted(() => ({ create: vi.fn(), read: vi.fn() }));
 const sourceDocumentState = vi.hoisted(() => ({ read: vi.fn() }));
 const assertionCaptureState = vi.hoisted(() => ({ capture: vi.fn() }));
+const chatPersistenceState = vi.hoisted(() => ({ save: vi.fn() }));
 const assertionReceiptState = vi.hoisted(() => ({
   list: vi.fn(),
   queue: vi.fn(),
@@ -20,6 +21,10 @@ const assertionReceiptState = vi.hoisted(() => ({
 
 vi.mock("@/ai/provider", () => ({
   getChatModel: () => providerState.model,
+}));
+
+vi.mock("@/chat/persistence", () => ({
+  saveChatMessage: chatPersistenceState.save,
 }));
 
 vi.mock("@/memory/retriever", () => ({
@@ -434,6 +439,7 @@ function chatHistoryRequest(currentText: string): Request {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  chatPersistenceState.save.mockResolvedValue(undefined);
   assertionReceiptState.list.mockResolvedValue([]);
   assertionReceiptState.queue.mockResolvedValue(undefined);
   assertionReceiptState.running.mockResolvedValue(undefined);
@@ -545,6 +551,36 @@ describe("POST /api/chat Explore", () => {
     );
     expect(body).toContain("你好！");
     expect(body).not.toContain("data-memorySearch");
+    expect(chatPersistenceState.save).toHaveBeenCalledTimes(2);
+    expect(chatPersistenceState.save).toHaveBeenNthCalledWith(1, {
+      actor: expect.objectContaining({ displayName: "开发用户" }),
+      message: expect.objectContaining({ id: "user-1", role: "user" }),
+      position: 0,
+    });
+    expect(chatPersistenceState.save).toHaveBeenNthCalledWith(2, {
+      actor: expect.objectContaining({ displayName: "开发用户" }),
+      message: expect.objectContaining({
+        role: "assistant",
+        parts: expect.arrayContaining([
+          expect.objectContaining({ type: "text", text: expect.stringContaining("你好") }),
+        ]),
+      }),
+      position: 1,
+    });
+  });
+
+  it("does not start generation when the user message cannot be persisted", async () => {
+    chatPersistenceState.save.mockRejectedValueOnce(new Error("database unavailable"));
+    const model = new MockLanguageModelV4({
+      doStream: [answerStep("不应生成")],
+    });
+    providerState.model = model;
+
+    const response = await POST(chatRequest("你好"));
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "无法保存对话，请稍后重试。" });
+    expect(model.doStreamCalls).toHaveLength(0);
   });
 
   it("injects the previous turn's persisted Assertion receipt into the main model", async () => {

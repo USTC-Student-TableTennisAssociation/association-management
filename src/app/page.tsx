@@ -56,6 +56,8 @@ const quickPrompts = [
   "2024 年继往开来什么时候举办？",
 ];
 
+type ChatHistoryState = "loading" | "ready" | "error";
+
 function messageReasoning(message: ClubChatMessage) {
   return message.parts
     .filter((part) => part.type === "reasoning")
@@ -501,6 +503,8 @@ function ChatSurface({
   messages,
   status,
   error,
+  historyState,
+  historyError,
   input,
   compact = false,
   textareaId,
@@ -514,6 +518,8 @@ function ChatSurface({
   messages: ClubChatMessage[];
   status: ChatStatus;
   error?: Error;
+  historyState: ChatHistoryState;
+  historyError?: string;
   input: string;
   compact?: boolean;
   textareaId: string;
@@ -525,7 +531,8 @@ function ChatSurface({
   onPreviewProposal: (proposal: ViewProposalPresentation) => void;
 }) {
   const isSending = status === "submitted" || status === "streaming";
-  const canSend = input.trim().length > 0 && !isSending;
+  const canInteract = historyState === "ready";
+  const canSend = input.trim().length > 0 && !isSending && canInteract;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -648,7 +655,7 @@ function ChatSurface({
       {!compact ? (
         <div className="grid gap-2 sm:grid-cols-3">
           {quickPrompts.map((prompt) => (
-            <button key={prompt} type="button" disabled={isSending} onClick={() => onSubmit(prompt)} className="min-h-11 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm text-zinc-700 shadow-sm hover:border-emerald-300 hover:text-emerald-800 disabled:opacity-60">
+            <button key={prompt} type="button" disabled={isSending || !canInteract} onClick={() => onSubmit(prompt)} className="min-h-11 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm text-zinc-700 shadow-sm hover:border-emerald-300 hover:text-emerald-800 disabled:opacity-60">
               {prompt}
             </button>
           ))}
@@ -663,12 +670,18 @@ function ChatSurface({
           onChange={(event) => onInputChange(event.target.value)}
           onKeyDown={handleKeyDown}
           rows={compact ? 2 : 3}
-          disabled={isSending}
+          disabled={isSending || !canInteract}
           className={`${compact ? "min-h-20" : "min-h-24"} max-h-40 w-full resize-none rounded-md border border-zinc-200 bg-zinc-50 px-3 py-3 text-sm leading-6 text-zinc-950 outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100 disabled:opacity-70`}
           placeholder={compact ? "询问当前页面，或继续已有对话…" : "询问组织资料、活动经验或工作事项…"}
         />
         <div className="mt-2 flex items-center justify-between gap-2">
-          <p className="min-h-5 text-xs text-red-600" role="status">{error?.message}</p>
+          <p className={`min-h-5 text-xs ${historyState === "error" || error ? "text-red-600" : "text-zinc-500"}`} role="status">
+            {historyState === "loading"
+              ? "正在从服务器恢复对话…"
+              : historyState === "error"
+                ? historyError
+                : error?.message}
+          </p>
           <div className="flex gap-2">
             {isSending ? <button type="button" onClick={onStop} className="h-9 rounded-md border border-zinc-300 px-3 text-sm text-zinc-700">停止</button> : null}
             <button type="submit" disabled={!canSend} className="h-9 rounded-md bg-emerald-700 px-4 text-sm font-medium text-white disabled:bg-zinc-300 disabled:text-zinc-500">
@@ -813,11 +826,49 @@ export default function Home() {
       },
     }),
   }), []);
-  const { messages, sendMessage, status, stop, error, clearError } = useChat<ClubChatMessage>({
+  const { messages, sendMessage, status, stop, error, clearError, setMessages } = useChat<ClubChatMessage>({
     messages: initialMessages,
     transport,
   });
+  const [historyState, setHistoryState] = useState<ChatHistoryState>("loading");
+  const [historyError, setHistoryError] = useState<string>();
   const isSending = status === "submitted" || status === "streaming";
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function restoreHistory() {
+      try {
+        const response = await fetch("/api/chat/history", {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const body = await response.json() as {
+          messages?: ClubChatMessage[];
+          error?: string;
+        };
+        if (!response.ok || !Array.isArray(body.messages)) {
+          throw new Error(body.error ?? "无法从服务器恢复对话。");
+        }
+        setMessages([
+          ...initialMessages,
+          ...body.messages.filter((message) => message.id !== "welcome"),
+        ]);
+        setHistoryState("ready");
+      } catch (restoreError) {
+        if (controller.signal.aborted) return;
+        setHistoryError(
+          restoreError instanceof Error
+            ? restoreError.message
+            : "无法从服务器恢复对话。",
+        );
+        setHistoryState("error");
+      }
+    }
+
+    void restoreHistory();
+    return () => controller.abort();
+  }, [setMessages]);
 
   const pageContext: ChatPageContext = activeWorkspace === "chat"
     ? { activePresentation: "full_chat" }
@@ -825,7 +876,7 @@ export default function Home() {
 
   function submit(content: string) {
     const text = content.trim();
-    if (!text || isSending) return;
+    if (!text || isSending || historyState !== "ready") return;
     clearError();
     setInput("");
     void sendMessage({ text }, { body: { pageContext } });
@@ -941,7 +992,7 @@ export default function Home() {
                 <h1 className="mt-1 text-3xl font-semibold text-zinc-950">AI 对话</h1>
                 <p className="mt-2 text-sm text-zinc-600">查询 Shared Brain、讨论业务理解，并在对话中确认 View 修改建议。</p>
               </header>
-              <ChatSurface messages={messages} status={status} error={error} input={input} textareaId="full-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onPreviewProposal={(proposal) => showProposalChange(proposal, 0)} />
+              <ChatSurface messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="full-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onPreviewProposal={(proposal) => showProposalChange(proposal, 0)} />
             </div>
           ) : (
             <SemanticViewWorkspace
@@ -979,7 +1030,7 @@ export default function Home() {
               </div>
               <button type="button" onClick={() => setDrawerOpen(false)} aria-label="收起 AI 对话" className="rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50">×</button>
             </header>
-            <ChatSurface compact messages={messages} status={status} error={error} input={input} textareaId="drawer-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onPreviewProposal={(proposal) => showProposalChange(proposal, 0)} />
+            <ChatSurface compact messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="drawer-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onPreviewProposal={(proposal) => showProposalChange(proposal, 0)} />
           </aside>
         ) : null}
       </div>
