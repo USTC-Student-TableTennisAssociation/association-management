@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ACTIVITY_PLAYBOOK_STARTER_NAMES,
+  activityPlaybookActionSchema,
   activityPlaybookEditorSchema,
   buildActivityPlaybooks,
   guideNodeEditorSchema,
 } from "@/semantic-view/activity-playbook";
+import { ACTIVITY_PLAYBOOK_STARTERS } from "@/semantic-view/activity-playbook-service";
 import type { SemanticViewCard, SemanticViewState } from "@/semantic-view/types";
 
 const playbookId = "11111111-1111-4111-8111-111111111111";
@@ -141,5 +144,43 @@ describe("Activity Playbook projection", () => {
     expect(node).not.toHaveProperty("current");
     expect(node).not.toHaveProperty("locked");
     expect(playbook).not.toHaveProperty("progress");
+  });
+
+  it("ships several internally connected starter maps instead of one giant flow", () => {
+    expect(ACTIVITY_PLAYBOOK_STARTERS.map((starter) => starter.name)).toEqual(
+      ACTIVITY_PLAYBOOK_STARTER_NAMES,
+    );
+    expect(ACTIVITY_PLAYBOOK_STARTERS.find((starter) =>
+      starter.name === "采购与报销操作指南")?.nodes.map((node) => node.name))
+      .toEqual(expect.arrayContaining([
+        "确认预算来源与报销条件",
+        "取得发票与付款凭证",
+        "完成二课结项材料",
+        "填写签领表与报销表",
+        "提交报销审核",
+      ]));
+
+    for (const starter of ACTIVITY_PLAYBOOK_STARTERS) {
+      const nodeKeys = starter.nodes.map((node) => node.key);
+      const nodeKeySet = new Set(nodeKeys);
+      expect(nodeKeySet.size).toBe(nodeKeys.length);
+      expect(nodeKeySet.has(starter.startNodeKey)).toBe(true);
+      for (const node of starter.nodes) {
+        expect(starter.lanes).toContain(node.lane);
+        for (const target of [
+          ...(node.next ?? []),
+          ...(node.yes ? [node.yes] : []),
+          ...(node.no ? [node.no] : []),
+        ]) {
+          expect(nodeKeySet.has(target)).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("accepts the idempotent starter installation action", () => {
+    expect(activityPlaybookActionSchema.parse({
+      type: "INSTALL_STARTER_PLAYBOOKS",
+    })).toEqual({ type: "INSTALL_STARTER_PLAYBOOKS" });
   });
 });

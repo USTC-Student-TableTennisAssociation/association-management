@@ -36,8 +36,15 @@ export const guideNodePathsSchema = z.object({
   whenNoCardId: z.string().uuid().nullable(),
 });
 
+export const ACTIVITY_PLAYBOOK_STARTER_NAMES = [
+  "社团活动筹备操作手册",
+  "采购与报销操作指南",
+  "校内场地申请操作指南",
+] as const;
+
 export const activityPlaybookActionSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("CREATE_SAMPLE_PLAYBOOK") }),
+  z.object({ type: z.literal("INSTALL_STARTER_PLAYBOOKS") }),
   z.object({
     type: z.literal("CREATE_PLAYBOOK"),
     values: activityPlaybookEditorSchema,

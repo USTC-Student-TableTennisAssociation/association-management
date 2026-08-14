@@ -7,6 +7,7 @@ import {
   GUIDE_NODE_TYPES,
   GUIDE_NODE_TYPE_LABELS,
 } from "@/semantic-view/activity-operations-contract";
+import { ACTIVITY_PLAYBOOK_STARTER_NAMES } from "@/semantic-view/activity-playbook";
 import type {
   ActivityGuideNode,
   ActivityPlaybook,
@@ -191,19 +192,21 @@ function PlaybookEditor({
   busy,
   onSave,
 }: {
-  playbook: ActivityPlaybook;
+  playbook?: ActivityPlaybook;
   busy: boolean;
   onSave: (values: ActivityPlaybookEditorValues) => Promise<void>;
 }) {
   const [values, setValues] = useState<ActivityPlaybookEditorValues>({
-    name: playbook.name,
-    description: playbook.description,
-    applicableScenario: playbook.applicableScenario,
-    overview: playbook.overview,
-    notes: playbook.notes,
-    lanes: playbook.lanes,
+    name: playbook?.name ?? "",
+    description: playbook?.description ?? "",
+    applicableScenario: playbook?.applicableScenario ?? "",
+    overview: playbook?.overview ?? "",
+    notes: playbook?.notes ?? "",
+    lanes: playbook?.lanes ?? ["项目负责人"],
   });
-  const [laneText, setLaneText] = useState(playbook.lanes.join("\n"));
+  const [laneText, setLaneText] = useState(
+    playbook?.lanes.join("\n") ?? "项目负责人",
+  );
   const [error, setError] = useState<string>();
 
   async function submit(event: FormEvent) {
@@ -232,7 +235,7 @@ function PlaybookEditor({
       </p>
       {error ? <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p> : null}
       <button disabled={busy} className="w-full rounded-lg bg-emerald-800 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50">
-        {busy ? "正在保存…" : "保存操作手册"}
+        {busy ? "正在保存…" : playbook ? "保存流程地图" : "创建流程地图"}
       </button>
     </form>
   );
@@ -366,7 +369,7 @@ export function ActivityPlaybookOverview({
   const [selectedPlaybookId, setSelectedPlaybookId] = useState<string>();
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [editing, setEditing] = useState<"new" | "edit">();
-  const [editingPlaybook, setEditingPlaybook] = useState(false);
+  const [playbookEditorMode, setPlaybookEditorMode] = useState<"new" | "edit">();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -396,6 +399,8 @@ export function ActivityPlaybookOverview({
   const playbook = collection?.playbooks.find((item) => item.cardId === selectedPlaybookId)
     ?? collection?.playbooks[0];
   const selectedNode = playbook?.nodes.find((node) => node.cardId === selectedNodeId);
+  const missingStarterCount = ACTIVITY_PLAYBOOK_STARTER_NAMES.filter((name) =>
+    !collection?.playbooks.some((item) => item.name === name)).length;
 
   async function mutate(action: ActivityPlaybookAction) {
     setBusy(true);
@@ -407,10 +412,18 @@ export function ActivityPlaybookOverview({
       });
       const body = await response.json() as ActivityPlaybookCollection & { error?: string };
       if (!response.ok) throw new Error(body.error || "保存失败");
+      const previousIds = new Set(collection?.playbooks.map((item) => item.cardId) ?? []);
       setCollection(body);
-      setSelectedPlaybookId((current) => current ?? body.playbooks[0]?.cardId);
+      if (action.type === "CREATE_PLAYBOOK") {
+        setSelectedPlaybookId(
+          body.playbooks.find((item) => !previousIds.has(item.cardId))?.cardId ??
+            body.playbooks.at(-1)?.cardId,
+        );
+      } else {
+        setSelectedPlaybookId((current) => current ?? body.playbooks[0]?.cardId);
+      }
       setEditing(undefined);
-      setEditingPlaybook(false);
+      setPlaybookEditorMode(undefined);
       setError(undefined);
       window.dispatchEvent(new CustomEvent(VIEW_CHANGED_EVENT, {
         detail: { viewKey: "activity_operations" },
@@ -431,20 +444,32 @@ export function ActivityPlaybookOverview({
             用结构化路径帮助人和 AI 理解工作；不跟踪节点完成状态，不限制用户如何执行。
           </p>
         </div>
-        {playbook ? (
-          <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {missingStarterCount > 0 ? (
+            <button type="button" disabled={busy} onClick={() => void mutate({ type: "INSTALL_STARTER_PLAYBOOKS" })} className="rounded-lg border border-emerald-700 bg-white px-4 py-2.5 text-sm font-medium text-emerald-800 disabled:opacity-50">
+              {busy ? "正在载入…" : `载入常用流程（${missingStarterCount}）`}
+            </button>
+          ) : null}
+          <button type="button" onClick={() => {
+            setSelectedNodeId(undefined);
+            setEditing(undefined);
+            setPlaybookEditorMode("new");
+          }} className="rounded-lg bg-emerald-800 px-4 py-2.5 text-sm font-medium text-white">＋ 新建流程地图</button>
+          {playbook ? (
+            <>
             <button type="button" onClick={() => {
               setSelectedNodeId(undefined);
               setEditing(undefined);
-              setEditingPlaybook(true);
-            }} className="rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-700">编辑手册</button>
+              setPlaybookEditorMode("edit");
+            }} className="rounded-lg border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-700">编辑当前流程</button>
             <button type="button" onClick={() => {
               setSelectedNodeId(undefined);
-              setEditingPlaybook(false);
+              setPlaybookEditorMode(undefined);
               setEditing("new");
             }} className="rounded-lg bg-emerald-800 px-4 py-2.5 text-sm font-medium text-white">＋ 新增指南节点</button>
-          </div>
-        ) : null}
+            </>
+          ) : null}
+        </div>
       </div>
       {error ? <p className="mb-4 rounded-lg bg-red-50 p-4 text-sm text-red-700">{error}</p> : null}
       {collection && !collection.playbooks.length ? (
@@ -453,10 +478,34 @@ export function ActivityPlaybookOverview({
           <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-zinc-500">
             可以先根据你过去的泳道图建立一份示例，再直接编辑节点与建议路径。
           </p>
-          <button type="button" disabled={busy} onClick={() => void mutate({ type: "CREATE_SAMPLE_PLAYBOOK" })} className="mt-5 rounded-lg bg-emerald-800 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50">
-            {busy ? "正在建立…" : "建立社团活动筹备示例"}
+          <button type="button" disabled={busy} onClick={() => void mutate({ type: "INSTALL_STARTER_PLAYBOOKS" })} className="mt-5 rounded-lg bg-emerald-800 px-5 py-2.5 text-sm font-medium text-white disabled:opacity-50">
+            {busy ? "正在建立…" : "建立常用流程地图"}
           </button>
         </div>
+      ) : null}
+      {collection && collection.playbooks.length ? (
+        <section className="mb-4 rounded-xl border border-zinc-200 bg-white p-4">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-zinc-900">流程地图目录</h3>
+            <span className="text-xs text-zinc-500">{collection.playbooks.length} 张</span>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+            {collection.playbooks.map((item) => {
+              const selected = item.cardId === playbook?.cardId;
+              return (
+                <button key={item.cardId} type="button" onClick={() => {
+                  setSelectedPlaybookId(item.cardId);
+                  setSelectedNodeId(undefined);
+                  setEditing(undefined);
+                  setPlaybookEditorMode(undefined);
+                }} className={`rounded-lg border px-3.5 py-3 text-left text-sm transition ${selected ? "border-emerald-700 bg-emerald-50 font-medium text-emerald-950" : "border-zinc-200 bg-zinc-50 text-zinc-700 hover:border-emerald-300 hover:bg-white"}`}>
+                  <span className="block">{item.name}</span>
+                  <span className="mt-1 block text-xs font-normal text-zinc-500">{item.nodes.length} 个指南节点</span>
+                </button>
+              );
+            })}
+          </div>
+        </section>
       ) : null}
       {playbook ? (
         <>
@@ -466,59 +515,53 @@ export function ActivityPlaybookOverview({
                 <h3 className="font-semibold text-zinc-900">{playbook.name}</h3>
                 <p className="mt-1 text-sm leading-6 text-zinc-600">{playbook.description}</p>
               </div>
-              {collection && collection.playbooks.length > 1 ? (
-                <select className={inputClass} value={playbook.cardId} onChange={(event) => {
-            setSelectedPlaybookId(event.target.value);
-            setSelectedNodeId(undefined);
-            setEditingPlaybook(false);
-                }}>
-                  {collection.playbooks.map((item) => <option key={item.cardId} value={item.cardId}>{item.name}</option>)}
-                </select>
-              ) : null}
             </div>
             {playbook.applicableScenario ? <p className="mt-3 text-xs text-zinc-500">适用场景：{playbook.applicableScenario}</p> : null}
           </div>
           <PlaybookMap playbook={playbook} selectedCardId={selectedNodeId} onSelect={(node) => {
             setSelectedNodeId(node.cardId);
             setEditing(undefined);
-            setEditingPlaybook(false);
+            setPlaybookEditorMode(undefined);
           }} />
           <p className="mt-3 text-xs text-zinc-400">点击任意节点查看指南。蓝色=操作建议，黄色=判断，紫色=资料/系统，绿色=结果。</p>
         </>
       ) : null}
 
-      {playbook && (selectedNode || editing === "new" || editingPlaybook) ? (
+      {playbookEditorMode === "new" ||
+      (playbook && (selectedNode || editing === "new" || playbookEditorMode === "edit")) ? (
         <div className="fixed inset-0 z-50 flex justify-end bg-zinc-950/20" onMouseDown={(event) => {
           if (event.target === event.currentTarget) {
             setSelectedNodeId(undefined);
             setEditing(undefined);
-            setEditingPlaybook(false);
+            setPlaybookEditorMode(undefined);
           }
         }}>
           <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-zinc-200 bg-white p-6 shadow-2xl">
             <header className="mb-6 flex items-start justify-between gap-4 border-b border-zinc-200 pb-4">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">操作手册节点</p>
-                <h3 className="mt-1 text-xl font-semibold text-zinc-950">{editingPlaybook ? "编辑操作手册" : editing === "new" ? "新增指南节点" : selectedNode?.name}</h3>
+                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">建议型流程地图</p>
+                <h3 className="mt-1 text-xl font-semibold text-zinc-950">{playbookEditorMode === "new" ? "新建流程地图" : playbookEditorMode === "edit" ? "编辑流程地图" : editing === "new" ? "新增指南节点" : selectedNode?.name}</h3>
               </div>
               <button type="button" onClick={() => {
                 setSelectedNodeId(undefined);
                 setEditing(undefined);
-                setEditingPlaybook(false);
+                setPlaybookEditorMode(undefined);
               }} className="rounded-md border border-zinc-200 px-2.5 py-1.5 text-zinc-600">×</button>
             </header>
-            {editingPlaybook ? (
+            {playbookEditorMode ? (
               <PlaybookEditor
-                key={playbook.cardId}
-                playbook={playbook}
+                key={playbookEditorMode === "new" ? "new-playbook" : playbook?.cardId}
+                playbook={playbookEditorMode === "edit" ? playbook : undefined}
                 busy={busy}
-                onSave={(values) => mutate({
-                  type: "UPDATE_PLAYBOOK",
-                  cardId: playbook.cardId,
-                  values,
-                })}
+                onSave={(values) => {
+                  if (playbookEditorMode === "new") {
+                    return mutate({ type: "CREATE_PLAYBOOK", values });
+                  }
+                  if (!playbook) return Promise.reject(new Error("当前流程地图不存在"));
+                  return mutate({ type: "UPDATE_PLAYBOOK", cardId: playbook.cardId, values });
+                }}
               />
-            ) : editing ? (
+            ) : editing && playbook ? (
               <NodeEditor
                 key={selectedNode?.cardId ?? "new"}
                 playbook={playbook}
@@ -542,7 +585,7 @@ export function ActivityPlaybookOverview({
                   }
                 }}
               />
-            ) : selectedNode ? (
+            ) : selectedNode && playbook ? (
               <div className="space-y-4">
                 <div className="flex flex-wrap gap-2">
                   <span className="rounded-full bg-zinc-100 px-3 py-1 text-xs font-medium text-zinc-700">{GUIDE_NODE_TYPE_LABELS[selectedNode.nodeType]}</span>
