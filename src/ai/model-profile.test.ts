@@ -13,7 +13,6 @@ describe("createModelProfile", () => {
       safetyTokens: 12_000,
       historyMaxTokens: 40_000,
       memoryMaxTokens: 64_000,
-      timeoutMs: 480_000,
       maxRequestBytes: 2_000_000,
     });
   });

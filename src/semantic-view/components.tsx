@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 
+import { ActivityPlaybookOverview } from "@/semantic-view/activity-playbook-components";
+import { ActivityPortfolioOverview } from "@/semantic-view/activity-portfolio-components";
 import {
+  ACTIVITY_OPERATIONS_VIEW,
   SOCIETY_INFORMATION_VIEW,
   type AssertionSupportView,
   type BusinessViewKey,
@@ -258,7 +261,7 @@ function proposedNewCard(
     viewKey: proposal.viewKey,
     cardTypeKey: creation.cardTypeKey,
     cardTypeLabel: creation.cardTypeLabel,
-    objectId: creation.objectId,
+    ...(creation.objectId ? { objectId: creation.objectId } : {}),
     objectName: creation.objectName,
     seedContentDimensions: cardType.seedContentDimensions,
     contentDimensions: dimensions.map((change) => ({
@@ -275,8 +278,9 @@ function proposedNewCard(
         cardinality: slotDefinition.cardinality,
         targets: (change?.after ?? []).map((target) => ({
           cardId: target.cardId ?? target.cardSelector,
+          viewKey: slotDefinition.allowedTargetViewKey ?? proposal.viewKey,
           cardTypeKey: target.cardTypeKey,
-          objectId: target.objectId,
+          ...(target.objectId ? { objectId: target.objectId } : {}),
           objectName: target.objectName,
         })),
       };
@@ -973,6 +977,7 @@ export function SemanticViewWorkspace({
   onExitProposalPreview,
   onPresentationChange,
   onOpenAI,
+  onAskAI,
 }: {
   viewKey?: BusinessViewKey;
   presentation: BusinessViewPresentation;
@@ -985,6 +990,7 @@ export function SemanticViewWorkspace({
   onExitProposalPreview: () => void;
   onPresentationChange: (presentation: BusinessViewPresentation) => void;
   onOpenAI: () => void;
+  onAskAI: (prompt: string) => void;
 }) {
   const [view, setView] = useState<SemanticViewState>();
   const [error, setError] = useState<string>();
@@ -1063,6 +1069,15 @@ export function SemanticViewWorkspace({
           >
             卡片
           </button>
+          {viewKey === ACTIVITY_OPERATIONS_VIEW ? (
+            <button
+              type="button"
+              onClick={() => onPresentationChange("playbook")}
+              className={`rounded-md px-4 py-2 text-sm ${presentation === "playbook" ? "bg-white font-medium text-emerald-900 shadow-sm" : "text-zinc-500"}`}
+            >
+              操作手册
+            </button>
+          ) : null}
         </div>
       </header>
 
@@ -1077,14 +1092,25 @@ export function SemanticViewWorkspace({
       ) : null}
 
       {error ? <p className="mt-6 rounded-lg bg-red-50 p-4 text-red-700">{error}</p> : null}
-      {!view && !error ? <p className="mt-6 text-zinc-500">正在读取社团信息…</p> : null}
+      {!view && !error ? <p className="mt-6 text-zinc-500">正在读取 Business View…</p> : null}
       {view && !view.compatible ? (
         <p className="mt-6 rounded-lg bg-red-50 p-4 text-red-800">{view.incompatibilityReason}</p>
       ) : null}
       {view?.compatible ? (
         <div className="mt-7">
-          {presentation === "overview"
-            ? <SocietyInformationOverview view={view} />
+          {presentation === "playbook" && view.viewKey === ACTIVITY_OPERATIONS_VIEW
+            ? <ActivityPlaybookOverview onAskAI={onAskAI} />
+            : presentation === "overview"
+            ? view.viewKey === SOCIETY_INFORMATION_VIEW
+              ? <SocietyInformationOverview view={view} />
+              : view.viewKey === ACTIVITY_OPERATIONS_VIEW
+                ? <ActivityPortfolioOverview />
+                : <GenericSemanticView
+                    view={view}
+                    focus={focus}
+                    proposalPreview={proposalPreview}
+                    onFocusChange={onFocusChange}
+                  />
             : <GenericSemanticView
                 view={view}
                 focus={focus}

@@ -29,6 +29,12 @@ enum MemoryChatAssertionReceiptStatus {
   failed
 }
 
+enum ChatMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
 /// 一次已完成 Global Resolution 的 cold-start package。
 /// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个记忆层。
 model MemoryCompilation {
@@ -273,8 +279,40 @@ model MemoryActor {
   chatEvidence          MemoryChatEvidence[]
   chatAssertionCaptures MemoryChatAssertionCapture[]
   chatAssertionReceipts MemoryChatAssertionReceipt[]
+  chatConversations     ChatConversation[]
 
   @@map("memory_actors")
+}
+
+/// 第一版每个 Actor 只有一个默认对话；后续可在不改变 Message 协议的前提下扩展标题、列表与归档。
+model ChatConversation {
+  id        String   @id @default(uuid()) @db.Uuid
+  actorId   String   @unique @map("actor_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  actor    MemoryActor  @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+
+  @@map("chat_conversations")
+}
+
+/// 持久化浏览器实际展示的完整 AI SDK UIMessage parts，而不是只保存最终纯文本。
+model ChatMessage {
+  id              String          @id @default(uuid()) @db.Uuid
+  conversationId  String          @map("conversation_id") @db.Uuid
+  clientMessageId String          @map("client_message_id") @db.Text
+  role            ChatMessageRole
+  parts           Json
+  position        Int
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, clientMessageId])
+  @@index([conversationId, position, createdAt])
+  @@map("chat_messages")
 }
 
 /// Assertion template 中一次 `{{fragment:...}}` 引用；ordinal 保留重复引用及出现顺序。
@@ -457,18 +495,18 @@ model MemoryAssertionEmbedding {
   @@map("memory_assertion_embeddings")
 }
 
-/// 某个业务 View 对一个当前 Compilation 中 Global Object 的正式语义投影。
+/// 业务 View 中的一张正式 Card。知识投影可锚定 Global Object；原生 Runtime Card 不强制来源身份。
 model SemanticCard {
   id             String   @id @default(uuid()) @db.Uuid
-  compilationId  String   @map("compilation_id") @db.Uuid
-  sourceObjectId String   @map("source_object_id") @db.Uuid
+  compilationId  String?  @map("compilation_id") @db.Uuid
+  sourceObjectId String?  @map("source_object_id") @db.Uuid
   viewKey        String   @map("view_key") @db.Text
   cardTypeKey    String   @map("card_type_key") @db.Text
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  compilation       MemoryCompilation          @relation(fields: [compilationId], references: [id], onDelete: Restrict)
-  sourceObject      MemoryGlobalObject         @relation(fields: [sourceObjectId], references: [id], onDelete: Restrict)
+  compilation       MemoryCompilation?         @relation(fields: [compilationId], references: [id], onDelete: Restrict)
+  sourceObject      MemoryGlobalObject?        @relation(fields: [sourceObjectId], references: [id], onDelete: Restrict)
   contentDimensions SemanticContentDimension[]
   outgoingSlots     SemanticSlotBinding[]      @relation("SemanticSlotSource")
   incomingSlots     SemanticSlotBinding[]      @relation("SemanticSlotTarget")

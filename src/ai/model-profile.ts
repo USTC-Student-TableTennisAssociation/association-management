@@ -5,7 +5,6 @@ export type ModelProfile = {
   safetyTokens: number;
   historyMaxTokens: number;
   memoryMaxTokens: number;
-  timeoutMs: number;
   maxRequestBytes: number;
 };
 
@@ -88,14 +87,6 @@ export function createModelProfile(
       0,
       hardInputTokens,
     ),
-    timeoutMs:
-      environmentInteger(
-        environment,
-        "AI_TIMEOUT_SECONDS",
-        480,
-        30,
-        600,
-      ) * 1_000,
     maxRequestBytes: environmentInteger(
       environment,
       "AI_MAX_REQUEST_BYTES",

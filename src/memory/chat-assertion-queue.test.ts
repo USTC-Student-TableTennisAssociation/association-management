@@ -28,6 +28,7 @@ describe("queueChatAssertionCapture", () => {
 
     await expect(toolset.tool.execute!({
       reason: "用户陈述了新的活动安排",
+      execution: "background",
     }, executionOptions)).resolves.toEqual(expect.objectContaining({
       queued: true,
       alreadyQueued: false,
@@ -46,8 +47,11 @@ describe("queueChatAssertionCapture", () => {
 
   it("is idempotent within one main answer", async () => {
     const toolset = createChatAssertionQueueTool({});
-    await toolset.tool.execute!({ reason: "第一次" }, executionOptions);
-    await expect(toolset.tool.execute!({ reason: "第二次" }, executionOptions))
+    await toolset.tool.execute!({ reason: "第一次", execution: "background" }, executionOptions);
+    await expect(toolset.tool.execute!({
+      reason: "第二次",
+      execution: "background",
+    }, executionOptions))
       .resolves.toEqual(expect.objectContaining({ alreadyQueued: true }));
     expect(toolset.decision()).toEqual({ reason: "第一次" });
   });
