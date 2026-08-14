@@ -731,12 +731,6 @@ export async function POST(request: Request) {
         temperature: 0.3,
         maxOutputTokens: profile.maxOutputTokens,
         abortSignal: request.signal,
-        timeout: {
-          totalMs: profile.timeoutMs,
-          stepMs: Math.min(profile.timeoutMs, 180_000),
-          chunkMs: 60_000,
-          toolMs: 240_000,
-        },
         onLanguageModelCallStart: async (event) => {
           mainModelCallNumber += 1;
           mainModelCalls.push({
