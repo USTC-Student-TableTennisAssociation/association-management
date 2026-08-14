@@ -178,6 +178,7 @@ async function loadObjects(compilationId: string) {
           },
         },
       },
+      chatMentions: { select: { surfaceForm: true } },
     },
   });
   return rows.map((row) => {
@@ -191,6 +192,9 @@ async function loadObjects(compilationId: string) {
         );
       }
       if (surfaceForm.trim()) surfaceForms.add(surfaceForm);
+    }
+    for (const mention of row.chatMentions ?? []) {
+      if (mention.surfaceForm.trim()) surfaceForms.add(mention.surfaceForm);
     }
     return {
       id: row.id,

@@ -16,7 +16,7 @@ export const createCardChangeSchema = z.object({
   cardRef: z.string().trim().regex(/^[a-z][a-z0-9_-]*$/).max(50)
     .describe("供同一 proposal 后续 change 以 new:<cardRef> 引用的局部名字"),
   sourceObjectId: z.string().uuid()
-    .describe("本轮 Shared Brain 检索结果中的 GlobalObject database id"),
+    .describe("本轮 Shared Brain 检索结果或前台 Chat → Assertion 发布结果中的 GlobalObject database id"),
   cardTypeKey: z.string().trim().min(1).max(100),
 });
 

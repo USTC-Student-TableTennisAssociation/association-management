@@ -22,6 +22,31 @@ vi.mock("@/memory/explore-toolset", () => ({
 
 const compilationId = "00000000-0000-4000-8000-000000000010";
 const objectId = "00000000-0000-4000-8000-000000000020";
+const associationRef = "association";
+const presidentRef = "new-president";
+const emptyCaptureResult = {
+  publishedAssertions: 0,
+  publishedAssertionIds: [],
+  affectedObjectIds: [],
+  affectedObjects: [],
+};
+
+function existingAssociationBinding() {
+  return {
+    ref: associationRef,
+    resolution: "existing" as const,
+    globalObjectId: objectId,
+  };
+}
+
+function newPresidentBinding(canonicalName = "雷岳鑫") {
+  return {
+    ref: presidentRef,
+    resolution: "create" as const,
+    canonicalName,
+    surfaceForms: [canonicalName],
+  };
+}
 
 function retrieval(): MemoryRetrievalResult {
   return {
@@ -89,7 +114,11 @@ function mockDatabase() {
       }),
     },
     memoryAssertion: { count: vi.fn().mockResolvedValue(10), createMany: vi.fn() },
-    memoryGlobalObject: { count: vi.fn().mockResolvedValue(1) },
+    memoryGlobalObject: {
+      count: vi.fn().mockResolvedValue(1),
+      findMany: vi.fn().mockResolvedValue([]),
+      createMany: vi.fn(),
+    },
     memoryActor: { upsert: vi.fn() },
     memoryChatEvidence: {
       upsert: vi.fn()
@@ -97,9 +126,11 @@ function mockDatabase() {
         .mockResolvedValueOnce({ id: "00000000-0000-4000-8000-000000000032" }),
     },
     memoryChatAssertionCapture: { create: vi.fn() },
+    memoryChatObjectMention: { findMany: vi.fn().mockResolvedValue([]), createMany: vi.fn() },
     memoryAssertionChatEvidenceLink: { createMany: vi.fn() },
     memoryGlobalAssertionLiteralReference: { createMany: vi.fn() },
     memoryAssertionEmbeddingIndex: { update: vi.fn() },
+    $queryRaw: vi.fn(),
     $executeRaw: vi.fn(),
   };
   const database = {
@@ -115,6 +146,7 @@ function mockDatabase() {
         },
       }),
     },
+    memoryGlobalObject: { findMany: vi.fn().mockResolvedValue([]) },
     $transaction: vi.fn(async (callback: (tx: typeof transaction) => unknown) => callback(transaction)),
   };
   vi.mocked(getDatabase).mockReturnValue(database as never);
@@ -145,13 +177,10 @@ describe("Chat Assertion capture agent", () => {
   it("passes full semantic context and reusable retrieval to a searchable extractor", async () => {
     mockDatabase();
     vi.mocked(generateText).mockResolvedValue({
-      output: { assertions: [] },
+      output: { objects: [], assertions: [] },
     } as never);
 
-    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual({
-      publishedAssertions: 0,
-      affectedObjectIds: [],
-    });
+    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual(emptyCaptureResult);
 
     expect(createMemoryExploreToolset).toHaveBeenCalledWith(expect.objectContaining({
       resultTokenBudget: 32_000,
@@ -171,14 +200,44 @@ describe("Chat Assertion capture agent", () => {
     );
   });
 
+  it("returns stable published IDs on a foreground retry without writing twice", async () => {
+    const { database } = mockDatabase();
+    const assertionId = "00000000-0000-4000-8000-000000000060";
+    const personId = "00000000-0000-4000-8000-000000000061";
+    database.memoryChatAssertionCapture.findFirst.mockResolvedValue({
+      id: "00000000-0000-4000-8000-000000000062",
+      assertions: [{
+        id: assertionId,
+        literalGlobalReferences: [{
+          globalObject: { id: personId, canonicalName: "雷岳鑫" },
+        }],
+      }],
+    });
+
+    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual({
+      publishedAssertions: 1,
+      publishedAssertionIds: [assertionId],
+      affectedObjectIds: [personId],
+      affectedObjects: [{
+        id: personId,
+        canonicalName: "雷岳鑫",
+        resolution: "existing",
+      }],
+    });
+
+    expect(generateText).not.toHaveBeenCalled();
+    expect(database.$transaction).not.toHaveBeenCalled();
+  });
+
   it("uses historical conversation to resolve the Object without persisting it as Evidence", async () => {
     const { database, transaction } = mockDatabase();
     vi.mocked(generateText).mockResolvedValue({
       output: {
+        objects: [existingAssociationBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
-            `{{object:${objectId}}}在2025-2026学年变成4星社团。`,
-          objectIds: [objectId],
+            `{{object:${associationRef}}}在2025-2026学年变成4星社团。`,
+          objectRefs: [associationRef],
           evidence: [{ messageId: "user-current", quotes: ["25-26学年变成4星社团"] }],
         }],
       },
@@ -190,10 +249,15 @@ describe("Chat Assertion capture agent", () => {
       vectors: [Array.from({ length: 1024 }, () => 0.1)],
     });
 
-    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual({
+    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual(expect.objectContaining({
       publishedAssertions: 1,
       affectedObjectIds: [objectId],
-    });
+      affectedObjects: [{
+        id: objectId,
+        canonicalName: "中国科学技术大学学生乒乓球协会",
+        resolution: "existing",
+      }],
+    }));
 
     expect(database.$transaction).toHaveBeenCalledTimes(1);
     expect(transaction.memoryChatEvidence.upsert).toHaveBeenCalledTimes(1);
@@ -222,18 +286,16 @@ describe("Chat Assertion capture agent", () => {
     const { database, transaction } = mockDatabase();
     vi.mocked(generateText).mockResolvedValue({
       output: {
+        objects: [existingAssociationBinding()],
         assertions: [{
-          globalStatementTemplateMarkdown: `{{object:${objectId}}}目前是三星社团。`,
-          objectIds: [objectId],
+          globalStatementTemplateMarkdown: `{{object:${associationRef}}}目前是三星社团。`,
+          objectRefs: [associationRef],
           evidence: [{ messageId: "assistant-context", quotes: ["目前记录是三星"] }],
         }],
       },
     } as never);
 
-    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual({
-      publishedAssertions: 0,
-      affectedObjectIds: [],
-    });
+    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();
     expect(transaction.memoryChatEvidence.upsert).not.toHaveBeenCalled();
   });
@@ -244,10 +306,11 @@ describe("Chat Assertion capture agent", () => {
     captureInput.semanticContext.conversation[0].text = "我说的是刚才那个社团。";
     vi.mocked(generateText).mockResolvedValue({
       output: {
+        objects: [existingAssociationBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
-            `{{object:${objectId}}}在2025-2026学年是四星社团。`,
-          objectIds: [objectId],
+            `{{object:${associationRef}}}在2025-2026学年是四星社团。`,
+          objectRefs: [associationRef],
           evidence: [{
             messageId: "user-current",
             quotes: ["25-26学年变成4星社团"],
@@ -256,10 +319,7 @@ describe("Chat Assertion capture agent", () => {
       },
     } as never);
 
-    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual({
-      publishedAssertions: 0,
-      affectedObjectIds: [],
-    });
+    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();
     expect(transaction.memoryChatEvidence.upsert).not.toHaveBeenCalled();
   });
@@ -268,10 +328,11 @@ describe("Chat Assertion capture agent", () => {
     const { database, transaction } = mockDatabase();
     vi.mocked(generateText).mockResolvedValue({
       output: {
+        objects: [existingAssociationBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
-            `中国科学技术大学学生乒乓球协会（{{object:${objectId}}}）在2025-2026学年是四星社团。`,
-          objectIds: [objectId],
+            `中国科学技术大学学生乒乓球协会（{{object:${associationRef}}}）在2025-2026学年是四星社团。`,
+          objectRefs: [associationRef],
           evidence: [
             { messageId: "user-context", quotes: ["乒协"] },
             { messageId: "user-current", quotes: ["25-26学年变成4星社团"] },
@@ -280,10 +341,7 @@ describe("Chat Assertion capture agent", () => {
       },
     } as never);
 
-    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual({
-      publishedAssertions: 0,
-      affectedObjectIds: [],
-    });
+    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();
     expect(transaction.memoryChatEvidence.upsert).not.toHaveBeenCalled();
   });
@@ -295,10 +353,11 @@ describe("Chat Assertion capture agent", () => {
       "我问了一下魏汉东，他说26-27会长是雷岳鑫";
     vi.mocked(generateText).mockResolvedValue({
       output: {
+        objects: [existingAssociationBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
-            `{{object:${objectId}}}2026-2027学年会长是雷岳鑫。`,
-          objectIds: [objectId],
+            `{{object:${associationRef}}}2026-2027学年会长是雷岳鑫。`,
+          objectRefs: [associationRef],
           evidence: [{
             messageId: "user-current",
             quotes: ["我问了一下魏汉东，他说26-27会长是雷岳鑫"],
@@ -307,25 +366,23 @@ describe("Chat Assertion capture agent", () => {
       },
     } as never);
 
-    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual({
-      publishedAssertions: 0,
-      affectedObjectIds: [],
-    });
+    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();
     expect(transaction.memoryChatEvidence.upsert).not.toHaveBeenCalled();
   });
 
-  it("preserves relayed speech and publishes only the factual current Evidence", async () => {
+  it("atomically creates a new Object used by a relayed Assertion and preserves its literal Evidence name", async () => {
     const { transaction } = mockDatabase();
     const captureInput = input();
     captureInput.semanticContext.conversation[2].text =
       "我问了一下魏汉东，他说26-27会长是雷岳鑫";
     vi.mocked(generateText).mockResolvedValue({
       output: {
+        objects: [existingAssociationBinding(), newPresidentBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
-            `魏汉东说{{object:${objectId}}}2026-2027学年会长是雷岳鑫。`,
-          objectIds: [objectId],
+            `魏汉东说{{object:${associationRef}}}2026-2027学年会长是{{object:${presidentRef}}}。`,
+          objectRefs: [associationRef, presidentRef],
           evidence: [{
             messageId: "user-current",
             quotes: ["我问了一下魏汉东，他说26-27会长是雷岳鑫"],
@@ -340,16 +397,147 @@ describe("Chat Assertion capture agent", () => {
       vectors: [Array.from({ length: 1024 }, () => 0.1)],
     });
 
-    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual({
-      publishedAssertions: 1,
-      affectedObjectIds: [objectId],
+    const result = await captureChatAssertions(captureInput, mockTrace());
+    expect(result.publishedAssertions).toBe(1);
+    expect(result.affectedObjectIds).toHaveLength(2);
+    expect(result.affectedObjectIds).toContain(objectId);
+
+    const createdObject = transaction.memoryGlobalObject.createMany.mock.calls[0][0].data[0];
+    expect(createdObject).toMatchObject({
+      compilationId,
+      canonicalName: "雷岳鑫",
+      globalObjectKey: expect.stringMatching(/^chat-object:/),
+      identitySummaryMarkdown: expect.stringContaining("具体身份与组织事实见关联 Assertion"),
+    });
+    expect(result.affectedObjectIds).toContain(createdObject.id);
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(transaction.memoryChatObjectMention.createMany).toHaveBeenCalledWith({
+      data: [{
+        globalObjectId: createdObject.id,
+        chatEvidenceId: "00000000-0000-4000-8000-000000000031",
+        ordinal: 0,
+        surfaceForm: "雷岳鑫",
+        normalizedSurfaceForm: "雷岳鑫",
+      }],
     });
     expect(transaction.memoryAssertion.createMany).toHaveBeenCalledWith({
       data: [expect.objectContaining({
         statementTemplateMarkdown:
           "魏汉东说中国科学技术大学学生乒乓球协会2026-2027学年会长是雷岳鑫。",
+        globalStatementTemplateMarkdown:
+          `魏汉东说{{object:${objectId}}}2026-2027学年会长是{{object:${createdObject.id}}}。`,
       })],
     });
+    expect(transaction.memoryGlobalAssertionLiteralReference.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({ globalObjectId: objectId, literalOrdinal: 0 }),
+        expect.objectContaining({ globalObjectId: createdObject.id, literalOrdinal: 1 }),
+      ],
+    });
     expect(transaction.memoryChatEvidence.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects Object creation when its literal name already matches an existing Object", async () => {
+    const { database, transaction } = mockDatabase();
+    database.memoryGlobalObject.findMany.mockResolvedValue([{
+      id: "00000000-0000-4000-8000-000000000040",
+      canonicalName: "雷岳鑫",
+      surfaceMemberships: [],
+      chatMentions: [],
+    }]);
+    const captureInput = input();
+    captureInput.semanticContext.conversation[2].text =
+      "我问了一下魏汉东，他说26-27会长是雷岳鑫";
+    vi.mocked(generateText).mockResolvedValue({
+      output: {
+        objects: [existingAssociationBinding(), newPresidentBinding()],
+        assertions: [{
+          globalStatementTemplateMarkdown:
+            `魏汉东说{{object:${associationRef}}}2026-2027学年会长是{{object:${presidentRef}}}。`,
+          objectRefs: [associationRef, presidentRef],
+          evidence: [{
+            messageId: "user-current",
+            quotes: ["我问了一下魏汉东，他说26-27会长是雷岳鑫"],
+          }],
+        }],
+      },
+    } as never);
+
+    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
+    expect(database.$transaction).not.toHaveBeenCalled();
+    expect(transaction.memoryGlobalObject.createMany).not.toHaveBeenCalled();
+    expect(embedMemoryQueries).not.toHaveBeenCalled();
+  });
+
+  it("rolls back cleanly when a concurrent chat creates a conflicting Object before publication", async () => {
+    const { database, transaction } = mockDatabase();
+    transaction.memoryGlobalObject.findMany.mockResolvedValue([{
+      id: "00000000-0000-4000-8000-000000000041",
+      canonicalName: "雷岳鑫",
+      surfaceMemberships: [],
+      chatMentions: [],
+    }]);
+    const captureInput = input();
+    captureInput.semanticContext.conversation[2].text =
+      "我问了一下魏汉东，他说26-27会长是雷岳鑫";
+    vi.mocked(generateText).mockResolvedValue({
+      output: {
+        objects: [existingAssociationBinding(), newPresidentBinding()],
+        assertions: [{
+          globalStatementTemplateMarkdown:
+            `魏汉东说{{object:${associationRef}}}2026-2027学年会长是{{object:${presidentRef}}}。`,
+          objectRefs: [associationRef, presidentRef],
+          evidence: [{
+            messageId: "user-current",
+            quotes: ["我问了一下魏汉东，他说26-27会长是雷岳鑫"],
+          }],
+        }],
+      },
+    } as never);
+    vi.mocked(embedMemoryQueries).mockResolvedValue({
+      model: "BAAI/bge-m3",
+      modelRevision: "test",
+      dimension: 1024,
+      vectors: [Array.from({ length: 1024 }, () => 0.1)],
+    });
+
+    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
+    expect(database.$transaction).toHaveBeenCalledTimes(1);
+    expect(transaction.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(transaction.memoryChatAssertionCapture.create).not.toHaveBeenCalled();
+    expect(transaction.memoryGlobalObject.createMany).not.toHaveBeenCalled();
+    expect(transaction.memoryAssertion.createMany).not.toHaveBeenCalled();
+  });
+
+  it("rejects generic Object names and never leaves an orphan Object", async () => {
+    const { database, transaction } = mockDatabase();
+    const captureInput = input();
+    captureInput.semanticContext.conversation[2].text = "乒协的新会长是会长";
+    vi.mocked(generateText).mockResolvedValue({
+      output: {
+        objects: [existingAssociationBinding(), newPresidentBinding("会长")],
+        assertions: [{
+          globalStatementTemplateMarkdown:
+            `{{object:${associationRef}}}的新会长是{{object:${presidentRef}}}。`,
+          objectRefs: [associationRef, presidentRef],
+          evidence: [{ messageId: "user-current", quotes: ["乒协的新会长是会长"] }],
+        }],
+      },
+    } as never);
+
+    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
+    expect(database.$transaction).not.toHaveBeenCalled();
+    expect(transaction.memoryGlobalObject.createMany).not.toHaveBeenCalled();
+  });
+
+  it("does not persist an unused create proposal when the extractor publishes no Assertion", async () => {
+    const { database, transaction } = mockDatabase();
+    vi.mocked(generateText).mockResolvedValue({
+      output: { objects: [newPresidentBinding()], assertions: [] },
+    } as never);
+
+    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual(emptyCaptureResult);
+    expect(database.$transaction).not.toHaveBeenCalled();
+    expect(transaction.memoryGlobalObject.createMany).not.toHaveBeenCalled();
   });
 });

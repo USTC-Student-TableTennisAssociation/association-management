@@ -185,6 +185,30 @@ function allSupportingAssertionIds(payload: ViewChangePayload): string[] {
   ))];
 }
 
+export function normalizedAcademicYear(value: string): string {
+  const normalized = value.normalize("NFKC")
+    .replace(/\s+/g, "")
+    .replace(/学年$/u, "")
+    .replace(/[—–至~～]/g, "-");
+  const full = normalized.match(/^(20\d{2})-(20\d{2})$/u);
+  if (full) return `${full[1]}-${full[2]}`;
+  const short = normalized.match(/^(\d{2})-(\d{2})$/u);
+  if (short) return `20${short[1]}-20${short[2]}`;
+  return normalized;
+}
+
+function proposedPositionYear(payload: ViewChangePayload, cardRef: string): string | undefined {
+  const selector = `new:${cardRef}`;
+  const dimension = payload.changes.find((change) =>
+    change.type === "SET_CONTENT_DIMENSION" &&
+    change.card === selector &&
+    change.name === "学年"
+  );
+  return dimension?.type === "SET_CONTENT_DIMENSION"
+    ? normalizedAcademicYear(dimension.contentMarkdown)
+    : undefined;
+}
+
 function resolveCard(
   cardsBySelector: Map<string, VirtualCard>,
   selector: string,
@@ -221,7 +245,13 @@ async function validateProposal(
 ): Promise<ValidatedProposal> {
   const existingCards = await database.semanticCard.findMany({
     where: { compilationId, viewKey: payload.viewKey },
-    include: { sourceObject: { select: { canonicalName: true } } },
+    include: {
+      sourceObject: { select: { canonicalName: true } },
+      contentDimensions: {
+        where: { name: "学年" },
+        select: { name: true, contentMarkdown: true },
+      },
+    },
   });
   const cardsBySelector = new Map<string, VirtualCard>(existingCards.map((card) => [
     card.id,
@@ -265,7 +295,7 @@ async function validateProposal(
     const unseen = createObjectIds.filter((id) => !allowedEvidence.objectIds.has(id));
     if (unseen.length) {
       throw new SemanticViewValidationError(
-        `CREATE_CARD 只能使用本轮 Shared Brain 检索中出现的 Object：${unseen.join(", ")}`,
+        `CREATE_CARD 只能使用本轮 Shared Brain 检索或前台 Chat → Assertion 发布中出现的 Object：${unseen.join(", ")}`,
       );
     }
   }
@@ -276,6 +306,7 @@ async function validateProposal(
   const objectsById = new Map(objects.map((object) => [object.id, object]));
 
   const seenNewRefs = new Set<string>();
+  const proposedPositionScopes = new Set<string>();
   for (const change of createChanges) {
     if (seenNewRefs.has(change.cardRef)) {
       throw new SemanticViewValidationError(`重复的 cardRef：${change.cardRef}`);
@@ -291,15 +322,49 @@ async function validateProposal(
     if (!cardType) {
       throw new SemanticViewValidationError(`不支持的 Card Type：${change.cardTypeKey}`);
     }
-    const duplicate = [...cardsBySelector.values()].find(
-      (card) =>
-        card.objectId === change.sourceObjectId &&
-        card.cardTypeKey === change.cardTypeKey,
-    );
-    if (duplicate) {
-      throw new SemanticViewValidationError(
-        `${object.canonicalName} 已有 ${change.cardTypeKey}，请直接修改现有 Card`,
+    if (change.cardTypeKey === "PositionCard") {
+      const academicYear = proposedPositionYear(payload, change.cardRef);
+      if (!academicYear) {
+        throw new SemanticViewValidationError(
+          `新 PositionCard ${change.cardRef} 必须在同一 Proposal 中设置“学年” ContentDimension`,
+        );
+      }
+      const scopeKey = `${change.sourceObjectId}\u0000${academicYear}`;
+      const samePositionCards = existingCards.filter((card) =>
+        card.sourceObjectId === change.sourceObjectId &&
+        card.cardTypeKey === "PositionCard"
       );
+      const unknownScope = samePositionCards.find((card) =>
+        !card.contentDimensions.some((dimension) => dimension.name === "学年")
+      );
+      if (unknownScope) {
+        throw new SemanticViewValidationError(
+          `${object.canonicalName} 已有未填写学年的 PositionCard，无法安全判断是否与 ${academicYear} 重复`,
+        );
+      }
+      const duplicate = samePositionCards.find((card) =>
+        card.contentDimensions.some((dimension) =>
+          dimension.name === "学年" &&
+          normalizedAcademicYear(dimension.contentMarkdown) === academicYear
+        )
+      );
+      if (duplicate || proposedPositionScopes.has(scopeKey)) {
+        throw new SemanticViewValidationError(
+          `${object.canonicalName} 已有 ${academicYear} 学年的 PositionCard，不能重复创建`,
+        );
+      }
+      proposedPositionScopes.add(scopeKey);
+    } else {
+      const duplicate = [...cardsBySelector.values()].find(
+        (card) =>
+          card.objectId === change.sourceObjectId &&
+          card.cardTypeKey === change.cardTypeKey,
+      );
+      if (duplicate) {
+        throw new SemanticViewValidationError(
+          `${object.canonicalName} 已有 ${change.cardTypeKey}，请直接修改现有 Card`,
+        );
+      }
     }
     const selector = `new:${change.cardRef}`;
     cardsBySelector.set(selector, {
@@ -318,7 +383,7 @@ async function validateProposal(
     );
     if (unseen.length) {
       throw new SemanticViewValidationError(
-        `只能引用本轮 Shared Brain 检索中出现的 Assertion：${unseen.join(", ")}`,
+        `只能引用本轮 Shared Brain 检索或前台 Chat → Assertion 发布中出现的 Assertion：${unseen.join(", ")}`,
       );
     }
   }
@@ -757,6 +822,17 @@ export async function decideViewProposal(
         throw new SemanticViewValidationError(
           "Proposal 来源 Compilation 已不是当前 active Compilation，禁止应用",
         );
+      }
+      const positionObjectIds = [...new Set(payload.changes.flatMap((change) =>
+        change.type === "CREATE_CARD" && change.cardTypeKey === "PositionCard"
+          ? [change.sourceObjectId]
+          : []
+      ))].sort();
+      for (const objectId of positionObjectIds) {
+        const lockKey = `semantic-position-card:${compilation.id}:${objectId}`;
+        await transaction.$queryRaw(Prisma.sql`
+          SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))
+        `);
       }
       await validateProposal(transaction, payload, compilation.id);
       await transaction.semanticCardProposal.update({

@@ -33,6 +33,7 @@ import {
 } from "@/memory/citation-sources";
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import {
+  captureChatAssertions,
   currentMemoryActor,
   organizationTimezone,
   type ChatMainModelCall,
@@ -40,6 +41,15 @@ import {
   type ChatSemanticMessage,
 } from "@/memory/chat-assertion";
 import { createChatAssertionQueueTool } from "@/memory/chat-assertion-queue";
+import {
+  buildChatAssertionReceiptInstruction,
+  completeChatAssertionReceipt,
+  createMemoryWriteStatusTool,
+  failChatAssertionReceipt,
+  listChatAssertionReceipts,
+  markChatAssertionReceiptRunning,
+  queueChatAssertionReceipt,
+} from "@/memory/chat-assertion-receipt";
 import { createChatMemoryMaintenanceScheduler } from "@/memory/chat-assertion-lifecycle";
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
 import { getMemoryRetriever } from "@/memory/retriever";
@@ -62,14 +72,17 @@ import {
 export const maxDuration = 600;
 
 // View → Search → optional original-source reads/continuations → Proposal → final answer.
-const MAX_EXPLORE_STEPS = 8;
+const MAX_EXPLORE_STEPS = 12;
 const EXPLORE_PROTOCOL_RESERVE_TOKENS = 4_000;
 
 const EXPLORE_INSTRUCTIONS = `
 你可以按需使用 searchMemory 和 followObject 在 Echo 的 GlobalObject–Assertion 记忆中查找组织知识。本轮开始时尚未执行搜索。
 调用 searchMemory 时必须把“找哪个实体”和“围绕它找什么”分开：targetHints 忠实保留用户所指实体的名称、别名或原话，不得扩写成相邻文档、知识库或概念；query 只表达围绕目标想了解的信息需求。后端会保留当前用户原话并结合完整对话语义上下文识别目标、筛选证据。
 问候、闲聊、改写、翻译、总结用户已提供的文字、一般概念解释以及不依赖 Echo 组织资料的任务，直接回答，不要调用检索工具。
-当且仅当当前用户原话自身陈述了值得后续检索的新组织事实时，调用一次 queueChatAssertionCapture，把本轮排入回答后的可信 Assertion 提取；纯问候、闲聊、问题、假设、头脑风暴、操作指令本身以及仅来自 Assistant 历史的事实不要排队。该工具不是检索或写入工具，不需要你摘取 Evidence 或选择上下文；后台会使用本轮完整语义上下文并可自主复用/继续 Shared Brain 搜索。该线路只能把 Assertion 关联到已经存在且检索确认的 GlobalObject，不能创建新 Object，也不会自动更新 Business View。调用后继续正常回答，不要向用户保证已经记住、写入、自动建档或稍后自行完成更新。
+当且仅当当前用户原话自身陈述了值得后续检索的新组织事实时，调用一次 queueChatAssertionCapture；纯问候、闲聊、问题、假设、头脑风暴、操作指令本身以及仅来自 Assistant 历史的事实不要调用。若操作指令同时明确确认了组织事实，只针对事实部分触发。该工具会使用完整对话上下文选择逐字用户 Evidence，并可自主复用或继续 Shared Brain 搜索；稳定专名在成功 Assertion 中实际使用、没有重复或歧义时，可以原子创建新 Object。
+普通事实使用 execution=background，在回答完成后静默提取。只有用户明确要求修改正式 Business View、且本轮 proposeViewChange 被缺失 Object 阻塞时，才使用 execution=foreground_for_view：必须等待其返回，成功后使用返回的真实 Object/Assertion IDs 继续本轮 Proposal；若没有发布安全结果，不得伪造 ID 或提出依赖缺失 Object 的 Proposal。代词可以由完整对话消歧，但新 Object 名称仍必须逐字来自一条真实 user Evidence，不能从 Assistant、Higher Memory 或搜索结果补写。两种模式都不会自动应用 Business View。
+当当前消息同时包含事实确认和正式 View 修改请求时，先 readSemanticView 并完成必要搜索，判断 Proposal 所需 Object 是否存在；在判断完成前不要抢先选择 background。缺少必要 Object 就选 foreground_for_view；所需 Object 已齐全时可直接 Proposal，并按事实是否值得长期检索决定是否用 background。
+系统可能在本轮输入中提供此前消息的 Chat → Assertion 处理回执。回执是操作状态，不是组织事实或 Evidence：只有 published 表示已实际写入；queued/running 尚未完成；skipped 表示处理完成但没有写入；failed 表示处理失败。用户追问“刚才是否记住/Assertion 是否进去”时，优先依据回执回答；需要精确 ID 或刷新状态时调用 readMemoryWriteStatus，不要为此调用组织记忆搜索。
 只有当本轮围绕少数重要 GlobalObject 进行了实质讨论，并值得维护其长期高层认知时，才调用 queueHigherMemoryMaintenance。普通搜索命中、顺带提及或一次性问题不触发。该工具与 Assertion queue 相互独立，只登记 Object id 和原因；后台自动获得同一份完整语义上下文，并固定在本轮 Assertion 阶段结束后才维护。
 Higher Memory 是重要 Object 的高优先级认知文档。searchMemory 返回 [H#] 时，默认直接阅读完整 Higher Memory 并据此回答，不要同时要求其底层 Assertions；只有 Higher Memory 未覆盖用户问题、用户要求细节/原话/来源、内容标明冲突或你明确需要核查时，才继续 followObject 或改写 searchMemory 下钻 Assertions。如果工具警告 Higher Memory 维护后出现了新 Assertion，则这是陈旧保护：必须同时核对返回的 [A#]，当前状态以保留来源强度和时间限定的较新证据为准，不得让旧 [H#] 遮住它。
 当前正式 Business Views 的优先读取范围：
@@ -102,6 +115,7 @@ readSourceDocument 必须以本轮真实 [A#] 锚定同一份 Source Document，
 用户明确要求修改已有正式 View 时，先 readSemanticView 后可以直接提出 Proposal，不强制搜索 Assertion。
 Business View 是用户批准后形成的正式业务认知状态，不以永久绑定 Assertion 为合法前提；Proposal 中的 Assertion 只是在存在时解释本次建议依据。
 proposeViewChange 不会修改正式状态。提出后应向用户简要解释建议，并等待用户在 Chat 中批准、拒绝或继续讨论。
+当用户明确要求“收录进档案”等正式 View 修改时，应尽量在同一轮完成必要搜索、前台 Assertion/Object 发布和 proposeViewChange；不要因为最初缺少 Object 就提前宣告无法建档。Proposal 仍需用户查看后点击批准，不能把用户对事实的确认当成对尚未展示 Proposal 的自动批准。
 `.trim();
 
 const FINAL_ANSWER_INSTRUCTION =
@@ -443,6 +457,34 @@ export async function POST(request: Request) {
         : {}),
     }];
   });
+  const conversationUserMessageIds = semanticConversation
+    .filter((message) => message.role === "user")
+    .map((message) => message.messageId);
+  let previousAssertionReceipts = [] as Awaited<ReturnType<typeof listChatAssertionReceipts>>;
+  try {
+    previousAssertionReceipts = await listChatAssertionReceipts({
+      actorId: requestActor.id,
+      clientMessageIds: conversationUserMessageIds.filter((id) => id !== latestUserMessage?.id),
+      limit: 3,
+    });
+    if (previousAssertionReceipts.length) {
+      await debugTrace.appendJsonSection(
+        "向主对话同步的 Assertion 处理回执",
+        previousAssertionReceipts,
+      );
+    }
+  } catch (error) {
+    console.error("[chat.assertion-receipt.load]", error);
+    await debugTrace.appendError("读取此前 Assertion 处理回执失败", error);
+  }
+  const assertionReceiptInstruction = buildChatAssertionReceiptInstruction({
+    receipts: previousAssertionReceipts,
+    messageTextById: new Map(
+      semanticConversation
+        .filter((message) => message.role === "user")
+        .map((message) => [message.messageId, message.text]),
+    ),
+  });
   const memoryMaintenance = createChatMemoryMaintenanceScheduler(debugTrace);
 
   let model;
@@ -512,6 +554,16 @@ export async function POST(request: Request) {
     originalMessages: messages,
     execute: async ({ writer }) => {
       const evidence = new MemoryEvidenceAccumulator(context.retrieval);
+      const exploreSystem = [
+        context.system,
+        currentTimeInstruction,
+        pageContextInstruction(pageContext),
+        EXPLORE_INSTRUCTIONS,
+        assertionReceiptInstruction,
+      ].join("\n\n");
+      let mainModelCallNumber = 0;
+      const mainModelCalls: ChatMainModelCall[] = [];
+      const mainToolExecutions: ChatMainToolExecution[] = [];
       const sharedResultBudget = new ToolResultTokenBudget(exploreResultTokenBudget);
       let hasSearchedMemory = false;
       let latestLocateTrace: MemorySearchTrace | undefined;
@@ -575,6 +627,62 @@ export async function POST(request: Request) {
       });
       const assertionQueueToolset = createChatAssertionQueueTool({
         trace: debugTrace,
+        onQueued: async (queueDecision, execution) => {
+          try {
+            if (!latestUserMessage) throw new Error("Assertion 回执缺少当前用户消息");
+            await queueChatAssertionReceipt({
+              actorId: requestActor.id,
+              actorDisplayName: requestActor.displayName,
+              clientMessageId: latestUserMessage.id,
+              submittedAt: submittedAt.toISOString(),
+              execution,
+              queueReason: queueDecision.reason,
+            });
+          } catch (error) {
+            console.error("[chat.assertion-receipt.queue]", error);
+            await debugTrace.appendError("登记 Assertion 处理回执失败", error);
+          }
+        },
+        captureForeground: async (queueDecision) => {
+          if (!latestUserMessage) {
+            throw new Error("前台 Assertion 捕获缺少当前用户消息");
+          }
+          const receiptKey = {
+            actorId: requestActor.id,
+            clientMessageId: latestUserMessage.id,
+          };
+          try {
+            await markChatAssertionReceiptRunning(receiptKey);
+            const captureResult = await captureChatAssertions({
+              clientMessageId: latestUserMessage.id,
+              submittedAt: submittedAt.toISOString(),
+              timezone: requestTimezone,
+              semanticContext: {
+                conversation: semanticConversation,
+                systemInstruction: exploreSystem,
+                pageContext,
+                modelCalls: [...mainModelCalls],
+                toolExecutions: [...mainToolExecutions],
+                finalAnswer: "（前台 Assertion/Object 发布发生在主回答完成之前）",
+              },
+              retrieval: evidence.snapshot(),
+              queueDecision,
+            }, debugTrace);
+            await completeChatAssertionReceipt(receiptKey, captureResult);
+            return captureResult;
+          } catch (error) {
+            try {
+              await failChatAssertionReceipt(receiptKey, error);
+            } catch (receiptError) {
+              console.error("[chat.assertion-receipt.foreground-failed]", receiptError);
+              await debugTrace.appendError("前台 Assertion 失败回执写入失败", receiptError);
+            }
+            throw error;
+          }
+        },
+        onForegroundResult: (captureResult) => {
+          semanticViewToolset.registerPublishedMemory(captureResult);
+        },
       });
       const higherMemoryQueueToolset = createObjectHigherMemoryQueueTool({
         trace: debugTrace,
@@ -584,21 +692,15 @@ export async function POST(request: Request) {
       });
       const tools = {
         ...memoryTools,
+        readMemoryWriteStatus: createMemoryWriteStatusTool({
+          actorId: requestActor.id,
+          conversationMessageIds: conversationUserMessageIds,
+        }),
         readSourceDocument: sourceDocumentToolset.tool,
         ...semanticViewToolset.tools,
         queueChatAssertionCapture: assertionQueueToolset.tool,
         queueHigherMemoryMaintenance: higherMemoryQueueToolset.tool,
       };
-      const exploreSystem = [
-        context.system,
-        currentTimeInstruction,
-        pageContextInstruction(pageContext),
-        EXPLORE_INSTRUCTIONS,
-      ].join("\n\n");
-      let mainModelCallNumber = 0;
-      const mainModelCalls: ChatMainModelCall[] = [];
-      const mainToolExecutions: ChatMainToolExecution[] = [];
-
       const result = streamText({
         model,
         system: exploreSystem,
@@ -628,7 +730,7 @@ export async function POST(request: Request) {
           totalMs: profile.timeoutMs,
           stepMs: Math.min(profile.timeoutMs, 180_000),
           chunkMs: 60_000,
-          toolMs: 120_000,
+          toolMs: 240_000,
         },
         onLanguageModelCallStart: async (event) => {
           mainModelCallNumber += 1;
@@ -758,6 +860,8 @@ export async function POST(request: Request) {
           }
           const accumulatedRetrieval = evidence.snapshot();
           const assertionQueueDecision = assertionQueueToolset.decision();
+          const foregroundAssertionDecision = assertionQueueToolset.foregroundDecision();
+          const foregroundAssertionResult = assertionQueueToolset.foregroundResult();
           const higherMemoryQueueDecision = higherMemoryQueueToolset.decision();
           const semanticContext = {
             conversation: semanticConversation,
@@ -767,17 +871,39 @@ export async function POST(request: Request) {
             toolExecutions: mainToolExecutions,
             finalAnswer: text,
           };
-          if (latestUserMessage && (assertionQueueDecision || higherMemoryQueueDecision)) {
+          if (
+            latestUserMessage &&
+            (assertionQueueDecision || foregroundAssertionResult || higherMemoryQueueDecision)
+          ) {
+            const assertionInput = (queueDecision: NonNullable<
+              typeof assertionQueueDecision | typeof foregroundAssertionDecision
+            >) => ({
+              clientMessageId: latestUserMessage.id,
+              submittedAt: submittedAt.toISOString(),
+              timezone: requestTimezone,
+              semanticContext,
+              retrieval: accumulatedRetrieval,
+              queueDecision,
+            });
             memoryMaintenance.publish({
               ...(assertionQueueDecision
                 ? {
-                    assertion: {
+                    assertionReceipt: {
+                      actorId: requestActor.id,
                       clientMessageId: latestUserMessage.id,
-                      submittedAt: submittedAt.toISOString(),
-                      timezone: requestTimezone,
-                      semanticContext,
-                      retrieval: accumulatedRetrieval,
-                      queueDecision: assertionQueueDecision,
+                    },
+                  }
+                : {}),
+              ...(assertionQueueDecision
+                ? {
+                    assertion: assertionInput(assertionQueueDecision),
+                  }
+                : {}),
+              ...(foregroundAssertionResult && foregroundAssertionDecision
+                ? {
+                    completedAssertion: {
+                      input: assertionInput(foregroundAssertionDecision),
+                      result: foregroundAssertionResult,
                     },
                   }
                 : {}),
