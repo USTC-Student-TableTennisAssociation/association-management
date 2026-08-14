@@ -409,7 +409,7 @@ async def test_atomic_parenthetical_same_referent_is_not_a_factual_claim(
 
     initial = json.loads(paths.initial_claims_json.read_text(encoding="utf-8"))
     reviewed = json.loads(paths.reviewed_claims_json.read_text(encoding="utf-8"))
-    assert initial["schema_version"] == "source-claims.v6"
+    assert initial["schema_version"] == "source-claims.v7"
     assert initial["claims"] == []
     assert len(initial["same_referent_drafts"]) == 1
     assert reviewed["same_referent_drafts"] == initial["same_referent_drafts"]
@@ -732,6 +732,70 @@ def test_fragment_can_extend_atomic_hint_with_source_local_reusable_name() -> No
             "中国科学技术大学学生乒乓球协会（USTC TTA）。之后乒协成立于2000年。"
         ),
     )
+
+
+def test_fragment_keeps_independent_full_and_short_names() -> None:
+    claim = _source_claim("claim-1", "中国科学技术大学又称中国科大、中科大。")
+    submission = ObjectFragmentSubmission(
+        fragments=[
+            ObjectFragmentDraft(
+                fragment_key="F1",
+                surface_forms=["中国科学技术大学", "中国科大", "中科大"],
+            )
+        ],
+        assertions=[
+            FragmentAssertionTemplateDraft(
+                claim_id="claim-1",
+                statement_template_markdown="{{fragment:F1}}又称中国科大、中科大。",
+            )
+        ],
+    )
+
+    _validate_fragment_submission(
+        submission,
+        [claim],
+        source_blocks=_blocks(claim.statement_markdown),
+    )
+
+
+def test_fragment_rejects_generic_context_name_as_specific_object_alias() -> None:
+    claim = _source_claim(
+        "claim-1",
+        "对各项目负责人充分赋权，推动负责人角色转向项目主理人。",
+    )
+    submission = ObjectFragmentSubmission(
+        fragments=[
+            ObjectFragmentDraft(
+                fragment_key="F1",
+                surface_forms=["项目负责人", "负责人"],
+            )
+        ],
+        assertions=[
+            FragmentAssertionTemplateDraft(
+                claim_id="claim-1",
+                statement_template_markdown=(
+                    "对各{{fragment:F1}}充分赋权，推动{{fragment:F1}}角色转向项目主理人。"
+                ),
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match="泛称"):
+        _validate_fragment_submission(
+            submission,
+            [claim],
+            source_blocks=_blocks(claim.statement_markdown),
+        )
+
+
+def test_same_referent_draft_rejects_context_only_name() -> None:
+    draft = _same_referent_draft("中国科学技术大学", "该校")
+
+    with pytest.raises(ValueError, match="当前语境指代"):
+        _validate_same_referent_drafts(
+            [draft],
+            _blocks("中国科学技术大学，以下简称该校。"),
+        )
 
 
 def test_same_referent_rejects_unknown_supporting_block() -> None:
@@ -1312,7 +1376,7 @@ def test_fragment_checkpoint_uses_stable_ids_without_mention_coordinates() -> No
         claims,
         source_blocks=_blocks("甲协会成立。"),
     )
-    assert checkpoint.schema_version == "source-object-fragments.v4"
+    assert checkpoint.schema_version == "source-object-fragments.v5"
     assert set(checkpoint.fragments[0].model_dump()) == {
         "fragment_id",
         "source_region_id",
@@ -1515,7 +1579,7 @@ async def test_v3_initial_checkpoint_restarts_for_v8_semantics(
     assert str(model.calls[0]["request_label"]).endswith("Assertion Discovery")
     assert snapshot.schema_version == "source-semantics.v9"
     initial = json.loads(paths.initial_claims_json.read_text(encoding="utf-8"))
-    assert initial["schema_version"] == "source-claims.v6"
+    assert initial["schema_version"] == "source-claims.v7"
 
 
 @pytest.mark.asyncio

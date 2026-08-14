@@ -72,6 +72,7 @@ model MemoryCompilation {
   assertionEmbeddingIndex MemoryAssertionEmbeddingIndex?
   semanticCards           SemanticCard[]
   semanticCardProposals   SemanticCardProposal[]
+  objectChangeProposals   MemoryObjectChangeProposal[]
 
   @@index([sourceSha256])
   @@map("memory_compilations")
@@ -592,4 +593,22 @@ model SemanticCardProposal {
 
   @@index([viewKey, status, createdAt])
   @@map("semantic_card_proposals")
+}
+
+/// 对 GlobalObject 身份的可审计修改建议；批准前不改变名称、归属或 Assertion 引用。
+model MemoryObjectChangeProposal {
+  id            String                     @id @default(uuid()) @db.Uuid
+  compilationId String                     @map("compilation_id") @db.Uuid
+  status        SemanticCardProposalStatus @default(pending)
+  reason        String                     @db.Text
+  payload       Json                       @db.JsonB
+  createdAt     DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
+  decidedAt     DateTime?                  @map("decided_at") @db.Timestamptz(3)
+  appliedAt     DateTime?                  @map("applied_at") @db.Timestamptz(3)
+  failureReason String?                    @map("failure_reason") @db.Text
+
+  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+
+  @@index([compilationId, status, createdAt])
+  @@map("memory_object_change_proposals")
 }

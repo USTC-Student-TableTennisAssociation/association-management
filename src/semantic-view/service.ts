@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 
 import { getDatabase } from "@/db";
+import { transactionAdvisoryLockQuery } from "@/db-advisory-lock";
 import {
   ACTIVITY_DIMENSIONS,
   ACTIVITY_STATUSES,
@@ -967,9 +968,7 @@ export async function decideViewProposal(
       ))].sort();
       for (const objectId of positionObjectIds) {
         const lockKey = `semantic-position-card:${compilation.id}:${objectId}`;
-        await transaction.$queryRaw(Prisma.sql`
-          SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))
-        `);
+        await transaction.$queryRaw(transactionAdvisoryLockQuery(lockKey));
       }
       await validateProposal(transaction, payload, compilation.id);
       await transaction.semanticCardProposal.update({
