@@ -1015,6 +1015,7 @@ async function importColdStart(
     const [protectedViews, proposalCount] = await Promise.all([
       prisma.semanticCard.groupBy({
         by: ["viewKey"],
+        where: { compilationId: { not: null } },
         _count: { _all: true },
       }),
       prisma.semanticCardProposal.count(),

@@ -92,8 +92,9 @@ export function createSemanticViewReferenceRegistry() {
             cardinality: slot.cardinality,
             targets: slot.targets.map((target) => ({
               cardId: target.cardId,
+              viewKey: target.viewKey,
               cardTypeKey: target.cardTypeKey,
-              objectId: target.objectId,
+              ...(target.objectId ? { objectId: target.objectId } : {}),
               objectName: target.objectName,
             })),
           })),

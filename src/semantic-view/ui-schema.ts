@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { businessViewKeySchema } from "@/semantic-view/types";
+
 const supportSchema = z.object({
   id: z.string(),
   statement: z.string(),
@@ -17,13 +19,13 @@ const proposalCardTargetSchema = z.object({
   cardSelector: z.string(),
   cardId: z.string().optional(),
   cardTypeKey: z.string(),
-  objectId: z.string(),
+  objectId: z.string().optional(),
   objectName: z.string(),
 });
 
 export const viewProposalPresentationSchema = z.object({
   id: z.string(),
-  viewKey: z.literal("society_information"),
+  viewKey: businessViewKeySchema,
   status: z.enum(["pending", "approved", "rejected", "applied", "failed"]),
   reason: z.string(),
   createdAt: z.string(),
@@ -34,7 +36,7 @@ export const viewProposalPresentationSchema = z.object({
       title: z.string(),
       cardSelector: z.string(),
       cardTypeKey: z.string(),
-      objectId: z.string(),
+      objectId: z.string().optional(),
       objectName: z.string(),
       cardTypeLabel: z.string(),
     }),
@@ -69,22 +71,22 @@ export const viewProposalPresentationSchema = z.object({
 const viewReferenceTargetSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("view"),
-    viewKey: z.literal("society_information"),
+    viewKey: businessViewKeySchema,
   }),
   z.object({
     kind: z.literal("card"),
-    viewKey: z.literal("society_information"),
+    viewKey: businessViewKeySchema,
     cardId: z.string(),
   }),
   z.object({
     kind: z.literal("dimension"),
-    viewKey: z.literal("society_information"),
+    viewKey: businessViewKeySchema,
     cardId: z.string(),
     dimensionName: z.string(),
   }),
   z.object({
     kind: z.literal("slot"),
-    viewKey: z.literal("society_information"),
+    viewKey: businessViewKeySchema,
     cardId: z.string(),
     slotKey: z.string(),
   }),

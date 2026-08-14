@@ -1,7 +1,11 @@
 import { z } from "zod";
 
 export const SOCIETY_INFORMATION_VIEW = "society_information" as const;
-export const businessViewKeySchema = z.literal(SOCIETY_INFORMATION_VIEW);
+export const ACTIVITY_OPERATIONS_VIEW = "activity_operations" as const;
+export const businessViewKeySchema = z.union([
+  z.literal(SOCIETY_INFORMATION_VIEW),
+  z.literal(ACTIVITY_OPERATIONS_VIEW),
+]);
 export type BusinessViewKey = z.infer<typeof businessViewKeySchema>;
 
 const cardSelectorSchema = z.string().trim().min(1).max(100).describe(
@@ -15,9 +19,13 @@ export const createCardChangeSchema = z.object({
   type: z.literal("CREATE_CARD"),
   cardRef: z.string().trim().regex(/^[a-z][a-z0-9_-]*$/).max(50)
     .describe("供同一 proposal 后续 change 以 new:<cardRef> 引用的局部名字"),
-  sourceObjectId: z.string().uuid()
-    .describe("本轮 Shared Brain 检索结果中的 GlobalObject database id"),
+  sourceObjectId: z.string().uuid().optional()
+    .describe("source-backed Card 使用本轮 Shared Brain 检索结果中的 GlobalObject database id"),
+  name: z.string().trim().min(1).max(200).optional()
+    .describe("activity_operations 原生 Runtime Card 的名称"),
   cardTypeKey: z.string().trim().min(1).max(100),
+}).refine((change) => Boolean(change.sourceObjectId || change.name), {
+  message: "CREATE_CARD 必须提供 sourceObjectId 或原生 Card name",
 });
 
 export const setContentDimensionChangeSchema = z.object({
@@ -71,7 +79,7 @@ export type SemanticViewCard = {
   viewKey: BusinessViewKey;
   cardTypeKey: string;
   cardTypeLabel: string;
-  objectId: string;
+  objectId?: string;
   objectName: string;
   seedContentDimensions: string[];
   contentDimensions: Array<{
@@ -86,8 +94,9 @@ export type SemanticViewCard = {
     cardinality: "one" | "many";
     targets: Array<{
       cardId: string;
+      viewKey: BusinessViewKey;
       cardTypeKey: string;
-      objectId: string;
+      objectId?: string;
       objectName: string;
     }>;
   }>;
@@ -104,6 +113,7 @@ export type SemanticViewCardType = {
     meaning: string;
     cardinality: "one" | "many";
     allowedTargetCardTypes: string[];
+    allowedTargetViewKey?: BusinessViewKey;
   }>;
 };
 
@@ -167,7 +177,7 @@ export type SemanticViewReadSnapshot = {
     id: string;
     cardTypeKey: string;
     cardTypeLabel: string;
-    objectId: string;
+    objectId?: string;
     objectName: string;
     contentDimensions: Array<{
       ref: string;
@@ -184,8 +194,9 @@ export type SemanticViewReadSnapshot = {
       cardinality: "one" | "many";
       targets: Array<{
         cardId: string;
+        viewKey: BusinessViewKey;
         cardTypeKey: string;
-        objectId: string;
+        objectId?: string;
         objectName: string;
       }>;
     }>;
@@ -199,7 +210,7 @@ export type SemanticViewFocus = {
   slotKey?: string;
 };
 
-export type BusinessViewPresentation = "overview" | "cards";
+export type BusinessViewPresentation = "overview" | "playbook" | "cards";
 
 export type ViewProposalStatus =
   | "pending"
@@ -212,7 +223,7 @@ export type ViewProposalCardTarget = {
   cardSelector: string;
   cardId?: string;
   cardTypeKey: string;
-  objectId: string;
+  objectId?: string;
   objectName: string;
 };
 
@@ -229,7 +240,7 @@ export type ViewProposalPresentation = {
       title: string;
       cardSelector: string;
       cardTypeKey: string;
-      objectId: string;
+      objectId?: string;
       objectName: string;
       cardTypeLabel: string;
       }

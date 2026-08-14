@@ -2,6 +2,14 @@ import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 
 import { getDatabase } from "@/db";
 import {
+  ACTIVITY_DIMENSIONS,
+  ACTIVITY_STATUSES,
+  GUIDE_NODE_DIMENSIONS,
+  GUIDE_NODE_TYPES,
+  WORK_PACKAGE_DIMENSIONS,
+  WORK_PACKAGE_STATUSES,
+} from "@/semantic-view/activity-operations-contract";
+import {
   businessViewDefinition,
   cardTypeDefinition,
 } from "@/semantic-view/card-types";
@@ -23,10 +31,21 @@ type VirtualCard = {
   selector: string;
   id?: string;
   viewKey: BusinessViewKey;
-  objectId: string;
+  objectId?: string;
   objectName: string;
   cardTypeKey: string;
 };
+
+function cardDisplayName(card: {
+  id: string;
+  cardTypeKey: string;
+  sourceObject: { canonicalName: string } | null;
+  contentDimensions: Array<{ name: string; contentMarkdown: string }>;
+}): string {
+  return card.contentDimensions.find((dimension) => dimension.name === "名称")
+    ?.contentMarkdown.trim() || card.sourceObject?.canonicalName ||
+    `${card.cardTypeKey} ${card.id.slice(0, 8)}`;
+}
 
 type LoadedAssertion = {
   id: string;
@@ -174,6 +193,50 @@ function resolveCard(
   return card;
 }
 
+export function assertActivityOperationsDimensionValue(
+  card: VirtualCard,
+  name: string,
+  contentMarkdown: string,
+): void {
+  if (card.viewKey !== "activity_operations") return;
+  const value = contentMarkdown.trim();
+  if (
+    card.cardTypeKey === "ActivityCard" &&
+    name === ACTIVITY_DIMENSIONS.status &&
+    !ACTIVITY_STATUSES.includes(value as (typeof ACTIVITY_STATUSES)[number])
+  ) {
+    throw new SemanticViewValidationError(`Activity 状态不支持 ${value}`);
+  }
+  if (
+    card.cardTypeKey === "WorkPackageCard" &&
+    name === WORK_PACKAGE_DIMENSIONS.status &&
+    !WORK_PACKAGE_STATUSES.includes(value as (typeof WORK_PACKAGE_STATUSES)[number])
+  ) {
+    throw new SemanticViewValidationError(`Work Package 状态不支持 ${value}`);
+  }
+  if (
+    card.cardTypeKey === "ActivityCard" &&
+    name === ACTIVITY_DIMENSIONS.participantCount &&
+    (!/^\d+$/.test(value) || Number(value) > 1_000_000)
+  ) {
+    throw new SemanticViewValidationError("参与人数必须是有确定依据的非负整数");
+  }
+  if (
+    card.cardTypeKey === "GuideNodeCard" &&
+    name === GUIDE_NODE_DIMENSIONS.nodeType &&
+    !GUIDE_NODE_TYPES.includes(value as (typeof GUIDE_NODE_TYPES)[number])
+  ) {
+    throw new SemanticViewValidationError(`操作指南节点类型不支持 ${value}`);
+  }
+  if (
+    card.cardTypeKey === "GuideNodeCard" &&
+    name === GUIDE_NODE_DIMENSIONS.row &&
+    (!/^\d+$/.test(value) || Number(value) > 100)
+  ) {
+    throw new SemanticViewValidationError("操作指南节点的纵向位置必须是 0 到 100 的整数");
+  }
+}
+
 export function assertSameBusinessView(
   sourceCard: { selector: string; viewKey: string },
   targetCard: { selector: string; viewKey: string },
@@ -182,6 +245,29 @@ export function assertSameBusinessView(
     throw new SemanticViewValidationError(
       `禁止跨 Business View SlotBinding：${sourceCard.selector} 属于 ${sourceCard.viewKey}，` +
       `${targetCard.selector} 属于 ${targetCard.viewKey}`,
+    );
+  }
+}
+
+export function assertSlotTarget(input: {
+  sourceCard: { selector: string; viewKey: string; cardTypeKey: string };
+  targetCard: { selector: string; viewKey: string; cardTypeKey: string };
+  slot: {
+    label: string;
+    allowedTargetCardTypes: readonly string[];
+    allowedTargetViewKey?: BusinessViewKey;
+  };
+}): void {
+  const expectedTargetView = input.slot.allowedTargetViewKey ?? input.sourceCard.viewKey;
+  if (input.targetCard.viewKey !== expectedTargetView) {
+    throw new SemanticViewValidationError(
+      `${input.slot.label} 只能连接 ${expectedTargetView} 中的 Card，` +
+      `${input.targetCard.selector} 属于 ${input.targetCard.viewKey}`,
+    );
+  }
+  if (!input.slot.allowedTargetCardTypes.includes(input.targetCard.cardTypeKey)) {
+    throw new SemanticViewValidationError(
+      `${input.slot.label} 不能连接 ${input.targetCard.cardTypeKey}`,
     );
   }
 }
@@ -196,8 +282,14 @@ async function validateProposal(
   },
 ): Promise<ValidatedProposal> {
   const existingCards = await database.semanticCard.findMany({
-    where: { compilationId, viewKey: payload.viewKey },
-    include: { sourceObject: { select: { canonicalName: true } } },
+    where: {
+      viewKey: payload.viewKey,
+      OR: [{ compilationId }, { compilationId: null }],
+    },
+    include: {
+      sourceObject: { select: { canonicalName: true } },
+      contentDimensions: { select: { name: true, contentMarkdown: true } },
+    },
   });
   const cardsBySelector = new Map<string, VirtualCard>(existingCards.map((card) => [
     card.id,
@@ -205,8 +297,8 @@ async function validateProposal(
       selector: card.id,
       id: card.id,
       viewKey: payload.viewKey,
-      objectId: card.sourceObjectId,
-      objectName: card.sourceObject.canonicalName,
+      objectId: card.sourceObjectId ?? undefined,
+      objectName: cardDisplayName(card),
       cardTypeKey: card.cardTypeKey,
     },
   ]));
@@ -219,16 +311,22 @@ async function validateProposal(
   if (referencedExistingCardIds.length) {
     const referencedCards = await database.semanticCard.findMany({
       where: { id: { in: referencedExistingCardIds } },
-      select: { id: true, viewKey: true },
+      include: {
+        sourceObject: { select: { canonicalName: true } },
+        contentDimensions: { select: { name: true, contentMarkdown: true } },
+      },
     });
-    const crossViewCard = referencedCards.find(
-      (card) => card.viewKey !== payload.viewKey,
-    );
-    if (crossViewCard) {
-      throw new SemanticViewValidationError(
-        `禁止跨 Business View 引用 Card：${crossViewCard.id} 属于 ${crossViewCard.viewKey}，` +
-        `当前 Proposal 属于 ${payload.viewKey}`,
-      );
+    for (const card of referencedCards) {
+      if (!cardsBySelector.has(card.id)) {
+        cardsBySelector.set(card.id, {
+          selector: card.id,
+          id: card.id,
+          viewKey: card.viewKey as BusinessViewKey,
+          objectId: card.sourceObjectId ?? undefined,
+          objectName: cardDisplayName(card),
+          cardTypeKey: card.cardTypeKey,
+        });
+      }
     }
   }
 
@@ -236,7 +334,9 @@ async function validateProposal(
     (change): change is Extract<ViewChange, { type: "CREATE_CARD" }> =>
       change.type === "CREATE_CARD",
   );
-  const createObjectIds = [...new Set(createChanges.map((change) => change.sourceObjectId))];
+  const createObjectIds = [...new Set(createChanges.flatMap((change) =>
+    change.sourceObjectId ? [change.sourceObjectId] : []
+  ))];
   if (allowedEvidence) {
     const unseen = createObjectIds.filter((id) => !allowedEvidence.objectIds.has(id));
     if (unseen.length) {
@@ -257,32 +357,41 @@ async function validateProposal(
       throw new SemanticViewValidationError(`重复的 cardRef：${change.cardRef}`);
     }
     seenNewRefs.add(change.cardRef);
-    const object = objectsById.get(change.sourceObjectId);
-    if (!object) {
+    const object = change.sourceObjectId
+      ? objectsById.get(change.sourceObjectId)
+      : undefined;
+    if (change.sourceObjectId && !object) {
       throw new SemanticViewValidationError(
         `Object ${change.sourceObjectId} 不存在于当前 Compilation`,
+      );
+    }
+    if (!change.sourceObjectId && payload.viewKey !== "activity_operations") {
+      throw new SemanticViewValidationError(
+        `${payload.viewKey} 的 Card identity 必须来自 Shared Brain Object`,
       );
     }
     const cardType = cardTypeDefinition(payload.viewKey, change.cardTypeKey);
     if (!cardType) {
       throw new SemanticViewValidationError(`不支持的 Card Type：${change.cardTypeKey}`);
     }
-    const duplicate = [...cardsBySelector.values()].find(
-      (card) =>
-        card.objectId === change.sourceObjectId &&
-        card.cardTypeKey === change.cardTypeKey,
-    );
+    const duplicate = change.sourceObjectId
+      ? [...cardsBySelector.values()].find(
+          (card) =>
+            card.objectId === change.sourceObjectId &&
+            card.cardTypeKey === change.cardTypeKey,
+        )
+      : undefined;
     if (duplicate) {
       throw new SemanticViewValidationError(
-        `${object.canonicalName} 已有 ${change.cardTypeKey}，请直接修改现有 Card`,
+        `${object!.canonicalName} 已有 ${change.cardTypeKey}，请直接修改现有 Card`,
       );
     }
     const selector = `new:${change.cardRef}`;
     cardsBySelector.set(selector, {
       selector,
       viewKey: payload.viewKey,
-      objectId: object.id,
-      objectName: object.canonicalName,
+      ...(object ? { objectId: object.id } : {}),
+      objectName: change.name ?? object!.canonicalName,
       cardTypeKey: change.cardTypeKey,
     });
   }
@@ -314,8 +423,18 @@ async function validateProposal(
   for (const change of payload.changes) {
     if (change.type === "CREATE_CARD") continue;
     const sourceCard = resolveCard(cardsBySelector, change.card);
+    if (sourceCard.viewKey !== payload.viewKey) {
+      throw new SemanticViewValidationError(
+        `Proposal 不能修改其他 Business View 的 Card：${change.card}`,
+      );
+    }
 
     if (change.type === "SET_CONTENT_DIMENSION") {
+      assertActivityOperationsDimensionValue(
+        sourceCard,
+        change.name,
+        change.contentMarkdown,
+      );
       const key = `${change.card}\u0000${change.name}`;
       if (touchedDimensions.has(key)) {
         throw new SemanticViewValidationError(
@@ -324,7 +443,10 @@ async function validateProposal(
       }
       touchedDimensions.add(key);
       for (const assertionId of change.supportingAssertionIds) {
-        if (!assertionsById.get(assertionId)!.objectIds.has(sourceCard.objectId)) {
+        if (
+          !sourceCard.objectId ||
+          !assertionsById.get(assertionId)!.objectIds.has(sourceCard.objectId)
+        ) {
           throw new SemanticViewValidationError(
             `Assertion ${assertionId} 没有引用 ${sourceCard.objectName}，不能支撑其 ContentDimension`,
           );
@@ -356,19 +478,17 @@ async function validateProposal(
     }
     for (const targetSelector of change.targets) {
       const targetCard = resolveCard(cardsBySelector, targetSelector);
-      assertSameBusinessView(sourceCard, targetCard);
       if (targetCard.selector === sourceCard.selector) {
         throw new SemanticViewValidationError(`${slot.label} 不能连接 Card 自身`);
       }
-      if (!slot.allowedTargetCardTypes.includes(targetCard.cardTypeKey)) {
-        throw new SemanticViewValidationError(
-          `${slot.label} 不能连接 ${targetCard.cardTypeKey}`,
-        );
-      }
+      assertSlotTarget({ sourceCard, targetCard, slot });
       const jointlySupported = change.supportingAssertionIds.length === 0 ||
         change.supportingAssertionIds.some((assertionId) => {
           const objectIds = assertionsById.get(assertionId)!.objectIds;
-          return objectIds.has(sourceCard.objectId) && objectIds.has(targetCard.objectId);
+          return Boolean(
+            sourceCard.objectId && targetCard.objectId &&
+            objectIds.has(sourceCard.objectId) && objectIds.has(targetCard.objectId)
+          );
         });
       if (!jointlySupported) {
         throw new SemanticViewValidationError(
@@ -402,31 +522,21 @@ export async function getSemanticView(viewKey: string): Promise<SemanticViewStat
   }
   const database = getDatabase();
   const compilation = await latestCompilation(database);
-  if (!compilation) {
-    return {
-      viewKey: view.key,
-      viewLabel: view.label,
-      viewDescription: view.meaning,
-      ...(view.specializedLabel ? { specializedLabel: view.specializedLabel } : {}),
-      compilationId: null,
-      compatible: true,
-      cardTypes: supportedCardTypeSummary(view.key),
-      cards: [],
-    };
-  }
 
   const allViewCards = await database.semanticCard.findMany({
     where: { viewKey: view.key },
     select: { compilationId: true },
   });
-  const mismatched = allViewCards.some((card) => card.compilationId !== compilation.id);
+  const mismatched = allViewCards.some(
+    (card) => card.compilationId !== null && card.compilationId !== compilation?.id,
+  );
   if (mismatched) {
     return {
       viewKey: view.key,
       viewLabel: view.label,
       viewDescription: view.meaning,
       ...(view.specializedLabel ? { specializedLabel: view.specializedLabel } : {}),
-      compilationId: compilation.id,
+        compilationId: compilation?.id ?? null,
       compatible: false,
       incompatibilityReason:
         `${view.label}来自旧 Compilation；为避免 Object 身份错配，当前已阻止读取和修改。`,
@@ -436,7 +546,12 @@ export async function getSemanticView(viewKey: string): Promise<SemanticViewStat
   }
 
   const cards = await database.semanticCard.findMany({
-    where: { compilationId: compilation.id, viewKey: view.key },
+    where: {
+      viewKey: view.key,
+      ...(compilation
+        ? { OR: [{ compilationId: compilation.id }, { compilationId: null }] }
+        : { compilationId: null }),
+    },
     orderBy: { createdAt: "asc" },
     include: {
       sourceObject: { select: { canonicalName: true } },
@@ -447,7 +562,10 @@ export async function getSemanticView(viewKey: string): Promise<SemanticViewStat
         orderBy: [{ slotKey: "asc" }, { createdAt: "asc" }],
         include: {
           targetCard: {
-            include: { sourceObject: { select: { canonicalName: true } } },
+            include: {
+              sourceObject: { select: { canonicalName: true } },
+              contentDimensions: { select: { name: true, contentMarkdown: true } },
+            },
           },
         },
       },
@@ -456,11 +574,26 @@ export async function getSemanticView(viewKey: string): Promise<SemanticViewStat
 
   for (const card of cards) {
     for (const binding of card.outgoingSlots) {
-      if (binding.targetCard.viewKey !== card.viewKey) {
+      const sourceType = cardTypeDefinition(card.viewKey, card.cardTypeKey);
+      const slot = sourceType?.slots[binding.slotKey];
+      if (!slot) {
         throw new SemanticViewValidationError(
-          `检测到非法跨 Business View SlotBinding：${card.id} → ${binding.targetCardId}`,
+          `${card.cardTypeKey} 没有定义 Slot ${binding.slotKey}`,
         );
       }
+      assertSlotTarget({
+        sourceCard: {
+          selector: card.id,
+          viewKey: card.viewKey,
+          cardTypeKey: card.cardTypeKey,
+        },
+        targetCard: {
+          selector: binding.targetCardId,
+          viewKey: binding.targetCard.viewKey,
+          cardTypeKey: binding.targetCard.cardTypeKey,
+        },
+        slot,
+      });
     }
   }
 
@@ -469,7 +602,7 @@ export async function getSemanticView(viewKey: string): Promise<SemanticViewStat
     viewLabel: view.label,
     viewDescription: view.meaning,
     ...(view.specializedLabel ? { specializedLabel: view.specializedLabel } : {}),
-    compilationId: compilation.id,
+    compilationId: compilation?.id ?? null,
     compatible: true,
     cardTypes: supportedCardTypeSummary(view.key),
     cards: cards.map((card) => {
@@ -485,8 +618,8 @@ export async function getSemanticView(viewKey: string): Promise<SemanticViewStat
         viewKey: view.key,
         cardTypeKey: card.cardTypeKey,
         cardTypeLabel: cardType?.label ?? card.cardTypeKey,
-        objectId: card.sourceObjectId,
-        objectName: card.sourceObject.canonicalName,
+        ...(card.sourceObjectId ? { objectId: card.sourceObjectId } : {}),
+        objectName: cardDisplayName(card),
         seedContentDimensions: [...(cardType?.seedContentDimensions ?? [])],
         contentDimensions: card.contentDimensions.map((dimension) => ({
           id: dimension.id,
@@ -500,9 +633,12 @@ export async function getSemanticView(viewKey: string): Promise<SemanticViewStat
           cardinality: slot.cardinality,
           targets: (bindingsBySlot.get(slot.key) ?? []).map((binding) => ({
             cardId: binding.targetCardId,
+            viewKey: binding.targetCard.viewKey as BusinessViewKey,
             cardTypeKey: binding.targetCard.cardTypeKey,
-            objectId: binding.targetCard.sourceObjectId,
-            objectName: binding.targetCard.sourceObject.canonicalName,
+            ...(binding.targetCard.sourceObjectId
+              ? { objectId: binding.targetCard.sourceObjectId }
+              : {}),
+            objectName: cardDisplayName(binding.targetCard),
           })),
         })),
       };
@@ -551,7 +687,14 @@ async function presentProposal(
         in: [...state.cardsBySelector.values()].flatMap((card) => card.id ? [card.id] : []),
       },
     },
-    include: { targetCard: { include: { sourceObject: true } } },
+    include: {
+      targetCard: {
+        include: {
+          sourceObject: true,
+          contentDimensions: { select: { name: true, contentMarkdown: true } },
+        },
+      },
+    },
   });
 
   return {
@@ -569,7 +712,7 @@ async function presentProposal(
           title: `创建 ${cardTypeDefinition(payload.viewKey, change.cardTypeKey)!.label}`,
           cardSelector: card.selector,
           cardTypeKey: card.cardTypeKey,
-          objectId: card.objectId,
+          ...(card.objectId ? { objectId: card.objectId } : {}),
           objectName: card.objectName,
           cardTypeLabel: cardTypeDefinition(payload.viewKey, change.cardTypeKey)!.label,
         };
@@ -611,8 +754,10 @@ async function presentProposal(
                 cardSelector: binding.targetCard.id,
                 cardId: binding.targetCard.id,
                 cardTypeKey: binding.targetCard.cardTypeKey,
-                objectId: binding.targetCard.sourceObjectId,
-                objectName: binding.targetCard.sourceObject.canonicalName,
+                ...(binding.targetCard.sourceObjectId
+                  ? { objectId: binding.targetCard.sourceObjectId }
+                  : {}),
+                objectName: cardDisplayName(binding.targetCard),
               }))
           : [],
         after: change.targets.map((target) => {
@@ -621,7 +766,7 @@ async function presentProposal(
             cardSelector: targetCard.selector,
             ...(targetCard.id ? { cardId: targetCard.id } : {}),
             cardTypeKey: targetCard.cardTypeKey,
-            objectId: targetCard.objectId,
+            ...(targetCard.objectId ? { objectId: targetCard.objectId } : {}),
             objectName: targetCard.objectName,
           };
         }),
@@ -745,13 +890,22 @@ export async function decideViewProposal(
         if (change.type !== "CREATE_CARD") continue;
         const card = await transaction.semanticCard.create({
           data: {
-            compilationId: compilation.id,
-            sourceObjectId: change.sourceObjectId,
+            compilationId: change.sourceObjectId ? compilation.id : null,
+            sourceObjectId: change.sourceObjectId ?? null,
             viewKey: payload.viewKey,
             cardTypeKey: change.cardTypeKey,
           },
         });
         createdCardIds.set(`new:${change.cardRef}`, card.id);
+        if (change.name) {
+          await transaction.semanticContentDimension.create({
+            data: {
+              cardId: card.id,
+              name: "名称",
+              contentMarkdown: change.name,
+            },
+          });
+        }
       }
 
       for (const change of payload.changes) {

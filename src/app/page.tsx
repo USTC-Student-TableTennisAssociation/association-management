@@ -28,7 +28,9 @@ import {
 } from "@/semantic-view/components";
 import { proposalChangeFocus } from "@/semantic-view/proposal-preview";
 import {
+  ACTIVITY_OPERATIONS_VIEW,
   SOCIETY_INFORMATION_VIEW,
+  type BusinessViewKey,
   type BusinessViewPresentation,
   type SemanticViewFocus,
   type SemanticViewReference,
@@ -771,7 +773,7 @@ function SourceDocumentDialog({
 
 export default function Home() {
   const [input, setInput] = useState("");
-  const [activeWorkspace, setActiveWorkspace] = useState<"chat" | typeof SOCIETY_INFORMATION_VIEW>(SOCIETY_INFORMATION_VIEW);
+  const [activeWorkspace, setActiveWorkspace] = useState<"chat" | BusinessViewKey>(SOCIETY_INFORMATION_VIEW);
   const [activePresentation, setActivePresentation] = useState<BusinessViewPresentation>("overview");
   const [semanticViewFocus, setSemanticViewFocus] = useState<SemanticViewFocus>();
   const [previewProposal, setPreviewProposal] = useState<ViewProposalPresentation>();
@@ -795,7 +797,7 @@ export default function Home() {
 
   const pageContext: ChatPageContext = activeWorkspace === "chat"
     ? { activePresentation: "full_chat" }
-    : { activeViewKey: SOCIETY_INFORMATION_VIEW, activePresentation };
+    : { activeViewKey: activeWorkspace, activePresentation };
 
   function submit(content: string) {
     const text = content.trim();
@@ -811,8 +813,9 @@ export default function Home() {
     setPreviewProposal(undefined);
   }
 
-  function openSocietyInformation() {
-    setActiveWorkspace(SOCIETY_INFORMATION_VIEW);
+  function openBusinessView(viewKey: BusinessViewKey) {
+    setActiveWorkspace(viewKey);
+    setActivePresentation("overview");
     setSemanticViewFocus(undefined);
     setPreviewProposal(undefined);
   }
@@ -887,10 +890,17 @@ export default function Home() {
           <p className="px-3 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-100/55">业务视角</p>
           <button
             type="button"
-            onClick={openSocietyInformation}
+            onClick={() => openBusinessView(SOCIETY_INFORMATION_VIEW)}
             className={`mt-2 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === SOCIETY_INFORMATION_VIEW ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
           >
             <span className="size-2 rounded-full bg-emerald-300" aria-hidden="true" /> 社团信息
+          </button>
+          <button
+            type="button"
+            onClick={() => openBusinessView(ACTIVITY_OPERATIONS_VIEW)}
+            className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === ACTIVITY_OPERATIONS_VIEW ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
+          >
+            <span className="size-2 rounded-full bg-amber-300" aria-hidden="true" /> 活动运营
           </button>
         </div>
         <p className="mt-auto px-3 pt-8 text-xs leading-5 text-emerald-100/45">Shared Brain 为所有业务视角提供事实依据。</p>
@@ -909,7 +919,8 @@ export default function Home() {
             </div>
           ) : (
             <SemanticViewWorkspace
-              viewKey={SOCIETY_INFORMATION_VIEW}
+              key={activeWorkspace}
+              viewKey={activeWorkspace}
               presentation={activePresentation}
               focus={semanticViewFocus}
               proposalPreview={previewProposal}
@@ -922,6 +933,10 @@ export default function Home() {
               onExitProposalPreview={exitProposalPreview}
               onPresentationChange={setActivePresentation}
               onOpenAI={() => setDrawerOpen(true)}
+              onAskAI={(prompt) => {
+                setInput(prompt);
+                setDrawerOpen(true);
+              }}
             />
           )}
         </section>
@@ -931,7 +946,9 @@ export default function Home() {
             <header className="mb-3 flex items-start justify-between gap-3 px-1">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">当前上下文</p>
-                <h2 className="mt-1 font-semibold text-zinc-950">社团信息 · {activePresentation === "overview" ? "社团概览" : "卡片"}</h2>
+                <h2 className="mt-1 font-semibold text-zinc-950">
+                  {activeWorkspace === ACTIVITY_OPERATIONS_VIEW ? "活动运营" : "社团信息"} · {activePresentation === "overview" ? "概览" : activePresentation === "playbook" ? "操作手册" : "卡片"}
+                </h2>
                 <p className="mt-1 text-xs text-zinc-500">AI 仍可使用完整 Shared Brain。</p>
               </div>
               <button type="button" onClick={() => setDrawerOpen(false)} aria-label="收起 AI 对话" className="rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50">×</button>

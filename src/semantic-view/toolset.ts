@@ -1,7 +1,10 @@
 import { tool } from "ai";
 
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
-import { cardTypePromptContract } from "@/semantic-view/card-types";
+import {
+  businessViewDefinitions,
+  cardTypePromptContract,
+} from "@/semantic-view/card-types";
 import { createSemanticViewReferenceRegistry } from "@/semantic-view/read-snapshot";
 import {
   createViewProposal,
@@ -9,7 +12,6 @@ import {
   SemanticViewValidationError,
 } from "@/semantic-view/service";
 import {
-  SOCIETY_INFORMATION_VIEW,
   type BusinessViewKey,
   type ViewProposalPresentation,
   viewChangePayloadSchema,
@@ -27,7 +29,7 @@ export function createSemanticViewToolset(input: {
       description:
         "读取指定 Business View 当前已经批准的完整正式状态，包括全部 Card Types、Cards、" +
         "ContentDimensions（含缺失的 seed dimensions）以及 Slots（含空 Slots）。" +
-        "当前只有 society_information。命中其业务范围的问题应优先调用。" +
+        "当前支持 society_information 和 activity_operations。命中其业务范围的问题应优先调用。" +
         "isFullSnapshot=true 只表示没有检索遗漏；空字段只表示正式 View 当前没有记录，" +
         "不表示现实世界不存在。返回的 V# 可在最终回答中引用。",
       inputSchema: viewChangePayloadSchema.pick({ viewKey: true }),
@@ -44,11 +46,14 @@ export function createSemanticViewToolset(input: {
         "这是一个笨工具：它不检索、不分析、不调用另一个模型，也绝不会修改正式 View。",
         "调用前必须先读取 readSemanticView。用户在当前对话中明确确认的业务修改可以直接提议，",
         "不要求先检索 Assertion；如果建议来自 Shared Brain fallback，可以把本轮真实 Assertion ids",
-        "作为本次 Proposal 的可选依据。新 Card 的 identity 仍必须使用本轮检索到的 GlobalObject id。",
+        "作为本次 Proposal 的可选依据。source-backed Card 使用本轮 GlobalObject id；activity_operations",
+        "的原生 Runtime Card 可以直接使用 name 建立业务身份。",
         "只有稳定、可复用且属于当前 View 职责的缺口才应主动吸收；ContentDimension 是开放结构；",
         "Slot key 只能使用开发者合同。",
         "支持的合同：",
-        cardTypePromptContract(SOCIETY_INFORMATION_VIEW),
+        ...Object.values(businessViewDefinitions).map((view) =>
+          cardTypePromptContract(view.key)
+        ),
       ].join("\n"),
       inputSchema: viewChangePayloadSchema,
       execute: async (payload) => {

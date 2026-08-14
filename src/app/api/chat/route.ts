@@ -39,6 +39,7 @@ import {
   semanticViewReferenceBundleSchema,
   viewProposalPresentationSchema,
 } from "@/semantic-view/ui-schema";
+import { businessViewKeySchema } from "@/semantic-view/types";
 
 export const maxDuration = 600;
 
@@ -78,8 +79,8 @@ const FINAL_ANSWER_INSTRUCTION =
   "当前是本轮最后的回答 step，工具已停用。请立即基于现有正式 View、Assertion 或已经读取的原文完成最终回答；若证据不足则明确说明，并保留正确的 [V#]/[A#]/[S#] 引用。";
 
 const pageContextSchema = z.object({
-  activeViewKey: z.literal("society_information").optional(),
-  activePresentation: z.enum(["overview", "cards", "full_chat"]),
+  activeViewKey: businessViewKeySchema.optional(),
+  activePresentation: z.enum(["overview", "playbook", "cards", "full_chat"]),
 }).refine(
   (context) => context.activePresentation === "full_chat" || Boolean(context.activeViewKey),
   { message: "Business View presentation 必须提供 activeViewKey" },
@@ -89,7 +90,11 @@ function pageContextInstruction(context?: ChatPageContext): string {
   if (!context || context.activePresentation === "full_chat") {
     return "页面 soft context：用户当前位于全屏 AI 对话。不要因此限制 Shared Brain 检索范围。";
   }
-  const presentation = context.activePresentation === "overview" ? "社团概览" : "卡片";
+  const presentation = context.activePresentation === "overview"
+    ? context.activeViewKey === "society_information" ? "社团概览" : "活动总览"
+    : context.activePresentation === "playbook"
+      ? "操作手册（建议型流程地图，不代表 Runtime 执行进度）"
+      : "卡片";
   return [
     `页面 soft context：用户当前正在查看 ${context.activeViewKey} · ${presentation}。`,
     "这只用于理解用户当前工作位置；可以优先考虑当前 View，但不能限制已有 Shared Brain retrieval，也不能把页面状态当作事实依据。",

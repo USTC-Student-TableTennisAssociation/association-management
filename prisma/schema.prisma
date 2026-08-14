@@ -290,18 +290,18 @@ model MemoryAssertionEmbedding {
   @@map("memory_assertion_embeddings")
 }
 
-/// 某个业务 View 对一个当前 Compilation 中 Global Object 的正式语义投影。
+/// 业务 View 中的一张正式 Card。知识投影可锚定 Global Object；原生 Runtime Card 不强制来源身份。
 model SemanticCard {
   id             String   @id @default(uuid()) @db.Uuid
-  compilationId  String   @map("compilation_id") @db.Uuid
-  sourceObjectId String   @map("source_object_id") @db.Uuid
+  compilationId  String?  @map("compilation_id") @db.Uuid
+  sourceObjectId String?  @map("source_object_id") @db.Uuid
   viewKey        String   @map("view_key") @db.Text
   cardTypeKey    String   @map("card_type_key") @db.Text
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  compilation       MemoryCompilation          @relation(fields: [compilationId], references: [id], onDelete: Restrict)
-  sourceObject      MemoryGlobalObject         @relation(fields: [sourceObjectId], references: [id], onDelete: Restrict)
+  compilation       MemoryCompilation?         @relation(fields: [compilationId], references: [id], onDelete: Restrict)
+  sourceObject      MemoryGlobalObject?        @relation(fields: [sourceObjectId], references: [id], onDelete: Restrict)
   contentDimensions SemanticContentDimension[]
   outgoingSlots     SemanticSlotBinding[]      @relation("SemanticSlotSource")
   incomingSlots     SemanticSlotBinding[]      @relation("SemanticSlotTarget")
