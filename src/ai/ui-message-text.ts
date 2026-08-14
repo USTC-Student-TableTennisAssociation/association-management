@@ -20,7 +20,7 @@ export function finalStepMessageText(message: ClubChatMessage): string {
 /** Keep prior structured proposals available for continued Chat negotiation. */
 export function modelHistoryMessageText(message: ClubChatMessage): string {
   const answer = finalStepMessageText(message);
-  const proposals = message.parts
+  const viewProposals = message.parts
     .filter((part) => part.type === "data-viewProposal")
     .map((part) => {
       const changes = part.data.changes.map((change) => {
@@ -34,7 +34,13 @@ export function modelHistoryMessageText(message: ClubChatMessage): string {
       });
       return `此前结构化 Proposal ${part.data.id}（${part.data.status}）：${changes.join("；")}`;
     });
-  return [answer, ...proposals].filter(Boolean).join("\n\n");
+  const objectProposals = message.parts
+    .filter((part) => part.type === "data-objectChangeProposal")
+    .map((part) =>
+      `此前 Object Change Proposal ${part.data.id}（${part.data.status}）：` +
+      part.data.changes.map((change) => change.title).join("；")
+    );
+  return [answer, ...viewProposals, ...objectProposals].filter(Boolean).join("\n\n");
 }
 
 /**
@@ -52,6 +58,7 @@ export function compactChatRequestMessages(
             { type: "text", text: finalStepMessageText(message) },
             ...message.parts.filter((part) =>
               part.type === "data-viewProposal" ||
+              part.type === "data-objectChangeProposal" ||
               part.type === "data-sourceReferences" ||
               part.type === "data-viewReferences"
             ),

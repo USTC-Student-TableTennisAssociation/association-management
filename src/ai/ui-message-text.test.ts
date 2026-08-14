@@ -68,6 +68,39 @@ describe("finalStepMessageText", () => {
     expect(modelHistoryMessageText(message)).toContain("此前结构化 Proposal");
   });
 
+  it("keeps an Object Change Proposal in later negotiation context", () => {
+    const message: ClubChatMessage = {
+      id: "assistant-object-proposal",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "我发现了一个身份问题。" },
+        {
+          type: "data-objectChangeProposal",
+          data: {
+            id: "00000000-0000-4000-8000-000000000098",
+            status: "pending",
+            reason: "负责人只是上下文泛称。",
+            createdAt: "2026-08-14T00:00:00.000Z",
+            invalidatesHigherMemory: false,
+            changes: [{
+              type: "REMOVE_SURFACE",
+              title: "移除“负责人”的 Object 名称归属",
+              details: ["Object：项目负责人"],
+            }],
+          },
+        },
+      ],
+    };
+
+    expect(modelHistoryMessageText(message)).toContain("Object Change Proposal");
+    expect(modelHistoryMessageText(message)).toContain("移除“负责人”");
+    expect(compactChatRequestMessages([message])[0].parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "data-objectChangeProposal" }),
+      ]),
+    );
+  });
+
   it("removes prior tool payloads while retaining lightweight source anchors", () => {
     const message = {
       id: "assistant-source",
