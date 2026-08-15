@@ -52,9 +52,13 @@ import {
   queueChatAssertionReceipt,
 } from "@/memory/chat-assertion-receipt";
 import { createChatMemoryMaintenanceScheduler } from "@/memory/chat-assertion-lifecycle";
+import {
+  loadAmbientHigherMemories,
+  type AmbientHigherMemorySnapshot,
+} from "@/memory/ambient-higher-memory";
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
+import { createHigherMemoryQueueTool } from "@/memory/higher-memory-queue";
 import { getMemoryRetriever } from "@/memory/retriever";
-import { createObjectHigherMemoryQueueTool } from "@/memory/object-higher-memory-queue";
 import { createObjectManagementToolset } from "@/memory/object-management-toolset";
 import { objectChangeProposalPresentationSchema } from "@/memory/object-management-types";
 import { createSourceDocumentToolset } from "@/memory/source-document-toolset";
@@ -90,8 +94,8 @@ const EXPLORE_INSTRUCTIONS = `
 Object 管理分为 use existing、create、纠正 Surface、合并、拆分和暂缓。普通新事实仍优先由 queueChatAssertionCapture 复用/创建 Object；只有身份归属本身需要改变时才调用 proposeObjectChange。proposeObjectChange 只生成可审计建议，用户批准前不会改变数据库。合并/拆分会让相关 Higher Memory 失效并在后续重新维护，绝不能拼接旧文本；若检查结果显示存在正式 Business View Card，当前版本不能安全自动重绑定，应明确告诉用户依赖而不要声称已经完成。
 REMOVE_SURFACE 必须使用 inspectObjectIdentity 返回的精确 Surface id；SPLIT_OBJECT 必须明确哪些 Surface 和 Assertion Reference 移到新身份，不能把同一事实复制给两个 Object。没有足够来源完成分区时选择暂缓，不要猜测合并或拆分。
 系统可能在本轮输入中提供此前消息的 Chat → Assertion 处理回执。回执是操作状态，不是组织事实或 Evidence：只有 published 表示已实际写入；queued/running 尚未完成；skipped 表示处理完成但没有写入；failed 表示处理失败。用户追问“刚才是否记住/Assertion 是否进去”时，优先依据回执回答；需要精确 ID 或刷新状态时调用 readMemoryWriteStatus，不要为此调用组织记忆搜索。
-只有当本轮围绕少数重要 GlobalObject 进行了实质讨论，并值得维护其长期高层认知时，才调用 queueHigherMemoryMaintenance。普通搜索命中、顺带提及或一次性问题不触发。该工具与 Assertion queue 相互独立，只登记 Object id 和原因；后台自动获得同一份完整语义上下文，并固定在本轮 Assertion 阶段结束后才维护。
-Higher Memory 是重要 Object 的高优先级认知文档。searchMemory 返回 [H#] 时，默认直接阅读完整 Higher Memory 并据此回答，不要同时要求其底层 Assertions；只有 Higher Memory 未覆盖用户问题、用户要求细节/原话/来源、内容标明冲突或你明确需要核查时，才继续 followObject 或改写 searchMemory 下钻 Assertions。如果工具警告 Higher Memory 维护后出现了新 Assertion，则这是陈旧保护：必须同时核对返回的 [A#]，当前状态以保留来源强度和时间限定的较新证据为准，不得让旧 [H#] 遮住它。
+只有当本轮真实互动使 Echo 对当前工作环境、近期共同焦点或少数重要 GlobalObject 形成了值得延续的新高层理解时，才调用 queueHigherMemoryMaintenance。workspace 用于“这是什么环境、长期在做什么、Echo 在这里通常做什么”；recent 用于近期共同工作、阶段性焦点、风险和未结方向；object 用于具体 GlobalObject。与某个成员有关的高层认知必须维护到该 Person Object，不得放入 workspace/recent。普通搜索命中、顺带提及或一次性问题不触发。该工具与 Assertion queue 相互独立，每轮至多调用一次；后台自动获得同一份完整语义上下文，并固定在本轮 Assertion 阶段结束后才维护。
+Object Higher Memory 是重要 Object 的高优先级认知文档。searchMemory 返回 [H#] 时，默认直接阅读完整 Higher Memory 并据此回答，不要同时要求其底层 Assertions；只有 Higher Memory 未覆盖用户问题、用户要求细节/原话/来源、内容标明冲突或你明确需要核查时，才继续 followObject 或改写 searchMemory 下钻 Assertions。如果工具警告 Higher Memory 维护后出现了新 Assertion，则这是陈旧保护：必须同时核对返回的 [A#]，当前状态以保留来源强度和时间限定的较新证据为准，不得让旧 [H#] 遮住它。
 当前正式 Business Views 的优先读取范围：
 ${businessViewRetrievalDescriptions()}
 如果用户问题命中某个 Business View 的上述范围，必须先调用 readSemanticView；当前 Chat AI 是唯一的范围与充分性判断主体。
@@ -511,6 +515,23 @@ export async function POST(request: Request) {
     ),
   });
   const memoryMaintenance = createChatMemoryMaintenanceScheduler(debugTrace);
+  let ambientHigherMemories: AmbientHigherMemorySnapshot[] = [];
+  try {
+    ambientHigherMemories = await loadAmbientHigherMemories();
+    if (ambientHigherMemories.length) {
+      await debugTrace.appendJsonSection(
+        "主 Chat 自动加载的 Ambient Higher Memory",
+        ambientHigherMemories.map((memory) => ({
+          scope: memory.scope,
+          maintainedAt: memory.maintainedAt,
+          contentMarkdown: memory.contentMarkdown,
+        })),
+      );
+    }
+  } catch (error) {
+    console.error("[chat.ambient-higher-memory.load]", error);
+    await debugTrace.appendError("Ambient Higher Memory 加载失败", error);
+  }
 
   let model;
   try {
@@ -547,6 +568,7 @@ export async function POST(request: Request) {
       retrieval,
       profile,
       memoryState: "not-searched",
+      ambientHigherMemories,
     });
   } catch (error) {
     memoryMaintenance.cancel("无法准备主模型上下文，后台记忆线路未启动。");
@@ -715,7 +737,7 @@ export async function POST(request: Request) {
           objectManagementToolset.registerPublishedMemory(captureResult);
         },
       });
-      const higherMemoryQueueToolset = createObjectHigherMemoryQueueTool({
+      const higherMemoryQueueToolset = createHigherMemoryQueueTool({
         trace: debugTrace,
         hasObject: (globalObjectId) =>
           evidence.hasObject(globalObjectId) ||

@@ -35,6 +35,11 @@ enum ChatMessageRole {
   SYSTEM
 }
 
+enum MemoryAmbientHigherMemoryScope {
+  workspace
+  recent
+}
+
 /// 一次已完成 Global Resolution 的 cold-start package。
 /// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个记忆层。
 model MemoryCompilation {
@@ -406,6 +411,22 @@ model MemoryObjectHigherMemory {
 
   @@index([compilationId, maintainedAt])
   @@map("memory_object_higher_memories")
+}
+
+/// Echo 对当前工作环境与近期焦点的高层认知；每轮对话自动读取，但不是精确业务状态的权威来源。
+/// 它不绑定 Compilation 或 GlobalObject，因此来源重编译不会使 Echo 丧失已从真实互动中形成的环境理解。
+model MemoryAmbientHigherMemory {
+  id                String                         @id @default(uuid()) @db.Uuid
+  scope             MemoryAmbientHigherMemoryScope @unique
+  contentMarkdown   String                         @map("content_markdown") @db.Text
+  maintainedAt      DateTime                       @map("maintained_at") @db.Timestamptz(3)
+  triggerMessageId  String                         @map("trigger_message_id") @db.Text
+  maintenanceReason String                         @map("maintenance_reason") @db.Text
+  createdAt         DateTime                       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime                       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([maintainedAt])
+  @@map("memory_ambient_higher_memories")
 }
 
 /// Reference Assertion 对 Global Object 的语义覆盖；不要求 Object 名称出现在 Assertion 正文中。

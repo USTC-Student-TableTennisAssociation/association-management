@@ -1,4 +1,4 @@
-import { generateText, Output, stepCountIs } from "ai";
+import { generateText, hasToolCall, stepCountIs } from "ai";
 import { z } from "zod";
 
 import {
@@ -9,12 +9,16 @@ import {
   type EchoDebugTrace,
 } from "@/ai/debug-trace";
 import { getChatModel } from "@/ai/provider";
+import {
+  requireStructuredSubmission,
+  structuredSubmissionTool,
+} from "@/ai/structured-submission";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
 import { getDatabase } from "@/db";
 import type { ChatAssertionSemanticContext } from "@/memory/chat-assertion";
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
-import type { ObjectHigherMemoryQueueDecision } from "@/memory/object-higher-memory-queue";
+import type { ObjectHigherMemoryQueueDecision } from "@/memory/higher-memory-queue";
 import type { MemoryRetrievalResult } from "@/memory/types";
 
 const MAX_MAINTENANCE_STEPS = 8;
@@ -23,7 +27,10 @@ const MAINTENANCE_SEARCH_RESULT_TOKENS = 48_000;
 const maintenanceSchema = z.object({
   memories: z.array(z.object({
     globalObjectId: z.string().uuid(),
-    contentMarkdown: z.string().trim().min(1).max(60_000),
+    contentMarkdown: z.string().trim()
+      .min(80, "正文不能只包含标题")
+      .max(60_000)
+      .describe("供后续 AI 直接阅读的完整 Object 高层认知 Markdown；必须包含由 grounded Assertions 支持的具体状态、时间边界、变化、冲突或资料缺口，不能只写标题"),
   })).max(6),
 });
 
@@ -92,7 +99,7 @@ function maintenancePrompt(input: ObjectHigherMemoryMaintenanceInput, state: {
     "对于当前状态，只有 Assertion 明确说明现在有效，或有效区间覆盖维护时间，才可无保留地写成当前事实。否则写成“最新明确记录/截至某时的记录”，或者说明现在无法确认。冲突不得按上传时间静默消解。",
     "正文是一份供后续 AI 直接阅读的自然 Markdown 文档，可以使用标题和列表；不要写生成过程、搜索过程、维护原因或免责声明式套话。Object 名称可以自然出现。",
     "若某个目标 Object 当前完全没有足以形成有用认知的 grounded Assertion，可以不输出该 Object；不能为了完成任务而填充空泛内容。",
-    "最终严格输出符合 JSON Schema 的对象，只能包含 memories；每项只能包含 globalObjectId、contentMarkdown。",
+    "完成搜索和判断后必须单独调用 submitObjectHigherMemory，不要在普通文本中输出 JSON，也不要把提交与搜索工具放在同一次响应中。提交参数只能包含 memories；每项只能包含 globalObjectId、contentMarkdown。",
     JSON.stringify({
       maintenanceInstant: input.submittedAt,
       organizationTimezone: input.timezone,
@@ -185,19 +192,27 @@ export async function maintainObjectHigherMemories(
   );
 
   let callNumber = 0;
+  const submitObjectHigherMemory = structuredSubmissionTool({
+    description: "提交为本轮目标 GlobalObject 重建的高层认知文档",
+    schema: maintenanceSchema,
+  });
   const result = await generateText({
     model: getChatModel(),
-    tools: searchTools,
-    toolChoice: "auto",
-    stopWhen: stepCountIs(MAX_MAINTENANCE_STEPS),
+    tools: { ...searchTools, submitObjectHigherMemory },
+    toolChoice: "required",
+    stopWhen: [
+      hasToolCall("submitObjectHigherMemory"),
+      stepCountIs(MAX_MAINTENANCE_STEPS),
+    ],
     prepareStep: ({ stepNumber }) => stepNumber === MAX_MAINTENANCE_STEPS - 1
-      ? { activeTools: [] as const, toolChoice: "none" as const }
+      ? {
+        activeTools: ["submitObjectHigherMemory"] as const,
+        toolChoice: {
+          type: "tool" as const,
+          toolName: "submitObjectHigherMemory" as const,
+        },
+      }
       : {},
-    output: Output.object({
-      schema: maintenanceSchema,
-      name: "object_higher_memory_maintenance",
-      description: "为本轮显式选择的重要 GlobalObject 重建高层认知文档",
-    }),
     prompt,
     temperature: 0.15,
     maxOutputTokens: 16_000,
@@ -253,12 +268,17 @@ export async function maintainObjectHigherMemories(
       );
     },
   });
+  const output = requireStructuredSubmission({
+    toolCalls: result.toolCalls,
+    toolName: "submitObjectHigherMemory",
+    schema: maintenanceSchema,
+  });
   await trace?.appendSection(
     "后台 Higher Memory Agent · Schema 校验后的输出",
-    debugCodeBlock(debugJson(result.output), "json"),
+    debugCodeBlock(debugJson(output), "json"),
   );
 
-  const outputIds = result.output.memories.map((memory) => memory.globalObjectId);
+  const outputIds = output.memories.map((memory) => memory.globalObjectId);
   const invalidOutputIds = outputIds.filter((id) => !targetIds.includes(id));
   if (invalidOutputIds.length || new Set(outputIds).size !== outputIds.length) {
     await trace?.appendSection(
@@ -267,7 +287,7 @@ export async function maintainObjectHigherMemories(
     );
     return 0;
   }
-  const accepted = result.output.memories;
+  const accepted = output.memories;
   if (!accepted.length) {
     await trace?.appendSection(
       "Higher Memory 处理结果",

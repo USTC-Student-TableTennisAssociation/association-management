@@ -171,6 +171,15 @@ function mockTrace() {
   } satisfies EchoDebugTrace;
 }
 
+function extractionResult(output: unknown) {
+  return {
+    toolCalls: [{
+      toolName: "submitChatAssertionExtraction",
+      input: output,
+    }],
+  } as never;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getChatModel).mockReturnValue({} as never);
@@ -184,9 +193,10 @@ describe("Chat Assertion capture agent", () => {
 
   it("passes full semantic context and reusable retrieval to a searchable extractor", async () => {
     mockDatabase();
-    vi.mocked(generateText).mockResolvedValue({
-      output: { objects: [], assertions: [] },
-    } as never);
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
+      objects: [],
+      assertions: [],
+    }));
 
     await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual(emptyCaptureResult);
 
@@ -196,8 +206,9 @@ describe("Chat Assertion capture agent", () => {
     expect(generateText).toHaveBeenCalledWith(expect.objectContaining({
       tools: expect.objectContaining({
         inspectObjectIdentity: expect.any(Object),
+        submitChatAssertionExtraction: expect.any(Object),
       }),
-      toolChoice: "auto",
+      toolChoice: "required",
       prompt: expect.stringContaining("完整模型输入"),
     }));
     expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain("initialRetrieval");
@@ -241,8 +252,7 @@ describe("Chat Assertion capture agent", () => {
 
   it("uses historical conversation to resolve the Object without persisting it as Evidence", async () => {
     const { database, transaction } = mockDatabase();
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [existingAssociationBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
@@ -250,8 +260,7 @@ describe("Chat Assertion capture agent", () => {
           objectRefs: [associationRef],
           evidence: [{ messageId: "user-current", quotes: ["25-26学年变成4星社团"] }],
         }],
-      },
-    } as never);
+    }));
     vi.mocked(embedMemoryQueries).mockResolvedValue({
       model: "BAAI/bge-m3",
       modelRevision: "test",
@@ -294,16 +303,14 @@ describe("Chat Assertion capture agent", () => {
 
   it("rejects an assertion that omits the current user message or uses assistant text", async () => {
     const { database, transaction } = mockDatabase();
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [existingAssociationBinding()],
         assertions: [{
           globalStatementTemplateMarkdown: `{{object:${associationRef}}}目前是三星社团。`,
           objectRefs: [associationRef],
           evidence: [{ messageId: "assistant-context", quotes: ["目前记录是三星"] }],
         }],
-      },
-    } as never);
+    }));
 
     await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();
@@ -314,8 +321,7 @@ describe("Chat Assertion capture agent", () => {
     const { database, transaction } = mockDatabase();
     const captureInput = input();
     captureInput.semanticContext.conversation[0].text = "我说的是刚才那个社团。";
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [existingAssociationBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
@@ -326,8 +332,7 @@ describe("Chat Assertion capture agent", () => {
             quotes: ["25-26学年变成4星社团"],
           }],
         }],
-      },
-    } as never);
+    }));
 
     await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();
@@ -336,8 +341,7 @@ describe("Chat Assertion capture agent", () => {
 
   it("rejects a template that repeats the Object name outside its placeholder", async () => {
     const { database, transaction } = mockDatabase();
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [existingAssociationBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
@@ -348,8 +352,7 @@ describe("Chat Assertion capture agent", () => {
             { messageId: "user-current", quotes: ["25-26学年变成4星社团"] },
           ],
         }],
-      },
-    } as never);
+    }));
 
     await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();
@@ -361,8 +364,7 @@ describe("Chat Assertion capture agent", () => {
     const captureInput = input();
     captureInput.semanticContext.conversation[2].text =
       "我问了一下魏汉东，他说26-27会长是雷岳鑫";
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [existingAssociationBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
@@ -373,8 +375,7 @@ describe("Chat Assertion capture agent", () => {
             quotes: ["我问了一下魏汉东，他说26-27会长是雷岳鑫"],
           }],
         }],
-      },
-    } as never);
+    }));
 
     await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();
@@ -386,8 +387,7 @@ describe("Chat Assertion capture agent", () => {
     const captureInput = input();
     captureInput.semanticContext.conversation[2].text =
       "我问了一下魏汉东，他说26-27会长是雷岳鑫";
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [existingAssociationBinding(), newPresidentBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
@@ -398,8 +398,7 @@ describe("Chat Assertion capture agent", () => {
             quotes: ["我问了一下魏汉东，他说26-27会长是雷岳鑫"],
           }],
         }],
-      },
-    } as never);
+    }));
     vi.mocked(embedMemoryQueries).mockResolvedValue({
       model: "BAAI/bge-m3",
       modelRevision: "test",
@@ -458,8 +457,7 @@ describe("Chat Assertion capture agent", () => {
     const captureInput = input();
     captureInput.semanticContext.conversation[2].text =
       "我问了一下魏汉东，他说26-27会长是雷岳鑫";
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [existingAssociationBinding(), newPresidentBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
@@ -470,8 +468,7 @@ describe("Chat Assertion capture agent", () => {
             quotes: ["我问了一下魏汉东，他说26-27会长是雷岳鑫"],
           }],
         }],
-      },
-    } as never);
+    }));
 
     await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();
@@ -493,8 +490,7 @@ describe("Chat Assertion capture agent", () => {
     const captureInput = input();
     captureInput.semanticContext.conversation[2].text =
       "乒协2026-2027学年设置器材负责人岗位。";
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [{
           ref: presidentRef,
           resolution: "create",
@@ -510,8 +506,7 @@ describe("Chat Assertion capture agent", () => {
             quotes: ["乒协2026-2027学年设置器材负责人岗位。"],
           }],
         }],
-      },
-    } as never);
+    }));
     vi.mocked(embedMemoryQueries).mockResolvedValue({
       model: "BAAI/bge-m3",
       modelRevision: "test",
@@ -565,8 +560,7 @@ describe("Chat Assertion capture agent", () => {
         };
       }).inspectObjectIdentity;
       await inspectTool.execute({ objectId });
-      return {
-        output: {
+      return extractionResult({
           objects: [{
             ref: presidentRef,
             resolution: "create",
@@ -588,8 +582,7 @@ describe("Chat Assertion capture agent", () => {
               quotes: ["乒协2026-2027学年设置器材负责人岗位。"],
             }],
           }],
-        },
-      } as never;
+      });
     });
     vi.mocked(embedMemoryQueries).mockResolvedValue({
       model: "BAAI/bge-m3",
@@ -638,8 +631,7 @@ describe("Chat Assertion capture agent", () => {
     }]);
     const captureInput = input();
     captureInput.semanticContext.conversation[2].text = "中科大设有学生社团。";
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [{
           ref: presidentRef,
           resolution: "create",
@@ -651,8 +643,7 @@ describe("Chat Assertion capture agent", () => {
           objectRefs: [presidentRef],
           evidence: [{ messageId: "user-current", quotes: ["中科大设有学生社团。"] }],
         }],
-      },
-    } as never);
+    }));
 
     await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(transaction.memoryGlobalObject.createMany).not.toHaveBeenCalled();
@@ -670,8 +661,7 @@ describe("Chat Assertion capture agent", () => {
     const captureInput = input();
     captureInput.semanticContext.conversation[2].text =
       "我问了一下魏汉东，他说26-27会长是雷岳鑫";
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [existingAssociationBinding(), newPresidentBinding()],
         assertions: [{
           globalStatementTemplateMarkdown:
@@ -682,8 +672,7 @@ describe("Chat Assertion capture agent", () => {
             quotes: ["我问了一下魏汉东，他说26-27会长是雷岳鑫"],
           }],
         }],
-      },
-    } as never);
+    }));
     vi.mocked(embedMemoryQueries).mockResolvedValue({
       model: "BAAI/bge-m3",
       modelRevision: "test",
@@ -703,8 +692,7 @@ describe("Chat Assertion capture agent", () => {
     const { database, transaction } = mockDatabase();
     const captureInput = input();
     captureInput.semanticContext.conversation[2].text = "乒协的新会长是会长";
-    vi.mocked(generateText).mockResolvedValue({
-      output: {
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
         objects: [existingAssociationBinding(), newPresidentBinding("会长")],
         assertions: [{
           globalStatementTemplateMarkdown:
@@ -712,8 +700,7 @@ describe("Chat Assertion capture agent", () => {
           objectRefs: [associationRef, presidentRef],
           evidence: [{ messageId: "user-current", quotes: ["乒协的新会长是会长"] }],
         }],
-      },
-    } as never);
+    }));
 
     await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();
@@ -722,9 +709,10 @@ describe("Chat Assertion capture agent", () => {
 
   it("does not persist an unused create proposal when the extractor publishes no Assertion", async () => {
     const { database, transaction } = mockDatabase();
-    vi.mocked(generateText).mockResolvedValue({
-      output: { objects: [newPresidentBinding()], assertions: [] },
-    } as never);
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
+      objects: [newPresidentBinding()],
+      assertions: [],
+    }));
 
     await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual(emptyCaptureResult);
     expect(database.$transaction).not.toHaveBeenCalled();

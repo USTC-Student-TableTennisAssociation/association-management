@@ -188,6 +188,29 @@ describe("packContext", () => {
     expect(result.report.estimatedTokens.memory).toBe(0);
   });
 
+  it("always includes workspace/recent Higher Memory before any search", () => {
+    const result = packContext({
+      messages: [message("user", "你好")],
+      retrieval: retrieval(),
+      profile: roomyProfile,
+      memoryState: "not-searched",
+      ambientHigherMemories: [{
+        scope: "workspace",
+        contentMarkdown: "Echo 当前正在帮助一个团队延续共同工作。",
+        maintainedAt: "2026-08-15T00:00:00.000Z",
+      }, {
+        scope: "recent",
+        contentMarkdown: "近期主要在准备一场比赛。",
+        maintainedAt: "2026-08-15T00:00:00.000Z",
+      }],
+    });
+
+    expect(result.system).toContain("Workspace Higher Memory");
+    expect(result.system).toContain("Recent Higher Memory");
+    expect(result.system).toContain("近期主要在准备一场比赛");
+    expect(result.system).not.toContain("本轮 Object–Assertion Locate");
+  });
+
   it("reports component estimates and a consistent total", () => {
     const result = packContext({
       messages: [

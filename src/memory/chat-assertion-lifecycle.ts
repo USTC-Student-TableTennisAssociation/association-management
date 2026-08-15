@@ -12,11 +12,12 @@ import {
   markChatAssertionReceiptRunning,
   type ChatAssertionReceiptKey,
 } from "@/memory/chat-assertion-receipt";
+import { findExistingHigherMemoryObjectIds } from "@/memory/object-higher-memory";
 import {
-  findExistingHigherMemoryObjectIds,
-  maintainObjectHigherMemories,
-  type ObjectHigherMemoryMaintenanceInput,
-} from "@/memory/object-higher-memory";
+  maintainHigherMemories,
+  type HigherMemoryMaintenanceInput,
+} from "@/memory/higher-memory-maintenance";
+import { addObjectTargetsToQueueDecision } from "@/memory/higher-memory-queue";
 
 export type ChatMemoryMaintenanceInput = {
   assertion?: ChatAssertionCaptureInput;
@@ -25,7 +26,7 @@ export type ChatMemoryMaintenanceInput = {
     input: ChatAssertionCaptureInput;
     result: ChatAssertionCaptureResult;
   };
-  higherMemory?: ObjectHigherMemoryMaintenanceInput;
+  higherMemory?: HigherMemoryMaintenanceInput;
 };
 
 export type ChatMemoryMaintenanceScheduler = {
@@ -132,8 +133,6 @@ export function createChatMemoryMaintenanceScheduler(
               compilationId,
             });
             if (automaticallyAffected.length) {
-              const explicitIds = higherMemoryInput?.queueDecision.objectIds ?? [];
-              const objectIds = [...new Set([...explicitIds, ...automaticallyAffected])].slice(0, 6);
               const automaticReason = "本轮新发布 Assertion 涉及已有 Higher Memory，自动刷新以避免旧高层认知遮住新事实。";
               higherMemoryInput = {
                 clientMessageId: higherMemoryInput?.clientMessageId ?? assertionContext.clientMessageId,
@@ -141,12 +140,11 @@ export function createChatMemoryMaintenanceScheduler(
                 timezone: higherMemoryInput?.timezone ?? assertionContext.timezone,
                 semanticContext: higherMemoryInput?.semanticContext ?? assertionContext.semanticContext,
                 retrieval: higherMemoryInput?.retrieval ?? assertionContext.retrieval,
-                queueDecision: {
-                  objectIds,
-                  reason: higherMemoryInput
-                    ? `${higherMemoryInput.queueDecision.reason}；${automaticReason}`
-                    : automaticReason,
-                },
+                queueDecision: addObjectTargetsToQueueDecision({
+                  decision: higherMemoryInput?.queueDecision,
+                  objectIds: automaticallyAffected,
+                  reason: automaticReason,
+                }),
               };
               await trace?.appendSection(
                 "Higher Memory 自动补偿触发",
@@ -169,13 +167,13 @@ export function createChatMemoryMaintenanceScheduler(
               "后台 Higher Memory 开始",
               `Assertion 阶段已经完整结束，本轮新发布 ${captureResult.publishedAssertions} 条 Assertion。现在开始维护 Higher Memory。`,
             );
-            const maintainedObjects = await maintainObjectHigherMemories(
+            const maintained = await maintainHigherMemories(
               higherMemoryInput,
               trace,
             );
             console.info("[chat.higher-memory]", JSON.stringify({
               clientMessageId: higherMemoryInput.clientMessageId,
-              maintainedObjects,
+              ...maintained,
             }));
           } catch (error) {
             console.error("[chat.higher-memory]", error);
@@ -184,7 +182,7 @@ export function createChatMemoryMaintenanceScheduler(
         } else {
           await trace?.appendSection(
             "后台 Higher Memory 跳过",
-            "主回答模型没有登记重要 Object 的 Higher Memory 维护意图，本轮也没有新 Assertion 需要刷新已有 Higher Memory。",
+            "主回答模型没有登记 workspace、recent 或重要 Object 的 Higher Memory 维护意图，本轮也没有新 Assertion 需要刷新已有 Object Higher Memory。",
           );
         }
       } finally {

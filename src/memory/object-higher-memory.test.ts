@@ -101,12 +101,15 @@ beforeEach(() => {
     followObject: { description: "follow" },
   });
   aiState.generateText.mockResolvedValue({
-    output: {
+    toolCalls: [{
+      toolName: "submitObjectHigherMemory",
+      input: {
       memories: [{
         globalObjectId: objectId,
-        contentMarkdown: "## 当前认知\n\n测试社团目前的状态需要结合有效期理解。",
+        contentMarkdown: "## 当前认知\n\n测试社团目前的状态需要结合相关 Assertion 的有效期理解。现有记录表明团队正在逐步整理工作方式，但这些记录没有证明所有状态截至当前仍然有效；后续协作应继续核对最新进展、明确仍未解决的事项，并保留记录之间可能存在的时间差异与资料缺口。",
       }],
-    },
+      },
+    }],
   });
 });
 
@@ -122,6 +125,8 @@ describe("maintainObjectHigherMemories", () => {
     expect(call.prompt).toContain("main system");
     expect(call.prompt).toContain("这是本轮回答");
     expect(call.prompt).toContain("不需要输出、挑选或维护 Assertion ID");
+    expect(call.tools).toHaveProperty("submitObjectHigherMemory");
+    expect(call.toolChoice).toBe("required");
 
     const transaction = (databaseState.database as {
       __transaction: { memoryObjectHigherMemory: { upsert: ReturnType<typeof vi.fn> } };
@@ -144,9 +149,33 @@ describe("maintainObjectHigherMemories", () => {
   });
 
   it("preserves old memory when the agent cannot form useful new cognition", async () => {
-    aiState.generateText.mockResolvedValue({ output: { memories: [] } });
+    aiState.generateText.mockResolvedValue({
+      toolCalls: [{
+        toolName: "submitObjectHigherMemory",
+        input: { memories: [] },
+      }],
+    });
 
     await expect(maintainObjectHigherMemories(input())).resolves.toBe(0);
+
+    const database = databaseState.database as { $transaction: ReturnType<typeof vi.fn> };
+    expect(database.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a title-only cognition document", async () => {
+    aiState.generateText.mockResolvedValue({
+      toolCalls: [{
+        toolName: "submitObjectHigherMemory",
+        input: {
+          memories: [{
+            globalObjectId: objectId,
+            contentMarkdown: "# 测试社团",
+          }],
+        },
+      }],
+    });
+
+    await expect(maintainObjectHigherMemories(input())).rejects.toThrow("正文不能只包含标题");
 
     const database = databaseState.database as { $transaction: ReturnType<typeof vi.fn> };
     expect(database.$transaction).not.toHaveBeenCalled();

@@ -11,6 +11,7 @@ const proposalState = vi.hoisted(() => ({ create: vi.fn(), read: vi.fn() }));
 const sourceDocumentState = vi.hoisted(() => ({ read: vi.fn() }));
 const assertionCaptureState = vi.hoisted(() => ({ capture: vi.fn() }));
 const chatPersistenceState = vi.hoisted(() => ({ save: vi.fn() }));
+const ambientMemoryState = vi.hoisted(() => ({ load: vi.fn() }));
 const assertionReceiptState = vi.hoisted(() => ({
   list: vi.fn(),
   queue: vi.fn(),
@@ -49,6 +50,11 @@ vi.mock("@/memory/chat-assertion-receipt", async (importOriginal) => {
     completeChatAssertionReceipt: assertionReceiptState.complete,
     failChatAssertionReceipt: assertionReceiptState.fail,
   };
+});
+
+vi.mock("@/memory/ambient-higher-memory", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/memory/ambient-higher-memory")>();
+  return { ...original, loadAmbientHigherMemories: ambientMemoryState.load };
 });
 
 vi.mock("@/memory/source-document", () => ({
@@ -445,6 +451,7 @@ beforeEach(() => {
   assertionReceiptState.running.mockResolvedValue(undefined);
   assertionReceiptState.complete.mockResolvedValue(undefined);
   assertionReceiptState.fail.mockResolvedValue(undefined);
+  ambientMemoryState.load.mockResolvedValue([]);
   assertionCaptureState.capture.mockResolvedValue({
     publishedAssertions: 1,
     publishedAssertionIds: ["00000000-0000-4000-8000-000000000051"],
@@ -534,6 +541,9 @@ describe("POST /api/chat Explore", () => {
       ]),
     );
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("本轮开始时尚未执行搜索");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("你是 Echo");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("不要预设当前环境属于高校社团");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain("你是高校社团的 AI 助手");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("本轮时间锚点");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("组织时区：Asia/Shanghai");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("每个具有时效性的组织结论");
@@ -581,6 +591,31 @@ describe("POST /api/chat Explore", () => {
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: "无法保存对话，请稍后重试。" });
     expect(model.doStreamCalls).toHaveLength(0);
+  });
+
+  it("injects persisted workspace/recent Higher Memory without invoking Locate", async () => {
+    ambientMemoryState.load.mockResolvedValue([{
+      scope: "workspace",
+      contentMarkdown: "Echo 当前正在帮助一个团队延续共同工作。",
+      maintainedAt: "2026-08-15T00:00:00.000Z",
+    }, {
+      scope: "recent",
+      contentMarkdown: "近期主要在准备一场比赛，场地是当前共同焦点。",
+      maintainedAt: "2026-08-15T00:00:00.000Z",
+    }]);
+    const model = new MockLanguageModelV4({
+      doStream: [answerStep("你好，我知道近期的共同焦点是比赛场地。")],
+    });
+    providerState.model = model;
+
+    const response = await POST(chatRequest("你好"));
+    await response.text();
+
+    expect(retrieverState.retrieve).not.toHaveBeenCalled();
+    const prompt = JSON.stringify(model.doStreamCalls[0].prompt);
+    expect(prompt).toContain("Workspace Higher Memory");
+    expect(prompt).toContain("Recent Higher Memory");
+    expect(prompt).toContain("场地是当前共同焦点");
   });
 
   it("injects the previous turn's persisted Assertion receipt into the main model", async () => {
