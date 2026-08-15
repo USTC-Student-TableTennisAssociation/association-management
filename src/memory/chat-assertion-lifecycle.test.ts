@@ -26,7 +26,9 @@ vi.mock("@/memory/chat-assertion-receipt", () => ({
 }));
 vi.mock("@/memory/object-higher-memory", () => ({
   findExistingHigherMemoryObjectIds: lifecycleState.findExisting,
-  maintainObjectHigherMemories: lifecycleState.maintain,
+}));
+vi.mock("@/memory/higher-memory-maintenance", () => ({
+  maintainHigherMemories: lifecycleState.maintain,
 }));
 
 import { createChatMemoryMaintenanceScheduler } from "@/memory/chat-assertion-lifecycle";
@@ -52,7 +54,7 @@ beforeEach(() => {
   });
   lifecycleState.maintain.mockImplementation(async () => {
     lifecycleState.order.push("higher-memory:start");
-    return 1;
+    return { objectMemories: 1, ambientMemories: 0 };
   });
   lifecycleState.findExisting.mockResolvedValue([]);
 });
@@ -154,7 +156,9 @@ describe("post-answer memory maintenance pipeline", () => {
     });
     expect(lifecycleState.maintain).toHaveBeenCalledWith(
       expect.objectContaining({
-        queueDecision: expect.objectContaining({ objectIds: ["object-1"] }),
+        queueDecision: expect.objectContaining({
+          targets: [{ scope: "object", globalObjectId: "object-1" }],
+        }),
       }),
       undefined,
     );

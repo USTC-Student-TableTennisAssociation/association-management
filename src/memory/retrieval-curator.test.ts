@@ -63,9 +63,12 @@ describe("resolveRetrievalTargets", () => {
 
   it("uses full conversation context for an ambiguous pronoun", async () => {
     aiState.generateText.mockResolvedValue({
-      output: {
+      toolCalls: [{
+        toolName: "submitRetrievalTarget",
+        input: {
         targetObjects: [{ id: "association", reason: "前文明确纠正为组织本身。" }],
-      },
+        },
+      }],
       reasoningText: "根据完整前文消解它的指代。",
     });
     const result = await resolveRetrievalTargets({
@@ -79,14 +82,20 @@ describe("resolveRetrievalTargets", () => {
     expect(result.targetObjectIds).toEqual(["association"]);
     expect(aiState.generateText.mock.calls[0][0].prompt).toContain("我问的是乒协组织本身");
     expect(aiState.generateText.mock.calls[0][0].prompt).toContain("那它目前最大的问题是什么");
-    expect(aiState.generateText.mock.calls[0][0].system).toContain("JSON");
+    expect(aiState.generateText.mock.calls[0][0]).toMatchObject({
+      tools: { submitRetrievalTarget: expect.any(Object) },
+      toolChoice: { type: "tool", toolName: "submitRetrievalTarget" },
+    });
   });
 
   it("rejects invented ids and falls back deterministically", async () => {
     aiState.generateText.mockResolvedValue({
-      output: {
+      toolCalls: [{
+        toolName: "submitRetrievalTarget",
+        input: {
         targetObjects: [{ id: "invented", reason: "错误对象" }],
-      },
+        },
+      }],
       reasoningText: "错误选择",
     });
     const result = await resolveRetrievalTargets({
@@ -113,14 +122,17 @@ describe("curateRetrievalAssertions", () => {
 
   it("returns only candidate ids selected by the model", async () => {
     aiState.generateText.mockResolvedValue({
-      output: {
+      toolCalls: [{
+        toolName: "submitRetrievalSelection",
+        input: {
         selectedAssertions: [
           { id: "assertion-2", reason: "直接回答" },
           { id: "assertion-5", reason: "保留不同限定" },
         ],
         coverage: "partial",
         missingAspects: ["当前有效性"],
-      },
+        },
+      }],
       reasoningText: "保留直接回答且限定不同的证据。",
     });
     const result = await curateRetrievalAssertions({
@@ -137,7 +149,10 @@ describe("curateRetrievalAssertions", () => {
       coverage: "partial",
       missingAspects: ["当前有效性"],
     });
-    expect(aiState.generateText.mock.calls[0][0].system).toContain("JSON");
+    expect(aiState.generateText.mock.calls[0][0]).toMatchObject({
+      tools: { submitRetrievalSelection: expect.any(Object) },
+      toolChoice: { type: "tool", toolName: "submitRetrievalSelection" },
+    });
   });
 
   it("falls back to the first six candidates when the model fails", async () => {

@@ -1,0 +1,152 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const aiState = vi.hoisted(() => ({ generateText: vi.fn() }));
+const databaseState = vi.hoisted(() => ({ database: undefined as unknown }));
+
+vi.mock("ai", async (importOriginal) => {
+  const original = await importOriginal<typeof import("ai")>();
+  return { ...original, generateText: aiState.generateText };
+});
+vi.mock("@/ai/provider", () => ({ getChatModel: () => ({}) }));
+vi.mock("@/db", () => ({ getDatabase: () => databaseState.database }));
+
+import {
+  buildAmbientHigherMemoryContext,
+  loadAmbientHigherMemories,
+  maintainAmbientHigherMemories,
+} from "@/memory/ambient-higher-memory";
+import type { MemoryRetrievalResult } from "@/memory/types";
+
+const maintainedAt = new Date("2026-08-15T00:00:00.000Z");
+
+function retrieval(): MemoryRetrievalResult {
+  return {
+    query: "我们最近在准备比赛",
+    mode: "object-assertion",
+    seedMap: { facets: [], objects: [], assertions: [], connections: [] },
+  };
+}
+
+function input() {
+  return {
+    clientMessageId: "message-current",
+    submittedAt: "2026-08-15T00:00:00.000Z",
+    timezone: "Asia/Shanghai",
+    semanticContext: {
+      conversation: [{
+        messageId: "message-current",
+        role: "user" as const,
+        text: "我们最近正在准备一场比赛，场地是当前重点。",
+      }],
+      systemInstruction: "main system",
+      modelCalls: [],
+      toolExecutions: [],
+      finalAnswer: "明白，后续可以围绕场地继续推进。",
+    },
+    retrieval: retrieval(),
+    scopes: ["workspace" as const, "recent" as const],
+    reason: "本轮形成了环境与近期工作理解",
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  const upsert = vi.fn().mockResolvedValue({ id: "ambient-memory" });
+  const transaction = { memoryAmbientHigherMemory: { upsert } };
+  databaseState.database = {
+    memoryAmbientHigherMemory: {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          scope: "recent",
+          contentMarkdown: "近期重点尚不明确。",
+          maintainedAt,
+        },
+        {
+          scope: "workspace",
+          contentMarkdown: "Echo 正在逐步理解当前环境。",
+          maintainedAt,
+        },
+      ]),
+    },
+    $transaction: vi.fn(async (callback: (tx: typeof transaction) => Promise<void>) =>
+      callback(transaction)
+    ),
+    __transaction: transaction,
+  };
+  aiState.generateText.mockResolvedValue({
+    toolCalls: [{
+      toolName: "submitAmbientHigherMemory",
+      input: {
+        memories: [{
+          scope: "workspace",
+          contentMarkdown: "## 当前环境\n\nEcho 正在逐步理解这个团队、长期工作方式及自身能承担的协作职责；目前主要根据真实对话延续共同工作，仍应通过后续互动和实际业务读取继续修正这种理解，不能预设环境类型或成员身份。",
+        }, {
+          scope: "recent",
+          contentMarkdown: "## 近期焦点\n\n近期主要在准备一场比赛，场地是当前重点；具体申请和确认状态可能继续变化，下一轮协作时应先了解最新进展，再根据仍未解决的风险决定是否需要协助准备材料、联系相关方或调整安排。",
+        }],
+      },
+    }],
+  });
+});
+
+describe("ambient Higher Memory", () => {
+  it("loads singleton scopes in workspace/recent order", async () => {
+    await expect(loadAmbientHigherMemories()).resolves.toEqual([
+      expect.objectContaining({ scope: "workspace" }),
+      expect.objectContaining({ scope: "recent" }),
+    ]);
+  });
+
+  it("renders ambient cognition as automatically loaded non-authoritative context", async () => {
+    const context = buildAmbientHigherMemoryContext(await loadAmbientHigherMemories());
+    expect(context).toContain("Workspace Higher Memory");
+    expect(context).toContain("Recent Higher Memory");
+    expect(context).toContain("无需先搜索");
+    expect(context).toContain("Business View");
+    expect(context).toContain("Person Object Higher Memory");
+  });
+
+  it("uses the real dialogue context without requiring another search and upserts both scopes", async () => {
+    await expect(maintainAmbientHigherMemories(input())).resolves.toBe(2);
+
+    const call = aiState.generateText.mock.calls[0][0];
+    expect(call.tools).toHaveProperty("submitAmbientHigherMemory");
+    expect(call.toolChoice).toEqual({
+      type: "tool",
+      toolName: "submitAmbientHigherMemory",
+    });
+    expect(call.prompt).toContain("我们最近正在准备一场比赛");
+    expect(call.prompt).toContain("不需要为了逐句确定性而重复搜索");
+    expect(call.prompt).toContain("Person Object Higher Memory");
+
+    const transaction = (databaseState.database as {
+      __transaction: { memoryAmbientHigherMemory: { upsert: ReturnType<typeof vi.fn> } };
+    }).__transaction;
+    expect(transaction.memoryAmbientHigherMemory.upsert).toHaveBeenCalledTimes(2);
+    expect(transaction.memoryAmbientHigherMemory.upsert).toHaveBeenCalledWith({
+      where: { scope: "recent" },
+      create: expect.objectContaining({
+        scope: "recent",
+        triggerMessageId: "message-current",
+        maintenanceReason: "本轮形成了环境与近期工作理解",
+      }),
+      update: expect.objectContaining({
+        contentMarkdown: expect.stringContaining("场地"),
+      }),
+    });
+  });
+
+  it("keeps old memories when the agent has no useful replacement", async () => {
+    aiState.generateText.mockResolvedValue({
+      toolCalls: [{
+        toolName: "submitAmbientHigherMemory",
+        input: { memories: [] },
+      }],
+    });
+
+    await expect(maintainAmbientHigherMemories(input())).resolves.toBe(0);
+
+    const database = databaseState.database as { $transaction: ReturnType<typeof vi.fn> };
+    expect(database.$transaction).not.toHaveBeenCalled();
+  });
+});
