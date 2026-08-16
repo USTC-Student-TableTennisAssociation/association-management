@@ -113,7 +113,6 @@ export async function inspectObjectIdentity(
     object: {
       id: object.id,
       canonicalName: object.canonicalName,
-      identitySummaryMarkdown: object.identitySummaryMarkdown,
     },
     surfaces: [
       ...object.surfaceMemberships.map((membership) => ({
@@ -608,13 +607,6 @@ async function mergeObjects(
     where: { globalObjectId: { in: sourceIds } },
     data: { globalObjectId: change.survivorObjectId },
   });
-  await transaction.memoryGlobalObject.update({
-    where: { id: change.survivorObjectId },
-    data: {
-      identitySummaryMarkdown:
-        "该 GlobalObject 的身份已通过已批准的 Object Change Proposal 合并；名称来源与事实见关联 Surface 和 Assertion。",
-    },
-  });
   await transaction.memoryGlobalObject.deleteMany({ where: { id: { in: sourceIds } } });
 }
 
@@ -631,8 +623,6 @@ async function splitObject(
     where: { id: change.sourceObjectId },
     data: {
       canonicalName: change.sourceCanonicalName,
-      identitySummaryMarkdown:
-        "该 GlobalObject 的身份已通过已批准的 Object Change Proposal 拆分；当前名称来源与事实见关联 Surface 和 Assertion。",
     },
   });
   await transaction.memoryGlobalObject.create({
@@ -641,8 +631,6 @@ async function splitObject(
       compilationId,
       globalObjectKey: `managed-object:${newObjectId}`,
       canonicalName: change.newCanonicalName,
-      identitySummaryMarkdown:
-        "该 GlobalObject 由已批准的 Object Change Proposal 从混合身份中拆出；名称来源与事实见关联 Surface 和 Assertion。",
     },
   });
 

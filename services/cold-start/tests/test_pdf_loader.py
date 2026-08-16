@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from cold_start.document.pdf_loader import MinerUPdfLoader
+from cold_start.document.pdf_loader import MinerUDocumentLoader, MinerUPdfLoader
 
 
 def test_mineru_loader_uses_verified_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,3 +114,10 @@ def test_mineru_content_list_becomes_native_source_blocks(tmp_path: Path) -> Non
 def test_mineru_loader_rejects_unknown_configuration() -> None:
     with pytest.raises(ValueError, match="COLD_START_MINERU_EFFORT"):
         MinerUPdfLoader(effort="extreme")  # type: ignore[arg-type]
+
+
+def test_mineru_document_loader_accepts_office_formats(tmp_path: Path) -> None:
+    for suffix in (".pdf", ".docx", ".pptx", ".xlsx"):
+        source = tmp_path / f"source{suffix}"
+        source.write_bytes(b"document")
+        MinerUDocumentLoader._validate_path(source)

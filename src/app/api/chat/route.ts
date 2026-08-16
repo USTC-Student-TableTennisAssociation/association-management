@@ -28,6 +28,8 @@ import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import { modelHistoryMessageText } from "@/ai/ui-message-text";
 import { saveChatMessage } from "@/chat/persistence";
+import { createLibraryToolset } from "@/library/toolset";
+import { libraryPlanPresentationSchema } from "@/library/ui-schema";
 import {
   citedAssertionRefs,
   hydrateCitedSourceExcerpts,
@@ -85,6 +87,11 @@ const EXPLORE_PROTOCOL_RESERVE_TOKENS = 4_000;
 
 const EXPLORE_INSTRUCTIONS = `
 你可以按需使用 searchMemory 和 followObject 在 Echo 的 GlobalObject–Assertion 记忆中查找组织知识。本轮开始时尚未执行搜索。
+资料库是与 Shared Brain 分离的原始文件层。用户询问已有文件、文件夹、整理或处理档位时，使用 listLibrary/inspectLibraryNodes 查看索引；只有用户询问已经进入记忆的组织事实时才使用 Shared Brain 检索。
+catalog（仅归档）表示文件不进入正式知识编译；基础编译可为它生成轻量语义草稿，但草稿不是 Shared Brain Assertion。文件名、格式与所在文件夹只是索引元数据，不得被当作文件内容事实。整理或改档位用 proposeLibraryPlan 提出建议，批准前不生效；不要建议删除文件。
+当资料库 Proposal 缺少一批节点的真实 ID 时，立即调用 listLibrary 的 recursive=true 批量取得。文件盘点优先用 kind=file、detail=compact，再按 profile、queries（任意字面包含词）和 extensions 缩小范围；不要首先请求整个资料库的无过滤 full 列表。多个目标目录一次放入 folderIds，不要逐层遍历或凭历史摘要重建 UUID。默认结果已过滤系统/临时噪音文件；不得把被过滤的噪音误当作未保留的原件。truncated=true 时传回 nextOffset 分页，或收紧过滤条件；truncated=false 表示当前条件已完整覆盖。
+只有当 catalog 文件的名称/路径确实无法支持档位判断时，才对已筛出的极少量候选调用 previewLibraryFiles。先保持 parseIfMissing=false 尝试复用数据库原文；只有用户确实要读模糊文件且当前运行机可承受时，才设置 true 显式启动高精度 MinerU。不得用它批量遍历文件。
+用户询问基础编译进度或处理失败时，调用 readLibraryCompilation。编译工作快照中的 Reference/Assertion/Object 都是草稿候选，未发布前不能当作 Shared Brain 事实。
 调用 searchMemory 时必须把“找哪个实体”和“围绕它找什么”分开：targetHints 忠实保留用户所指实体的名称、别名或原话，不得扩写成相邻文档、知识库或概念；query 只表达围绕目标想了解的信息需求。后端会保留当前用户原话并结合完整对话语义上下文识别目标、筛选证据。
 问候、闲聊、改写、翻译、总结用户已提供的文字、一般概念解释以及不依赖 Echo 组织资料的任务，直接回答，不要调用检索工具。
 当且仅当当前用户原话自身陈述了值得后续检索的新组织事实时，调用一次 queueChatAssertionCapture；纯问候、闲聊、问题、假设、头脑风暴、操作指令本身以及仅来自 Assistant 历史的事实不要调用。若操作指令同时明确确认了组织事实，只针对事实部分触发。该工具会使用完整对话上下文选择逐字用户 Evidence，并可自主复用或继续 Shared Brain 搜索；稳定专名在成功 Assertion 中实际使用、没有重复或歧义时，可以原子创建新 Object。
@@ -134,15 +141,22 @@ const FINAL_ANSWER_INSTRUCTION =
 
 const pageContextSchema = z.object({
   activeViewKey: businessViewKeySchema.optional(),
-  activePresentation: z.enum(["overview", "playbook", "cards", "full_chat"]),
+  activePresentation: z.enum(["overview", "playbook", "cards", "full_chat", "library"]),
+  activeFolderId: z.string().uuid().optional(),
 }).refine(
-  (context) => context.activePresentation === "full_chat" || Boolean(context.activeViewKey),
+  (context) => ["full_chat", "library"].includes(context.activePresentation) || Boolean(context.activeViewKey),
   { message: "Business View presentation 必须提供 activeViewKey" },
 );
 
 function pageContextInstruction(context?: ChatPageContext): string {
   if (!context || context.activePresentation === "full_chat") {
     return "页面 soft context：用户当前位于全屏 AI 对话。不要因此限制 Shared Brain 检索范围。";
+  }
+  if (context.activePresentation === "library") {
+    return [
+      `页面 soft context：用户当前正在查看资料库${context.activeFolderId ? `，当前文件夹 id 为 ${context.activeFolderId}` : ""}。`,
+      "这只用于理解当前工作位置；文件索引不是组织事实证据。",
+    ].join("\n");
   }
   const presentation = context.activePresentation === "overview"
     ? context.activeViewKey === "society_information" ? "社团概览" : "活动总览"
@@ -428,6 +442,7 @@ export async function POST(request: Request) {
       viewReferences: zodSchema(semanticViewReferenceBundleSchema),
       viewProposal: zodSchema(viewProposalPresentationSchema),
       objectChangeProposal: zodSchema(objectChangeProposalPresentationSchema),
+      libraryProposal: zodSchema(libraryPlanPresentationSchema),
     },
   });
   if (!validation.success) return jsonError("消息格式错误。", 400);
@@ -672,6 +687,11 @@ export async function POST(request: Request) {
           writer.write({ type: "data-objectChangeProposal", data: proposal });
         },
       });
+      const libraryToolset = createLibraryToolset({
+        onProposal: (proposal) => {
+          writer.write({ type: "data-libraryProposal", data: proposal });
+        },
+      });
       const sourceDocumentToolset = createSourceDocumentToolset({
         evidence,
         resultTokenBudget: exploreResultTokenBudget,
@@ -753,6 +773,7 @@ export async function POST(request: Request) {
         readSourceDocument: sourceDocumentToolset.tool,
         ...semanticViewToolset.tools,
         ...objectManagementToolset.tools,
+        ...libraryToolset.tools,
         queueChatAssertionCapture: assertionQueueToolset.tool,
         queueHigherMemoryMaintenance: higherMemoryQueueToolset.tool,
       };

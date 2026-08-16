@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 import unicodedata
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -74,9 +74,7 @@ class SameReferentDraft(StrictModel):
 
 class AtomicClaimSubmission(StrictModel):
     claims: list[AtomicClaimDraft] = Field(default_factory=list, max_length=1_000)
-    same_referent_drafts: list[SameReferentDraft] = Field(
-        default_factory=list, max_length=500
-    )
+    same_referent_drafts: list[SameReferentDraft] = Field(default_factory=list, max_length=500)
 
 
 class MissingClaimSubmission(StrictModel):
@@ -201,9 +199,7 @@ class SourceClaimCheckpoint(StrictModel):
 
 
 class SourceObjectFragmentCheckpoint(StrictModel):
-    schema_version: Literal["source-object-fragments.v5"] = (
-        "source-object-fragments.v5"
-    )
+    schema_version: Literal["source-object-fragments.v5"] = "source-object-fragments.v5"
     source_sha256: str
     region_node_id: str = Field(pattern=r"^region-\d{4,}$")
     fragments: list[ObjectFragment]
@@ -286,9 +282,7 @@ class FullSourceSemanticSnapshot(StrictModel):
                 "source_time_text 为 null 时 source_time_supporting_block_ids 必须为空"
             )
         if self.source_time_text is not None and not self.source_time_supporting_block_ids:
-            raise ValueError(
-                "非空 source_time_text 必须提供 source_time_supporting_block_ids"
-            )
+            raise ValueError("非空 source_time_text 必须提供 source_time_supporting_block_ids")
         if len(set(self.source_time_supporting_block_ids)) != len(
             self.source_time_supporting_block_ids
         ):
@@ -382,7 +376,7 @@ CLAIM_EXTRACTION_SYSTEM_PROMPT = """
 - 不判断全局 Object identity，不建立 Relation，不分类 record/viewpoint，不结构化时间，
   不评价长期价值；
 - 不分配任何 ID，不输出最终数据库协议，也不进行全局自检；
-- context_dependent 不是质量、置信度或重要性评价；不要为了把它改成 false 而重新打开已经完成的
+- context_dependent 不是质量或重要性评价；不要为了把它改成 false 而重新打开已经完成的
   Claim 判断。处理完最后一个 block 后立即提交。
 
 JSON 字符串要求：
@@ -604,7 +598,7 @@ Assertion template 与 Object link 规则：
   semantic_fragment_keys；不要再加入“乒协”或某行历史定位中出现的群体 Fragment；
 - 名称只存在于 SourceRegion、frozen claim 或 naming hint，没有出现在其他 factual claim 中，
   也仍可合法进入 Fragment；不得为它制造 fake claim；
-- 不输出 supporting blocks、时间、Relation、Object type、confidence、business role、alias evidence
+- 不输出 supporting blocks、时间、Relation、Object type、business role、alias evidence
   graph、Global identity 或长期价值判断。
 
 JSON 字符串要求：
@@ -644,7 +638,7 @@ Source Time 用来帮助系统理解这份来源处在什么历史位置，以�
 规整。证据不充分或候选互相冲突时返回 null。
 
 严禁根据正文事件的最大年份推断；严禁使用文件系统时间、PDF metadata、上传时间、编译时间、
-当前系统时间或外部知识。不要输出 start/end、precision、kind、confidence、basis 或 validity。
+当前系统时间或外部知识。不要输出 start/end、precision、kind、basis 或 validity。
 
 只输出一个严格 JSON 对象，不要输出 Markdown 代码块、解释或其他字段：
 {"source_time_text":"2026年春","supporting_block_ids":["p0006-b0008"]}
@@ -682,9 +676,7 @@ class SourceSemanticCompiler:
         source_blocks = self._owned_blocks(node)
         cached = _load_current_source_snapshot(self.paths, source_blocks)
         if cached is not None:
-            self._validate_checkpoint_identity(
-                cached.source.sha256, cached.region_node_id, node
-            )
+            self._validate_checkpoint_identity(cached.source.sha256, cached.region_node_id, node)
             return cached
 
         lineage = self._lineage(node)
@@ -696,9 +688,7 @@ class SourceSemanticCompiler:
         )
         label = f"来源语义·{node.node_id}"
 
-        initial = self._load_claim_checkpoint(
-            self.paths.initial_claims_json, node, source_blocks
-        )
+        initial = self._load_claim_checkpoint(self.paths.initial_claims_json, node, source_blocks)
         rebuilt_initial = initial is None
         if initial is None:
             self.progress.report(label, "第一遍：开始提取内聚知识单元与 Reference")
@@ -707,9 +697,7 @@ class SourceSemanticCompiler:
                 user_prompt=source_prompt,
                 output_model=AtomicClaimSubmission,
                 request_label=f"{label}·Assertion Discovery",
-                validate=lambda value: _validate_atomic_submission(
-                    value, source_blocks
-                ),
+                validate=lambda value: _validate_atomic_submission(value, source_blocks),
             )
             initial = self._claim_checkpoint(
                 node,
@@ -816,11 +804,7 @@ class SourceSemanticCompiler:
             same_referent_drafts=reviewed.same_referent_drafts,
         )
         source_ids = [block.block_id for block in source_blocks]
-        model_calls = (
-            initial.model_calls
-            + reviewed.model_calls
-            + object_fragments.model_calls
-        )
+        model_calls = initial.model_calls + reviewed.model_calls + object_fragments.model_calls
         snapshot = SourceSemanticSnapshot(
             created_at=datetime.now(UTC),
             source=self.exploration.source,
@@ -888,8 +872,7 @@ class SourceSemanticCompiler:
                 )
             except (ModelRepetitionError, ValueError) as error:
                 raise ValueError(
-                    f"{fallback_label}失败且不再重试："
-                    f"{_short_validation_error(error)}"
+                    f"{fallback_label}失败且不再重试：{_short_validation_error(error)}"
                 ) from error
             return parsed, 2
         except ValueError as first_error:
@@ -900,8 +883,7 @@ class SourceSemanticCompiler:
             )
             self.progress.report(
                 request_label,
-                f"输出校验失败，进行唯一一次 clean retry："
-                f"{_short_validation_error(first_error)}",
+                f"输出校验失败，进行唯一一次 clean retry：{_short_validation_error(first_error)}",
             )
             try:
                 parsed = await self._request_json_once(
@@ -949,9 +931,7 @@ class SourceSemanticCompiler:
                     user_prompt=user_prompt,
                     output_model=output_model,
                     request_label=(
-                        request_label
-                        if attempt == 1
-                        else f"{request_label}·clean-retry"
+                        request_label if attempt == 1 else f"{request_label}·clean-retry"
                     ),
                     validate=validate,
                 )
@@ -1065,9 +1045,7 @@ class SourceSemanticCompiler:
             checkpoint.source_sha256, checkpoint.region_node_id, node
         )
         _validate_claim_blocks(checkpoint.claims, source_blocks)
-        _validate_same_referent_drafts(
-            checkpoint.same_referent_drafts, source_blocks
-        )
+        _validate_same_referent_drafts(checkpoint.same_referent_drafts, source_blocks)
         return checkpoint
 
     def _load_object_fragments_checkpoint(
@@ -1079,25 +1057,23 @@ class SourceSemanticCompiler:
     ) -> SourceObjectFragmentCheckpoint | None:
         if not self.paths.object_fragments_json.exists():
             return None
-        raw = json.loads(
-            self.paths.object_fragments_json.read_text(encoding="utf-8")
-        )
-        if (
-            not isinstance(raw, dict)
-            or raw.get("schema_version") != "source-object-fragments.v5"
-        ):
+        raw = json.loads(self.paths.object_fragments_json.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or raw.get("schema_version") != "source-object-fragments.v5":
             return None
-        checkpoint = SourceObjectFragmentCheckpoint.model_validate(raw)
-        self._validate_checkpoint_identity(
-            checkpoint.source_sha256, checkpoint.region_node_id, node
-        )
-        _validate_fragment_checkpoint(
-            checkpoint,
-            claims,
-            same_referent_drafts=same_referent_drafts,
-            source_blocks=source_blocks,
-        )
-        return checkpoint
+        try:
+            checkpoint = SourceObjectFragmentCheckpoint.model_validate(raw)
+            self._validate_checkpoint_identity(
+                checkpoint.source_sha256, checkpoint.region_node_id, node
+            )
+            _validate_fragment_checkpoint(
+                checkpoint,
+                claims,
+                same_referent_drafts=same_referent_drafts,
+                source_blocks=source_blocks,
+            )
+            return checkpoint
+        except (ValidationError, ValueError):
+            return None
 
     def _validate_checkpoint_identity(
         self,
@@ -1127,6 +1103,7 @@ class FullSourceSemanticRunner:
         paths: FullSourceSemanticPaths,
         max_parallel_sources: int,
         source_node_ids: Sequence[str] | None = None,
+        on_available: Callable[[FullSourceSemanticSnapshot, bool], Awaitable[None]] | None = None,
         progress: ProgressReporter | None = None,
     ) -> None:
         if max_parallel_sources < 1:
@@ -1137,10 +1114,13 @@ class FullSourceSemanticRunner:
         self.paths = paths
         self.max_parallel_sources = max_parallel_sources
         self.requested_source_node_ids = tuple(source_node_ids or ())
+        self.on_available = on_available
         self.progress = progress or NullProgressReporter()
         self.nodes = {node.node_id: node for node in exploration.region_tree.nodes}
         self.errors: dict[str, str] = {}
         self._working_lock = asyncio.Lock()
+        self._availability_lock = asyncio.Lock()
+        self._available_count = -1
 
     async def run(self) -> FullSourceSemanticSnapshot:
         if self.exploration.region_tree.status != "frozen":
@@ -1152,12 +1132,10 @@ class FullSourceSemanticRunner:
                 self.paths.source_time_json.write_text(
                     source_time.model_dump_json(indent=2), encoding="utf-8"
                 )
-            self.paths.snapshot_json.write_text(
-                cached.model_dump_json(indent=2), encoding="utf-8"
-            )
-            self.paths.report_markdown.write_text(
-                _render_full_report(cached), encoding="utf-8"
-            )
+            self.paths.snapshot_json.write_text(cached.model_dump_json(indent=2), encoding="utf-8")
+            self.paths.report_markdown.write_text(_render_full_report(cached), encoding="utf-8")
+            if self.on_available is not None:
+                await self.on_available(cached, True)
             return cached
 
         available_source_ids = [
@@ -1187,9 +1165,7 @@ class FullSourceSemanticRunner:
         completed = [
             node_id
             for node_id in source_ids
-            if _load_current_source_snapshot(
-                _source_paths(self.paths, node_id)
-            ) is not None
+            if _load_current_source_snapshot(_source_paths(self.paths, node_id)) is not None
         ]
         self.progress.report(
             "全部来源语义",
@@ -1199,6 +1175,7 @@ class FullSourceSemanticRunner:
             ),
         )
         self._write_working(source_ids)
+        await self._notify_available(source_ids, source_time)
         semaphore = asyncio.Semaphore(self.max_parallel_sources)
 
         async def compile_one(position: int, node_id: str) -> SourceSemanticSnapshot:
@@ -1224,6 +1201,7 @@ class FullSourceSemanticRunner:
                 self.errors.pop(node_id, None)
                 async with self._working_lock:
                     self._write_working(source_ids)
+                await self._notify_available(source_ids, source_time)
                 return snapshot
 
         outcomes = await asyncio.gather(
@@ -1242,34 +1220,12 @@ class FullSourceSemanticRunner:
         if failures:
             raise RuntimeError("来源语义编译失败：" + "；".join(failures))
 
-        snapshots = [
-            outcome
-            for outcome in outcomes
-            if isinstance(outcome, SourceSemanticSnapshot)
-        ]
-        full = FullSourceSemanticSnapshot(
-            created_at=datetime.now(UTC),
-            source=self.exploration.source,
-            source_time_text=source_time.source_time_text,
-            source_time_supporting_block_ids=source_time.supporting_block_ids,
-            region_tree_schema_version=self.exploration.region_tree.schema_version,
-            source_node_ids=source_ids,
-            sources=snapshots,
-            total_assertions=sum(len(item.assertions) for item in snapshots),
-            total_object_fragments=sum(
-                len(item.object_fragments) for item in snapshots
-            ),
-            total_surface_forms=sum(
-                len(fragment.surface_forms)
-                for item in snapshots
-                for fragment in item.object_fragments
-            ),
-            model_calls=(
-                source_time.model_calls + sum(item.model_calls for item in snapshots)
-            ),
-        )
+        snapshots = [outcome for outcome in outcomes if isinstance(outcome, SourceSemanticSnapshot)]
+        full = self._full_snapshot(source_ids, snapshots, source_time)
         self.paths.snapshot_json.write_text(full.model_dump_json(indent=2), encoding="utf-8")
         self.paths.report_markdown.write_text(_render_full_report(full), encoding="utf-8")
+        if self.on_available is not None:
+            await self.on_available(full, True)
         self.progress.report(
             "全部来源语义",
             (
@@ -1279,6 +1235,53 @@ class FullSourceSemanticRunner:
             ),
         )
         return full
+
+    async def _notify_available(
+        self,
+        source_ids: Sequence[str],
+        source_time: SourceTimeCheckpoint,
+    ) -> None:
+        if self.on_available is None:
+            return
+        async with self._availability_lock:
+            snapshots: list[SourceSemanticSnapshot] = []
+            for node_id in source_ids:
+                snapshot = _load_current_source_snapshot(_source_paths(self.paths, node_id))
+                if snapshot is None:
+                    break
+                snapshots.append(snapshot)
+            if len(snapshots) == self._available_count:
+                return
+            self._available_count = len(snapshots)
+            if snapshots:
+                await self.on_available(
+                    self._full_snapshot(source_ids, snapshots, source_time),
+                    False,
+                )
+
+    def _full_snapshot(
+        self,
+        source_ids: Sequence[str],
+        snapshots: Sequence[SourceSemanticSnapshot],
+        source_time: SourceTimeCheckpoint,
+    ) -> FullSourceSemanticSnapshot:
+        return FullSourceSemanticSnapshot(
+            created_at=datetime.now(UTC),
+            source=self.exploration.source,
+            source_time_text=source_time.source_time_text,
+            source_time_supporting_block_ids=source_time.supporting_block_ids,
+            region_tree_schema_version=self.exploration.region_tree.schema_version,
+            source_node_ids=list(source_ids),
+            sources=list(snapshots),
+            total_assertions=sum(len(item.assertions) for item in snapshots),
+            total_object_fragments=sum(len(item.object_fragments) for item in snapshots),
+            total_surface_forms=sum(
+                len(fragment.surface_forms)
+                for item in snapshots
+                for fragment in item.object_fragments
+            ),
+            model_calls=(source_time.model_calls + sum(item.model_calls for item in snapshots)),
+        )
 
     async def _extract_source_time(self) -> SourceTimeCheckpoint:
         user_prompt = _source_time_prompt(self.exploration.source, self.blocks)
@@ -1305,11 +1308,7 @@ class FullSourceSemanticRunner:
                         },
                         {"role": "user", "content": user_prompt},
                     ],
-                    request_label=(
-                        "Source Time"
-                        if attempt == 1
-                        else "Source Time·clean-retry"
-                    ),
+                    request_label=("Source Time" if attempt == 1 else "Source Time·clean-retry"),
                     thinking="enabled",
                 )
                 if turn.tool_calls or not turn.content:
@@ -1351,8 +1350,7 @@ class FullSourceSemanticRunner:
         unknown = requested - set(available)
         if unknown:
             raise ValueError(
-                "--source-id 不是可编译的 content_source 节点："
-                + ", ".join(sorted(unknown))
+                "--source-id 不是可编译的 content_source 节点：" + ", ".join(sorted(unknown))
             )
         return [node_id for node_id in available if node_id in requested]
 
@@ -1480,18 +1478,13 @@ def _load_current_source_snapshot(
     if not paths.initial_claims_json.exists() or not paths.reviewed_claims_json.exists():
         return None
     initial_raw = json.loads(paths.initial_claims_json.read_text(encoding="utf-8"))
-    if (
-        not isinstance(initial_raw, dict)
-        or initial_raw.get("schema_version") != "source-claims.v7"
-    ):
+    if not isinstance(initial_raw, dict) or initial_raw.get("schema_version") != "source-claims.v7":
         return None
     try:
         initial = SourceClaimCheckpoint.model_validate(initial_raw)
         if source_blocks is not None:
             _validate_claim_blocks(initial.claims, source_blocks)
-            _validate_same_referent_drafts(
-                initial.same_referent_drafts, source_blocks
-            )
+            _validate_same_referent_drafts(initial.same_referent_drafts, source_blocks)
     except ValidationError:
         return None
     except ValueError:
@@ -1512,9 +1505,7 @@ def _load_current_source_snapshot(
             return None
         if source_blocks is not None:
             _validate_claim_blocks(reviewed.claims, source_blocks)
-            _validate_same_referent_drafts(
-                reviewed.same_referent_drafts, source_blocks
-            )
+            _validate_same_referent_drafts(reviewed.same_referent_drafts, source_blocks)
     except ValidationError:
         return None
     except ValueError:
@@ -1552,8 +1543,7 @@ def _source_prompt(
     blocks: tuple[ParsedBlock, ...],
 ) -> str:
     path = "\n".join(
-        f"- {item.node_id}｜{item.label}：{item.introduction}"
-        for item in [*lineage, node]
+        f"- {item.node_id}｜{item.label}：{item.introduction}" for item in [*lineage, node]
     )
     return f"""
 [STAGE: extract_cohesive_source_assertions]
@@ -1570,14 +1560,17 @@ def _source_prompt(
 
 
 def _review_prompt(source_prompt: str, claims: Sequence[SourceClaim]) -> str:
-    rendered = "\n".join(
-        (
-            f"- {item.claim_id}｜kind={item.kind}｜{item.statement_markdown}｜"
-            f"context_dependent={str(item.context_dependent).lower()}｜"
-            f"依据 {', '.join(item.supporting_block_ids)}"
+    rendered = (
+        "\n".join(
+            (
+                f"- {item.claim_id}｜kind={item.kind}｜{item.statement_markdown}｜"
+                f"context_dependent={str(item.context_dependent).lower()}｜"
+                f"依据 {', '.join(item.supporting_block_ids)}"
+            )
+            for item in claims
         )
-        for item in claims
-    ) or "（第一次没有提取出命题）"
+        or "（第一次没有提取出命题）"
+    )
     return f"""
 [STAGE: find_missing_source_assertions]
 
@@ -1596,20 +1589,26 @@ def _fragment_prompt(
     claims: Sequence[SourceClaim],
     same_referent_drafts: Sequence[SourceSameReferentDraft],
 ) -> str:
-    rendered = "\n".join(
-        (
-            f"- {item.claim_id}｜kind={item.kind}｜{item.statement_markdown}｜"
-            f"context_dependent={str(item.context_dependent).lower()}"
+    rendered = (
+        "\n".join(
+            (
+                f"- {item.claim_id}｜kind={item.kind}｜{item.statement_markdown}｜"
+                f"context_dependent={str(item.context_dependent).lower()}"
+            )
+            for item in claims
         )
-        for item in claims
-    ) or "（当前来源没有现实命题；assertions 必须为空，但仍可从命名语境构造 Fragment）"
-    naming_hints = "\n".join(
-        (
-            f"- {item.same_referent_draft_id}｜必须同组："
-            + " = ".join(mention.span_text for mention in item.mentions)
+        or "（当前来源没有现实命题；assertions 必须为空，但仍可从命名语境构造 Fragment）"
+    )
+    naming_hints = (
+        "\n".join(
+            (
+                f"- {item.same_referent_draft_id}｜必须同组："
+                + " = ".join(mention.span_text for mention in item.mentions)
+            )
+            for item in same_referent_drafts
         )
-        for item in same_referent_drafts
-    ) or "（没有 source hard grouping hint）"
+        or "（没有 source hard grouping hint）"
+    )
     return f"""
 [STAGE: construct_object_fragments]
 
@@ -1632,8 +1631,7 @@ def _source_time_prompt(source: SourceMetadata, blocks: Sequence[ParsedBlock]) -
     rendered_blocks = format_blocks(list(blocks))
     if len(rendered_blocks) > 200_000:
         raise ValueError(
-            "整份 Source 超过 Source Time 单次调用的安全上下文预算；"
-            "本轮不会退化为逐区域时间提取"
+            "整份 Source 超过 Source Time 单次调用的安全上下文预算；本轮不会退化为逐区域时间提取"
         )
     return f"""
 [STAGE: extract_source_time]
@@ -1723,8 +1721,7 @@ def _validate_claim_blocks(
         if unknown:
             claim_label = getattr(claim, "claim_id", f"第 {position} 条命题草稿")
             raise ValueError(
-                f"{claim_label} 引用了当前来源之外的原文块："
-                f"{', '.join(sorted(unknown))}"
+                f"{claim_label} 引用了当前来源之外的原文块：{', '.join(sorted(unknown))}"
             )
 
 
@@ -1733,9 +1730,7 @@ def _validate_atomic_submission(
     source_blocks: Sequence[ParsedBlock],
 ) -> None:
     _validate_claim_blocks(submission.claims, source_blocks)
-    _validate_same_referent_drafts(
-        submission.same_referent_drafts, source_blocks
-    )
+    _validate_same_referent_drafts(submission.same_referent_drafts, source_blocks)
 
 
 def _validate_same_referent_drafts(
@@ -1745,23 +1740,16 @@ def _validate_same_referent_drafts(
     block_map = {block.block_id: block for block in source_blocks}
     seen: set[tuple[tuple[tuple[str, int], ...], tuple[str, ...]]] = set()
     for position, draft in enumerate(drafts, start=1):
-        draft_label = getattr(
-            draft, "same_referent_draft_id", f"第 {position} 条同指称草稿"
-        )
+        draft_label = getattr(draft, "same_referent_draft_id", f"第 {position} 条同指称草稿")
         block_ids = list(dict.fromkeys(draft.supporting_block_ids))
         unknown = sorted(set(block_ids) - set(block_map))
         if unknown:
-            raise ValueError(
-                f"{draft_label} 引用了当前来源之外的原文块："
-                + ", ".join(unknown)
-            )
+            raise ValueError(f"{draft_label} 引用了当前来源之外的原文块：" + ", ".join(unknown))
         distinct_span_texts = {item.span_text for item in draft.mentions}
         if len(distinct_span_texts) < 2:
             raise ValueError(f"{draft_label} 至少需要两个不同字面称呼")
         _validate_independent_surface_forms(list(distinct_span_texts))
-        mention_keys = [
-            (item.span_text, item.occurrence_index) for item in draft.mentions
-        ]
+        mention_keys = [(item.span_text, item.occurrence_index) for item in draft.mentions]
         if len(set(mention_keys)) != len(mention_keys):
             raise ValueError(f"{draft_label} 重复提交了同一字面 mention")
         source_text = "\n".join(block_map[block_id].markdown for block_id in block_ids)
@@ -1836,32 +1824,91 @@ def _fragment_grounding_texts(
     return (
         *(block.markdown for block in source_blocks),
         *(claim.statement_markdown for claim in claims),
-        *(
-            mention.span_text
-            for draft in same_referent_drafts
-            for mention in draft.mentions
-        ),
+        *(mention.span_text for draft in same_referent_drafts for mention in draft.mentions),
     )
 
 
 _CONTEXT_ONLY_SURFACE_FORMS = {
-    "他", "她", "它", "他们", "她们", "它们", "其", "该对象", "这个对象", "那个对象",
-    "该协会", "本会", "这个协会", "该组织", "这个组织", "上述组织", "该校", "本校",
-    "这所学校", "该活动", "这个活动", "上述活动", "该赛事", "这个赛事", "上述赛事",
-    "该同学", "这位同学", "该老师", "这位老师", "相关负责人", "该负责人", "这位负责人",
+    "他",
+    "她",
+    "它",
+    "他们",
+    "她们",
+    "它们",
+    "其",
+    "该对象",
+    "这个对象",
+    "那个对象",
+    "该协会",
+    "本会",
+    "这个协会",
+    "该组织",
+    "这个组织",
+    "上述组织",
+    "该校",
+    "本校",
+    "这所学校",
+    "该活动",
+    "这个活动",
+    "上述活动",
+    "该赛事",
+    "这个赛事",
+    "上述赛事",
+    "该同学",
+    "这位同学",
+    "该老师",
+    "这位老师",
+    "相关负责人",
+    "该负责人",
+    "这位负责人",
 }
 
 _GENERIC_ADDITIONAL_SURFACE_FORMS = {
-    "负责人", "会长", "主席", "指导老师", "老师", "同学", "成员", "干事", "社团", "协会",
-    "组织", "学校", "学院", "部门", "活动", "比赛", "赛事", "平台", "文档", "手册", "系统",
+    "负责人",
+    "会长",
+    "主席",
+    "指导老师",
+    "老师",
+    "同学",
+    "成员",
+    "干事",
+    "社团",
+    "协会",
+    "组织",
+    "学校",
+    "学院",
+    "部门",
+    "活动",
+    "比赛",
+    "赛事",
+    "平台",
+    "文档",
+    "手册",
+    "系统",
 }
 
 _CONTEXTUAL_REFERENCE_PREFIXES = (
-    "该", "本", "这个", "那个", "这位", "上述", "前述", "相关",
+    "该",
+    "本",
+    "这个",
+    "那个",
+    "这位",
+    "上述",
+    "前述",
+    "相关",
 )
 
 _CONTEXTUAL_REFERENCE_NOUNS = _GENERIC_ADDITIONAL_SURFACE_FORMS | {
-    "对象", "单位", "个人", "人员", "人选", "事项", "制度", "工作", "情况", "内容",
+    "对象",
+    "单位",
+    "个人",
+    "人员",
+    "人选",
+    "事项",
+    "制度",
+    "工作",
+    "情况",
+    "内容",
 }
 
 _RELATIVE_ROLE_PREFIXES = ("现任", "前任", "时任", "本届", "上届", "下届")
@@ -1914,20 +1961,14 @@ def _validate_fragment_submission(
         raise ValueError("fragment_key 不能重复")
     allowed_keys = set(fragment_keys)
     surface_to_key: dict[str, str] = {}
-    grounding_texts = _fragment_grounding_texts(
-        source_blocks, claims, same_referent_drafts
-    )
+    grounding_texts = _fragment_grounding_texts(source_blocks, claims, same_referent_drafts)
     for fragment in submission.fragments:
         _validate_independent_surface_forms(fragment.surface_forms)
         for surface_form in fragment.surface_forms:
             previous = surface_to_key.setdefault(surface_form, fragment.fragment_key)
             if previous != fragment.fragment_key:
-                raise ValueError(
-                    f"surface form {surface_form!r} 被分到多个 Fragment"
-                )
-            if source_blocks and not any(
-                surface_form in text for text in grounding_texts
-            ):
+                raise ValueError(f"surface form {surface_form!r} 被分到多个 Fragment")
+            if source_blocks and not any(surface_form in text for text in grounding_texts):
                 raise ValueError(
                     f"surface form {surface_form!r} 未在当前 SourceRegion、"
                     "frozen claims 或 source naming hints 出现"
@@ -1937,9 +1978,7 @@ def _validate_fragment_submission(
         claim = next(item for item in claims if item.claim_id == assertion.claim_id)
         if assertion.kind != claim.kind:
             raise ValueError(f"{assertion.claim_id} 的 kind 与 frozen claim 不一致")
-        anchored_keys = _fragment_reference_ids(
-            assertion.statement_template_markdown
-        )
+        anchored_keys = _fragment_reference_ids(assertion.statement_template_markdown)
         if assertion.kind == "reference" and anchored_keys:
             raise ValueError(
                 f"{assertion.claim_id} 是 Reference Assertion，不能使用 anchored Fragment token"
@@ -1948,8 +1987,7 @@ def _validate_fragment_submission(
         unknown -= allowed_keys
         if unknown:
             raise ValueError(
-                f"{assertion.claim_id} 引用了不存在的 Fragment："
-                + ", ".join(sorted(unknown))
+                f"{assertion.claim_id} 引用了不存在的 Fragment：" + ", ".join(sorted(unknown))
             )
         semantic_keys = assertion.semantic_fragment_keys
         if len(set(semantic_keys)) != len(semantic_keys):
@@ -1961,9 +1999,7 @@ def _validate_fragment_submission(
                 + ", ".join(sorted(unknown_semantic))
             )
         if assertion.kind == "grounded" and semantic_keys:
-            raise ValueError(
-                f"{assertion.claim_id} 是 grounded Assertion，不能使用 semantic links"
-            )
+            raise ValueError(f"{assertion.claim_id} 是 grounded Assertion，不能使用 semantic links")
         if assertion.kind == "reference" and not semantic_keys:
             raise ValueError(
                 f"{assertion.claim_id} 是 Reference Assertion，至少需要一个 semantic link"
@@ -1983,18 +2019,14 @@ def _validate_hard_grouping_hints(
 ) -> None:
     for draft in drafts:
         missing = [
-            item.span_text
-            for item in draft.mentions
-            if item.span_text not in surface_to_fragment
+            item.span_text for item in draft.mentions if item.span_text not in surface_to_fragment
         ]
         if missing:
             raise ValueError(
                 f"{draft.same_referent_draft_id} 的 hard grouping 名称未进入 Fragment："
                 + ", ".join(missing)
             )
-        fragment_ids = {
-            surface_to_fragment[item.span_text] for item in draft.mentions
-        }
+        fragment_ids = {surface_to_fragment[item.span_text] for item in draft.mentions}
         if len(fragment_ids) != 1:
             raise ValueError(
                 f"{draft.same_referent_draft_id} 的 hard grouping 名称被拆到不同 Fragment"
@@ -2035,9 +2067,7 @@ def _materialize_fragments(
                 claim_id=item.claim_id,
                 kind=item.kind,
                 statement_template_markdown=template,
-                semantic_fragment_ids=[
-                    key_to_id[key] for key in item.semantic_fragment_keys
-                ],
+                semantic_fragment_ids=[key_to_id[key] for key in item.semantic_fragment_keys],
                 supporting_block_ids=claim.supporting_block_ids,
                 context_dependent=claim.context_dependent,
             )
@@ -2059,26 +2089,17 @@ def _validate_fragment_checkpoint(
     fragment_ids = [item.fragment_id for item in checkpoint.fragments]
     if fragment_ids != expected_fragment_ids:
         raise ValueError("Object Fragment 断点的稳定 ID 顺序无效")
-    if any(
-        item.source_region_id != checkpoint.region_node_id
-        for item in checkpoint.fragments
-    ):
+    if any(item.source_region_id != checkpoint.region_node_id for item in checkpoint.fragments):
         raise ValueError("Object Fragment 断点包含其他 SourceRegion 的 Fragment")
 
     surface_to_fragment: dict[str, str] = {}
-    grounding_texts = _fragment_grounding_texts(
-        source_blocks, claims, same_referent_drafts
-    )
+    grounding_texts = _fragment_grounding_texts(source_blocks, claims, same_referent_drafts)
     for fragment in checkpoint.fragments:
         _validate_independent_surface_forms(fragment.surface_forms)
         for surface_form in fragment.surface_forms:
-            previous = surface_to_fragment.setdefault(
-                surface_form, fragment.fragment_id
-            )
+            previous = surface_to_fragment.setdefault(surface_form, fragment.fragment_id)
             if previous != fragment.fragment_id:
-                raise ValueError(
-                    f"surface form {surface_form!r} 被分到多个 Fragment"
-                )
+                raise ValueError(f"surface form {surface_form!r} 被分到多个 Fragment")
             if validate_surface_grounding and not any(
                 surface_form in text for text in grounding_texts
             ):
@@ -2110,8 +2131,7 @@ def _validate_fragment_checkpoint(
         unknown -= allowed_fragment_ids
         if unknown:
             raise ValueError(
-                f"{assertion.claim_id} 引用了不存在的稳定 Fragment："
-                + ", ".join(sorted(unknown))
+                f"{assertion.claim_id} 引用了不存在的稳定 Fragment：" + ", ".join(sorted(unknown))
             )
         unknown_semantic = set(assertion.semantic_fragment_ids) - allowed_fragment_ids
         if unknown_semantic:
@@ -2164,8 +2184,7 @@ def _validate_missing_claims(
                 continue
             if addition_text == existing_text or addition_text in existing_text:
                 raise ValueError(
-                    "Missing Review 新增命题已由同一 supporting blocks 的 frozen "
-                    "Assertion 明确覆盖"
+                    "Missing Review 新增命题已由同一 supporting blocks 的 frozen Assertion 明确覆盖"
                 )
 
 
@@ -2177,9 +2196,7 @@ def _validate_no_self_identity_collapse(template: str, claim_id: str) -> None:
     token = r"\{\{fragment:([^{}]+)\}\}"
     match = re.search(rf"{token}\s*(?:为|是)\s*{token}", template)
     if match is not None and match.group(1) == match.group(2):
-        raise ValueError(
-            f"{claim_id} 的 Fragment template 把不同语义边界折叠为 self-identity"
-        )
+        raise ValueError(f"{claim_id} 的 Fragment template 把不同语义边界折叠为 self-identity")
 
 
 def _claim_signature(
@@ -2195,15 +2212,9 @@ def _covered_block_ids(
     *,
     same_referent_drafts: Sequence[SourceSameReferentDraft] = (),
 ) -> list[str]:
-    covered = {
-        block_id
-        for claim in claims
-        for block_id in claim.supporting_block_ids
-    }
+    covered = {block_id for claim in claims for block_id in claim.supporting_block_ids}
     covered.update(
-        block_id
-        for draft in same_referent_drafts
-        for block_id in draft.supporting_block_ids
+        block_id for draft in same_referent_drafts for block_id in draft.supporting_block_ids
     )
     return [block.block_id for block in blocks if block.block_id in covered]
 
@@ -2238,7 +2249,7 @@ def _render_report(
         )
         lines.append(
             f"- `{claim.claim_id}` `{claim.kind}` {claim.statement_template_markdown}｜"
-            f"依据 `{ '`, `'.join(claim.supporting_block_ids) }`"
+            f"依据 `{'`, `'.join(claim.supporting_block_ids)}`"
             f"{semantic_links}{context_marker}"
         )
     if not snapshot.assertions:
@@ -2247,8 +2258,7 @@ def _render_report(
     lines.extend(["", "## Object Fragment", ""])
     for item in snapshot.object_fragments:
         lines.append(
-            f"- `{item.fragment_id}`｜"
-            + " = ".join(f"**{name}**" for name in item.surface_forms)
+            f"- `{item.fragment_id}`｜" + " = ".join(f"**{name}**" for name in item.surface_forms)
         )
     if not snapshot.object_fragments:
         lines.append("无。")
@@ -2281,10 +2291,7 @@ def _render_full_report(snapshot: FullSourceSemanticSnapshot) -> str:
         f"> Source Time：{snapshot.source_time_text or '未提取到明确时间锚点'}",
         (
             "> Source Time evidence："
-            + (
-                ", ".join(f"`{item}`" for item in snapshot.source_time_supporting_block_ids)
-                or "无"
-            )
+            + (", ".join(f"`{item}`" for item in snapshot.source_time_supporting_block_ids) or "无")
         ),
         f"> 来源节点：{len(snapshot.sources)}",
         f"> Assertion：{snapshot.total_assertions}",

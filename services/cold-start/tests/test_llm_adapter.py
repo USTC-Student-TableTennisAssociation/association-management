@@ -1,3 +1,4 @@
+import asyncio
 import json
 from collections.abc import Mapping
 
@@ -9,6 +10,7 @@ from cold_start.llm.openai_compatible import (
     ModelProtocolError,
     ModelRepetitionError,
     OpenAICompatibleChatModel,
+    _RequestConcurrencyLimiter,
     _RequestRateLimiter,
 )
 
@@ -36,12 +38,8 @@ class FakeClock:
 
 class BrokenSseStream(httpx.AsyncByteStream):
     async def __aiter__(self):
-        yield sse_event(
-            {"choices": [{"delta": {"reasoning_content": "尚未完成的思考"}}]}
-        ).encode()
-        yield sse_event(
-            {"choices": [{"delta": {"content": '{"partial": true'}}]}
-        ).encode()
+        yield sse_event({"choices": [{"delta": {"reasoning_content": "尚未完成的思考"}}]}).encode()
+        yield sse_event({"choices": [{"delta": {"content": '{"partial": true'}}]}).encode()
         raise httpx.RemoteProtocolError("远端在 [DONE] 前断开")
 
 
@@ -70,6 +68,24 @@ async def test_global_rate_limiter_spaces_every_request_attempt() -> None:
         ("请求二", "RPM 限速排队：等待 3.0 秒后发起请求"),
         ("重试也计数", "RPM 限速排队：等待 3.0 秒后发起请求"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_concurrency_limiter_allows_eighteen_in_flight_requests() -> None:
+    progress = RecordingProgressReporter()
+    limiter = _RequestConcurrencyLimiter(18, progress=progress)
+
+    await asyncio.gather(*(limiter.acquire(f"请求 {index}") for index in range(18)))
+
+    assert limiter.active == 18
+    waiting = asyncio.create_task(limiter.acquire("请求 19"))
+    await asyncio.sleep(0)
+    assert not waiting.done()
+    limiter.release()
+    await waiting
+    assert limiter.active == 18
+    for _ in range(18):
+        limiter.release()
 
 
 @pytest.mark.asyncio
@@ -125,25 +141,18 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
     assert body["stream"] is True
     assert "temperature" not in body
     assert any(
-        stage == "测试" and "收到首个正文片段" in message
-        for stage, message in progress.events
+        stage == "测试" and "收到首个正文片段" in message for stage, message in progress.events
     )
-    assert any(
-        stage == "测试" and "流式接收完成" in message
-        for stage, message in progress.events
-    )
+    assert any(stage == "测试" and "流式接收完成" in message for stage, message in progress.events)
     assert any(stage == "测试·思考" for stage, _ in progress.events)
     assert any(stage == "测试·正文" for stage, _ in progress.events)
-    assert "先理解问题。" in next(tmp_path.glob("*.reasoning.partial.txt")).read_text(
-        encoding="utf-8"
-    )
-    assert "勘探结果" in next(tmp_path.glob("*.content.partial.txt")).read_text(
-        encoding="utf-8"
-    )
+    assert "先理解问题。" in next(tmp_path.glob("*.reasoning.txt")).read_text(encoding="utf-8")
+    assert "勘探结果" in next(tmp_path.glob("*.content.txt")).read_text(encoding="utf-8")
     raw_events = next(tmp_path.glob("*.sse.jsonl")).read_text(encoding="utf-8")
     assert '"kind": "comment"' in raw_events
     assert "[DONE]" in raw_events
     request_trace = json.loads(next(tmp_path.glob("*.request.json")).read_text())
+    assert request_trace["label"] == "测试"
     assert request_trace["payload"]["messages"] == [
         {"role": "system", "content": "系统"},
         {"role": "user", "content": "用户"},
@@ -161,10 +170,7 @@ async def test_adapter_sends_temperature_only_when_explicitly_requested() -> Non
         return httpx.Response(
             200,
             headers={"Content-Type": "text/event-stream"},
-            text=(
-                sse_event({"choices": [{"delta": {"content": "完成"}}]})
-                + sse_event("[DONE]")
-            ),
+            text=(sse_event({"choices": [{"delta": {"content": "完成"}}]}) + sse_event("[DONE]")),
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -194,10 +200,7 @@ async def test_adapter_continues_trace_sequence_in_existing_directory(tmp_path) 
         return httpx.Response(
             200,
             headers={"Content-Type": "text/event-stream"},
-            text=(
-                sse_event({"choices": [{"delta": {"content": "完成"}}]})
-                + sse_event("[DONE]")
-            ),
+            text=(sse_event({"choices": [{"delta": {"content": "完成"}}]}) + sse_event("[DONE]")),
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -212,7 +215,9 @@ async def test_adapter_continues_trace_sequence_in_existing_directory(tmp_path) 
         )
         await model.complete(system_prompt="系统", user_prompt="用户", request_label="恢复")
 
-    assert (tmp_path / "086-恢复.request.json").is_file()
+    assert (tmp_path / "086.request.json").is_file()
+    trace = json.loads((tmp_path / "086.request.json").read_text(encoding="utf-8"))
+    assert trace["label"] == "恢复"
 
 
 @pytest.mark.asyncio
@@ -270,12 +275,8 @@ async def test_adapter_keeps_partial_trace_when_remote_stream_breaks(tmp_path) -
                 request_label="测试",
             )
 
-    assert "尚未完成的思考" in next(
-        tmp_path.glob("*.reasoning.partial.txt")
-    ).read_text(encoding="utf-8")
-    assert '{"partial": true' in next(
-        tmp_path.glob("*.content.partial.txt")
-    ).read_text(encoding="utf-8")
+    assert "尚未完成的思考" in next(tmp_path.glob("*.reasoning.txt")).read_text(encoding="utf-8")
+    assert '{"partial": true' in next(tmp_path.glob("*.content.txt")).read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -291,15 +292,7 @@ async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages(
             stream_body = "".join(
                 (
                     sse_event(
-                        {
-                            "choices": [
-                                {
-                                    "delta": {
-                                        "reasoning_content": "需要调用文档检索。"
-                                    }
-                                }
-                            ]
-                        }
+                        {"choices": [{"delta": {"reasoning_content": "需要调用文档检索。"}}]}
                     ),
                     sse_event(
                         {
@@ -446,24 +439,8 @@ async def test_adapter_returns_reasoning_only_turn_without_transport_retry() -> 
             headers={"Content-Type": "text/event-stream"},
             text="".join(
                 (
-                    sse_event(
-                        {
-                            "choices": [
-                                {
-                                    "delta": {
-                                        "reasoning_content": "已经完成判断。"
-                                    }
-                                }
-                            ]
-                        }
-                    ),
-                    sse_event(
-                        {
-                            "choices": [
-                                {"delta": {}, "finish_reason": "stop"}
-                            ]
-                        }
-                    ),
+                    sse_event({"choices": [{"delta": {"reasoning_content": "已经完成判断。"}}]}),
+                    sse_event({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
                     sse_event("[DONE]"),
                 )
             ),
@@ -493,8 +470,7 @@ async def test_adapter_returns_reasoning_only_turn_without_transport_retry() -> 
 async def test_adapter_aborts_exact_repetition_and_keeps_raw_sse(tmp_path) -> None:
     repeated_unit = "模型在同一个选择之间来回判断，既没有增加新证据，也没有推进到正式答案。" * 6
     stream_body = "".join(
-        sse_event({"choices": [{"delta": {"reasoning_content": repeated_unit}}]})
-        for _ in range(6)
+        sse_event({"choices": [{"delta": {"reasoning_content": repeated_unit}}]}) for _ in range(6)
     ) + sse_event("[DONE]")
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -523,15 +499,14 @@ async def test_adapter_aborts_exact_repetition_and_keeps_raw_sse(tmp_path) -> No
             )
 
     assert next(tmp_path.glob("*.sse.jsonl")).stat().st_size > 0
-    assert next(tmp_path.glob("*.reasoning.partial.txt")).stat().st_size > 0
+    assert next(tmp_path.glob("*.reasoning.txt")).stat().st_size > 0
 
 
 @pytest.mark.asyncio
 async def test_adapter_allows_repeated_structured_content() -> None:
     repeated_item = '{"relation_pattern":"role_holding","lane_tags":["staffing"]}'
     stream_body = "".join(
-        sse_event({"choices": [{"delta": {"content": repeated_item}}]})
-        for _ in range(6)
+        sse_event({"choices": [{"delta": {"content": repeated_item}}]}) for _ in range(6)
     ) + sse_event("[DONE]")
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -571,8 +546,7 @@ async def test_adapter_allows_reused_json_schema_in_reasoning() -> None:
         for index in range(1, 7)
     ]
     stream_body = "".join(
-        sse_event({"choices": [{"delta": {"reasoning_content": item}}]})
-        for item in items
+        sse_event({"choices": [{"delta": {"reasoning_content": item}}]}) for item in items
     ) + sse_event("[DONE]")
 
     async def handler(request: httpx.Request) -> httpx.Response:

@@ -158,7 +158,6 @@ def global_object(
         global_object_id=object_id,
         global_object_key=key,
         canonical_name=canonical_name,
-        identity_summary_markdown=f"来源持续指向{canonical_name}",
         surface_atoms=surfaces,
         reference_atoms=references or [],
         assertions=assertions or [],
@@ -268,7 +267,6 @@ def test_one_region_plan_can_create_and_attach_together() -> None:
                         target=ResolutionTarget(
                             kind="new",
                             canonical_name="新生赛",
-                            identity_summary_markdown="面向新生的比赛。",
                         ),
                         surface_atom_ids=[second.surface_atoms[0].atom_id],
                     )
@@ -314,7 +312,6 @@ def test_multiple_incoming_fragments_can_form_one_new_object() -> None:
                         target=ResolutionTarget(
                             kind="new",
                             canonical_name="USTC TTA",
-                            identity_summary_markdown="学校学生乒乓球协会。",
                         ),
                         surface_atom_ids=[
                             first.surface_atoms[0].atom_id,
@@ -466,7 +463,6 @@ def test_split_preserves_original_uuid_and_reference_ownership() -> None:
                         target=ResolutionTarget(
                             kind="new",
                             canonical_name="二课系统",
-                            identity_summary_markdown="提交活动申请的平台。",
                         ),
                         surface_atom_ids=[
                             existing.surface_atoms[1].atom_id,
@@ -520,7 +516,6 @@ def test_region_plan_must_partition_all_incoming_atoms() -> None:
                         target=ResolutionTarget(
                             kind="new",
                             canonical_name="甲",
-                            identity_summary_markdown="甲对象。",
                         ),
                         surface_atom_ids=[first.surface_atoms[0].atom_id],
                     )
@@ -619,6 +614,19 @@ def test_local_loader_preserves_repeated_reference_ordinals(tmp_path: Path) -> N
     ]
     assert len(loaded.regions[0].fragments[0].reference_atoms) == 2
 
+    progress_path = compilation_directory / "source-semantics-progress.json"
+    progress_path.write_text(
+        snapshot.model_copy(
+            update={"source_node_ids": ["region-0001", "region-0002"]}
+        ).model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="sources 顺序"):
+        load_source_compilation(progress_path)
+    partial = load_source_compilation(progress_path, allow_partial=True)
+    assert partial.source_node_ids == ("region-0001", "region-0002")
+    assert [item.source_node_id for item in partial.regions] == ["region-0001"]
+
 
 def test_working_registry_round_trip_uses_local_current_state(tmp_path: Path) -> None:
     incoming_fragment = fragment("region-0001", "fragment-1", ["甲协会"])
@@ -643,6 +651,50 @@ def test_working_registry_round_trip_uses_local_current_state(tmp_path: Path) ->
 
     assert store_registry(rebuilt) == store_registry(state)
     assert rebuilt.next_source_region_ordinal == 1
+
+
+@pytest.mark.asyncio
+async def test_progressive_resolution_checkpoints_prefix_without_finalizing(
+    tmp_path: Path,
+) -> None:
+    first = region("region-0001", [])
+    second = region("region-0002", [])
+    partial = dataset([first], directory=tmp_path)
+    partial.snapshot.source_node_ids = ["region-0001", "region-0002"]
+    paths = _paths(tmp_path)
+    state = initial_registry(partial)
+    write_working_registry(paths, partial, state)
+
+    class NoCallModel:
+        async def complete_turn(self, **kwargs: object) -> ModelTurn:
+            del kwargs
+            raise AssertionError("空 Fragment SourceRegion 不应调用模型")
+
+    state = await GlobalObjectResolverRunner(
+        model=NoCallModel(),
+        dataset=partial,
+        paths=paths,
+        state=state,
+        retriever=GlobalObjectCandidateRetriever(embedder=None),
+    ).run_all(final=False)
+
+    assert state.next_source_region_ordinal == 1
+    assert not paths.artifact_json.exists()
+    assert not (paths.directory / "global-assertions.json").exists()
+
+    complete = dataset([first, second], directory=tmp_path)
+    resumed = load_working_registry(paths, complete)
+    completed = await GlobalObjectResolverRunner(
+        model=NoCallModel(),
+        dataset=complete,
+        paths=paths,
+        state=resumed,
+        retriever=GlobalObjectCandidateRetriever(embedder=None),
+    ).run_all()
+
+    assert completed.next_source_region_ordinal == 2
+    assert paths.artifact_json.exists()
+    assert (paths.directory / "global-assertions.json").exists()
 
 
 def test_global_assertion_finalization_replaces_fragments_and_adds_literal_atoms() -> None:
@@ -761,9 +813,7 @@ def test_case_c_reference_finalization_links_five_objects_without_span_replaceme
     )
     assert all(name not in finalized.global_statement_template_markdown for name in event_names)
     assert finalized.reference_atoms == []
-    assert finalized.linked_global_object_ids == [
-        f"global-event-{index}" for index in range(1, 6)
-    ]
+    assert finalized.linked_global_object_ids == [f"global-event-{index}" for index in range(1, 6)]
     assert artifact.total_reference_atoms == 0
     assert artifact.total_semantic_object_links == 5
     assert reference_evidence.supporting_blocks[0].source_block_id == "p0010-b0004"
@@ -862,7 +912,6 @@ async def test_runner_calls_model_once_for_whole_region_and_skips_empty_region(
                                 target=ResolutionTarget(
                                     kind="new",
                                     canonical_name="甲",
-                                    identity_summary_markdown="甲和乙共同代表的对象。",
                                 ),
                                 surface_atom_ids=[
                                     first.surface_atoms[0].atom_id,
@@ -963,9 +1012,7 @@ async def test_attach_shape_retry_preserves_identity_and_only_repairs_protocol(
         "assistant",
         "user",
     ]
-    assert "attach 的 source_global_object_ids 必须为 []" in retry_messages[0][
-        "content"
-    ]
+    assert "attach 的 source_global_object_ids 必须为 []" in retry_messages[0]["content"]
     assert "identity 判断本身无需改变" in retry_messages[0]["content"]
     assert existing.global_object_id in retry_messages[2]["content"]
     assert "不要重新判断 identity" in retry_messages[3]["content"]
@@ -992,7 +1039,6 @@ async def test_batch_create_retry_splits_groups_without_rejudging_identity(
             target=ResolutionTarget(
                 kind="new",
                 canonical_name=name,
-                identity_summary_markdown=f"{name}对象。",
             ),
             surface_atom_ids=[atom.atom_id],
         )
@@ -1040,9 +1086,7 @@ async def test_batch_create_retry_splits_groups_without_rejudging_identity(
     ).run_all()
 
     assert len(model.calls) == 2
-    assert "只有 split operation 可以包含多个 groups" in model.calls[0][0][
-        "content"
-    ]
+    assert "只有 split operation 可以包含多个 groups" in model.calls[0][0]["content"]
     retry_messages = model.calls[1]
     assert [item["role"] for item in retry_messages] == [
         "system",
@@ -1072,7 +1116,6 @@ async def test_invalid_json_retry_reuses_draft_and_rechecks_single_group_rule(
             target=ResolutionTarget(
                 kind="new",
                 canonical_name="周常训练",
-                identity_summary_markdown="周常训练活动。",
             ),
             surface_atom_ids=[first.surface_atoms[0].atom_id],
         ),
@@ -1080,7 +1123,6 @@ async def test_invalid_json_retry_reuses_draft_and_rechecks_single_group_rule(
             target=ResolutionTarget(
                 kind="new",
                 canonical_name="干事",
-                identity_summary_markdown="与干事会不同。",
             ),
             surface_atom_ids=[second.surface_atoms[0].atom_id],
         ),
@@ -1095,14 +1137,11 @@ async def test_invalid_json_retry_reuses_draft_and_rechecks_single_group_rule(
         ]
     )
     invalid_json = batched.model_dump_json().replace(
-        "与干事会不同。",
-        '与"干事会"不同。',
+        '"canonical_name":"干事"',
+        '"canonical_name":"与"干事会"不同"',
     )
     repaired = RegionIntegrationPlan(
-        operations=[
-            RegionResolutionOperation(action="create", groups=[group])
-            for group in groups
-        ]
+        operations=[RegionResolutionOperation(action="create", groups=[group]) for group in groups]
     )
 
     class FakeModel:

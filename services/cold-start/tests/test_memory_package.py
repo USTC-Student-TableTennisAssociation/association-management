@@ -43,7 +43,6 @@ def _assertion(**values: object) -> Assertion:
             start=None,
             end=None,
             precision="unspecified",
-            confidence="low",
         ),
         temporal_basis_markdown="原文及上下文没有给出可定位时间。",
         **values,
@@ -144,7 +143,6 @@ def test_temporal_scope_rejects_inconsistent_boundaries() -> None:
             start="2024",
             end="2025",
             precision="year",
-            confidence="high",
         )
 
 

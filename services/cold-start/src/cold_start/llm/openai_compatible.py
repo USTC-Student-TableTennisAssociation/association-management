@@ -102,6 +102,38 @@ class _RequestRateLimiter:
         await self.sleep(delay)
 
 
+class _RequestConcurrencyLimiter:
+    """限制已经发出、仍在 thinking 或流式输出的真实 HTTP 请求数量。"""
+
+    def __init__(
+        self,
+        max_in_flight: int,
+        *,
+        progress: ProgressReporter,
+    ) -> None:
+        self.max_in_flight = max_in_flight
+        self.progress = progress
+        self.semaphore = asyncio.Semaphore(max_in_flight)
+        self.active = 0
+
+    async def acquire(self, label: str) -> None:
+        if self.semaphore.locked():
+            self.progress.report(
+                label,
+                f"模型并发排队：等待空闲槽位（在途上限 {self.max_in_flight}）",
+            )
+        await self.semaphore.acquire()
+        self.active += 1
+        self.progress.report(
+            label,
+            f"模型请求已发出：thinking / 流式输出在途 {self.active}/{self.max_in_flight}",
+        )
+
+    def release(self) -> None:
+        self.active -= 1
+        self.semaphore.release()
+
+
 @dataclass
 class _ToolParts:
     call_id: str = ""
@@ -139,15 +171,16 @@ class _Trace:
         if directory is None:
             return
         directory.mkdir(parents=True, exist_ok=True)
-        stem = f"{sequence:03d}-{_safe_label(label)}-attempt-{attempt}"
+        # Global Resolution artifacts can already sit more than 200 characters
+        # deep on Windows. Repeating a human-readable (and sometimes Chinese)
+        # request label in every trace filename can push the full path past the
+        # classic MAX_PATH boundary. Keep identity in the request trace instead
+        # and use a deliberately short, stable filename here.
+        stem = f"{sequence:03d}-a{attempt}"
         self.tool_calls_path = directory / f"{stem}.tool-calls.json"
-        self.events_file = (directory / f"{stem}.sse.jsonl").open(
-            "w", encoding="utf-8"
-        )
+        self.events_file = (directory / f"{stem}.sse.jsonl").open("w", encoding="utf-8")
         for kind in ("content", "reasoning"):
-            self.files[kind] = (directory / f"{stem}.{kind}.partial.txt").open(
-                "w", encoding="utf-8"
-            )
+            self.files[kind] = (directory / f"{stem}.{kind}.txt").open("w", encoding="utf-8")
 
     def text(self, kind: str, value: str) -> None:
         if file := self.files.get(kind):
@@ -229,6 +262,10 @@ class OpenAICompatibleChatModel:
             settings.requests_per_minute,
             progress=self.progress,
         )
+        self.concurrency_limiter = _RequestConcurrencyLimiter(
+            settings.max_in_flight,
+            progress=self.progress,
+        )
         self.trace_directory = trace_directory
         self.show_model_stream = show_model_stream
         self.sequence = _last_trace_sequence(trace_directory)
@@ -289,14 +326,18 @@ class OpenAICompatibleChatModel:
         for attempt in range(1, self.settings.max_retries + 1):
             try:
                 await self.rate_limiter.acquire(request_label)
-                return await self._stream(
-                    endpoint,
-                    headers,
-                    payload,
-                    sequence=sequence,
-                    label=request_label,
-                    attempt=attempt,
-                )
+                await self.concurrency_limiter.acquire(request_label)
+                try:
+                    return await self._stream(
+                        endpoint,
+                        headers,
+                        payload,
+                        sequence=sequence,
+                        label=request_label,
+                        attempt=attempt,
+                    )
+                finally:
+                    self.concurrency_limiter.release()
             except Exception as error:
                 if not _retryable(error) or attempt == self.settings.max_retries:
                     if _retryable(error):
@@ -455,9 +496,7 @@ class OpenAICompatibleChatModel:
                     label,
                     f"检测到{display}逐字重复，已中止当前单次请求并保留原始 SSE",
                 )
-                raise ModelRepetitionError(
-                    f"{label}的{display}连续重复同一片段：{repeated[:80]!r}"
-                )
+                raise ModelRepetitionError(f"{label}的{display}连续重复同一片段：{repeated[:80]!r}")
             if kind not in first:
                 first.add(kind)
                 display = "思考" if kind == "reasoning" else "正文"
@@ -478,8 +517,7 @@ class OpenAICompatibleChatModel:
                     first.add("tool")
                     self.progress.report(
                         label,
-                        f"收到首个工具调用片段，等待 "
-                        f"{time.perf_counter() - started:.1f} 秒",
+                        f"收到首个工具调用片段，等待 {time.perf_counter() - started:.1f} 秒",
                     )
 
     def _show_pending(
@@ -505,10 +543,14 @@ class OpenAICompatibleChatModel:
         if self.trace_directory is None:
             return
         self.trace_directory.mkdir(parents=True, exist_ok=True)
-        path = self.trace_directory / f"{sequence:03d}-{_safe_label(label)}.request.json"
+        path = self.trace_directory / f"{sequence:03d}.request.json"
         path.write_text(
             json.dumps(
-                {"endpoint": _endpoint(self.settings.api_base_url), "payload": payload},
+                {
+                    "label": label,
+                    "endpoint": _endpoint(self.settings.api_base_url),
+                    "payload": payload,
+                },
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -567,10 +609,6 @@ def _endpoint(base_url: str) -> str:
     if normalized.endswith("/chat/completions"):
         return normalized
     return f"{normalized}/chat/completions"
-
-
-def _safe_label(label: str) -> str:
-    return re.sub(r"[^\w\u4e00-\u9fff-]+", "-", label).strip("-")
 
 
 def _retryable(error: Exception) -> bool:

@@ -106,7 +106,7 @@ Assertion 只能包含八个字段：
 - `holder_object_id`：观点持有者 Object ID；仅 `viewpoint` 可以填写，`record` 必须为
   `null`；观点持有者未明示时也为 `null`；
 - `temporal_scope`：命题成立时间的结构化判断，包含 `kind`、`display`、`start`、`end`、
-  `precision`、`confidence`；
+  `precision`；
 - `temporal_basis_markdown`：一小段时间判断依据，必须说明时间来自原文明示、文档成文背景、
   章节上下文，还是无法判断；
 - `uncertainty_markdown`：原文明示的不确定性，没有则为 `null`；
@@ -129,9 +129,9 @@ Object 继续保留成普通文字。反过来，时间、数量、状态和一�
 - `point` 只填 `start`；`range` 同时填 `start`、`end`；`open_range` 只填一个边界；
   `general` 和 `unknown` 的两个边界都为 `null`；
 - `precision` 只能是 `day`、`month`、`semester`、`academic_year`、`year`、`unspecified`；
-- `confidence` 只能是 `high`、`medium`、`low`；`display` 使用便于人阅读的简短中文；
+- `display` 使用便于人阅读的简短中文；
 - 原文明示日期或时期，优先按原文记录；当前原文未明示时，可以依据本文件的成文时间、
-  明确章节时期和父级上下文作保守推断，但必须降低 confidence，并在
+  明确章节时期和父级上下文作保守推断，并在
   `temporal_basis_markdown` 中披露推断来源；仍无法定位时使用 `unknown`；
 - 持续适用且没有可定位起止时间的常设身份或一般规则可使用 `general`，不能为了填字段
   虚构年份；“每周”“T-7”等频率或相对时点属于命题正文，不代替 Assertion 的有效时期。
@@ -203,8 +203,7 @@ Assertion 引用，程序会保留结果但产生人工复核警告。
         "display": "2024年",
         "start": "2024",
         "end": null,
-        "precision": "year",
-        "confidence": "high"
+        "precision": "year"
       },
       "temporal_basis_markdown": "原文明确写出2024年。",
       "uncertainty_markdown": null,
@@ -220,8 +219,7 @@ Assertion 引用，程序会保留结果但产生人工复核警告。
         "display": "时间不明",
         "start": null,
         "end": null,
-        "precision": "unspecified",
-        "confidence": "low"
+        "precision": "unspecified"
       },
       "temporal_basis_markdown": "原文及当前上下文没有给出可定位时间。",
       "uncertainty_markdown": null,
@@ -251,7 +249,7 @@ Assertion、Evidence，不建立知识图，不按业务视角连线，也不评
 
 只有带 block_id 的当前节点自有原文是事实依据。文档背景和区域路径只用于理解简称、
 省略、时间和上下文，不能成为时间以外的新信息依据；依赖它们推断时间时必须在时间依据中
-明示且降低置信度。按 block_id 从头到尾检查现实命题，不按“是否
+明示。按 block_id 从头到尾检查现实命题，不按“是否
 重要”删减，特别检查表格、列表中的名称、数值、时间、条件、例外、职责、步骤、结果和
 观点。排除文档导航不是价值筛选，而是基础记忆的语义边界。
 
@@ -730,8 +728,7 @@ def _render_artifact(
         if item.holder_object_id:
             metadata.append(f"持有者 {item.holder_object_id}")
         metadata.append(
-            f"时间 {item.temporal_scope.display}（{item.temporal_scope.kind}/"
-            f"{item.temporal_scope.confidence}）"
+            f"时间 {item.temporal_scope.display}（{item.temporal_scope.kind}）"
         )
         metadata.append(f"时间依据 {item.temporal_basis_markdown}")
         if item.uncertainty_markdown:

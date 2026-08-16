@@ -58,7 +58,6 @@ class TemporalScope(StrictModel):
         "year",
         "unspecified",
     ]
-    confidence: Literal["high", "medium", "low"]
 
     @model_validator(mode="after")
     def validate_boundaries(self) -> TemporalScope:

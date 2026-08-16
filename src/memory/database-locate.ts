@@ -214,7 +214,14 @@ async function loadAssertions(compilationId: string) {
       kind: true,
       globalStatementTemplateMarkdown: true,
       contextDependent: true,
-      sourceRegion: { select: { sourceNodeId: true, label: true } },
+      sourceRegion: {
+        select: {
+          sourceNodeId: true,
+          label: true,
+          sourceTitle: true,
+          sourceSha256: true,
+        },
+      },
       fragmentReferences: {
         orderBy: { ordinal: "asc" },
         select: {
@@ -427,7 +434,14 @@ async function loadSources(
     select: {
       id: true,
       compilation: { select: { sourceTitle: true, sourceSha256: true } },
-      sourceRegion: { select: { sourceNodeId: true, label: true } },
+      sourceRegion: {
+        select: {
+          sourceNodeId: true,
+          label: true,
+          sourceTitle: true,
+          sourceSha256: true,
+        },
+      },
       chatEvidenceLinks: {
         orderBy: { ordinal: "asc" },
         select: {
@@ -461,8 +475,8 @@ async function loadSources(
       const sources: MemorySourceReference[] = row.sourceRegion
         ? row.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
             kind: "document",
-            sourceTitle: row.compilation.sourceTitle,
-            sourceSha256: row.compilation.sourceSha256,
+            sourceTitle: row.sourceRegion!.sourceTitle ?? row.compilation.sourceTitle,
+            sourceSha256: row.sourceRegion!.sourceSha256 ?? row.compilation.sourceSha256,
             sourceNodeId: row.sourceRegion!.sourceNodeId,
             sourceRegionLabel: row.sourceRegion!.label,
             sourceBlockId: sourceBlock.sourceBlockId,
@@ -608,7 +622,9 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     });
   } catch (error) {
     if (input.signal?.aborted) throw error;
-    if (process.env.MEMORY_VECTOR_REQUIRED !== "false") throw error;
+    // 新来源已发布但本地 BGE-M3 服务暂未启动时，仍允许 Shared Brain 使用 lexical 通道。
+    // 只有显式设置 MEMORY_VECTOR_REQUIRED=true 的严格环境才拒绝降级。
+    if (process.env.MEMORY_VECTOR_REQUIRED === "true") throw error;
     warnings.push(`Assertion vector 通道不可用，已仅使用 lexical：${String(error)}`);
   }
 

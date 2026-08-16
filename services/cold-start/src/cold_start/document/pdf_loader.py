@@ -20,8 +20,10 @@ MinerUEffort = Literal["medium", "high"]
 MinerUMethod = Literal["auto", "txt", "ocr"]
 
 
-class MinerUPdfLoader:
-    """用 MinerU high 模式解析 PDF，并直接消费其稳定块列表。"""
+class MinerUDocumentLoader:
+    """用 MinerU 解析 PDF 和 Office 文档，并直接消费其稳定块列表。"""
+
+    SUPPORTED_SUFFIXES = frozenset({".pdf", ".docx", ".pptx", ".xlsx"})
 
     def __init__(
         self,
@@ -300,18 +302,18 @@ class MinerUPdfLoader:
                 str(value).strip() for value in item.get("list_items", ()) if value
             )
         if source_type == "table":
-            return MinerUPdfLoader._join_fields(
+            return MinerUDocumentLoader._join_fields(
                 item, "table_caption", "table_body", "table_footnote"
             )
         if source_type in {"image", "chart"}:
-            return MinerUPdfLoader._join_fields(
+            return MinerUDocumentLoader._join_fields(
                 item,
                 f"{source_type}_caption",
                 "content",
                 f"{source_type}_footnote",
             )
         if source_type == "code":
-            return MinerUPdfLoader._join_fields(
+            return MinerUDocumentLoader._join_fields(
                 item, "code_caption", "code_body", "code_footnote"
             )
         return str(item.get("text") or item.get("content") or "").strip()
@@ -375,6 +377,11 @@ class MinerUPdfLoader:
     @staticmethod
     def _validate_path(path: Path) -> None:
         if not path.is_file():
-            raise FileNotFoundError(f"PDF 文件不存在：{path}")
-        if path.suffix.lower() != ".pdf":
-            raise ValueError(f"输入文件不是 PDF：{path}")
+            raise FileNotFoundError(f"文档不存在：{path}")
+        if path.suffix.lower() not in MinerUDocumentLoader.SUPPORTED_SUFFIXES:
+            supported = "、".join(sorted(MinerUDocumentLoader.SUPPORTED_SUFFIXES))
+            raise ValueError(f"MinerU 解析入口只支持 {supported}：{path}")
+
+
+# 保留原名以兼容深度冷启动和已有调用方。
+MinerUPdfLoader = MinerUDocumentLoader

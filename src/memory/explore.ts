@@ -802,7 +802,14 @@ async function loadFollowAssertions(compilationId: string, assertionIds: string[
       globalStatementTemplateMarkdown: true,
       contextDependent: true,
       compilation: { select: { sourceTitle: true, sourceSha256: true } },
-      sourceRegion: { select: { sourceNodeId: true, label: true } },
+      sourceRegion: {
+        select: {
+          sourceNodeId: true,
+          label: true,
+          sourceTitle: true,
+          sourceSha256: true,
+        },
+      },
       chatEvidenceLinks: {
         orderBy: { ordinal: "asc" },
         select: {
@@ -924,8 +931,8 @@ function assertionSources(assertion: FollowAssertionRecord): MemorySourceReferen
   if (assertion.sourceRegion) {
     return assertion.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
       kind: "document",
-      sourceTitle: assertion.compilation.sourceTitle,
-      sourceSha256: assertion.compilation.sourceSha256,
+      sourceTitle: assertion.sourceRegion!.sourceTitle ?? assertion.compilation.sourceTitle,
+      sourceSha256: assertion.sourceRegion!.sourceSha256 ?? assertion.compilation.sourceSha256,
       sourceNodeId: assertion.sourceRegion!.sourceNodeId,
       sourceRegionLabel: assertion.sourceRegion!.label,
       sourceBlockId: sourceBlock.sourceBlockId,

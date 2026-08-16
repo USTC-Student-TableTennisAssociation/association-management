@@ -61,11 +61,19 @@ class GlobalObjectResolverRunner:
         self.retriever = retriever
         self.progress = progress or NullProgressReporter()
 
-    async def run_all(self, *, stop_after: int | None = None) -> RegistryState:
+    async def run_all(
+        self,
+        *,
+        stop_after: int | None = None,
+        final: bool = True,
+    ) -> RegistryState:
         start = self.state.next_source_region_ordinal
         if start == len(self.dataset.regions):
-            self.progress.report("全局对象", "当前 Global Resolution 已完成")
-            self._write_completed_artifacts(self.state)
+            if final:
+                if start != len(self.state.source_node_ids):
+                    raise ValueError("完整 Global Resolution 仍有未就绪的 SourceRegion")
+                self.progress.report("全局对象", "当前 Global Resolution 已完成")
+                self._write_completed_artifacts(self.state)
             return self.state
         limit = len(self.dataset.regions)
         if stop_after is not None:
@@ -83,9 +91,7 @@ class GlobalObjectResolverRunner:
                 f"{len(incoming.fragments)} 个 Fragment",
             )
             if not incoming.fragments:
-                state = state.model_copy(
-                    update={"next_source_region_ordinal": sequence + 1}
-                )
+                state = state.model_copy(update={"next_source_region_ordinal": sequence + 1})
                 write_working_registry(self.paths, self.dataset, state)
                 self.progress.report(label, "当前 SourceRegion 没有 Fragment，直接推进 checkpoint")
                 continue
@@ -129,7 +135,9 @@ class GlobalObjectResolverRunner:
             )
 
         self.state = state
-        if state.next_source_region_ordinal == len(self.dataset.regions):
+        if final and state.next_source_region_ordinal == len(self.dataset.regions):
+            if state.next_source_region_ordinal != len(state.source_node_ids):
+                raise ValueError("完整 Global Resolution 仍有未就绪的 SourceRegion")
             self._write_completed_artifacts(state)
         return state
 
@@ -215,9 +223,7 @@ class GlobalObjectResolverRunner:
                 if turn.tool_calls or not turn.content:
                     raise ValueError("模型没有返回 JSON 正文")
                 last_content = turn.content
-                plan = RegionIntegrationPlan.model_validate_json(
-                    normalize_json_fence(turn.content)
-                )
+                plan = RegionIntegrationPlan.model_validate_json(normalize_json_fence(turn.content))
                 validate_region_integration_plan(
                     plan,
                     incoming=incoming,
@@ -276,7 +282,6 @@ def apply_region_plan(
                 global_object_id=object_id,
                 global_object_key=f"global-{sequence + 1:06d}-{object_id}",
                 canonical_name=group.target.canonical_name or "",
-                identity_summary_markdown=group.target.identity_summary_markdown or "",
             )
 
     for operation_index, operation in enumerate(plan.operations):
@@ -286,8 +291,7 @@ def apply_region_plan(
             references = [*target.reference_atoms, *group.reference_atoms]
             assertion_ids = list(
                 dict.fromkeys(
-                    assertion_key(atom.source_node_id, atom.source_claim_id)
-                    for atom in references
+                    assertion_key(atom.source_node_id, atom.source_claim_id) for atom in references
                 )
             )
             objects[target_id] = target.model_copy(
@@ -340,7 +344,6 @@ def candidate_prompt_payload(item: ActiveGlobalObject) -> dict[str, object]:
         "global_object_id": item.global_object_id,
         "global_object_key": item.global_object_key,
         "canonical_name": item.canonical_name,
-        "identity_summary_markdown": item.identity_summary_markdown,
         "surface_atoms": [
             {"atom_id": atom.atom_id, "surface_form": atom.surface_form}
             for atom in item.surface_atoms
@@ -468,10 +471,7 @@ def _operation_shape_retry(
     registry: RegistryState,
     candidates_by_fragment: Mapping[str, Sequence[ActiveGlobalObject]],
 ) -> tuple[str, bool] | None:
-    if (
-        previous_content is None
-        or "的 source/group/target 结构不合法" not in str(error)
-    ):
+    if previous_content is None or "的 source/group/target 结构不合法" not in str(error):
         return None
     try:
         payload = json.loads(normalize_json_fence(previous_content))
@@ -494,9 +494,9 @@ def _operation_shape_retry(
         source_list = sources if isinstance(sources, list) else []
         groups = raw_operation.get("groups")
         group_list = groups if isinstance(groups, list) else []
-        target = group_list[0].get("target") if group_list and isinstance(
-            group_list[0], dict
-        ) else None
+        target = (
+            group_list[0].get("target") if group_list and isinstance(group_list[0], dict) else None
+        )
         target_kind = target.get("kind") if isinstance(target, dict) else None
         target_id = target.get("global_object_id") if isinstance(target, dict) else None
         location = f"operations[{index}]"
@@ -521,9 +521,7 @@ def _operation_shape_retry(
                 repairable_structure = False
                 repaired_operations.append(raw_operation)
             elif any(kind != expected_kind for kind in target_kinds):
-                violations.append(
-                    f"{location} 的 {action} target.kind 必须为 {expected_kind}"
-                )
+                violations.append(f"{location} 的 {action} target.kind 必须为 {expected_kind}")
                 repairable_structure = False
                 repaired_operations.append(raw_operation)
             elif len(group_list) > 1:
@@ -540,15 +538,9 @@ def _operation_shape_retry(
         elif action == "merge":
             merge_invalid = False
             if len(source_list) < 2:
-                violations.append(
-                    f"{location} 的 merge 必须列出至少两个 source_global_object_ids"
-                )
+                violations.append(f"{location} 的 merge 必须列出至少两个 source_global_object_ids")
                 merge_invalid = True
-            if (
-                len(group_list) != 1
-                or target_kind != "existing"
-                or target_id not in source_list
-            ):
+            if len(group_list) != 1 or target_kind != "existing" or target_id not in source_list:
                 violations.append(
                     f"{location} 的 merge 必须只有一个 existing group，且 target 必须是 source 之一"
                 )
@@ -562,9 +554,7 @@ def _operation_shape_retry(
                 violations.append(f"{location} 的 split 必须至少包含两个 groups")
                 split_invalid = True
             if not isinstance(sources, list) or len(source_list) > 1:
-                violations.append(
-                    f"{location} 的 split 最多列出一个需要拆分重构的 source Object"
-                )
+                violations.append(f"{location} 的 split 最多列出一个需要拆分重构的 source Object")
                 split_invalid = True
             if split_invalid:
                 repairable_structure = False
@@ -621,7 +611,7 @@ def _new_global_object_id(
         raise ValueError("new Global Object 必须拥有 surface atom")
     seed = "\n".join(
         [
-            "global-resolution.v2",
+            "global-resolution.v3",
             state.source_sha256,
             ",".join(sorted(source_object_ids)),
             ",".join(sorted(surface_atom_ids)),

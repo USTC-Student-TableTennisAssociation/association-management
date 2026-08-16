@@ -20,6 +20,7 @@ class ModelSettings:
     stream_progress_interval_seconds: float = 5.0
     max_retries: int = 2
     requests_per_minute: int = 18
+    max_in_flight: int = 18
 
     @classmethod
     def from_environment(
@@ -63,6 +64,11 @@ class ModelSettings:
                 explicit=requests_per_minute,
                 default=18,
             ),
+            max_in_flight=_environment_int(
+                "COLD_START_MODEL_MAX_IN_FLIGHT",
+                explicit=None,
+                default=18,
+            ),
         )
 
     def __post_init__(self) -> None:
@@ -74,6 +80,7 @@ class ModelSettings:
             "stream_progress_interval_seconds": self.stream_progress_interval_seconds,
             "max_retries": self.max_retries,
             "requests_per_minute": self.requests_per_minute,
+            "max_in_flight": self.max_in_flight,
         }
         for name, value in positive_values.items():
             if value <= 0:
@@ -86,7 +93,7 @@ class ExplorationSettings:
 
     context_unit_chars: int = 12_000
     max_tree_depth: int = 6
-    max_parallel_regions: int = 3
+    max_parallel_regions: int = 18
     max_tool_calls_per_region: int = 2
     boundary_context_blocks: int = 2
     retrieval_unit_chars: int = 1_200
@@ -103,7 +110,7 @@ class ExplorationSettings:
             max_parallel_regions=_environment_int(
                 "COLD_START_MAX_PARALLEL_REGIONS",
                 explicit=None,
-                default=3,
+                default=18,
             ),
             embedding_model=embedding_model
             or os.getenv("COLD_START_EMBEDDING_MODEL")
@@ -131,8 +138,8 @@ class ExplorationSettings:
 class CompilationSettings:
     """整棵区域树基础编译的并发边界。"""
 
-    max_parallel_sources: int = 6
-    max_parallel_parents: int = 3
+    max_parallel_sources: int = 18
+    max_parallel_parents: int = 18
 
     @classmethod
     def from_environment(
@@ -145,12 +152,12 @@ class CompilationSettings:
             max_parallel_sources=_environment_int(
                 "COLD_START_MAX_PARALLEL_COMPILATIONS",
                 explicit=max_parallel_sources,
-                default=6,
+                default=18,
             ),
             max_parallel_parents=_environment_int(
                 "COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS",
                 explicit=max_parallel_parents,
-                default=3,
+                default=18,
             ),
         )
 
@@ -165,7 +172,7 @@ class CompilationSettings:
 class ActivityViewSettings:
     """活动运营视角的父级语义分组与并发边界。"""
 
-    max_parallel_groups: int = 6
+    max_parallel_groups: int = 18
     max_objects_per_group: int = 40
     max_object_group_chars: int = 50_000
     max_assertions_per_group: int = 12
@@ -181,7 +188,7 @@ class ActivityViewSettings:
             max_parallel_groups=_environment_int(
                 "COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS",
                 explicit=max_parallel_groups,
-                default=6,
+                default=18,
             ),
             max_objects_per_group=_environment_int(
                 "COLD_START_PERSPECTIVE_OBJECTS_PER_GROUP",

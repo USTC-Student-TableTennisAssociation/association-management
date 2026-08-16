@@ -1291,8 +1291,6 @@ export async function captureChatAssertions(
             compilationId: compilation.id,
             globalObjectKey: object.globalObjectKey,
             canonicalName: object.canonicalName,
-            identitySummaryMarkdown:
-              `由聊天首次登记的 GlobalObject，当前以名称“${object.canonicalName}”识别；具体身份与组织事实见关联 Assertion。`,
           })),
         });
         const mentionEvidenceIds = [...new Set(objectMentions.map((mention) =>

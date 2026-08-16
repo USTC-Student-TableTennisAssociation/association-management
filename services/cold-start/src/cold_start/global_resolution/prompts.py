@@ -61,8 +61,8 @@ atom 有两类：
 不能被多个 operation 同时修改或作为多个 target。split 后 reference atom 必须按 Assertion 的
 实际指称分配，不能机械复制给多个 Object。
 
-已有 target 使用 target.kind=existing 并只填写 global_object_id；不要重写名称和摘要。新 target
-使用 target.kind=new 并填写 canonical_name 与 identity_summary_markdown。canonical_name 必须逐字
+已有 target 使用 target.kind=existing 并只填写 global_object_id；不要重写名称。新 target
+使用 target.kind=new 并只填写 canonical_name。canonical_name 必须逐字
 选自该 group 的 surface atom。所有 source/target/Assertion/atom ID 都只能来自输入。
 
 输出严格合法的 JSON 正文，不要 Markdown fence，不要输出 JSON 之外的解释。JSON 字符串内
