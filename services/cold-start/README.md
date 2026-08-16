@@ -110,6 +110,8 @@ AI_MAX_RETRIES=2
 AI_STREAM_PROGRESS_INTERVAL_SECONDS=5
 # 所有分析、提交、修复和父节点请求共享；学校接口 RPM=20 时建议设为 18。
 AI_REQUESTS_PER_MINUTE=18
+# 已发出且仍在 thinking / 流式输出的请求最多同时 18 个。
+COLD_START_MODEL_MAX_IN_FLIGHT=18
 
 COLD_START_EMBEDDING_MODEL=BAAI/bge-m3
 COLD_START_EMBEDDING_DEVICE=
@@ -118,10 +120,10 @@ COLD_START_MINERU_BACKEND=hybrid-engine
 COLD_START_MINERU_EFFORT=high
 COLD_START_MINERU_METHOD=auto
 COLD_START_MINERU_IMAGE_ANALYSIS=true
-COLD_START_MAX_PARALLEL_REGIONS=6
-COLD_START_MAX_PARALLEL_COMPILATIONS=6
-COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS=3
-COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS=6
+COLD_START_MAX_PARALLEL_REGIONS=18
+COLD_START_MAX_PARALLEL_COMPILATIONS=18
+COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS=18
+COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS=18
 COLD_START_PERSPECTIVE_OBJECTS_PER_GROUP=40
 COLD_START_PERSPECTIVE_OBJECT_GROUP_CHARS=50000
 COLD_START_PERSPECTIVE_ASSERTIONS_PER_GROUP=12
@@ -224,7 +226,16 @@ uv run cold-start compile-sources \
 ```bash
 uv run cold-start compile-sources \
   --run "../../.cold-start/runs/20260808T054110Z-107ebc775f" \
-  --max-parallel-sources 8
+  --max-parallel-sources 18
+```
+
+需要在第一个稳定顺序来源完成后立即开始 Global Object Resolution 时，使用同一进程流水线；来源编译与对象归并共用模型 RPM 限速器：
+
+```bash
+uv run cold-start compile-sources \
+  --run "../../.cold-start/runs/20260808T054110Z-107ebc775f" \
+  --max-parallel-sources 18 \
+  --resolve-progressively
 ```
 
 批量运行目录在根层保存一次 Source Time，并按来源隔离三个阶段断点：
@@ -343,8 +354,8 @@ uv run cold-start compile \
 ```bash
 uv run cold-start compile \
   --run "../../.cold-start/runs/20260729T100753Z-107ebc775f" \
-  --max-parallel-sources 8 \
-  --max-parallel-parents 4
+  --max-parallel-sources 18 \
+  --max-parallel-parents 18
 ```
 
 处理过程分为三个阶段：

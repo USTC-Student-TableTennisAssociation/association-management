@@ -3,6 +3,7 @@ import type { UIMessage } from "ai";
 import type { MemorySearchBundle } from "@/memory/types";
 import type { ObjectChangeProposalPresentation } from "@/memory/object-management-types";
 import type { SourceDocumentReferenceBundle } from "@/memory/source-document-types";
+import type { LibraryPlanPresentation } from "@/library/types";
 import type { ViewProposalPresentation } from "@/semantic-view/types";
 import type {
   BusinessViewKey,
@@ -12,7 +13,8 @@ import type {
 
 export type ChatPageContext = {
   activeViewKey?: BusinessViewKey;
-  activePresentation: BusinessViewPresentation | "full_chat";
+  activePresentation: BusinessViewPresentation | "full_chat" | "library";
+  activeFolderId?: string;
 };
 
 export type ClubChatMessage = UIMessage<
@@ -23,5 +25,6 @@ export type ClubChatMessage = UIMessage<
     viewReferences: SemanticViewReferenceBundle;
     viewProposal: ViewProposalPresentation;
     objectChangeProposal: ObjectChangeProposalPresentation;
+    libraryProposal: LibraryPlanPresentation;
   }
 >;

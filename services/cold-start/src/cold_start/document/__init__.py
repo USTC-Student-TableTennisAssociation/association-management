@@ -5,9 +5,10 @@ from cold_start.document.models import (
     ParsedDocument,
     ParsedPage,
 )
-from cold_start.document.pdf_loader import MinerUPdfLoader
+from cold_start.document.pdf_loader import MinerUDocumentLoader, MinerUPdfLoader
 
 __all__ = [
+    "MinerUDocumentLoader",
     "MinerUPdfLoader",
     "ParsedBlock",
     "ParsedDocument",

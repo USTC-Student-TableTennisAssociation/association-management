@@ -181,7 +181,7 @@ def build_global_assertions_artifact(
     return GlobalAssertionsArtifact(
         created_at=datetime.now(UTC),
         source_semantics_schema_version=dataset.snapshot.schema_version,
-        global_resolution_schema_version="global-resolution.v2",
+        global_resolution_schema_version="global-resolution.v3",
         source_sha256=dataset.source_sha256,
         source_node_ids=list(dataset.source_node_ids),
         assertions=finalized,

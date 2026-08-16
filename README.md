@@ -46,6 +46,10 @@ cp .env.example .env
 AI_API_KEY=
 AI_API_BASE_URL=https://api.openai.com/v1
 AI_MODEL=
+AI_VISION_MODEL=
+# 视觉模型使用不同服务时再填写；留空则继承上面的 API 地址与 Key。
+AI_VISION_API_KEY=
+AI_VISION_API_BASE_URL=
 ```
 
 启动开发服务器：
@@ -84,3 +88,26 @@ pnpm dev
 
 冷启动模块的安装、运行和产物说明见
 [`services/cold-start/README.md`](services/cold-start/README.md)。
+
+## 资料库（V1）
+
+资料库用虚拟文件树保留日常资料，导入时不移动或删除源文件。文件内容按
+SHA-256 去重存储，同时保留每个文件的虚拟位置和原始相对路径。新导入文件默认是
+`catalog`（仅归档），不解析、不生成 Assertion。
+
+先部署数据库迁移并启动项目：
+
+```bash
+pnpm prisma:deploy
+pnpm dev
+```
+
+资料库页面可直接选择多个文件或整个文件夹导入，导入时保留目录层级并按 SHA-256 去重。终端的 `pnpm library:import -- <path>` 仍可用于特大批量或需要保留空文件夹的导入。
+
+页面中可以新建文件夹、重命名、移动、永久删除、设置
+`catalog / coarse / deep` 档位，并预览图片、PDF 和纯文本。“基础编译”工作台会按
+SHA-256 唯一内容列出文件，默认只勾选深度与粗编译项，并支持搜索、逐项勾选、全选和批量改档位；
+只有本次明确勾选的内容才会进入 `deep → coarse → catalog` 可恢复任务。深度文件优先复用已完成的
+cold-start Compilation，粗编译按原文大主题产生 Reference、可选 grounded Assertion 和关联 Object，仅归档只生成轻量 Reference–Object 结果或明确记录未形成知识结果。模型只选择编号证据块并标注 Object 名称，服务端生成精确原文摘录和 Object 闭环。图片先由 `AI_VISION_MODEL` 生成 OCR、画面观察和不确定性记录，再由
+`AI_MODEL` 把这些文字编译成相同的草稿候选；普通模型不会接收原图。所有文件草稿和跨文件 Global Object 归并成功后，新结果才原子发布到 Shared Brain；失败不会替换旧结果。详细边界见
+[`docs/architecture/07-资料库与分层处理第一版.md`](docs/architecture/07-资料库与分层处理第一版.md)。

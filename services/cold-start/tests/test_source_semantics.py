@@ -18,6 +18,7 @@ from cold_start.compilation.source_semantics import (
     AtomicClaimSubmission,
     FragmentAssertionTemplateDraft,
     FullSourceSemanticRunner,
+    FullSourceSemanticSnapshot,
     MissingClaimSubmission,
     ObjectFragmentDraft,
     ObjectFragmentSubmission,
@@ -104,8 +105,7 @@ def _initial_turn(
         drafts.append(
             {
                 "mentions": [
-                    {"span_text": span, "occurrence_index": 0}
-                    for span in same_referent_spans
+                    {"span_text": span, "occurrence_index": 0} for span in same_referent_spans
                 ],
                 "supporting_block_ids": ["p0001-b0002"],
             }
@@ -137,15 +137,11 @@ def _fragment_turn() -> ModelTurn:
             "assertions": [
                 {
                     "claim_id": "claim-1",
-                    "statement_template_markdown": (
-                        "{{fragment:F1}}过去通常申请两个场地。"
-                    ),
+                    "statement_template_markdown": ("{{fragment:F1}}过去通常申请两个场地。"),
                 },
                 {
                     "claim_id": "claim-2",
-                    "statement_template_markdown": (
-                        "{{fragment:F2}}必须提前申请场地。"
-                    ),
+                    "statement_template_markdown": ("{{fragment:F2}}必须提前申请场地。"),
                 },
             ],
         }
@@ -159,9 +155,7 @@ def _one_fragment_turn(
 ) -> ModelTurn:
     return _json_turn(
         {
-            "fragments": [
-                {"fragment_key": "F1", "surface_forms": list(surface_forms)}
-            ],
+            "fragments": [{"fragment_key": "F1", "surface_forms": list(surface_forms)}],
             "assertions": [
                 {
                     "claim_id": "claim-1",
@@ -170,7 +164,6 @@ def _one_fragment_turn(
             ],
         }
     )
-
 
 
 def _blocks(
@@ -273,9 +266,7 @@ async def test_compiles_three_direct_json_stages(tmp_path: Path) -> None:
     assert snapshot.review_addition_count == 1
     assert snapshot.model_calls == 3
     assert [item.claim_id for item in snapshot.assertions] == ["claim-1", "claim-2"]
-    assert snapshot.assertions[0].statement_template_markdown.startswith(
-        "{{fragment:fragment-1}}"
-    )
+    assert snapshot.assertions[0].statement_template_markdown.startswith("{{fragment:fragment-1}}")
     assert snapshot.assertions[0].context_dependent is False
     assert [item.fragment_id for item in snapshot.object_fragments] == [
         "fragment-1",
@@ -299,8 +290,7 @@ async def test_compiles_three_direct_json_stages(tmp_path: Path) -> None:
     assert all(call["tools"] == () for call in model.calls)
     assert all(call["tool_choice"] is None for call in model.calls)
     assert all(
-        "Atomic-Conservative-Fallback" not in str(call["request_label"])
-        for call in model.calls
+        "Atomic-Conservative-Fallback" not in str(call["request_label"]) for call in model.calls
     )
     first_system = str(model.calls[0]["messages"][0]["content"])
     assert "只输出一个 JSON 对象" in first_system
@@ -337,15 +327,11 @@ async def test_compiles_three_direct_json_stages(tmp_path: Path) -> None:
 async def test_model_constructs_fragment_and_direct_template(tmp_path: Path) -> None:
     fragment = _json_turn(
         {
-            "fragments": [
-                {"fragment_key": "F1", "surface_forms": ["协会"]}
-            ],
+            "fragments": [{"fragment_key": "F1", "surface_forms": ["协会"]}],
             "assertions": [
                 {
                     "claim_id": "claim-1",
-                    "statement_template_markdown": (
-                        "{{fragment:F1}}过去通常申请两个场地。"
-                    ),
+                    "statement_template_markdown": ("{{fragment:F1}}过去通常申请两个场地。"),
                 }
             ],
         }
@@ -443,9 +429,7 @@ async def test_explicit_short_or_english_name_becomes_same_referent(
             _json_turn({"claims": []}),
             _json_turn(
                 {
-                    "fragments": [
-                        {"fragment_key": "F1", "surface_forms": spans}
-                    ],
+                    "fragments": [{"fragment_key": "F1", "surface_forms": spans}],
                     "assertions": [],
                 }
             ),
@@ -510,9 +494,7 @@ async def test_non_identity_relationships_do_not_create_atomic_same_referent(
     ).compile("region-0002")
 
     assert len(snapshot.object_fragments) == len(spans)
-    assert [item.surface_forms for item in snapshot.object_fragments] == [
-        [span] for span in spans
-    ]
+    assert [item.surface_forms for item in snapshot.object_fragments] == [[span] for span in spans]
     assert len(model.calls) == 3
 
 
@@ -538,9 +520,7 @@ async def test_mixed_sentence_is_split_during_atomic_extraction(
                     "assertions": [
                         {
                             "claim_id": "claim-1",
-                            "statement_template_markdown": (
-                                "{{fragment:F1}}成立于2005年。"
-                            ),
+                            "statement_template_markdown": ("{{fragment:F1}}成立于2005年。"),
                         }
                     ],
                 }
@@ -584,9 +564,7 @@ async def test_corrupted_v6_fragment_snapshot_is_rebuilt_from_stage_checkpoints(
                 "assertions": [
                     {
                         "claim_id": "claim-1",
-                        "statement_template_markdown": (
-                            "{{fragment:F1}}成立于2005年。"
-                        ),
+                        "statement_template_markdown": ("{{fragment:F1}}成立于2005年。"),
                     }
                 ],
             }
@@ -673,10 +651,7 @@ def _same_referent_draft(
 ) -> SourceSameReferentDraft:
     return SourceSameReferentDraft(
         same_referent_draft_id="same-ref-draft-1",
-        mentions=[
-            SameReferentMentionDraft(span_text=span, occurrence_index=0)
-            for span in spans
-        ],
+        mentions=[SameReferentMentionDraft(span_text=span, occurrence_index=0) for span in spans],
         supporting_block_ids=[block_id],
     )
 
@@ -728,9 +703,7 @@ def test_fragment_can_extend_atomic_hint_with_source_local_reusable_name() -> No
         submission,
         claims,
         same_referent_drafts=[draft],
-        source_blocks=_blocks(
-            "中国科学技术大学学生乒乓球协会（USTC TTA）。之后乒协成立于2000年。"
-        ),
+        source_blocks=_blocks("中国科学技术大学学生乒乓球协会（USTC TTA）。之后乒协成立于2000年。"),
     )
 
 
@@ -799,9 +772,7 @@ def test_same_referent_draft_rejects_context_only_name() -> None:
 
 
 def test_same_referent_rejects_unknown_supporting_block() -> None:
-    draft = _same_referent_draft(
-        "甲协会", "甲协", block_id="p9999-b0001"
-    )
+    draft = _same_referent_draft("甲协会", "甲协", block_id="p9999-b0001")
     with pytest.raises(ValueError, match="当前来源之外的原文块"):
         _validate_same_referent_drafts([draft], _blocks("甲协会，简称甲协。"))
 
@@ -827,23 +798,17 @@ async def test_incremental_review_does_not_duplicate_existing_claim(tmp_path: Pa
     )
     one_fragment = _json_turn(
         {
-            "fragments": [
-                {"fragment_key": "F1", "surface_forms": ["继往开来杯"]}
-            ],
+            "fragments": [{"fragment_key": "F1", "surface_forms": ["继往开来杯"]}],
             "assertions": [
                 {
                     "claim_id": "claim-1",
-                    "statement_template_markdown": (
-                        "{{fragment:F1}}过去通常申请两个场地。"
-                    ),
+                    "statement_template_markdown": ("{{fragment:F1}}过去通常申请两个场地。"),
                 }
             ],
         }
     )
     snapshot = await SourceSemanticCompiler(
-        model=FakeJsonModel(
-            [_initial_turn(), duplicate, _json_turn({"claims": []}), one_fragment]
-        ),
+        model=FakeJsonModel([_initial_turn(), duplicate, _json_turn({"claims": []}), one_fragment]),
         exploration=_exploration(),
         blocks=_blocks(),
         paths=create_source_semantic_paths(tmp_path, "region-0002"),
@@ -863,7 +828,7 @@ def test_json_fence_normalization_is_strict_and_minimal() -> None:
     assert normalize_json_fence(prefixed) == prefixed
     with pytest.raises(ValueError):
         ObjectFragmentSubmission.model_validate_json(
-            normalize_json_fence('{fragments:[],assertions:[]}')
+            normalize_json_fence("{fragments:[],assertions:[]}")
         )
 
 
@@ -900,8 +865,8 @@ def test_missing_claim_schema_examples_match_strict_model() -> None:
 def test_atomic_prompt_requires_json_safe_quotes() -> None:
     assert "中文弯引号“”" in CLAIM_EXTRACTION_SYSTEM_PROMPT
     assert "ASCII 双引号" in CLAIM_EXTRACTION_SYSTEM_PROMPT
-    assert '\\\"' in CLAIM_EXTRACTION_SYSTEM_PROMPT
-    assert '协会呈现“两极化”结构' in CLAIM_EXTRACTION_SYSTEM_PROMPT
+    assert '\\"' in CLAIM_EXTRACTION_SYSTEM_PROMPT
+    assert "协会呈现“两极化”结构" in CLAIM_EXTRACTION_SYSTEM_PROMPT
     assert set(AtomicClaimSubmission.model_fields) == {
         "claims",
         "same_referent_drafts",
@@ -1094,9 +1059,7 @@ async def test_case_b_prompt_and_protocol_split_different_lifecycles(
             ],
         }
     )
-    model = FakeJsonModel(
-        [first_turn, _json_turn({"claims": []}), fragment_turn]
-    )
+    model = FakeJsonModel([first_turn, _json_turn({"claims": []}), fragment_turn])
 
     snapshot = await SourceSemanticCompiler(
         model=model,
@@ -1157,9 +1120,7 @@ def test_case_c_reference_uses_semantic_links_without_object_mentions() -> None:
     assert assertions[0].kind == "reference"
     assert assertions[0].statement_template_markdown == claim.statement_markdown
     assert all(name not in assertions[0].statement_template_markdown for name in event_names)
-    assert assertions[0].semantic_fragment_ids == [
-        fragment.fragment_id for fragment in fragments
-    ]
+    assert assertions[0].semantic_fragment_ids == [fragment.fragment_id for fragment in fragments]
     assert assertions[0].supporting_block_ids == ["p0001-b0002"]
 
 
@@ -1168,9 +1129,7 @@ def test_case_d_grounded_assertion_keeps_anchored_reference_validation() -> None
     with pytest.raises(ValueError, match="grounded Assertion，不能使用 semantic links"):
         _validate_fragment_submission(
             ObjectFragmentSubmission(
-                fragments=[
-                    ObjectFragmentDraft(fragment_key="F1", surface_forms=["继往开来"])
-                ],
+                fragments=[ObjectFragmentDraft(fragment_key="F1", surface_forms=["继往开来"])],
                 assertions=[
                     FragmentAssertionTemplateDraft(
                         claim_id="claim-1",
@@ -1250,15 +1209,11 @@ def test_non_reusable_pronouns_are_not_required_surface_forms() -> None:
 async def test_unknown_fragment_reference_gets_one_clean_retry(tmp_path: Path) -> None:
     invalid_fragments = _json_turn(
         {
-            "fragments": [
-                {"fragment_key": "F1", "surface_forms": ["副会长"]}
-            ],
+            "fragments": [{"fragment_key": "F1", "surface_forms": ["副会长"]}],
             "assertions": [
                 {
                     "claim_id": "claim-1",
-                    "statement_template_markdown": (
-                        "{{fragment:F1}}协助{{fragment:F2}}工作。"
-                    ),
+                    "statement_template_markdown": ("{{fragment:F1}}协助{{fragment:F2}}工作。"),
                 }
             ],
         }
@@ -1272,9 +1227,7 @@ async def test_unknown_fragment_reference_gets_one_clean_retry(tmp_path: Path) -
             "assertions": [
                 {
                     "claim_id": "claim-1",
-                    "statement_template_markdown": (
-                        "{{fragment:F1}}协助{{fragment:F2}}工作。"
-                    ),
+                    "statement_template_markdown": ("{{fragment:F1}}协助{{fragment:F2}}工作。"),
                 }
             ],
         }
@@ -1305,11 +1258,7 @@ def test_fragment_template_does_not_require_reverse_rendering() -> None:
         _source_claim("claim-1", "继往开来杯通常申请两个场地。"),
     ]
     submission = ObjectFragmentSubmission(
-        fragments=[
-            ObjectFragmentDraft(
-                fragment_key="F1", surface_forms=["继往开来杯"]
-            )
-        ],
+        fragments=[ObjectFragmentDraft(fragment_key="F1", surface_forms=["继往开来杯"])],
         assertions=[
             FragmentAssertionTemplateDraft(
                 claim_id="claim-1",
@@ -1322,9 +1271,7 @@ def test_fragment_template_does_not_require_reverse_rendering() -> None:
         claims,
         source_blocks=_blocks("继往开来杯通常申请两个场地。"),
     )
-    _, assertions = _materialize_fragments(
-        submission, claims, source_region_id="region-0002"
-    )
+    _, assertions = _materialize_fragments(submission, claims, source_region_id="region-0002")
     assert assertions[0].statement_template_markdown == (
         "通常为{{fragment:fragment-1}}申请两个场地。"
     )
@@ -1351,9 +1298,7 @@ def test_fragment_submission_rejects_unknown_reference_and_ungrounded_alias() ->
 def test_fragment_checkpoint_uses_stable_ids_without_mention_coordinates() -> None:
     claims = [_source_claim("claim-1", "甲协会成立。")]
     submission = ObjectFragmentSubmission(
-        fragments=[
-            ObjectFragmentDraft(fragment_key="F1", surface_forms=["甲协会"])
-        ],
+        fragments=[ObjectFragmentDraft(fragment_key="F1", surface_forms=["甲协会"])],
         assertions=[
             FragmentAssertionTemplateDraft(
                 claim_id="claim-1",
@@ -1386,9 +1331,7 @@ def test_fragment_checkpoint_uses_stable_ids_without_mention_coordinates() -> No
         _validate_fragment_submission(
             ObjectFragmentSubmission(
                 fragments=[
-                    ObjectFragmentDraft(
-                        fragment_key="F1", surface_forms=["系统发明的别名"]
-                    )
+                    ObjectFragmentDraft(fragment_key="F1", surface_forms=["系统发明的别名"])
                 ],
                 assertions=[
                     FragmentAssertionTemplateDraft(
@@ -1493,9 +1436,7 @@ def test_fragment_rejects_self_identity_alias_collapse() -> None:
         assertions=[
             FragmentAssertionTemplateDraft(
                 claim_id="claim-1",
-                statement_template_markdown=(
-                    "{{fragment:F1}}为{{fragment:F1}}，署于2026年春。"
-                ),
+                statement_template_markdown=("{{fragment:F1}}为{{fragment:F1}}，署于2026年春。"),
             )
         ],
     )
@@ -1505,6 +1446,58 @@ def test_fragment_rejects_self_identity_alias_collapse() -> None:
             [claim],
             source_blocks=_blocks(claim.statement_markdown),
         )
+
+
+def test_invalid_fragment_checkpoint_is_treated_as_stage_cache_miss(
+    tmp_path: Path,
+) -> None:
+    claim = _source_claim(
+        "claim-1",
+        "25-26学年乒协会长为魏汉东，署于2026年春。",
+    )
+    collapsed = ObjectFragmentSubmission(
+        fragments=[
+            ObjectFragmentDraft(
+                fragment_key="F1",
+                surface_forms=["25-26学年乒协会长", "魏汉东"],
+            )
+        ],
+        assertions=[
+            FragmentAssertionTemplateDraft(
+                claim_id="claim-1",
+                statement_template_markdown=("{{fragment:F1}}为{{fragment:F1}}，署于2026年春。"),
+            )
+        ],
+    )
+    fragments, assertions = _materialize_fragments(
+        collapsed,
+        [claim],
+        source_region_id="region-0002",
+    )
+    checkpoint = SourceObjectFragmentCheckpoint(
+        source_sha256="a" * 64,
+        region_node_id="region-0002",
+        fragments=fragments,
+        assertions=assertions,
+        model_calls=1,
+    )
+    paths = create_source_semantic_paths(tmp_path, "region-0002")
+    paths.object_fragments_json.write_text(checkpoint.model_dump_json(indent=2), encoding="utf-8")
+    compiler = SourceSemanticCompiler(
+        model=FakeJsonModel([]),
+        exploration=_exploration(),
+        blocks=_blocks(claim.statement_markdown),
+        paths=paths,
+    )
+    assert (
+        compiler._load_object_fragments_checkpoint(
+            compiler.nodes["region-0002"],
+            [claim],
+            [],
+            _blocks(claim.statement_markdown),
+        )
+        is None
+    )
 
 
 def test_missing_review_rejects_covered_list_item_but_keeps_new_exception() -> None:
@@ -1541,7 +1534,6 @@ def test_missing_review_rejects_covered_list_item_but_keeps_new_exception() -> N
         existing,
         _blocks(existing[0].statement_markdown),
     )
-
 
 
 @pytest.mark.asyncio
@@ -1608,12 +1600,8 @@ async def test_stage_uses_one_clean_retry_without_bad_output_history(tmp_path: P
     assert retry_messages[1] == first_messages[1]
     assert "错误思考" not in str(retry_messages)
     assert '{"claims": [' not in str(retry_messages)
-    assert "上一次提交未通过确定性校验" in str(
-        retry_messages[0]["content"]
-    )
-    assert "请仅根据原始输入重新生成一次" in str(
-        retry_messages[0]["content"]
-    )
+    assert "上一次提交未通过确定性校验" in str(retry_messages[0]["content"])
+    assert "请仅根据原始输入重新生成一次" in str(retry_messages[0]["content"])
     assert str(model.calls[1]["request_label"]).endswith("clean-retry")
     assert "Atomic-Conservative-Fallback" not in str(model.calls[1])
 
@@ -1755,15 +1743,13 @@ def test_conservative_atomic_fallback_prompt_has_bounded_semantics() -> None:
     assert "遗漏事实由后续 Missing" in prompt
     assert "组织架构不合理、经验传承断层" in prompt
     assert "记录→提供参考→终结失忆" in prompt
-    assert '\\\"' in prompt
+    assert '\\"' in prompt
 
 
 @pytest.mark.asyncio
 async def test_stage_failure_stops_after_one_retry(tmp_path: Path) -> None:
     paths = create_source_semantic_paths(tmp_path, "region-0002")
-    model = FakeJsonModel(
-        [ModelTurn(content="{"), ModelTurn(content='{"claims": [}')]
-    )
+    model = FakeJsonModel([ModelTurn(content="{"), ModelTurn(content='{"claims": [}')])
     with pytest.raises(ValueError, match="clean retry 均失败"):
         await SourceSemanticCompiler(
             model=model,
@@ -1794,9 +1780,7 @@ class BatchJsonModel:
         del messages, tools, tool_choice, temperature, thinking
         self.calls.append(request_label)
         if request_label == "Source Time":
-            return _json_turn(
-                {"source_time_text": None, "supporting_block_ids": []}
-            )
+            return _json_turn({"source_time_text": None, "supporting_block_ids": []})
         node_id = "region-0002" if "region-0002" in request_label else "region-0003"
         block_id = "p0001-b0002" if node_id == "region-0002" else "p0001-b0003"
         label = "继往开来杯" if node_id == "region-0002" else "会员大会"
@@ -1815,9 +1799,7 @@ class BatchJsonModel:
         if request_label.endswith("遗漏扫描"):
             return _json_turn({"claims": []})
         if "Object Fragment Construction" in request_label:
-            surface_form = (
-                "不存在的字面" if self.fail_fragments_node == node_id else label
-            )
+            surface_form = "不存在的字面" if self.fail_fragments_node == node_id else label
             return _json_turn(
                 {
                     "fragments": [
@@ -1829,9 +1811,7 @@ class BatchJsonModel:
                     "assertions": [
                         {
                             "claim_id": "claim-1",
-                            "statement_template_markdown": (
-                                "{{fragment:F1}}每学年举办一次。"
-                            ),
+                            "statement_template_markdown": ("{{fragment:F1}}每学年举办一次。"),
                         }
                     ],
                 }
@@ -1927,6 +1907,48 @@ async def test_batch_compiles_all_sources_and_writes_stage_index(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_batch_exposes_stable_completed_prefix_before_final_snapshot(
+    tmp_path: Path,
+) -> None:
+    available: list[tuple[list[str], list[str], bool]] = []
+
+    async def on_available(
+        snapshot: FullSourceSemanticSnapshot,
+        complete: bool,
+    ) -> None:
+        available.append(
+            (
+                list(snapshot.source_node_ids),
+                [item.region_node_id for item in snapshot.sources],
+                complete,
+            )
+        )
+
+    await FullSourceSemanticRunner(
+        model=BatchJsonModel(),
+        exploration=_batch_exploration(),
+        blocks=_batch_blocks(),
+        paths=create_full_source_semantic_paths(tmp_path),
+        max_parallel_sources=1,
+        on_available=on_available,
+    ).run()
+
+    assert available == [
+        (["region-0002", "region-0003"], ["region-0002"], False),
+        (
+            ["region-0002", "region-0003"],
+            ["region-0002", "region-0003"],
+            False,
+        ),
+        (
+            ["region-0002", "region-0003"],
+            ["region-0002", "region-0003"],
+            True,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_batch_can_filter_sources_without_changing_stage_flow(tmp_path: Path) -> None:
     model = BatchJsonModel()
     snapshot = await FullSourceSemanticRunner(
@@ -1974,7 +1996,5 @@ async def test_batch_resume_only_retries_failed_source_stage(tmp_path: Path) -> 
     ).run()
 
     assert len(resumed_model.calls) == 1
-    assert resumed_model.calls[0].endswith(
-        "region-0003·Object Fragment Construction"
-    )
+    assert resumed_model.calls[0].endswith("region-0003·Object Fragment Construction")
     assert len(snapshot.sources) == 2

@@ -72,13 +72,12 @@ type StoredGlobalObject = {
   global_object_id: string;
   global_object_key: string;
   canonical_name: string;
-  identity_summary_markdown: string;
   surface_atom_ids: string[];
   reference_atom_ids: string[];
 };
 
 type GlobalResolutionArtifact = {
-  schema_version: "global-resolution.v2";
+  schema_version: "global-resolution.v3";
   created_at: string;
   source_semantics_schema_version: "source-semantics-full.v9";
   source_sha256: string;
@@ -110,7 +109,7 @@ type GlobalAssertionsArtifact = {
   schema_version: "global-assertions.v3";
   created_at: string;
   source_semantics_schema_version: "source-semantics-full.v9";
-  global_resolution_schema_version: "global-resolution.v2";
+  global_resolution_schema_version: "global-resolution.v3";
   source_sha256: string;
   source_node_ids: string[];
   assertions: GlobalizedAssertion[];
@@ -563,7 +562,7 @@ type ValidatedGlobalAssertions = {
 
 function validateGlobalResolution(value: unknown, snapshot: Snapshot): ValidatedResolution {
   const root = objectValue(value, "global-resolution.json");
-  if (root.schema_version !== "global-resolution.v2") {
+  if (root.schema_version !== "global-resolution.v3") {
     throw new Error(`不支持的 Global Resolution 版本：${String(root.schema_version)}`);
   }
   if (root.source_semantics_schema_version !== snapshot.schema_version) {
@@ -653,10 +652,6 @@ function validateGlobalResolution(value: unknown, snapshot: Snapshot): Validated
       global_object_id: globalObjectId,
       global_object_key: globalObjectKey,
       canonical_name: canonicalName,
-      identity_summary_markdown: stringValue(
-        item.identity_summary_markdown,
-        `global_objects[${index}].identity_summary_markdown`,
-      ),
       surface_atom_ids: surfaceAtomIds,
       reference_atom_ids: referenceAtomIds,
     };
@@ -667,7 +662,7 @@ function validateGlobalResolution(value: unknown, snapshot: Snapshot): Validated
 
   return {
     artifact: {
-      schema_version: "global-resolution.v2",
+      schema_version: "global-resolution.v3",
       created_at: createdAt.toISOString(),
       source_semantics_schema_version: "source-semantics-full.v9",
       source_sha256: snapshot.source.sha256,
@@ -902,7 +897,7 @@ function validateGlobalAssertions(
     artifact: {
       schema_version: "global-assertions.v3", created_at: createdAt.toISOString(),
       source_semantics_schema_version: "source-semantics-full.v9",
-      global_resolution_schema_version: "global-resolution.v2",
+      global_resolution_schema_version: "global-resolution.v3",
       source_sha256: snapshot.source.sha256, source_node_ids: sourceNodeIds,
       assertions: validatedAssertions, total_assertions: totalAssertions,
       total_source_reference_atoms: totalSourceReferences,
@@ -942,6 +937,8 @@ async function importColdStart(
     sourcePages: item.source_pages, sourceBlockIds: item.source_block_ids, coveredBlockIds: item.covered_block_ids,
     unclaimedBlockIds: item.unclaimed_block_ids, initialClaimCount: item.initial_claim_count,
     reviewAdditionCount: item.review_addition_count, modelCalls: item.model_calls, createdAt: new Date(item.created_at),
+    sourcePath: snapshot.source.path, sourceTitle: snapshot.source.title,
+    sourceSha256: snapshot.source.sha256, sourceParser: snapshot.source.parser,
   }));
   const sourceBlocks: Prisma.MemorySourceBlockCreateManyInput[] = blocks.map((item) => ({
     id: blockIds.get(item.block_id)!, compilationId, sourceBlockId: item.block_id, order: item.order,
@@ -978,7 +975,6 @@ async function importColdStart(
     compilationId,
     globalObjectKey: item.global_object_key,
     canonicalName: item.canonical_name,
-    identitySummaryMarkdown: item.identity_summary_markdown,
   }));
   const surfaceMemberships: Prisma.MemoryGlobalObjectSurfaceMembershipCreateManyInput[] =
     resolution.surfaceAssignments.map((item) => ({

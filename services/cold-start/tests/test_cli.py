@@ -173,6 +173,25 @@ def test_cli_exposes_full_basic_compilation_command() -> None:
     assert args.requests_per_minute == 18
 
 
+def test_cli_exposes_mineru_only_document_parsing_command() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "parse-document",
+            "--source",
+            "extensionless-blob",
+            "--source-suffix",
+            "docx",
+            "--output",
+            "parse-cache",
+        ]
+    )
+
+    assert args.command == "parse-document"
+    assert args.source == Path("extensionless-blob")
+    assert args.source_suffix == "docx"
+    assert args.output == Path("parse-cache")
+
+
 def test_cli_exposes_source_semantic_compilation_command() -> None:
     args = cli.build_parser().parse_args(
         [
@@ -206,6 +225,11 @@ def test_cli_exposes_all_source_semantic_compilation_command() -> None:
             "region-0097",
             "--resume",
             "existing-full-source-run",
+            "--resolve-progressively",
+            "--global-resume",
+            "existing-global-run",
+            "--candidate-limit",
+            "8",
         ]
     )
 
@@ -214,6 +238,9 @@ def test_cli_exposes_all_source_semantic_compilation_command() -> None:
     assert args.max_parallel_sources == 8
     assert args.source_id == ["region-0095", "region-0097"]
     assert args.resume == Path("existing-full-source-run")
+    assert args.resolve_progressively is True
+    assert args.global_resume == Path("existing-global-run")
+    assert args.candidate_limit == 8
 
 
 def test_cli_exposes_source_region_global_object_resolver_command() -> None:

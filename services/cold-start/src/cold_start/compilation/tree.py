@@ -66,7 +66,7 @@ PARENT_INTEGRATION_OUTPUT_PROTOCOL = """
 - `statement_template_markdown`：必须用 `{{object:现有对象ID}}` 引用对象；
 - `holder_object_id`：仅 viewpoint 可以填写，record 必须为 `null`；
 - `temporal_scope`：完整保留结构化时间对象 `kind`、`display`、`start`、`end`、
-  `precision`、`confidence`；
+  `precision`；
 - `temporal_basis_markdown`：时间判断依据；
 - `uncertainty_markdown`：没有则为 `null`；
 - `reason`：父节点原文如何证明原叙述需要纠正。

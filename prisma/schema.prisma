@@ -40,8 +40,254 @@ enum MemoryAmbientHigherMemoryScope {
   recent
 }
 
-/// 一次已完成 Global Resolution 的 cold-start package。
-/// 当前导入策略会先删除这里的全部记录，再依靠级联删除清空整个记忆层。
+enum LibraryNodeKind {
+  file
+  folder
+}
+
+enum LibraryProcessingProfile {
+  catalog
+  coarse
+  deep
+}
+
+enum LibraryProcessingStatus {
+  idle
+  queued
+  running
+  ready
+  failed
+}
+
+enum LibraryPlanStatus {
+  pending
+  approved
+  rejected
+  applied
+  failed
+}
+
+enum LibraryCompilationJobStatus {
+  queued
+  running
+  paused
+  completed
+  failed
+}
+
+enum LibraryProcessingStage {
+  queued
+  preparing
+  parsing
+  analyzing
+  resolving
+  staging
+  ready
+  failed
+}
+
+/// 一次本地目录或后续上传批次。第一版只记录导入结果，不承担文件同步。
+model LibraryImportBatch {
+  id              String    @id @default(uuid()) @db.Uuid
+  displayName     String    @map("display_name") @db.Text
+  originalRoot    String?   @map("original_root") @db.Text
+  status          String    @default("running") @db.Text
+  fileCount       Int       @default(0) @map("file_count")
+  uniqueBlobCount Int       @default(0) @map("unique_blob_count")
+  errorMessage    String?   @map("error_message") @db.Text
+  importedAt      DateTime  @default(now()) @map("imported_at") @db.Timestamptz(3)
+  completedAt     DateTime? @map("completed_at") @db.Timestamptz(3)
+
+  nodes LibraryNode[]
+
+  @@map("library_import_batches")
+}
+
+/// 按 SHA-256 保存的不可变原件；多个目录位置可以共享同一个 Blob。
+model LibrarySourceBlob {
+  id         String   @id @default(uuid()) @db.Uuid
+  sha256     String   @unique @db.Text
+  storageKey String   @map("storage_key") @db.Text
+  mimeType   String   @map("mime_type") @db.Text
+  byteSize   BigInt   @map("byte_size")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  nodes              LibraryNode[]
+  processingRuns     LibrarySourceProcessingRun[]
+  catalogAssessments LibraryCatalogAssessment[]
+
+  @@map("library_source_blobs")
+}
+
+/// Echo 资料库中的虚拟文件或文件夹。移动和重命名只改变树位置，不改变 Blob 或来源身份。
+model LibraryNode {
+  id                   String                   @id @default(uuid()) @db.Uuid
+  kind                 LibraryNodeKind
+  parentId             String?                  @map("parent_id") @db.Uuid
+  name                 String                   @db.Text
+  normalizedName       String                   @map("normalized_name") @db.Text
+  blobId               String?                  @map("blob_id") @db.Uuid
+  importBatchId        String?                  @map("import_batch_id") @db.Uuid
+  originalRelativePath String?                  @map("original_relative_path") @db.Text
+  processingProfile    LibraryProcessingProfile @default(catalog) @map("processing_profile")
+  processingStatus     LibraryProcessingStatus  @default(idle) @map("processing_status")
+  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  parent             LibraryNode?                 @relation("LibraryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children           LibraryNode[]                @relation("LibraryTree")
+  blob               LibrarySourceBlob?           @relation(fields: [blobId], references: [id], onDelete: Restrict)
+  importBatch        LibraryImportBatch?          @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  processingRuns     LibrarySourceProcessingRun[]
+  catalogAssessments LibraryCatalogAssessment[]
+
+  @@unique([parentId, normalizedName])
+  @@index([parentId, kind, name])
+  @@index([blobId])
+  @@index([processingProfile, processingStatus])
+  @@map("library_nodes")
+}
+
+/// 一次可恢复的基础编译任务。任务对唯一 Blob 去重，固定按 deep→coarse→catalog 执行。
+model LibraryCompilationJob {
+  id                  String                      @id @default(uuid()) @db.Uuid
+  status              LibraryCompilationJobStatus @default(queued)
+  activePhase         LibraryProcessingProfile?   @map("active_phase")
+  pauseRequested      Boolean                     @default(false) @map("pause_requested")
+  totalContent        Int                         @default(0) @map("total_content")
+  completedContent    Int                         @default(0) @map("completed_content")
+  failedContent       Int                         @default(0) @map("failed_content")
+  deepTotal           Int                         @default(0) @map("deep_total")
+  deepCompleted       Int                         @default(0) @map("deep_completed")
+  coarseTotal         Int                         @default(0) @map("coarse_total")
+  coarseCompleted     Int                         @default(0) @map("coarse_completed")
+  catalogTotal        Int                         @default(0) @map("catalog_total")
+  catalogCompleted    Int                         @default(0) @map("catalog_completed")
+  configuration       Json                        @default("{}") @db.JsonB
+  activeStage         String?                     @map("active_stage") @db.Text
+  globalStatus        String                      @default("queued") @map("global_status") @db.Text
+  globalProgress      Int                         @default(0) @map("global_progress")
+  globalTotal         Int                         @default(0) @map("global_total")
+  globalRetryCount    Int                         @default(0) @map("global_retry_count")
+  globalStatusMessage String?                     @map("global_status_message") @db.Text
+  globalErrorMessage  String?                     @map("global_error_message") @db.Text
+  globalCheckpoint    Json                        @default("{}") @map("global_checkpoint") @db.JsonB
+  globalResult        Json                        @default("{}") @map("global_result") @db.JsonB
+  errorMessage        String?                     @map("error_message") @db.Text
+  createdAt           DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  startedAt           DateTime?                   @map("started_at") @db.Timestamptz(3)
+  heartbeatAt         DateTime?                   @map("heartbeat_at") @db.Timestamptz(3)
+  completedAt         DateTime?                   @map("completed_at") @db.Timestamptz(3)
+
+  runs LibrarySourceProcessingRun[]
+
+  @@index([status, createdAt])
+  @@map("library_compilation_jobs")
+}
+
+/// 资料库当前生效的跨文件 Object 草稿快照。重编译只在成功后原子替换它。
+model LibraryCompilationState {
+  id            String   @id @default("default") @db.Text
+  globalObjects Json     @default("[]") @map("global_objects") @db.JsonB
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@map("library_compilation_state")
+}
+
+/// 解析或编译的一次运行记录。成功运行会在 Global Object 归并后发布到 Shared Brain。
+model LibrarySourceProcessingRun {
+  id                      String                   @id @default(uuid()) @db.Uuid
+  libraryNodeId           String                   @map("library_node_id") @db.Uuid
+  sourceBlobId            String?                  @map("source_blob_id") @db.Uuid
+  jobId                   String?                  @map("job_id") @db.Uuid
+  profile                 LibraryProcessingProfile
+  profileVersion          String                   @map("profile_version") @db.Text
+  status                  LibraryProcessingStatus  @default(queued)
+  stage                   LibraryProcessingStage   @default(queued)
+  phaseOrder              Int                      @default(0) @map("phase_order")
+  progressCurrent         Int                      @default(0) @map("progress_current")
+  progressTotal           Int                      @default(1) @map("progress_total")
+  statusMessage           String?                  @map("status_message") @db.Text
+  retryCount              Int                      @default(0) @map("retry_count")
+  isCurrent               Boolean                  @default(false) @map("is_current")
+  checkpoint              Json                     @default("{}") @db.JsonB
+  parserKey               String?                  @map("parser_key") @db.Text
+  artifactLocation        String?                  @map("artifact_location") @db.Text
+  resultSummary           String?                  @map("result_summary") @db.Text
+  errorMessage            String?                  @map("error_message") @db.Text
+  publishedAt             DateTime?                @map("published_at") @db.Timestamptz(3)
+  publishedAssertionCount Int                      @default(0) @map("published_assertion_count")
+  publishedObjectCount    Int                      @default(0) @map("published_object_count")
+  createdAt               DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  completedAt             DateTime?                @map("completed_at") @db.Timestamptz(3)
+
+  libraryNode LibraryNode               @relation(fields: [libraryNodeId], references: [id], onDelete: Cascade)
+  sourceBlob  LibrarySourceBlob?        @relation(fields: [sourceBlobId], references: [id], onDelete: Restrict)
+  job         LibraryCompilationJob?    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  document    LibrarySourceDocument?
+  assessment  LibraryCatalogAssessment?
+
+  @@unique([jobId, sourceBlobId])
+  @@index([libraryNodeId, createdAt])
+  @@index([status, createdAt])
+  @@index([jobId, phaseOrder, status])
+  @@index([sourceBlobId, isCurrent])
+  @@map("library_source_processing_runs")
+}
+
+/// 轻量编目或粗编译的带来源候选；Global Object 归并成功后会发布为 Shared Brain Assertion。
+model LibraryCatalogAssessment {
+  id                   String   @id @default(uuid()) @db.Uuid
+  processingRunId      String   @unique @map("processing_run_id") @db.Uuid
+  sourceBlobId         String   @map("source_blob_id") @db.Uuid
+  representativeNodeId String   @map("representative_node_id") @db.Uuid
+  summary              String   @db.Text
+  previewExcerpt       String?  @map("preview_excerpt") @db.Text
+  referenceCandidates  Json     @default("[]") @map("reference_candidates") @db.JsonB
+  assertionCandidates  Json     @default("[]") @map("assertion_candidates") @db.JsonB
+  objectCandidates     Json     @default("[]") @map("object_candidates") @db.JsonB
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  processingRun      LibrarySourceProcessingRun @relation(fields: [processingRunId], references: [id], onDelete: Cascade)
+  sourceBlob         LibrarySourceBlob          @relation(fields: [sourceBlobId], references: [id], onDelete: Restrict)
+  representativeNode LibraryNode                @relation(fields: [representativeNodeId], references: [id], onDelete: Cascade)
+
+  @@index([sourceBlobId])
+  @@map("library_catalog_assessments")
+}
+
+/// 经过解析的资料库文档骨架；后续 SourceBlock 迁移后将直接挂到这里。
+model LibrarySourceDocument {
+  id                String   @id @default(uuid()) @db.Uuid
+  processingRunId   String   @unique @map("processing_run_id") @db.Uuid
+  title             String   @db.Text
+  parser            String   @db.Text
+  structureMetadata Json     @default("{}") @map("structure_metadata") @db.JsonB
+  blockCount        Int      @default(0) @map("block_count")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  processingRun LibrarySourceProcessingRun @relation(fields: [processingRunId], references: [id], onDelete: Cascade)
+
+  @@map("library_source_documents")
+}
+
+/// AI 对资料库移动与处理档位的轻量建议；批准前不改变文件树。
+model LibraryPlan {
+  id            String            @id @default(uuid()) @db.Uuid
+  status        LibraryPlanStatus @default(pending)
+  reason        String            @db.Text
+  operations    Json              @db.JsonB
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  decidedAt     DateTime?         @map("decided_at") @db.Timestamptz(3)
+  appliedAt     DateTime?         @map("applied_at") @db.Timestamptz(3)
+  failureReason String?           @map("failure_reason") @db.Text
+
+  @@index([status, createdAt])
+  @@map("library_plans")
+}
+
+/// Echo 当前 Shared Brain 快照。cold-start、粗编译、轻量编目和对话 Assertion 共用同一个活跃 Compilation。
 model MemoryCompilation {
   id                           String   @id @default(uuid()) @db.Uuid
   schemaVersion                String   @map("schema_version") @db.Text
@@ -99,6 +345,11 @@ model MemorySourceRegion {
   reviewAdditionCount Int      @map("review_addition_count")
   modelCalls          Int      @map("model_calls")
   createdAt           DateTime @map("created_at")
+  /// 多文件 Shared Brain 中的真实来源元数据；历史单文档 Compilation 可为 null。
+  sourcePath          String?  @map("source_path") @db.Text
+  sourceTitle         String?  @map("source_title") @db.Text
+  sourceSha256        String?  @map("source_sha256") @db.Text
+  sourceParser        String?  @map("source_parser") @db.Text
 
   compilation     MemoryCompilation            @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   objectFragments MemorySourceObjectFragment[]
@@ -106,6 +357,7 @@ model MemorySourceRegion {
 
   @@unique([compilationId, sourceNodeId])
   @@index([label])
+  @@index([sourceSha256])
   @@map("memory_source_regions")
 }
 
@@ -296,7 +548,7 @@ model ChatConversation {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  actor    MemoryActor  @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  actor    MemoryActor   @relation(fields: [actorId], references: [id], onDelete: Cascade)
   messages ChatMessage[]
 
   @@map("chat_conversations")
@@ -351,11 +603,10 @@ model MemoryAssertionSourceBlock {
 
 /// 完整 cold-start package 最终导入的 Global Object；Resolver runtime 不读写数据库。
 model MemoryGlobalObject {
-  id                      String @id @default(uuid()) @db.Uuid
-  compilationId           String @map("compilation_id") @db.Uuid
-  globalObjectKey         String @map("global_object_key") @db.Text
-  canonicalName           String @map("canonical_name") @db.Text
-  identitySummaryMarkdown String @map("identity_summary_markdown") @db.Text
+  id              String @id @default(uuid()) @db.Uuid
+  compilationId   String @map("compilation_id") @db.Uuid
+  globalObjectKey String @map("global_object_key") @db.Text
+  canonicalName   String @map("canonical_name") @db.Text
 
   compilation            MemoryCompilation                          @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   surfaceMemberships     MemoryGlobalObjectSurfaceMembership[]

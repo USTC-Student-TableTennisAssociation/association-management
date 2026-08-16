@@ -183,7 +183,6 @@ def global_object_retrieval_text(value: ActiveGlobalObject) -> str:
     forms = _unique(item.surface_form for item in value.surface_atoms)
     if forms:
         parts.append("来源名称：" + "｜".join(forms))
-    parts.append("身份摘要：" + value.identity_summary_markdown)
     if value.assertions:
         parts.append(
             "相关叙述：\n"

@@ -41,7 +41,6 @@ function globalObjects() {
       id: "global-event",
       globalObjectKey: "global-object-event",
       canonicalName: "继往开来",
-      identitySummaryMarkdown: "持续存在的校园活动。",
       chatMentions: [{ surfaceForm: "传统赛" }],
       surfaceMemberships: [
         {
@@ -64,7 +63,6 @@ function globalObjects() {
       id: "global-student-union",
       globalObjectKey: "global-object-student-union",
       canonicalName: "学生会",
-      identitySummaryMarkdown: "学生组织。",
       chatMentions: [],
       surfaceMemberships: [
         {
@@ -80,7 +78,6 @@ function globalObjects() {
       id: "global-club",
       globalObjectKey: "global-object-club",
       canonicalName: "社团",
-      identitySummaryMarkdown: "学生社团。",
       chatMentions: [],
       surfaceMemberships: [
         {

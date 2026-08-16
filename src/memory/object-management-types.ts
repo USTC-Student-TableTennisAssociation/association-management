@@ -72,7 +72,6 @@ export type ObjectIdentityInspection = {
   object: {
     id: string;
     canonicalName: string;
-    identitySummaryMarkdown: string;
   };
   surfaces: ObjectIdentitySurface[];
   references: ObjectIdentityReference[];

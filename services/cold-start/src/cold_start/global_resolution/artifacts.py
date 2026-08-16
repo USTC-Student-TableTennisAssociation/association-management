@@ -56,7 +56,11 @@ class GlobalResolutionPaths:
     artifact_json: Path
 
 
-def load_source_compilation(path: Path) -> SourceCompilationDataset:
+def load_source_compilation(
+    path: Path,
+    *,
+    allow_partial: bool = False,
+) -> SourceCompilationDataset:
     resolved = path.expanduser().resolve()
     snapshot_path = resolved / "source-semantics-full.json" if resolved.is_dir() else resolved
     directory = snapshot_path.parent
@@ -65,8 +69,13 @@ def load_source_compilation(path: Path) -> SourceCompilationDataset:
     snapshot = FullSourceSemanticSnapshot.model_validate_json(
         snapshot_path.read_text(encoding="utf-8")
     )
-    if [item.region_node_id for item in snapshot.sources] != snapshot.source_node_ids:
-        raise ValueError("source-semantics-full.json 的 sources 顺序与 source_node_ids 不一致")
+    compiled_ids = [item.region_node_id for item in snapshot.sources]
+    expected_ids = (
+        snapshot.source_node_ids[: len(compiled_ids)] if allow_partial else snapshot.source_node_ids
+    )
+    if compiled_ids != expected_ids:
+        label = "可用前缀" if allow_partial else "sources"
+        raise ValueError(f"source-semantics-full.json 的 {label} 顺序与 source_node_ids 不一致")
 
     blocks_path = _find_upward(directory, "parsed-blocks.json")
     raw_blocks = json.loads(blocks_path.read_text(encoding="utf-8"))
@@ -301,7 +310,6 @@ def store_registry(state: RegistryState) -> list[StoredGlobalObject]:
             global_object_id=item.global_object_id,
             global_object_key=item.global_object_key,
             canonical_name=item.canonical_name,
-            identity_summary_markdown=item.identity_summary_markdown,
             surface_atom_ids=[atom.atom_id for atom in item.surface_atoms],
             reference_atom_ids=[atom.atom_id for atom in item.reference_atoms],
         )
@@ -338,7 +346,6 @@ def rebuild_registry(
                 global_object_id=item.global_object_id,
                 global_object_key=item.global_object_key,
                 canonical_name=item.canonical_name,
-                identity_summary_markdown=item.identity_summary_markdown,
                 surface_atoms=surfaces,
                 reference_atoms=references,
                 assertions=[dataset.assertions[item_id] for item_id in assertion_ids],

@@ -350,8 +350,7 @@ Assertion，并直接支持桥接谓词；`supporting_child_node_ids` 必须至�
     "temporal_scope": {
       "kind": "point|range|open_range|general|unknown",
       "display": "...", "start": null, "end": null,
-      "precision": "day|month|semester|academic_year|year|unspecified",
-      "confidence": "high|medium|low"
+      "precision": "day|month|semester|academic_year|year|unspecified"
     },
     "temporal_basis_markdown": "...",
     "reason": "..."

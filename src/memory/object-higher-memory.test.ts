@@ -87,7 +87,6 @@ beforeEach(() => {
         id: objectId,
         globalObjectKey: "test-club",
         canonicalName: "测试社团",
-        identitySummaryMarkdown: "测试社团 identity",
       }]),
     },
     memoryObjectHigherMemory: { findMany: vi.fn().mockResolvedValue([]) },

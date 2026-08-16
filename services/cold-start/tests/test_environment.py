@@ -27,6 +27,7 @@ def test_finds_parent_env_and_preserves_system_environment(
             "AI_READ_TIMEOUT_SECONDS=720\n"
             "AI_MAX_RETRIES=1\n"
             "AI_REQUESTS_PER_MINUTE=17\n"
+            "COLD_START_MODEL_MAX_IN_FLIGHT=18\n"
             "AI_STREAM_PROGRESS_INTERVAL_SECONDS=7\n"
         ),
         encoding="utf-8",
@@ -37,6 +38,7 @@ def test_finds_parent_env_and_preserves_system_environment(
         "AI_READ_TIMEOUT_SECONDS",
         "AI_MAX_RETRIES",
         "AI_REQUESTS_PER_MINUTE",
+        "COLD_START_MODEL_MAX_IN_FLIGHT",
         "AI_STREAM_PROGRESS_INTERVAL_SECONDS",
     ):
         monkeypatch.delenv(variable, raising=False)
@@ -51,6 +53,7 @@ def test_finds_parent_env_and_preserves_system_environment(
     assert model_settings.read_timeout_seconds == 720
     assert model_settings.max_retries == 1
     assert model_settings.requests_per_minute == 17
+    assert model_settings.max_in_flight == 18
     assert model_settings.stream_progress_interval_seconds == 7
 
 
@@ -67,6 +70,24 @@ def test_reads_region_parallelism_from_environment(
     settings = ExplorationSettings.from_environment()
 
     assert settings.max_parallel_regions == 6
+
+
+def test_parallel_worker_defaults_are_eighteen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in (
+        "COLD_START_MAX_PARALLEL_REGIONS",
+        "COLD_START_MAX_PARALLEL_COMPILATIONS",
+        "COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS",
+        "COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert ExplorationSettings.from_environment().max_parallel_regions == 18
+    compilation = CompilationSettings.from_environment()
+    assert compilation.max_parallel_sources == 18
+    assert compilation.max_parallel_parents == 18
+    assert ActivityViewSettings.from_environment().max_parallel_groups == 18
 
 
 def test_reads_compilation_parallelism_from_environment(

@@ -25,6 +25,7 @@ from cold_start.compilation import (
 )
 from cold_start.compilation.source_semantics import (
     FullSourceSemanticRunner,
+    FullSourceSemanticSnapshot,
     SourceSemanticCompiler,
     create_full_source_semantic_paths,
     create_source_semantic_paths,
@@ -38,6 +39,7 @@ from cold_start.config import (
     ModelSettings,
 )
 from cold_start.document import MinerUPdfLoader
+from cold_start.document.parse_cache import parse_document_to_cache
 from cold_start.embedding_server import (
     DEFAULT_EMBEDDING_MODEL_REVISION,
     serve_embeddings,
@@ -119,6 +121,24 @@ def build_parser() -> argparse.ArgumentParser:
     explore = subparsers.add_parser("explore", help="运行单 PDF 全局勘探")
     _add_pdf_arguments(explore)
     _add_model_arguments(explore)
+
+    parse_document = subparsers.add_parser(
+        "parse-document",
+        help="只运行 MinerU 来源解析并写入可复用缓存",
+    )
+    parse_document.add_argument("--source", type=Path, required=True)
+    parse_document.add_argument(
+        "--source-suffix",
+        required=True,
+        choices=("pdf", "docx", "pptx", "xlsx"),
+        help="对象存储文件没有扩展名，因此显式传入原格式",
+    )
+    parse_document.add_argument("--output", type=Path, required=True)
+    parse_document.add_argument(
+        "--env-file",
+        type=Path,
+        help="显式指定环境文件；不指定时从当前目录向上查找 .env",
+    )
 
     compile_leaf = subparsers.add_parser(
         "compile-leaf",
@@ -210,6 +230,31 @@ def build_parser() -> argparse.ArgumentParser:
         "--resume",
         type=Path,
         help="继续已有全部来源语义编译目录，按来源和阶段复用断点",
+    )
+    compile_sources.add_argument(
+        "--resolve-progressively",
+        action="store_true",
+        help="稳定顺序的首个来源完成后即开始 Global Object Resolution",
+    )
+    compile_sources.add_argument(
+        "--global-resume",
+        type=Path,
+        help="继续与来源语义编译同步的 Global Resolution 目录",
+    )
+    compile_sources.add_argument(
+        "--embedding-model",
+        help="渐进 Global Resolution 使用的本地 BGE-M3 目录或模型名",
+    )
+    compile_sources.add_argument(
+        "--no-bge",
+        action="store_true",
+        help="渐进 Global Resolution 只使用词面召回",
+    )
+    compile_sources.add_argument(
+        "--candidate-limit",
+        type=int,
+        default=8,
+        help="渐进 Global Resolution 每个 Fragment 的普通候选上限",
     )
     _add_model_arguments(compile_sources)
 
@@ -421,6 +466,23 @@ async def _run_explore(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_parse_document(args: argparse.Namespace) -> int:
+    progress = ConsoleProgressReporter()
+    _report_environment(args, progress)
+    result = parse_document_to_cache(
+        source_path=args.source,
+        source_suffix=args.source_suffix,
+        cache_directory=args.output,
+        progress=lambda message: progress.report("解析", message),
+    )
+    state = "复用缓存" if result.reused else "新建缓存"
+    progress.report(
+        "完成",
+        f"{state}；{result.parser_name}；{result.parsed_document_markdown}",
+    )
+    return 0
+
+
 async def _run_compile_leaf(args: argparse.Namespace) -> int:
     progress = ConsoleProgressReporter()
     _report_environment(args, progress)
@@ -581,6 +643,10 @@ async def _run_compile_source(args: argparse.Namespace) -> int:
 async def _run_compile_sources(args: argparse.Namespace) -> int:
     progress = ConsoleProgressReporter()
     _report_environment(args, progress)
+    if args.global_resume and not args.resolve_progressively:
+        raise ValueError("--global-resume 只能与 --resolve-progressively 一起使用")
+    if args.candidate_limit < 1:
+        raise ValueError("candidate-limit 必须大于 0")
     model_settings = ModelSettings.from_environment(
         model=args.model,
         api_base_url=args.api_base_url,
@@ -598,6 +664,13 @@ async def _run_compile_sources(args: argparse.Namespace) -> int:
         if args.resume
         else create_full_source_semantic_paths(args.run)
     )
+    global_paths = None
+    if args.resolve_progressively:
+        global_paths = (
+            open_global_resolution_paths(args.global_resume)
+            if args.global_resume
+            else create_global_resolution_paths(paths.directory)
+        )
     progress.report(
         "模型",
         (
@@ -617,6 +690,15 @@ async def _run_compile_sources(args: argparse.Namespace) -> int:
             else f"已创建全部来源语义编译目录 {paths.directory}"
         ),
     )
+    if global_paths is not None:
+        progress.report(
+            "产物",
+            (
+                f"继续 Global Resolution 目录 {global_paths.directory}"
+                if args.global_resume
+                else f"已创建 Global Resolution 目录 {global_paths.directory}"
+            ),
+        )
     progress.report("模型", f"模型输入、工具参数和思考将实时保存到 {paths.model_streams}")
     model = OpenAICompatibleChatModel(
         model_settings,
@@ -625,15 +707,95 @@ async def _run_compile_sources(args: argparse.Namespace) -> int:
         show_model_stream=args.show_model_stream,
     )
     try:
-        await FullSourceSemanticRunner(
-            model=model,
-            exploration=exploration,
-            blocks=blocks,
-            paths=paths,
-            max_parallel_sources=compilation_settings.max_parallel_sources,
-            source_node_ids=args.source_id,
-            progress=progress,
-        ).run()
+        if global_paths is None:
+            await FullSourceSemanticRunner(
+                model=model,
+                exploration=exploration,
+                blocks=blocks,
+                paths=paths,
+                max_parallel_sources=compilation_settings.max_parallel_sources,
+                source_node_ids=args.source_id,
+                progress=progress,
+            ).run()
+        else:
+            available: asyncio.Queue[tuple[FullSourceSemanticSnapshot, bool]] = asyncio.Queue()
+
+            async def on_available(
+                snapshot: FullSourceSemanticSnapshot,
+                complete: bool,
+            ) -> None:
+                await available.put((snapshot, complete))
+
+            async def compile_sources() -> None:
+                await FullSourceSemanticRunner(
+                    model=model,
+                    exploration=exploration,
+                    blocks=blocks,
+                    paths=paths,
+                    max_parallel_sources=compilation_settings.max_parallel_sources,
+                    source_node_ids=args.source_id,
+                    on_available=on_available,
+                    progress=progress,
+                ).run()
+
+            async def resolve_available() -> None:
+                assert global_paths is not None
+                progress_snapshot = paths.directory / "source-semantics-progress.json"
+                state = None
+                embedder = (
+                    None
+                    if args.no_bge
+                    else BgeM3Embedder(
+                        ExplorationSettings.from_environment(
+                            embedding_model=args.embedding_model
+                        ).embedding_model,
+                        progress,
+                    )
+                )
+                retriever = GlobalObjectCandidateRetriever(
+                    embedder=embedder,
+                    candidate_limit=args.candidate_limit,
+                )
+                while True:
+                    raw_snapshot, complete = await available.get()
+                    progress_snapshot.write_text(
+                        raw_snapshot.model_dump_json(indent=2),
+                        encoding="utf-8",
+                    )
+                    dataset = load_source_compilation(
+                        progress_snapshot,
+                        allow_partial=not complete,
+                    )
+                    if state is None:
+                        state = (
+                            load_working_registry(global_paths, dataset)
+                            if args.global_resume
+                            else initial_registry(dataset)
+                        )
+                        if not args.global_resume:
+                            write_working_registry(global_paths, dataset, state)
+                    progress.report(
+                        "全局对象·流水线",
+                        (
+                            f"已就绪 {len(dataset.regions)}/"
+                            f"{len(dataset.source_node_ids)} 个 SourceRegion；"
+                            f"从 {state.next_source_region_ordinal} 继续"
+                        ),
+                    )
+                    state = await GlobalObjectResolverRunner(
+                        model=model,
+                        dataset=dataset,
+                        paths=global_paths,
+                        state=state,
+                        retriever=retriever,
+                        progress=progress,
+                    ).run_all(final=complete)
+                    if complete:
+                        return
+
+            async with asyncio.TaskGroup() as tasks:
+                tasks.create_task(compile_sources())
+                tasks.create_task(resolve_available())
     finally:
         await model.aclose()
     progress.report("完成", f"全部来源语义编译产物：{paths.directory}")
@@ -828,6 +990,8 @@ def main() -> None:
             return
         if args.command == "explore":
             raise SystemExit(asyncio.run(_run_explore(args)))
+        if args.command == "parse-document":
+            raise SystemExit(_run_parse_document(args))
         if args.command == "compile-leaf":
             raise SystemExit(asyncio.run(_run_compile_leaf(args)))
         if args.command == "compile":

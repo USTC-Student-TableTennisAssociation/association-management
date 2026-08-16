@@ -14,6 +14,9 @@ import {
   compactChatRequestMessages,
   finalStepMessageText,
 } from "@/ai/ui-message-text";
+import { LibraryWorkspace } from "@/library/components/library-workspace";
+import { LibraryProposalCard } from "@/library/components/library-proposal-card";
+import { CompilationWorkspace } from "@/library/components/compilation-workspace";
 import type {
   MemoryChannelTrace,
   StructuredSeedMap,
@@ -562,6 +565,9 @@ function ChatSurface({
             const objectChangeProposals = message.parts.filter(
               (part) => part.type === "data-objectChangeProposal",
             );
+            const libraryProposals = message.parts.filter(
+              (part) => part.type === "data-libraryProposal",
+            );
             const viewReferences = message.parts
               .filter((part) => part.type === "data-viewReferences")
               .at(-1)?.data.references ?? [];
@@ -605,6 +611,12 @@ function ChatSurface({
                   ))}
                   {objectChangeProposals.map((part) => (
                     <ObjectChangeProposalCard
+                      key={part.data.id}
+                      proposal={part.data}
+                    />
+                  ))}
+                  {libraryProposals.map((part) => (
+                    <LibraryProposalCard
                       key={part.data.id}
                       proposal={part.data}
                     />
@@ -820,7 +832,8 @@ function SourceDocumentDialog({
 
 export default function Home() {
   const [input, setInput] = useState("");
-  const [activeWorkspace, setActiveWorkspace] = useState<"chat" | BusinessViewKey>(SOCIETY_INFORMATION_VIEW);
+  const [activeWorkspace, setActiveWorkspace] = useState<"chat" | "library" | "compilation" | BusinessViewKey>(SOCIETY_INFORMATION_VIEW);
+  const [activeLibraryFolderId, setActiveLibraryFolderId] = useState<string>();
   const [activePresentation, setActivePresentation] = useState<BusinessViewPresentation>("overview");
   const [semanticViewFocus, setSemanticViewFocus] = useState<SemanticViewFocus>();
   const [previewProposal, setPreviewProposal] = useState<ViewProposalPresentation>();
@@ -882,7 +895,9 @@ export default function Home() {
 
   const pageContext: ChatPageContext = activeWorkspace === "chat"
     ? { activePresentation: "full_chat" }
-    : { activeViewKey: activeWorkspace, activePresentation };
+    : activeWorkspace === "library" || activeWorkspace === "compilation"
+      ? { activePresentation: "library", activeFolderId: activeLibraryFolderId }
+      : { activeViewKey: activeWorkspace, activePresentation };
 
   function submit(content: string) {
     const text = content.trim();
@@ -901,6 +916,18 @@ export default function Home() {
   function openBusinessView(viewKey: BusinessViewKey) {
     setActiveWorkspace(viewKey);
     setActivePresentation("overview");
+    setSemanticViewFocus(undefined);
+    setPreviewProposal(undefined);
+  }
+
+  function openLibrary() {
+    setActiveWorkspace("library");
+    setSemanticViewFocus(undefined);
+    setPreviewProposal(undefined);
+  }
+
+  function openCompilation() {
+    setActiveWorkspace("compilation");
     setSemanticViewFocus(undefined);
     setPreviewProposal(undefined);
   }
@@ -970,6 +997,20 @@ export default function Home() {
           >
             <span aria-hidden="true">✦</span> AI 对话
           </button>
+          <button
+            type="button"
+            onClick={openLibrary}
+            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === "library" ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
+          >
+            <span aria-hidden="true">🗂️</span> 资料库
+          </button>
+          <button
+            type="button"
+            onClick={openCompilation}
+            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === "compilation" ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
+          >
+            <span aria-hidden="true">▷</span> 基础编译
+          </button>
         </div>
         <div className="mt-8 border-t border-white/15 pt-6">
           <p className="px-3 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-100/55">业务视角</p>
@@ -1004,6 +1045,24 @@ export default function Home() {
               </header>
               <ChatSurface messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="full-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onPreviewProposal={(proposal) => showProposalChange(proposal, 0)} />
             </div>
+          ) : activeWorkspace === "library" ? (
+            <LibraryWorkspace
+              initialFolderId={activeLibraryFolderId}
+              onFolderChange={setActiveLibraryFolderId}
+              onOpenAI={() => setDrawerOpen(true)}
+              onAskAI={(prompt) => {
+                setInput(prompt);
+                setDrawerOpen(true);
+              }}
+            />
+          ) : activeWorkspace === "compilation" ? (
+            <CompilationWorkspace
+              onOpenLibrary={openLibrary}
+              onAskAI={(prompt) => {
+                setInput(prompt);
+                setDrawerOpen(true);
+              }}
+            />
           ) : (
             <SemanticViewWorkspace
               key={activeWorkspace}
@@ -1034,7 +1093,11 @@ export default function Home() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">当前上下文</p>
                 <h2 className="mt-1 font-semibold text-zinc-950">
-                  {activeWorkspace === ACTIVITY_OPERATIONS_VIEW ? "活动运营" : "社团信息"} · {activePresentation === "overview" ? "概览" : activePresentation === "playbook" ? "操作手册" : "卡片"}
+                  {activeWorkspace === "library"
+                    ? "资料库 · 当前文件夹"
+                    : activeWorkspace === "compilation"
+                      ? "资料库 · 基础编译"
+                    : `${activeWorkspace === ACTIVITY_OPERATIONS_VIEW ? "活动运营" : "社团信息"} · ${activePresentation === "overview" ? "概览" : activePresentation === "playbook" ? "操作手册" : "卡片"}`}
                 </h2>
                 <p className="mt-1 text-xs text-zinc-500">AI 仍可使用完整 Shared Brain。</p>
               </div>

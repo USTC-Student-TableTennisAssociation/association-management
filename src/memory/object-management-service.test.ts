@@ -20,7 +20,6 @@ function objectRow(options?: { withCard?: boolean }) {
     id: objectId,
     compilationId,
     canonicalName: "项目负责人",
-    identitySummaryMarkdown: "测试身份",
     surfaceMemberships: [{
       objectFragmentId: fragmentId,
       surfaceFormOrdinal: 1,

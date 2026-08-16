@@ -156,7 +156,6 @@ def _turn(
                     "start": None,
                     "end": None,
                     "precision": "unspecified",
-                    "confidence": "low",
                 },
                 "temporal_basis_markdown": "原文和上下文没有给出可定位时间。",
                 "uncertainty_markdown": None,

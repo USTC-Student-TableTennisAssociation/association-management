@@ -31,7 +31,6 @@ def _unknown_time() -> dict[str, object]:
         "start": None,
         "end": None,
         "precision": "unspecified",
-        "confidence": "low",
     }
 
 

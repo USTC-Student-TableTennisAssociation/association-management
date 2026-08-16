@@ -416,7 +416,6 @@ describe("Chat Assertion capture agent", () => {
       compilationId,
       canonicalName: "雷岳鑫",
       globalObjectKey: expect.stringMatching(/^chat-object:/),
-      identitySummaryMarkdown: expect.stringContaining("具体身份与组织事实见关联 Assertion"),
     });
     expect(result.affectedObjectIds).toContain(createdObject.id);
     expect(transaction.$queryRaw).toHaveBeenCalledTimes(1);
@@ -539,7 +538,6 @@ describe("Chat Assertion capture agent", () => {
       object: {
         id: objectId,
         canonicalName: "项目负责人",
-        identitySummaryMarkdown: "测试",
       },
       surfaces: [{
         id: `document:${pollutedFragmentId}:1`,

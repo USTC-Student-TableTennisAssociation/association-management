@@ -168,7 +168,6 @@ class ActiveGlobalObject(StrictModel):
     global_object_id: str = Field(min_length=1)
     global_object_key: str = Field(min_length=1)
     canonical_name: str = Field(min_length=1, max_length=300)
-    identity_summary_markdown: str = Field(min_length=1, max_length=5_000)
     surface_atoms: list[SurfaceAtom] = Field(default_factory=list)
     reference_atoms: list[ReferenceAtom] = Field(default_factory=list)
     assertions: list[AssertionEvidence] = Field(default_factory=list)
@@ -195,7 +194,6 @@ class StoredGlobalObject(StrictModel):
     global_object_id: str = Field(min_length=1)
     global_object_key: str = Field(min_length=1)
     canonical_name: str = Field(min_length=1, max_length=300)
-    identity_summary_markdown: str = Field(min_length=1, max_length=5_000)
     surface_atom_ids: list[str] = Field(default_factory=list)
     reference_atom_ids: list[str] = Field(default_factory=list)
 
@@ -239,7 +237,7 @@ class RegistryState(StrictModel):
 
 
 class GlobalResolutionWorking(StrictModel):
-    schema_version: Literal["global-resolution-working.v2"] = "global-resolution-working.v2"
+    schema_version: Literal["global-resolution-working.v3"] = "global-resolution-working.v3"
     source_semantics_schema_version: Literal["source-semantics-full.v9"]
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
@@ -248,7 +246,7 @@ class GlobalResolutionWorking(StrictModel):
 
 
 class GlobalResolutionArtifact(StrictModel):
-    schema_version: Literal["global-resolution.v2"] = "global-resolution.v2"
+    schema_version: Literal["global-resolution.v3"] = "global-resolution.v3"
     created_at: datetime
     source_semantics_schema_version: Literal["source-semantics-full.v9"]
     source_sha256: str = Field(min_length=1)
@@ -307,7 +305,7 @@ class GlobalAssertionsArtifact(StrictModel):
     schema_version: Literal["global-assertions.v3"] = "global-assertions.v3"
     created_at: datetime
     source_semantics_schema_version: Literal["source-semantics-full.v9"]
-    global_resolution_schema_version: Literal["global-resolution.v2"]
+    global_resolution_schema_version: Literal["global-resolution.v3"]
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
     assertions: list[GlobalizedAssertion]
@@ -344,20 +342,19 @@ class ResolutionTarget(StrictModel):
     kind: ResolutionTargetKind
     global_object_id: str | None = Field(default=None, min_length=1)
     canonical_name: str | None = Field(default=None, min_length=1, max_length=300)
-    identity_summary_markdown: str | None = Field(default=None, min_length=1, max_length=5_000)
 
     @model_validator(mode="after")
     def validate_target(self) -> ResolutionTarget:
         if self.kind == "new":
             if self.global_object_id is not None:
                 raise ValueError("new target 不得预先提供 global_object_id")
-            if self.canonical_name is None or self.identity_summary_markdown is None:
-                raise ValueError("new target 必须提供 canonical_name/summary")
+            if self.canonical_name is None:
+                raise ValueError("new target 必须提供 canonical_name")
         else:
             if self.global_object_id is None:
                 raise ValueError("existing target 必须提供 global_object_id")
-            if self.canonical_name is not None or self.identity_summary_markdown is not None:
-                raise ValueError("existing target 保留当前 canonical/summary")
+            if self.canonical_name is not None:
+                raise ValueError("existing target 保留当前 canonical name")
         return self
 
 
