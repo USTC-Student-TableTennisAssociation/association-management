@@ -74,7 +74,6 @@ import {
   type AmbientHigherMemorySnapshot,
 } from "@/memory/ambient-higher-memory";
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
-import { createHigherMemoryQueueTool } from "@/memory/higher-memory-queue";
 import { getMemoryRetriever } from "@/memory/retriever";
 import { createObjectManagementToolset } from "@/memory/object-management-toolset";
 import { objectChangeProposalPresentationSchema } from "@/memory/object-management-types";
@@ -616,6 +615,7 @@ export async function POST(request: Request) {
       let libraryQueryTruncated: boolean | undefined;
       let libraryMatchedCount = 0;
       const sourceLayersUsed = new Set<string>();
+      const missingViewHigherMemoryKeys = new Set<"society_information" | "activity_operations">();
       const mainModelCalls: ChatMainModelCall[] = [];
       const mainToolExecutions: ChatMainToolExecution[] = [];
       const sharedResultBudget = new ToolResultTokenBudget(exploreResultTokenBudget);
@@ -765,13 +765,6 @@ export async function POST(request: Request) {
           objectManagementToolset.registerPublishedMemory(captureResult);
         },
       });
-      const higherMemoryQueueToolset = createHigherMemoryQueueTool({
-        trace: debugTrace,
-        hasObject: (globalObjectId) =>
-          evidence.hasObject(globalObjectId) ||
-          semanticViewToolset.hasInspectedObject(globalObjectId) ||
-          objectManagementToolset.hasInspectedObject(globalObjectId),
-      });
       const knownArtifactNodeIds = new Set<string>();
       const gatewayTools = createCapabilityGatewayTools(openedCapabilities, {
         openBusinessContext: async ({ viewKey, focus, targetHints }) => {
@@ -779,6 +772,7 @@ export async function POST(request: Request) {
             semanticViewToolset.prefetchView(viewKey),
             loadViewHigherMemory(viewKey),
           ]);
+          if (!viewHigherMemory) missingViewHigherMemoryKeys.add(viewKey);
           const businessContext = await buildBusinessContext({
             snapshot,
             focus,
@@ -803,7 +797,7 @@ export async function POST(request: Request) {
             formalCardMissing: businessContext.formalCardMissing,
             unresolvedAspects: businessContext.unresolvedAspects,
             next: businessContext.unresolvedAspects.length
-              ? "如果这些缺口会影响回答，下一步使用 expandEvidence；否则直接回答。"
+              ? "如果缺口会影响回答，使用 expandEvidence；如果用户确认或后续可靠证据已经足以填补一个稳定、可复用的正式 View 缺口，还应使用 openActions(business_view) 生成待审批 Proposal；否则直接回答。"
               : "当前 View + Object Higher Memory 已没有显式缺口，优先直接回答。",
           };
         },
@@ -1058,11 +1052,28 @@ export async function POST(request: Request) {
               }
             }
           }
+          const semanticToolOutput = ["searchMemory", "expandEvidence", "followObject"]
+              .includes(toolName)
+            ? { note: "完整合并结果见本轮 retrieval snapshot。" }
+            : toolName === "openBusinessContext" && objectValue(output)
+              ? (() => {
+                  const businessResult = objectValue(output)!;
+                  const view = objectValue(businessResult.view);
+                  return {
+                    viewKey: view?.viewKey,
+                    viewHigherMemory: businessResult.viewHigherMemory,
+                    relevantCards: businessResult.relevantCards,
+                    formalCardMissing: businessResult.formalCardMissing,
+                    unresolvedAspects: businessResult.unresolvedAspects,
+                    next: businessResult.next,
+                  };
+                })()
+              : output;
           mainToolExecutions.push({
             toolCallId: event.toolCall.toolCallId,
             toolName: event.toolCall.toolName,
-            input: debugJson(event.toolCall.input),
-            output: debugJson(output),
+            input: event.toolCall.input,
+            output: semanticToolOutput,
             success: event.toolOutput.type === "tool-result",
           });
           await debugTrace.appendSection(
@@ -1127,7 +1138,6 @@ export async function POST(request: Request) {
           const assertionQueueDecision = assertionQueueToolset.decision();
           const foregroundAssertionDecision = assertionQueueToolset.foregroundDecision();
           const foregroundAssertionResult = assertionQueueToolset.foregroundResult();
-          const higherMemoryQueueDecision = higherMemoryQueueToolset.decision();
           const handoffCall = steps.at(-1)?.toolCalls.find((call) =>
             call.toolName === TURN_HANDOFF_TOOL
           );
@@ -1153,10 +1163,27 @@ export async function POST(request: Request) {
           const semanticContext = {
             conversation: semanticConversation.slice(-8),
             systemInstruction: "",
+            pageContext,
             modelCalls: [],
-            toolExecutions: [],
+            toolExecutions: mainToolExecutions,
             finalAnswer: text,
           };
+          const consolidationToolNames = new Set([
+            "openBusinessContext",
+            "openArtifacts",
+            "expandEvidence",
+            "searchMemory",
+            "followObject",
+            "readSourceDocument",
+            "openArtifactKnowledge",
+            "proposeViewChange",
+            "proposeObjectChange",
+            "proposeLibraryPlan",
+          ]);
+          const structuralConsolidationNeeded = mainToolExecutions.some((execution) =>
+            execution.success && consolidationToolNames.has(execution.toolName)
+          );
+          const consolidationNeeded = reviewNeeded || structuralConsolidationNeeded;
           const automaticWritebackDecision = !foregroundAssertionResult && reviewNeeded
             ? {
                 reason: candidateQuotes.length
@@ -1181,6 +1208,17 @@ export async function POST(request: Request) {
               retrieval: accumulatedRetrieval,
               queueDecision,
             });
+          const consolidationInput = latestUserMessage && consolidationNeeded
+            ? {
+                actorId: requestActor.id,
+                actorDisplayName: requestActor.displayName,
+                clientMessageId: latestUserMessage.id,
+                submittedAt: submittedAt.toISOString(),
+                timezone: requestTimezone,
+                semanticContext,
+                retrieval: accumulatedRetrieval,
+              }
+            : undefined;
           let writebackStatus = !reviewNeeded
             ? "skipped_by_handoff"
             : "eligible";
@@ -1235,8 +1273,8 @@ export async function POST(request: Request) {
           const hasForegroundWork = Boolean(
             latestUserMessage && foregroundAssertionResult && foregroundAssertionDecision,
           );
-          const hasHigherMemoryWork = Boolean(latestUserMessage && higherMemoryQueueDecision);
-          if (latestUserMessage && (hasBackgroundWork || hasForegroundWork || hasHigherMemoryWork)) {
+          const hasConsolidationWork = Boolean(consolidationInput);
+          if (latestUserMessage && (hasBackgroundWork || hasForegroundWork || hasConsolidationWork)) {
             memoryMaintenance.publish({
               ...(hasBackgroundWork && receiptKey
                 ? {
@@ -1254,17 +1292,9 @@ export async function POST(request: Request) {
                     },
                   }
                 : {}),
-              ...(higherMemoryQueueDecision
-                ? {
-                    higherMemory: {
-                      clientMessageId: latestUserMessage.id,
-                      submittedAt: submittedAt.toISOString(),
-                      timezone: requestTimezone,
-                      semanticContext,
-                      retrieval: accumulatedRetrieval,
-                      queueDecision: higherMemoryQueueDecision,
-                    },
-                  }
+              ...(consolidationInput ? { consolidation: consolidationInput } : {}),
+              ...(missingViewHigherMemoryKeys.size
+                ? { viewHigherMemoryKeys: [...missingViewHigherMemoryKeys] }
                 : {}),
             });
           } else {
@@ -1276,10 +1306,10 @@ export async function POST(request: Request) {
             );
             await debugTrace.appendSection(
               "Higher Memory 入口判断",
-              "结果：主回答模型未调用 `queueHigherMemoryMaintenance`。",
+              "结果：本轮没有新事实审查意图，也没有实际打开知识或业务能力，因此不启动 Consolidator。",
             );
             memoryMaintenance.cancel(
-              "本轮没有可执行的持久化 Assertion 任务，也没有 Higher Memory 维护意图。",
+              "本轮没有可执行的 Assertion 或 Higher Memory Consolidation 工作。",
             );
           }
           const answerSourceLayers = new Set<string>();

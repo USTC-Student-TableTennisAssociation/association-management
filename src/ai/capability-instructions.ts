@@ -19,7 +19,6 @@ export const knownRuntimeToolNames = [
   "openArtifactKnowledge",
   "proposeLibraryPlan",
   "queueChatAssertionCapture",
-  "queueHigherMemoryMaintenance",
 ] as const;
 
 function has(toolNames: ReadonlySet<string>, name: string): boolean {
