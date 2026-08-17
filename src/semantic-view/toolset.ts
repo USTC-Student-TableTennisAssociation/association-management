@@ -14,6 +14,7 @@ import {
 } from "@/semantic-view/service";
 import {
   type BusinessViewKey,
+  type SemanticViewReadSnapshot,
   type ViewProposalPresentation,
   viewChangePayloadSchema,
 } from "@/semantic-view/types";
@@ -27,6 +28,32 @@ export function createSemanticViewToolset(input: {
   const foregroundObjectIds = new Set<string>();
   const foregroundAssertionIds = new Set<string>();
   const viewReferences = createSemanticViewReferenceRegistry();
+  const snapshotByViewKey = new Map<
+    BusinessViewKey,
+    Promise<SemanticViewReadSnapshot>
+  >();
+
+  const readView = (viewKey: BusinessViewKey): Promise<SemanticViewReadSnapshot> => {
+    const existing = snapshotByViewKey.get(viewKey);
+    if (existing) return existing;
+    const pending = getSemanticView(viewKey).then((view) => {
+      inspectedViewKeys.add(viewKey);
+      for (const card of view.cards) {
+        if (card.objectId) inspectedObjectIds.add(card.objectId);
+        for (const slot of card.slots) {
+          for (const target of slot.targets) {
+            if (target.objectId) inspectedObjectIds.add(target.objectId);
+          }
+        }
+      }
+      return viewReferences.buildSnapshot(view);
+    }).catch((error) => {
+      snapshotByViewKey.delete(viewKey);
+      throw error;
+    });
+    snapshotByViewKey.set(viewKey, pending);
+    return pending;
+  };
 
   const tools = {
     readSemanticView: tool({
@@ -37,26 +64,14 @@ export function createSemanticViewToolset(input: {
         "isFullSnapshot=true 只表示没有检索遗漏；空字段只表示正式 View 当前没有记录，" +
         "不表示现实世界不存在。返回的 V# 可在最终回答中引用。",
       inputSchema: viewChangePayloadSchema.pick({ viewKey: true }),
-      execute: async ({ viewKey }) => {
-        const view = await getSemanticView(viewKey);
-        inspectedViewKeys.add(viewKey);
-        for (const card of view.cards) {
-          if (card.objectId) inspectedObjectIds.add(card.objectId);
-          for (const slot of card.slots) {
-            for (const target of slot.targets) {
-              if (target.objectId) inspectedObjectIds.add(target.objectId);
-            }
-          }
-        }
-        return viewReferences.buildSnapshot(view);
-      },
+      execute: async ({ viewKey }) => readView(viewKey),
     }),
 
     proposeViewChange: tool({
       description: [
         "把当前 Chat AI 已经形成的 Business View 修改判断表达成结构化 Proposal。",
         "这是一个笨工具：它不检索、不分析、不调用另一个模型，也绝不会修改正式 View。",
-        "调用前必须先读取 readSemanticView。用户在当前对话中明确确认的业务修改可以直接提议，",
+        "调用前必须已通过 openBusinessContext 或 readSemanticView 读取正式 View。用户在当前对话中明确确认的业务修改可以直接提议，",
         "不要求先检索 Assertion；如果建议来自 Shared Brain fallback，可以把本轮真实 Assertion ids",
         "作为本次 Proposal 的可选依据。source-backed Card 使用本轮检索到、或由前台 Chat → Assertion 成功发布后返回的 GlobalObject id；activity_operations",
         "的原生 Runtime Card 可以直接使用 name 建立业务身份。",
@@ -71,7 +86,7 @@ export function createSemanticViewToolset(input: {
       execute: async (payload) => {
         if (!inspectedViewKeys.has(payload.viewKey)) {
           throw new SemanticViewValidationError(
-            `提出 ${payload.viewKey} Proposal 前必须先调用 readSemanticView`,
+            `提出 ${payload.viewKey} Proposal 前必须先通过 openBusinessContext 或 readSemanticView 读取正式 View`,
           );
         }
         const evidence = input.evidence.snapshot();
@@ -105,6 +120,7 @@ export function createSemanticViewToolset(input: {
 
   return {
     tools,
+    prefetchView: readView,
     registerPublishedMemory: (result: ChatAssertionCaptureResult) => {
       for (const objectId of result.affectedObjectIds) foregroundObjectIds.add(objectId);
       for (const assertionId of result.publishedAssertionIds) {

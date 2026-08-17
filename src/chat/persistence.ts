@@ -13,6 +13,21 @@ export type ChatHistoryActor = {
   displayName: string;
 };
 
+export type ChatConversationSummary = {
+  id: string;
+  title: string;
+  archivedAt: string | null;
+  lastMessageAt: string;
+  createdAt: string;
+};
+
+export class ChatConversationAccessError extends Error {
+  constructor(message = "对话不存在或不属于当前用户。") {
+    super(message);
+    this.name = "ChatConversationAccessError";
+  }
+}
+
 const storedPartsSchema = z.array(
   z.object({ type: z.string().min(1) }).passthrough(),
 );
@@ -33,30 +48,141 @@ function jsonParts(parts: ClubChatMessage["parts"]): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(parts)) as Prisma.InputJsonValue;
 }
 
-async function ensureConversation(
+function summary(row: {
+  id: string;
+  title: string;
+  archivedAt: Date | null;
+  lastMessageAt: Date;
+  createdAt: Date;
+}): ChatConversationSummary {
+  return {
+    id: row.id,
+    title: row.title,
+    archivedAt: row.archivedAt?.toISOString() ?? null,
+    lastMessageAt: row.lastMessageAt.toISOString(),
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+async function requireOwnedConversation(
   database: Prisma.TransactionClient,
-  actor: ChatHistoryActor,
+  actorId: string,
+  conversationId: string,
 ) {
-  await database.memoryActor.upsert({
-    where: { id: actor.id },
-    update: { displayName: actor.displayName },
-    create: { id: actor.id, displayName: actor.displayName },
+  const conversation = await database.chatConversation.findFirst({
+    where: { id: conversationId, actorId },
+    select: {
+      id: true,
+      title: true,
+      archivedAt: true,
+      lastMessageAt: true,
+      createdAt: true,
+    },
   });
-  return database.chatConversation.upsert({
-    where: { actorId: actor.id },
-    update: {},
-    create: { actorId: actor.id },
-    select: { id: true },
+  if (!conversation) throw new ChatConversationAccessError();
+  return conversation;
+}
+
+export async function createChatConversation(
+  actor: ChatHistoryActor,
+  title = "新对话",
+  database: PrismaClient = getDatabase(),
+): Promise<ChatConversationSummary> {
+  const cleanTitle = title.trim().slice(0, 120) || "新对话";
+  const row = await database.chatConversation.create({
+    data: { actorId: actor.id, title: cleanTitle },
+    select: {
+      id: true,
+      title: true,
+      archivedAt: true,
+      lastMessageAt: true,
+      createdAt: true,
+    },
   });
+  return summary(row);
+}
+
+export async function listChatConversations(
+  actor: ChatHistoryActor,
+  database: PrismaClient = getDatabase(),
+): Promise<ChatConversationSummary[]> {
+  const rows = await database.chatConversation.findMany({
+    where: { actorId: actor.id, archivedAt: null },
+    orderBy: [{ lastMessageAt: "desc" }, { createdAt: "desc" }],
+    select: {
+      id: true,
+      title: true,
+      archivedAt: true,
+      lastMessageAt: true,
+      createdAt: true,
+    },
+  });
+  return rows.map(summary);
+}
+
+export async function updateChatConversation(input: {
+  actor: ChatHistoryActor;
+  conversationId: string;
+  title?: string;
+  archived?: boolean;
+}, database: PrismaClient = getDatabase()): Promise<ChatConversationSummary> {
+  return database.$transaction(async (transaction) => {
+    await requireOwnedConversation(transaction, input.actor.id, input.conversationId);
+    const title = input.title === undefined
+      ? undefined
+      : input.title.trim().slice(0, 120);
+    if (input.title !== undefined && !title) {
+      throw new Error("对话标题不能为空。");
+    }
+    const row = await transaction.chatConversation.update({
+      where: { id: input.conversationId },
+      data: {
+        ...(title ? { title } : {}),
+        ...(input.archived === undefined
+          ? {}
+          : { archivedAt: input.archived ? new Date() : null }),
+      },
+      select: {
+        id: true,
+        title: true,
+        archivedAt: true,
+        lastMessageAt: true,
+        createdAt: true,
+      },
+    });
+    return summary(row);
+  });
+}
+
+function firstMessageTitle(message: ClubChatMessage): string | undefined {
+  if (message.role !== "user") return undefined;
+  const text = message.parts
+    .flatMap((part) => part.type === "text" ? [part.text] : [])
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return undefined;
+  return text.length > 32 ? `${text.slice(0, 32)}…` : text;
+}
+
+function hasPersistableContent(message: ClubChatMessage): boolean {
+  if (message.role !== "assistant") return true;
+  return message.parts.some((part) => part.type === "text" && part.text.trim().length > 0);
 }
 
 export async function saveChatMessage(input: {
   actor: ChatHistoryActor;
+  conversationId: string;
   message: ClubChatMessage;
   position: number;
 }, database: PrismaClient = getDatabase()): Promise<void> {
+  if (!hasPersistableContent(input.message)) return;
   await database.$transaction(async (transaction) => {
-    const conversation = await ensureConversation(transaction, input.actor);
+    const conversation = await requireOwnedConversation(
+      transaction,
+      input.actor.id,
+      input.conversationId,
+    );
     await transaction.chatMessage.upsert({
       where: {
         conversationId_clientMessageId: {
@@ -77,19 +203,30 @@ export async function saveChatMessage(input: {
         position: input.position,
       },
     });
+    const suggestedTitle = conversation.title === "新对话"
+      ? firstMessageTitle(input.message)
+      : undefined;
     await transaction.chatConversation.update({
       where: { id: conversation.id },
-      data: { updatedAt: new Date() },
+      data: {
+        lastMessageAt: new Date(),
+        ...(suggestedTitle ? { title: suggestedTitle } : {}),
+      },
     });
   });
 }
 
 export async function loadChatMessages(
   actor: ChatHistoryActor,
+  conversationId: string,
   database: PrismaClient = getDatabase(),
 ): Promise<ClubChatMessage[]> {
   return database.$transaction(async (transaction) => {
-    const conversation = await ensureConversation(transaction, actor);
+    const conversation = await requireOwnedConversation(
+      transaction,
+      actor.id,
+      conversationId,
+    );
     const rows = await transaction.chatMessage.findMany({
       where: { conversationId: conversation.id },
       orderBy: [{ position: "asc" }, { createdAt: "asc" }],
@@ -99,10 +236,13 @@ export async function loadChatMessages(
         parts: true,
       },
     });
-    return rows.map((row) => ({
-      id: row.clientMessageId,
-      role: uiRole(row.role),
-      parts: storedPartsSchema.parse(row.parts) as ClubChatMessage["parts"],
-    }));
+    return rows.flatMap((row) => {
+      const message: ClubChatMessage = {
+        id: row.clientMessageId,
+        role: uiRole(row.role),
+        parts: storedPartsSchema.parse(row.parts) as ClubChatMessage["parts"],
+      };
+      return hasPersistableContent(message) ? [message] : [];
+    });
   });
 }

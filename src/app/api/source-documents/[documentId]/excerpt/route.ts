@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { currentAuthUser, unauthorizedResponse } from "@/auth/session";
+
 import {
   readSourceDocumentRange,
   SourceDocumentReadError,
@@ -17,6 +19,7 @@ export async function GET(
   context: { params: Promise<{ documentId: string }> },
 ) {
   try {
+    if (!await currentAuthUser()) return unauthorizedResponse();
     const { documentId } = await context.params;
     const url = new URL(request.url);
     const query = querySchema.parse({

@@ -1,5 +1,8 @@
 import { Prisma } from "@/generated/prisma/client";
+import { after } from "next/server";
 import { ZodError } from "zod";
+
+import { currentAuthUser, unauthorizedResponse } from "@/auth/session";
 
 import {
   executeActivityPortfolioAction,
@@ -9,6 +12,8 @@ import {
   activityPortfolioActionSchema,
 } from "@/semantic-view/activity-portfolio";
 import { SemanticViewValidationError } from "@/semantic-view/service";
+import { maintainViewHigherMemory } from "@/semantic-view/higher-memory";
+import { ACTIVITY_OPERATIONS_VIEW } from "@/semantic-view/types";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +36,7 @@ function errorResponse(error: unknown) {
 
 export async function GET() {
   try {
+    if (!await currentAuthUser()) return unauthorizedResponse();
     return Response.json(await getActivityPortfolio());
   } catch (error) {
     return errorResponse(error);
@@ -39,8 +45,20 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    if (!await currentAuthUser()) return unauthorizedResponse();
     const action = activityPortfolioActionSchema.parse(await request.json());
-    return Response.json(await executeActivityPortfolioAction(action));
+    const result = await executeActivityPortfolioAction(action);
+    after(async () => {
+      try {
+        await maintainViewHigherMemory(
+          ACTIVITY_OPERATIONS_VIEW,
+          `Activity Portfolio 操作：${action.type}`,
+        );
+      } catch (error) {
+        console.error("[activity-operations.view-higher-memory]", error);
+      }
+    });
+    return Response.json(result);
   } catch (error) {
     return errorResponse(error);
   }

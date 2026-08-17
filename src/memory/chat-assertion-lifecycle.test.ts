@@ -8,6 +8,7 @@ const lifecycleState = vi.hoisted(() => ({
   receiptRunning: vi.fn(),
   receiptComplete: vi.fn(),
   receiptFail: vi.fn(),
+  loadJob: vi.fn(),
   order: [] as string[],
 }));
 
@@ -20,6 +21,7 @@ vi.mock("@/memory/chat-assertion", () => ({
   captureChatAssertions: lifecycleState.capture,
 }));
 vi.mock("@/memory/chat-assertion-receipt", () => ({
+  loadChatAssertionWritebackJob: lifecycleState.loadJob,
   markChatAssertionReceiptRunning: lifecycleState.receiptRunning,
   completeChatAssertionReceipt: lifecycleState.receiptComplete,
   failChatAssertionReceipt: lifecycleState.receiptFail,
@@ -57,9 +59,39 @@ beforeEach(() => {
     return { objectMemories: 1, ambientMemories: 0 };
   });
   lifecycleState.findExisting.mockResolvedValue([]);
+  lifecycleState.loadJob.mockResolvedValue({
+    clientMessageId: "message-durable",
+    submittedAt: "2026-08-14T00:00:00.000Z",
+    timezone: "Asia/Shanghai",
+    semanticContext: {},
+    retrieval: { compilationId: "compilation-1" },
+    queueDecision: { reason: "durable job" },
+  });
 });
 
 describe("post-answer memory maintenance pipeline", () => {
+  it("loads a persisted job by key before starting background capture", async () => {
+    const scheduler = createChatMemoryMaintenanceScheduler();
+    scheduler.publish({
+      assertionJob: { actorId: "actor-1", clientMessageId: "message-durable" },
+      assertionReceipt: { actorId: "actor-1", clientMessageId: "message-durable" },
+    });
+
+    await lifecycleState.afterCallback?.();
+
+    expect(lifecycleState.loadJob).toHaveBeenCalledWith({
+      actorId: "actor-1",
+      clientMessageId: "message-durable",
+    });
+    expect(lifecycleState.capture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientMessageId: "message-durable",
+        queueDecision: { reason: "durable job" },
+      }),
+      undefined,
+    );
+  });
+
   it("always completes Chat Assertion before starting Higher Memory", async () => {
     const scheduler = createChatMemoryMaintenanceScheduler();
     scheduler.publish({
@@ -115,6 +147,7 @@ describe("post-answer memory maintenance pipeline", () => {
           publishedAssertions: 1,
           publishedAssertionIds: ["assertion-foreground"],
           affectedObjectIds: ["object-1"],
+          higherMemoryObjectIds: ["object-1"],
           affectedObjects: [{
             id: "object-1",
             canonicalName: "测试对象",

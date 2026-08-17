@@ -1,3 +1,4 @@
+import { currentAuthUser, unauthorizedResponse } from "@/auth/session";
 import {
   getSemanticView,
   SemanticViewValidationError,
@@ -11,6 +12,7 @@ export async function GET(
 ) {
   const { viewKey } = await context.params;
   try {
+    if (!await currentAuthUser()) return unauthorizedResponse();
     return Response.json(await getSemanticView(viewKey));
   } catch (error) {
     if (error instanceof SemanticViewValidationError) {

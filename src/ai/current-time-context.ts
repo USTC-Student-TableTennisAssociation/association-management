@@ -17,10 +17,7 @@ export function buildCurrentTimeInstruction(instant: Date, timezone: string): st
   if (Number.isNaN(instant.getTime())) throw new Error("当前时刻不是有效日期");
   const localDateTime = localDateTimeAt(instant, timezone);
   return [
-    "本轮时间锚点（由 Echo 服务端提供，不是组织事实证据）：",
-    `- 当前时刻（ISO 8601）：${instant.toISOString()}`,
-    `- 组织本地时间：${localDateTime}`,
-    `- 组织时区：${timezone}`,
-    "仅用该时间锚点解释“今天”“目前”“本学期”“刚才”等相对时间；不能仅凭当前时间断言某条组织信息现在仍然有效。",
+    `当前组织时间：${localDateTime}（${timezone}）。`,
+    "它只用于解释相对时间，不能证明组织信息当前仍然有效。",
   ].join("\n");
 }

@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Club Management",
-  description: "高校社团多周期智能管理系统",
+  title: "Echo",
+  description: "以组织记忆支持真实工作的智能协作系统",
 };
 
 export default function RootLayout({

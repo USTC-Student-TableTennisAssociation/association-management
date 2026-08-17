@@ -6,6 +6,7 @@ import type { MemoryRetrievalResult } from "@/memory/types";
 import type { SemanticViewState } from "@/semantic-view/types";
 
 const providerState = vi.hoisted(() => ({ model: undefined as unknown }));
+const authState = vi.hoisted(() => ({ current: vi.fn() }));
 const retrieverState = vi.hoisted(() => ({ retrieve: vi.fn() }));
 const proposalState = vi.hoisted(() => ({ create: vi.fn(), read: vi.fn() }));
 const sourceDocumentState = vi.hoisted(() => ({ read: vi.fn() }));
@@ -22,6 +23,10 @@ const assertionReceiptState = vi.hoisted(() => ({
 
 vi.mock("@/ai/provider", () => ({
   getChatModel: () => providerState.model,
+}));
+
+vi.mock("@/auth/session", () => ({
+  currentAuthUser: authState.current,
 }));
 
 vi.mock("@/chat/persistence", () => ({
@@ -106,26 +111,6 @@ function toolCallStep() {
           toolCallId: "call-search-memory",
           toolName: "searchMemory",
           input: JSON.stringify({ query: "测试记忆" }),
-        },
-        {
-          type: "finish" as const,
-          finishReason: { unified: "tool-calls" as const, raw: undefined },
-          usage,
-        },
-      ],
-    }),
-  };
-}
-
-function viewToolCallStep() {
-  return {
-    stream: simulateReadableStream({
-      chunks: [
-        {
-          type: "tool-call" as const,
-          toolCallId: "call-read-semantic-view",
-          toolName: "readSemanticView",
-          input: JSON.stringify({ viewKey: "society_information" }),
         },
         {
           type: "finish" as const,
@@ -248,16 +233,28 @@ function directProposalToolCallStep() {
   };
 }
 
-function assertionQueueToolCallStep() {
+function activityArchiveProposalToolCallStep() {
   return {
     stream: simulateReadableStream({
       chunks: [
         {
           type: "tool-call" as const,
-          toolCallId: "call-queue-chat-assertion",
-          toolName: "queueChatAssertionCapture",
+          toolCallId: "call-activity-archive-proposal",
+          toolName: "proposeViewChange",
           input: JSON.stringify({
-            reason: "用户陈述了新的活动安排",
+            viewKey: "activity_operations",
+            reason: "用户明确确认日期并要求收录进活动档案。",
+            changes: [{
+              type: "CREATE_CARD",
+              cardRef: "ji-wang-kai-lai",
+              name: "继往开来",
+              cardTypeKey: "ActivityCard",
+            }, {
+              type: "SET_CONTENT_DIMENSION",
+              card: "new:ji-wang-kai-lai",
+              name: "举办日期",
+              contentMarkdown: "2026-10-18",
+            }],
           }),
         },
         {
@@ -400,10 +397,45 @@ function fixtureView(): SemanticViewState {
   };
 }
 
+function fixtureActivityView(): SemanticViewState {
+  return {
+    viewKey: "activity_operations",
+    viewLabel: "Activity Operations",
+    viewDescription: "活动运营正式状态",
+    compilationId: "00000000-0000-4000-8000-000000000090",
+    compatible: true,
+    cardTypes: [{
+      key: "ActivityCard",
+      label: "活动",
+      meaning: "一次真实活动",
+      seedContentDimensions: ["举办日期", "规划运营"],
+      slots: [],
+    }],
+    cards: [{
+      id: "00000000-0000-4000-8000-000000000093",
+      viewKey: "activity_operations",
+      cardTypeKey: "ActivityCard",
+      cardTypeLabel: "活动",
+      objectName: "2025 继往开来",
+      seedContentDimensions: ["举办日期", "规划运营"],
+      contentDimensions: [{
+        id: "00000000-0000-4000-8000-000000000094",
+        name: "举办日期",
+        contentMarkdown: "2025-09-21",
+      }, {
+        id: "00000000-0000-4000-8000-000000000095",
+        name: "规划运营",
+        contentMarkdown: "按筹备、报名、比赛执行和复盘四个阶段推进。",
+      }],
+      slots: [],
+    }],
+  };
+}
+
 function chatRequest(
   text: string,
   pageContext?: {
-    activeViewKey?: "society_information";
+    activeViewKey?: "society_information" | "activity_operations";
     activePresentation: "overview" | "cards" | "full_chat";
   },
 ): Request {
@@ -411,6 +443,7 @@ function chatRequest(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      conversationId: "00000000-0000-4000-8000-000000000081",
       ...(pageContext ? { pageContext } : {}),
       messages: [{
         id: "user-1",
@@ -426,6 +459,7 @@ function chatHistoryRequest(currentText: string): Request {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      conversationId: "00000000-0000-4000-8000-000000000081",
       messages: [{
         id: "user-previous",
         role: "user",
@@ -445,6 +479,21 @@ function chatHistoryRequest(currentText: string): Request {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  delete process.env.ECHO_CHAT_PREFLIGHT_ENABLED;
+  authState.current.mockResolvedValue({
+    userId: "00000000-0000-4000-8000-000000000070",
+    loginName: "开发用户",
+    role: "ADMIN",
+    actor: {
+      id: "00000000-0000-4000-8000-000000000001",
+      displayName: "开发用户",
+    },
+    personObject: {
+      id: "00000000-0000-4000-8000-000000000071",
+      canonicalName: "开发用户",
+      personCardId: "00000000-0000-4000-8000-000000000072",
+    },
+  });
   chatPersistenceState.save.mockResolvedValue(undefined);
   assertionReceiptState.list.mockResolvedValue([]);
   assertionReceiptState.queue.mockResolvedValue(undefined);
@@ -492,7 +541,8 @@ beforeEach(() => {
     isFullDocument: true,
     isCompleteSelection: true,
   });
-  proposalState.read.mockResolvedValue(fixtureView());
+  proposalState.read.mockImplementation(async (viewKey: string) =>
+    viewKey === "activity_operations" ? fixtureActivityView() : fixtureView());
   proposalState.create.mockResolvedValue({
     id: "00000000-0000-4000-8000-000000000099",
     viewKey: "society_information",
@@ -515,68 +565,84 @@ beforeEach(() => {
 });
 
 describe("POST /api/chat Explore", () => {
-  it("answers a non-memory question without invoking Locate", async () => {
+  it("A: streams a writing request in one model call with zero business tools", async () => {
     const model = new MockLanguageModelV4({
-      doStream: [answerStep("你好！我可以帮你整理思路或查询组织记忆。")],
+      doStream: [answerStep("各位同学，欢迎大家参加，期待与你相见！")],
     });
     providerState.model = model;
 
-    const response = await POST(chatRequest("你好"));
+    const response = await POST(chatRequest("帮我把这段通知写得更友好一些。"));
     const body = await response.text();
 
     expect(response.status).toBe(200);
     expect(retrieverState.retrieve).not.toHaveBeenCalled();
     expect(model.doStreamCalls).toHaveLength(1);
-    expect(model.doStreamCalls[0].toolChoice).toEqual({ type: "auto" });
-    expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name)).toEqual(
-      expect.arrayContaining([
-        "searchMemory",
-        "followObject",
-        "readMemoryWriteStatus",
-        "readSourceDocument",
-        "readSemanticView",
-        "proposeViewChange",
-        "queueChatAssertionCapture",
-        "queueHigherMemoryMaintenance",
-      ]),
-    );
-    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("本轮开始时尚未执行搜索");
+    const prompt = JSON.stringify(model.doStreamCalls[0].prompt);
+    expect(prompt).toContain("认证身份：当前登录用户为");
+    expect(prompt).toContain("00000000-0000-4000-8000-000000000071");
+    expect(model.doStreamCalls[0].toolChoice).toEqual({ type: "none" });
+    expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name)).toEqual([]);
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain("本轮开始时尚未执行搜索");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("直接完成用户当前的闲聊、改写、翻译");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("你是 Echo");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("不要预设当前环境属于高校社团");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain("你是高校社团的 AI 助手");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("本轮时间锚点");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("组织时区：Asia/Shanghai");
-    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("每个具有时效性的组织结论");
-    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("无法确认今天是否仍然有效");
-    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("contextDependent=true");
-    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("Assertion 很零散");
-    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
-      "纯问候、闲聊、问题、假设",
-    );
-    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
-      "可以原子创建新 Object",
-    );
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain("contextDependent=true");
     expect(JSON.stringify(model.doStreamCalls[0].prompt)).not.toContain(
       "没有找到足以支持回答的组织事实",
     );
-    expect(body).toContain("你好！");
+    expect(body).toContain("欢迎大家参加");
     expect(body).not.toContain("data-memorySearch");
     expect(chatPersistenceState.save).toHaveBeenCalledTimes(2);
     expect(chatPersistenceState.save).toHaveBeenNthCalledWith(1, {
       actor: expect.objectContaining({ displayName: "开发用户" }),
+      conversationId: "00000000-0000-4000-8000-000000000081",
       message: expect.objectContaining({ id: "user-1", role: "user" }),
       position: 0,
     });
     expect(chatPersistenceState.save).toHaveBeenNthCalledWith(2, {
       actor: expect.objectContaining({ displayName: "开发用户" }),
+      conversationId: "00000000-0000-4000-8000-000000000081",
       message: expect.objectContaining({
-        role: "assistant",
-        parts: expect.arrayContaining([
-          expect.objectContaining({ type: "text", text: expect.stringContaining("你好") }),
-        ]),
+          role: "assistant",
+          parts: expect.arrayContaining([
+            expect.objectContaining({ type: "text", text: expect.stringContaining("欢迎") }),
+          ]),
       }),
       position: 1,
     });
+  });
+
+  it("B: prefetched the activity View before the only model call and exposes no mutation tools", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [answerStep("当前正式 View 按筹备、报名、执行和复盘四阶段规划运营 [V4]。")],
+    });
+    providerState.model = model;
+
+    const response = await POST(chatRequest("继往开来比赛是怎么规划运营的？"));
+    const body = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(proposalState.read).toHaveBeenCalledWith("activity_operations");
+    expect(model.doStreamCalls).toHaveLength(1);
+    const prompt = JSON.stringify(model.doStreamCalls[0].prompt);
+    expect(prompt).toContain("服务端已预读取的正式 Business View");
+    expect(prompt).toContain("2025-09-21");
+    expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name)).toEqual([
+      "readSemanticView",
+      "searchMemory",
+      "followObject",
+      "readSourceDocument",
+      "listLibrary",
+      "inspectLibraryNodes",
+      "previewLibraryFiles",
+      "readLibraryCompilation",
+      "readMemoryWriteStatus",
+    ]);
+    expect(body).toContain("[V4]");
+    expect(retrieverState.retrieve).not.toHaveBeenCalled();
   });
 
   it("does not start generation when the user message cannot be persisted", async () => {
@@ -659,35 +725,130 @@ describe("POST /api/chat Explore", () => {
     expect(prompt).toContain("不是组织事实、不是 Evidence");
   });
 
-  it("lets the main model explicitly queue a factual user statement without memory search", async () => {
+  it("C: queues a durable fact after the answer without querying history or exposing queue tools", async () => {
     const model = new MockLanguageModelV4({
-      doStream: [
-        assertionQueueToolCallStep(),
-        answerStep("明白了，这是一项计划中的迎新活动。"),
-      ],
+      doStream: [answerStep("收到，今年继往开来的计划日期是 10 月 18 日。")],
     });
     providerState.model = model;
 
-    const response = await POST(chatRequest("我们九月份准备举办迎新活动。"));
+    const response = await POST(chatRequest("今年继往开来准备在 10 月 18 日举办了。"));
     const body = await response.text();
 
     expect(response.status).toBe(200);
     expect(retrieverState.retrieve).not.toHaveBeenCalled();
-    expect(model.doStreamCalls).toHaveLength(2);
+    expect(model.doStreamCalls).toHaveLength(1);
+    expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name)).toEqual([]);
     expect(assertionReceiptState.queue).toHaveBeenCalledWith(expect.objectContaining({
       clientMessageId: "user-1",
       execution: "background",
-      queueReason: "用户陈述了新的活动安排",
+      conversationId: "00000000-0000-4000-8000-000000000081",
+      timezone: "Asia/Shanghai",
+      semanticContext: expect.objectContaining({
+        finalAnswer: expect.stringContaining("10 月 18 日"),
+      }),
+      retrieval: expect.any(Object),
     }));
-    expect(body).toContain('"toolName":"queueChatAssertionCapture"');
-    expect(body).toContain("明白了，这是一项计划中的迎新活动");
+    expect(body).not.toContain('"toolName":"queueChatAssertionCapture"');
+    expect(body).toContain("计划日期是 10 月 18 日");
     expect(body).not.toContain("data-memorySearch");
+  });
+
+  it("marks an existing receipt failed when the recoverable writeback payload cannot persist", async () => {
+    assertionReceiptState.queue.mockRejectedValueOnce(new Error("writeback unavailable"));
+    const model = new MockLanguageModelV4({
+      doStream: [answerStep("收到，计划日期是 10 月 18 日。")],
+    });
+    providerState.model = model;
+
+    const response = await POST(chatRequest("今年继往开来准备在 10 月 18 日举办了。"));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(model.doStreamCalls).toHaveLength(1);
+    expect(assertionReceiptState.fail).toHaveBeenCalledWith({
+      actorId: "00000000-0000-4000-8000-000000000001",
+      clientMessageId: "user-1",
+    }, expect.objectContaining({ message: "writeback unavailable" }));
+  });
+
+  it("D: can prefetch, retrieve, answer, and independently persist writeback in one turn", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        toolCallStep(),
+        answerStep("已结合往年资料生成筹备计划 [V3][A1]。"),
+      ],
+    });
+    providerState.model = model;
+
+    const response = await POST(chatRequest(
+      "今年继往开来准备在 10 月 18 日举办了，帮我参考往年的经验做一份筹备计划。",
+    ));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(proposalState.read).toHaveBeenCalledWith("activity_operations");
+    expect(retrieverState.retrieve).toHaveBeenCalledOnce();
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(model.doStreamCalls[0].tools).toHaveLength(9);
+    expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name)).not.toContain(
+      "proposeViewChange",
+    );
+    expect((model.doStreamCalls[0].tools ?? []).map((tool) => tool.name)).not.toContain(
+      "queueChatAssertionCapture",
+    );
+    expect(assertionReceiptState.queue).toHaveBeenCalledWith(expect.objectContaining({
+      execution: "background",
+      semanticContext: expect.objectContaining({
+        finalAnswer: expect.stringContaining("筹备计划"),
+      }),
+      retrieval: expect.objectContaining({
+        seedMap: expect.objectContaining({
+          assertions: expect.arrayContaining([expect.objectContaining({ ref: "A1" })]),
+        }),
+      }),
+    }));
+  });
+
+  it("E: prefetches before a formal activity proposal and still queues fact writeback", async () => {
+    const model = new MockLanguageModelV4({
+      doStream: [
+        activityArchiveProposalToolCallStep(),
+        answerStep("已整理成待批准的活动档案 Proposal。"),
+      ],
+    });
+    providerState.model = model;
+
+    const response = await POST(chatRequest(
+      "把今年继往开来的比赛日期正式改成 10 月 18 日。",
+    ));
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(proposalState.read).toHaveBeenCalledWith("activity_operations");
+    expect(proposalState.read).toHaveBeenCalledTimes(1);
+    expect(model.doStreamCalls).toHaveLength(2);
+    expect(model.doStreamCalls[0].tools).toHaveLength(12);
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
+      "服务端已预读取的正式 Business View",
+    );
+    expect(proposalState.create).toHaveBeenCalledWith(expect.objectContaining({
+      payload: expect.objectContaining({
+        viewKey: "activity_operations",
+        changes: expect.arrayContaining([
+          expect.objectContaining({ name: "继往开来", cardTypeKey: "ActivityCard" }),
+          expect.objectContaining({ name: "举办日期", contentMarkdown: "2026-10-18" }),
+        ]),
+      }),
+    }));
+    expect(assertionReceiptState.queue).toHaveBeenCalledWith(expect.objectContaining({
+      execution: "background",
+      queueReason: expect.stringContaining("正式 View 操作请求"),
+    }));
   });
 
   it("publishes a missing Object before creating a same-turn Business View Proposal", async () => {
     const model = new MockLanguageModelV4({
       doStream: [
-        viewToolCallStep(),
         foregroundAssertionToolCallStep(),
         foregroundPersonProposalToolCallStep(),
         answerStep("我已创建雷岳鑫的记忆实体，并整理成待批准的人物档案 Proposal。"),
@@ -755,7 +916,6 @@ describe("POST /api/chat Explore", () => {
   it("answers from a sufficient formal View with V# and no Shared Brain search", async () => {
     const model = new MockLanguageModelV4({
       doStream: [
-        viewToolCallStep(),
         answerStep("当前正式社团信息记录为四星 [V3]。"),
       ],
     });
@@ -767,6 +927,12 @@ describe("POST /api/chat Explore", () => {
     expect(response.status).toBe(200);
     expect(proposalState.read).toHaveBeenCalledWith("society_information");
     expect(retrieverState.retrieve).not.toHaveBeenCalled();
+    expect(model.doStreamCalls).toHaveLength(1);
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain(
+      "服务端已预读取的正式 Business View",
+    );
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("V3");
+    expect(JSON.stringify(model.doStreamCalls[0].prompt)).toContain("四星");
     expect(body).toContain("当前正式社团信息记录为四星 [V3]");
     expect(body).toContain('"type":"data-viewReferences"');
     expect(body).toContain('"ref":"V3"');
@@ -776,7 +942,6 @@ describe("POST /api/chat Explore", () => {
   it("falls back to Shared Brain when the full View snapshot lacks the answer", async () => {
     const model = new MockLanguageModelV4({
       doStream: [
-        viewToolCallStep(),
         toolCallStep(),
         answerStep("当前正式 View 没有记录成立时间 [V4]；底层材料提供了新事实 [A1]。"),
       ],
@@ -853,7 +1018,6 @@ describe("POST /api/chat Explore", () => {
   it("lets the same Chat AI emit a structured proposal after Shared Brain retrieval", async () => {
     const model = new MockLanguageModelV4({
       doStream: [
-        viewToolCallStep(),
         toolCallStep(),
         proposalToolCallStep(),
         answerStep("我建议在 Overview 中单独展示社团星级 [A1]。"),
@@ -878,7 +1042,6 @@ describe("POST /api/chat Explore", () => {
   it("allows a user-confirmed View change without Assertion after reading the View", async () => {
     const model = new MockLanguageModelV4({
       doStream: [
-        viewToolCallStep(),
         directProposalToolCallStep(),
         answerStep("我已把你的明确修改整理成待批准 Proposal。"),
       ],
@@ -899,6 +1062,7 @@ describe("POST /api/chat Explore", () => {
   });
 
   it("rejects a View Proposal when the model has not read that View first", async () => {
+    process.env.ECHO_CHAT_PREFLIGHT_ENABLED = "false";
     const model = new MockLanguageModelV4({
       doStream: [
         directProposalToolCallStep(),
@@ -912,6 +1076,8 @@ describe("POST /api/chat Explore", () => {
 
     expect(response.status).toBe(200);
     expect(proposalState.create).not.toHaveBeenCalled();
+    expect(model.doStreamCalls[0].toolChoice).toEqual({ type: "auto" });
+    expect(model.doStreamCalls[0].tools).toHaveLength(15);
     expect(body).toContain('"type":"tool-output-error"');
   });
 

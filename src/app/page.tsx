@@ -7,7 +7,7 @@ import {
   isToolUIPart,
   type ChatStatus,
 } from "ai";
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import {
@@ -61,6 +61,26 @@ const quickPrompts = [
 ];
 
 type ChatHistoryState = "loading" | "ready" | "error";
+
+type CurrentUser = {
+  userId: string;
+  loginName: string;
+  role: "ADMIN" | "MEMBER";
+  actor: { id: string; displayName: string };
+  personObject: {
+    id: string;
+    canonicalName: string;
+    personCardId: string | null;
+  } | null;
+};
+
+type ConversationSummary = {
+  id: string;
+  title: string;
+  archivedAt: string | null;
+  lastMessageAt: string;
+  createdAt: string;
+};
 
 function messageReasoning(message: ClubChatMessage) {
   return message.parts
@@ -840,6 +860,9 @@ export default function Home() {
   const [previewChangeIndex, setPreviewChangeIndex] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sourceReference, setSourceReference] = useState<SourceDocumentReference>();
+  const [currentUser, setCurrentUser] = useState<CurrentUser>();
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string>();
   const transport = useMemo(() => new DefaultChatTransport<ClubChatMessage>({
     api: "/api/chat",
     prepareSendMessagesRequest: ({ messages, body }) => ({
@@ -857,41 +880,104 @@ export default function Home() {
   const [historyError, setHistoryError] = useState<string>();
   const isSending = status === "submitted" || status === "streaming";
 
+  const refreshConversations = useCallback(async () => {
+    const response = await fetch("/api/chat/conversations", { cache: "no-store" });
+    if (response.status === 401) {
+      window.location.assign("/login");
+      return [];
+    }
+    const body = await response.json() as {
+      conversations?: ConversationSummary[];
+      error?: string;
+    };
+    if (!response.ok || !body.conversations) {
+      throw new Error(body.error ?? "无法读取对话列表。");
+    }
+    setConversations(body.conversations);
+    return body.conversations;
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
 
-    async function restoreHistory() {
+    async function bootstrap() {
       try {
-        const response = await fetch("/api/chat/history", {
+        const meResponse = await fetch("/api/auth/me", {
           cache: "no-store",
           signal: controller.signal,
         });
-        const body = await response.json() as {
-          messages?: ClubChatMessage[];
+        if (meResponse.status === 401) {
+          window.location.assign("/login");
+          return;
+        }
+        const meBody = await meResponse.json() as {
+          user?: CurrentUser;
           error?: string;
         };
-        if (!response.ok || !Array.isArray(body.messages)) {
-          throw new Error(body.error ?? "无法从服务器恢复对话。");
+        if (!meResponse.ok || !meBody.user) {
+          throw new Error(meBody.error ?? "无法读取登录状态。");
         }
-        setMessages([
-          ...initialMessages,
-          ...body.messages.filter((message) => message.id !== "welcome"),
-        ]);
-        setHistoryState("ready");
-      } catch (restoreError) {
+        setCurrentUser(meBody.user);
+        let items = await refreshConversations();
+        if (!items.length) {
+          const createResponse = await fetch("/api/chat/conversations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+            signal: controller.signal,
+          });
+          const createBody = await createResponse.json() as {
+            conversation?: ConversationSummary;
+            error?: string;
+          };
+          if (!createResponse.ok || !createBody.conversation) {
+            throw new Error(createBody.error ?? "无法创建初始对话。");
+          }
+          items = [createBody.conversation];
+          setConversations(items);
+        }
+        setActiveConversationId(items[0].id);
+      } catch (bootstrapError) {
         if (controller.signal.aborted) return;
         setHistoryError(
-          restoreError instanceof Error
-            ? restoreError.message
-            : "无法从服务器恢复对话。",
+          bootstrapError instanceof Error
+            ? bootstrapError.message
+            : "无法初始化 Echo。",
         );
         setHistoryState("error");
       }
     }
 
-    void restoreHistory();
+    void bootstrap();
     return () => controller.abort();
-  }, [setMessages]);
+  }, [refreshConversations]);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+    const controller = new AbortController();
+    void fetch(`/api/chat/conversations/${activeConversationId}/messages`, {
+      cache: "no-store",
+      signal: controller.signal,
+    }).then(async (response) => {
+      const body = await response.json() as {
+        messages?: ClubChatMessage[];
+        error?: string;
+      };
+      if (!response.ok || !Array.isArray(body.messages)) {
+        throw new Error(body.error ?? "无法从服务器恢复对话。");
+      }
+      setMessages([
+        ...initialMessages,
+        ...body.messages.filter((message) => message.id !== "welcome"),
+      ]);
+      setHistoryState("ready");
+    }).catch((loadError) => {
+      if (controller.signal.aborted) return;
+      setHistoryError(loadError instanceof Error ? loadError.message : "无法恢复对话。");
+      setHistoryState("error");
+    });
+    return () => controller.abort();
+  }, [activeConversationId, setMessages]);
 
   const pageContext: ChatPageContext = activeWorkspace === "chat"
     ? { activePresentation: "full_chat" }
@@ -901,10 +987,73 @@ export default function Home() {
 
   function submit(content: string) {
     const text = content.trim();
-    if (!text || isSending || historyState !== "ready") return;
+    if (!text || !activeConversationId || isSending || historyState !== "ready") return;
     clearError();
     setInput("");
-    void sendMessage({ text }, { body: { pageContext } });
+    void sendMessage(
+      { text },
+      { body: { pageContext, conversationId: activeConversationId } },
+    ).finally(() => void refreshConversations());
+  }
+
+  function activateConversation(conversationId: string) {
+    setHistoryState("loading");
+    setHistoryError(undefined);
+    setMessages(initialMessages);
+    setActiveConversationId(conversationId);
+  }
+
+  async function createConversation() {
+    if (isSending) return;
+    const response = await fetch("/api/chat/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const body = await response.json() as {
+      conversation?: ConversationSummary;
+      error?: string;
+    };
+    if (!response.ok || !body.conversation) {
+      setHistoryError(body.error ?? "无法创建对话。");
+      return;
+    }
+    setConversations((current) => [body.conversation!, ...current]);
+    activateConversation(body.conversation.id);
+    setActiveWorkspace("chat");
+    setDrawerOpen(false);
+  }
+
+  async function renameConversation(conversation: ConversationSummary) {
+    const title = window.prompt("输入新的对话标题：", conversation.title)?.trim();
+    if (!title) return;
+    const response = await fetch(`/api/chat/conversations/${conversation.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    if (response.ok) await refreshConversations();
+  }
+
+  async function archiveConversation(conversation: ConversationSummary) {
+    if (isSending) return;
+    const response = await fetch(`/api/chat/conversations/${conversation.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archived: true }),
+    });
+    if (!response.ok) return;
+    const remaining = conversations.filter((item) => item.id !== conversation.id);
+    setConversations(remaining);
+    if (activeConversationId === conversation.id) {
+      if (remaining[0]) activateConversation(remaining[0].id);
+      else await createConversation();
+    }
+  }
+
+  async function logout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    window.location.assign("/login");
   }
 
   function openFullChat() {
@@ -982,37 +1131,76 @@ export default function Home() {
     setSemanticViewFocus(undefined);
   }
 
+  const activeConversation = conversations.find((item) =>
+    item.id === activeConversationId
+  );
+
+  if (!currentUser) {
+    return (
+      <main className="flex min-h-dvh items-center justify-center bg-[#eef2ef] px-5 text-zinc-700">
+        <div className="max-w-md rounded-xl border border-zinc-200 bg-white px-6 py-5 text-center shadow-sm">
+          <p className="font-medium">{historyState === "error" ? "Echo 初始化失败" : "正在进入 Echo…"}</p>
+          {historyError ? <p className="mt-2 text-sm text-red-700">{historyError}</p> : null}
+          {historyState === "error" ? <button onClick={() => window.location.reload()} className="mt-4 rounded-lg bg-emerald-800 px-4 py-2 text-sm text-white">重试</button> : null}
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="flex h-dvh min-h-0 overflow-hidden bg-[#f6f7f4] text-zinc-950">
-      <nav className="flex w-60 shrink-0 flex-col border-r border-zinc-200 bg-[#153f35] px-4 py-6 text-white">
+      <nav className="flex w-72 shrink-0 flex-col overflow-hidden border-r border-zinc-200 bg-[#153f35] px-4 py-6 text-white">
         <div className="px-2">
           <p className="text-2xl font-semibold tracking-tight">Echo</p>
-          <p className="mt-1 text-sm text-emerald-100/75">高校社团管理助手</p>
+          <p className="mt-1 text-sm text-emerald-100/75">组织记忆与智能协作</p>
         </div>
-        <div className="mt-8 space-y-1">
-          <button
-            type="button"
-            onClick={openFullChat}
-            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === "chat" ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
-          >
-            <span aria-hidden="true">✦</span> AI 对话
-          </button>
+        <div className="mt-7 flex min-h-0 flex-1 flex-col">
+          <div className="flex items-center justify-between px-2">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-100/55">AI 对话</p>
+            <button type="button" disabled={isSending} onClick={() => void createConversation()} className="rounded-md border border-white/15 px-2 py-1 text-xs text-emerald-50 hover:bg-white/10 disabled:opacity-40">+ 新建</button>
+          </div>
+          <div className="mt-2 min-h-0 space-y-1 overflow-y-auto pr-1">
+            {conversations.map((conversation) => (
+              <div key={conversation.id} className={`group flex items-center rounded-lg ${activeWorkspace === "chat" && activeConversationId === conversation.id ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isSending || conversation.id === activeConversationId) {
+                      openFullChat();
+                      return;
+                    }
+                    activateConversation(conversation.id);
+                    openFullChat();
+                  }}
+                  className="min-w-0 flex-1 truncate px-3 py-2.5 text-left text-sm"
+                  title={conversation.title}
+                >
+                  {conversation.title}
+                </button>
+                <button type="button" aria-label="重命名对话" onClick={() => void renameConversation(conversation)} className="hidden px-1 text-xs opacity-60 group-hover:block">✎</button>
+                <button type="button" aria-label="归档对话" onClick={() => void archiveConversation(conversation)} className="hidden px-2 text-xs opacity-60 group-hover:block">×</button>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="mt-5 border-t border-white/15 pt-5">
+          <p className="px-3 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-100/55">资料处理</p>
           <button
             type="button"
             onClick={openLibrary}
-            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === "library" ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
+            className={`mt-2 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === "library" ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
           >
             <span aria-hidden="true">🗂️</span> 资料库
           </button>
           <button
             type="button"
             onClick={openCompilation}
-            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === "compilation" ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
+            className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === "compilation" ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
           >
             <span aria-hidden="true">▷</span> 基础编译
           </button>
         </div>
-        <div className="mt-8 border-t border-white/15 pt-6">
+        <div className="mt-5 border-t border-white/15 pt-5">
           <p className="px-3 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-100/55">业务视角</p>
           <button
             type="button"
@@ -1029,7 +1217,14 @@ export default function Home() {
             <span className="size-2 rounded-full bg-amber-300" aria-hidden="true" /> 活动运营
           </button>
         </div>
-        <p className="mt-auto px-3 pt-8 text-xs leading-5 text-emerald-100/45">Shared Brain 为所有业务视角提供事实依据。</p>
+        <div className="mt-5 border-t border-white/15 px-2 pt-4">
+          <p className="truncate text-sm font-medium">{currentUser.actor.displayName}</p>
+          <p className="mt-1 truncate text-xs text-emerald-100/55">{currentUser.personObject?.canonicalName ?? currentUser.loginName}</p>
+          <div className="mt-3 flex gap-2">
+            {currentUser.role === "ADMIN" ? <button onClick={() => window.location.assign("/admin/users")} className="rounded-md border border-white/15 px-2.5 py-1.5 text-xs hover:bg-white/10">账号管理</button> : null}
+            <button onClick={() => void logout()} className="rounded-md border border-white/15 px-2.5 py-1.5 text-xs hover:bg-white/10">退出</button>
+          </div>
+        </div>
       </nav>
 
       <div className="flex min-h-0 min-w-0 flex-1">
@@ -1040,8 +1235,8 @@ export default function Home() {
             <div className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col px-6 py-7 lg:px-10">
               <header className="mb-5">
                 <p className="text-sm font-medium text-emerald-700">全局智能层</p>
-                <h1 className="mt-1 text-3xl font-semibold text-zinc-950">AI 对话</h1>
-                <p className="mt-2 text-sm text-zinc-600">查询 Shared Brain、讨论业务理解，并在对话中确认 View 修改建议。</p>
+                <h1 className="mt-1 truncate text-3xl font-semibold text-zinc-950">{activeConversation?.title ?? "AI 对话"}</h1>
+                <p className="mt-2 text-sm text-zinc-600">完整对话仅你可见；经记忆维护的高层理解、Assertion 与正式 Business View 可进入共享组织认知。</p>
               </header>
               <ChatSurface messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="full-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onPreviewProposal={(proposal) => showProposalChange(proposal, 0)} />
             </div>

@@ -9,24 +9,32 @@ import {
 import {
   completeChatAssertionReceipt,
   failChatAssertionReceipt,
+  loadChatAssertionWritebackJob,
   markChatAssertionReceiptRunning,
   type ChatAssertionReceiptKey,
 } from "@/memory/chat-assertion-receipt";
-import { findExistingHigherMemoryObjectIds } from "@/memory/object-higher-memory";
+import {
+  consolidateTurnKnowledge,
+  type KnowledgeConsolidationInput,
+} from "@/memory/knowledge-consolidator";
 import {
   maintainHigherMemories,
   type HigherMemoryMaintenanceInput,
 } from "@/memory/higher-memory-maintenance";
-import { addObjectTargetsToQueueDecision } from "@/memory/higher-memory-queue";
+import { maintainViewHigherMemory } from "@/semantic-view/higher-memory";
+import type { BusinessViewKey } from "@/semantic-view/types";
 
 export type ChatMemoryMaintenanceInput = {
   assertion?: ChatAssertionCaptureInput;
+  assertionJob?: ChatAssertionReceiptKey;
   assertionReceipt?: ChatAssertionReceiptKey;
   completedAssertion?: {
     input: ChatAssertionCaptureInput;
     result: ChatAssertionCaptureResult;
   };
+  consolidation?: KnowledgeConsolidationInput;
   higherMemory?: HigherMemoryMaintenanceInput;
+  viewHigherMemoryKeys?: BusinessViewKey[];
 };
 
 export type ChatMemoryMaintenanceScheduler = {
@@ -35,8 +43,8 @@ export type ChatMemoryMaintenanceScheduler = {
 };
 
 /**
- * One post-answer pipeline owns both stages. The fixed order prevents Higher
- * Memory from observing a half-finished Chat Assertion publication.
+ * One post-answer pipeline owns assertion publication, semantic consolidation,
+ * and Higher Memory maintenance in that order.
  */
 export function createChatMemoryMaintenanceScheduler(
   trace?: EchoDebugTrace,
@@ -58,15 +66,34 @@ export function createChatMemoryMaintenanceScheduler(
           "后台对话记忆线路开始",
           [
             "主回答已经结束。以下处理在后台执行，不影响本轮回答是否成功。",
-            "固定顺序：Chat → Assertion 完整结束后，才允许 Higher Memory 开始维护。",
+            "固定顺序：Assertion 发布 → Knowledge Consolidation → Object/Ambient Higher Memory → 缺失的 View Higher Memory 重建。",
           ].join("\n"),
         );
         let captureResult: ChatAssertionCaptureResult = input.completedAssertion?.result ?? {
           publishedAssertions: 0,
           publishedAssertionIds: [],
           affectedObjectIds: [],
+          higherMemoryObjectIds: [],
           affectedObjects: [],
         };
+        let assertionInput = input.assertion;
+        if (!input.completedAssertion && !assertionInput && input.assertionJob) {
+          try {
+            assertionInput = await loadChatAssertionWritebackJob(input.assertionJob);
+            await trace?.appendSection(
+              "后台 Chat → Assertion 任务恢复",
+              "已使用持久化回执 key 重新加载完整语义上下文与检索快照；后台任务不依赖请求局部变量保存工作内容。",
+            );
+          } catch (error) {
+            console.error("[chat.assertion-job.load]", error);
+            await trace?.appendError("加载持久化 Assertion 写回任务失败", error);
+            try {
+              await failChatAssertionReceipt(input.assertionJob, error);
+            } catch (receiptError) {
+              console.error("[chat.assertion-receipt.failed]", receiptError);
+            }
+          }
+        }
         if (input.completedAssertion) {
           await trace?.appendSection(
             "后台 Chat → Assertion 跳过",
@@ -76,7 +103,7 @@ export function createChatMemoryMaintenanceScheduler(
               `- 关联 Object：${captureResult.affectedObjectIds.length} 个`,
             ].join("\n"),
           );
-        } else if (input.assertion) {
+        } else if (assertionInput) {
           try {
             if (input.assertionReceipt) {
               try {
@@ -88,11 +115,11 @@ export function createChatMemoryMaintenanceScheduler(
             }
             await trace?.appendSection(
               "后台 Chat → Assertion 开始",
-              "主回答模型已登记 Assertion 提取意图。",
+              "主回答已结束，现在独立判断用户原话是否值得固化。",
             );
-            captureResult = await captureChatAssertions(input.assertion, trace);
+            captureResult = await captureChatAssertions(assertionInput, trace);
             console.info("[chat.assertion-capture]", JSON.stringify({
-              clientMessageId: input.assertion.clientMessageId,
+              clientMessageId: assertionInput.clientMessageId,
               ...captureResult,
             }));
             if (input.assertionReceipt) {
@@ -118,46 +145,64 @@ export function createChatMemoryMaintenanceScheduler(
         } else {
           await trace?.appendSection(
             "后台 Chat → Assertion 跳过",
-            "主回答模型没有登记 Assertion 提取；Higher Memory 如有维护意图，仍可基于数据库中已有 Assertion 继续。",
+            "本轮没有可执行的回答后 Assertion 任务；Higher Memory 如有维护意图，仍可基于数据库中已有 Assertion 继续。",
           );
         }
 
         let higherMemoryInput = input.higherMemory;
-        const assertionContext = input.assertion ?? input.completedAssertion?.input;
-        if (assertionContext && captureResult.publishedAssertions > 0) {
+        const consolidationInput = input.consolidation;
+        if (consolidationInput) {
           try {
-            const compilationId = assertionContext.retrieval.compilationId ??
-              assertionContext.retrieval.trace?.snapshot.id;
-            const automaticallyAffected = await findExistingHigherMemoryObjectIds({
-              objectIds: captureResult.affectedObjectIds,
-              compilationId,
-            });
-            if (automaticallyAffected.length) {
-              const automaticReason = "本轮新发布 Assertion 涉及已有 Higher Memory，自动刷新以避免旧高层认知遮住新事实。";
-              higherMemoryInput = {
-                clientMessageId: higherMemoryInput?.clientMessageId ?? assertionContext.clientMessageId,
-                submittedAt: higherMemoryInput?.submittedAt ?? assertionContext.submittedAt,
-                timezone: higherMemoryInput?.timezone ?? assertionContext.timezone,
-                semanticContext: higherMemoryInput?.semanticContext ?? assertionContext.semanticContext,
-                retrieval: higherMemoryInput?.retrieval ?? assertionContext.retrieval,
-                queueDecision: addObjectTargetsToQueueDecision({
-                  decision: higherMemoryInput?.queueDecision,
-                  objectIds: automaticallyAffected,
-                  reason: automaticReason,
-                }),
-              };
-              await trace?.appendSection(
-                "Higher Memory 自动补偿触发",
-                [
-                  `新发布的 ${captureResult.publishedAssertions} 条 Assertion 关联了已有 Higher Memory。`,
-                  `自动加入维护的 Object：${automaticallyAffected.map((id) => `\`${id}\``).join("、")}`,
-                  "这里只刷新已经存在的 Higher Memory，不会因此为普通 Object 新建 Higher Memory。",
-                ].join("\n"),
+            const consolidation = await consolidateTurnKnowledge(
+              consolidationInput,
+              captureResult,
+              trace,
+            );
+            const selectedTargets = [
+              ...consolidation.objectUpdates.map((update) => ({
+                scope: "object" as const,
+                globalObjectId: update.globalObjectId,
+              })),
+              ...consolidation.ambientUpdates.map((update) => ({ scope: update.scope })),
+            ];
+            if (selectedTargets.length) {
+              const existingTargets = higherMemoryInput?.queueDecision.targets ?? [];
+              const uniqueTargets = [...existingTargets, ...selectedTargets].filter(
+                (target, index, all) => {
+                  const key = target.scope === "object"
+                    ? `object:${target.globalObjectId}`
+                    : target.scope;
+                  return all.findIndex((candidate) =>
+                    (candidate.scope === "object"
+                      ? `object:${candidate.globalObjectId}`
+                      : candidate.scope) === key
+                  ) === index;
+                },
               );
+              const focus = [
+                ...consolidation.objectUpdates.map((update) =>
+                  `${update.canonicalName}（${update.updateAreas.join("+")}）：${update.focus}`
+                ),
+                ...consolidation.ambientUpdates.map((update) =>
+                  `${update.scope}：${update.focus}`
+                ),
+              ].join("；");
+              higherMemoryInput = {
+                clientMessageId: higherMemoryInput?.clientMessageId ?? consolidationInput.clientMessageId,
+                submittedAt: higherMemoryInput?.submittedAt ?? consolidationInput.submittedAt,
+                timezone: higherMemoryInput?.timezone ?? consolidationInput.timezone,
+                semanticContext: higherMemoryInput?.semanticContext ?? consolidationInput.semanticContext,
+                retrieval: higherMemoryInput?.retrieval ?? consolidationInput.retrieval,
+                queueDecision: {
+                  targets: uniqueTargets,
+                  reason: [higherMemoryInput?.queueDecision.reason, focus]
+                    .filter(Boolean).join("；"),
+                },
+              };
             }
           } catch (error) {
-            console.error("[chat.higher-memory.auto-trigger]", error);
-            await trace?.appendError("Higher Memory 自动补偿判断失败", error);
+            console.error("[chat.knowledge-consolidation]", error);
+            await trace?.appendError("Knowledge Consolidator 失败", error);
           }
         }
 
@@ -182,8 +227,24 @@ export function createChatMemoryMaintenanceScheduler(
         } else {
           await trace?.appendSection(
             "后台 Higher Memory 跳过",
-            "主回答模型没有登记 workspace、recent 或重要 Object 的 Higher Memory 维护意图，本轮也没有新 Assertion 需要刷新已有 Object Higher Memory。",
+            "Knowledge Consolidator 没有选择需要维护的 Object、workspace 或 recent。",
           );
+        }
+
+        for (const viewKey of [...new Set(input.viewHigherMemoryKeys ?? [])]) {
+          try {
+            await maintainViewHigherMemory(
+              viewKey,
+              "对话读取 View 时发现 Higher Memory 缺失或已不符合当前精简格式",
+            );
+            await trace?.appendSection(
+              "View Higher Memory 重建",
+              `已根据当前批准的 ${viewKey} 正式 View 状态重建精简 Higher Memory。`,
+            );
+          } catch (error) {
+            console.error("[chat.view-higher-memory]", error);
+            await trace?.appendError(`重建 ${viewKey} View Higher Memory 失败`, error);
+          }
         }
       } finally {
         await trace?.flush();

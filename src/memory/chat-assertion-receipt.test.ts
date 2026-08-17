@@ -11,6 +11,7 @@ import {
   completeChatAssertionReceipt,
   createMemoryWriteStatusTool,
   listChatAssertionReceipts,
+  loadChatAssertionWritebackJob,
   queueChatAssertionReceipt,
 } from "@/memory/chat-assertion-receipt";
 
@@ -62,6 +63,31 @@ beforeEach(() => {
     memoryChatAssertionReceipt: {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       findMany: vi.fn().mockResolvedValue([receiptRow()]),
+      findUnique: vi.fn().mockResolvedValue({
+        actor: {
+          id: "00000000-0000-4000-8000-000000000001",
+          displayName: "开发用户",
+        },
+        conversationId: "00000000-0000-4000-8000-000000000081",
+        clientMessageId: "message-current",
+        execution: "background",
+        queueReason: "用户提供了新任会长信息",
+        status: "queued",
+        submittedAt: new Date("2026-08-14T01:00:00.000Z"),
+        timezone: "Asia/Shanghai",
+        semanticContext: {
+          conversation: [],
+          systemInstruction: "system",
+          modelCalls: [],
+          toolExecutions: [],
+          finalAnswer: "answer",
+        },
+        retrieval: {
+          query: "query",
+          mode: "fixture",
+          seedMap: { facets: [], objects: [], assertions: [], connections: [] },
+        },
+      }),
     },
     transaction,
   };
@@ -95,6 +121,61 @@ describe("Chat Assertion processing receipts", () => {
     );
   });
 
+  it("persists and reloads the complete recoverable background work payload", async () => {
+    const semanticContext = {
+      conversation: [],
+      systemInstruction: "system",
+      modelCalls: [],
+      toolExecutions: [],
+      finalAnswer: "answer",
+    };
+    const retrieval = {
+      query: "query",
+      mode: "fixture",
+      seedMap: { facets: [], objects: [], assertions: [], connections: [] },
+    };
+    await queueChatAssertionReceipt({
+      actorId: "00000000-0000-4000-8000-000000000001",
+      actorDisplayName: "开发用户",
+      conversationId: "00000000-0000-4000-8000-000000000081",
+      clientMessageId: "message-current",
+      submittedAt: "2026-08-14T01:00:00.000Z",
+      timezone: "Asia/Shanghai",
+      execution: "background",
+      queueReason: "用户提供了新任会长信息",
+      semanticContext,
+      retrieval: retrieval as never,
+    });
+
+    const database = databaseState.database as {
+      transaction: {
+        memoryChatAssertionReceipt: { upsert: ReturnType<typeof vi.fn> };
+      };
+    };
+    expect(database.transaction.memoryChatAssertionReceipt.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          conversationId: "00000000-0000-4000-8000-000000000081",
+          timezone: "Asia/Shanghai",
+          semanticContext,
+          retrieval,
+        }),
+      }),
+    );
+
+    await expect(loadChatAssertionWritebackJob({
+      actorId: "00000000-0000-4000-8000-000000000001",
+      clientMessageId: "message-current",
+    })).resolves.toEqual(expect.objectContaining({
+      actor: expect.objectContaining({ displayName: "开发用户" }),
+      conversationId: "00000000-0000-4000-8000-000000000081",
+      timezone: "Asia/Shanghai",
+      semanticContext,
+      retrieval,
+      queueDecision: { reason: "用户提供了新任会长信息" },
+    }));
+  });
+
   it("records actual published Assertion and Object IDs", async () => {
     await completeChatAssertionReceipt({
       actorId: "00000000-0000-4000-8000-000000000001",
@@ -103,6 +184,7 @@ describe("Chat Assertion processing receipts", () => {
       publishedAssertions: 1,
       publishedAssertionIds: ["assertion-1"],
       affectedObjectIds: ["object-1"],
+      higherMemoryObjectIds: ["object-1"],
       affectedObjects: [{
         id: "object-1",
         canonicalName: "雷岳鑫",
