@@ -58,10 +58,18 @@ AI_VISION_API_BASE_URL=
 pnpm dev
 ```
 
+首次打开时，Echo 会进入 `/setup` 创建第一个管理员。创建登录账号时会同时建立
+`MemoryActor` 并关联当前 Shared Brain 中的 Person Object / PersonCard；因此首次配置前需要
+已存在一个完成导入的 Memory Compilation。管理员可在“账号管理”中创建成员、重置密码、
+切换角色和停用账号。
+
+每个登录成员可以创建多条私有 AI 对话。完整对话列表和消息按 Actor 隔离；经记忆维护形成的
+Ambient Higher Memory、Assertion 和经人确认的 Business View 仍属于共享组织认知。
+
 当前聊天入口使用 OpenAI-compatible 的 `/chat/completions` 接口和 AI SDK 流式 tool loop。
 模型会自行判断是否需要调用 `searchMemory`，并可继续用 `followObject` 沿已经发现的
-GlobalObject 探索 Assertion；问候、改写等不需要组织知识的请求不会强制搜索。前端聊天记录
-暂存在浏览器页面状态中，刷新后不会保留。
+GlobalObject 探索 Assertion；问候、改写等不需要组织知识的请求不会强制搜索。前端聊天记录会按
+登录 Actor 和 Conversation 持久化到 PostgreSQL，刷新或切换对话时从服务端恢复。
 
 ## Object–Assertion 搜索
 

@@ -1,20 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { loadChatMessages, saveChatMessage } from "@/chat/persistence";
+import {
+  ChatConversationAccessError,
+  loadChatMessages,
+  saveChatMessage,
+} from "@/chat/persistence";
 
 const actor = {
   id: "00000000-0000-4000-8000-000000000001",
   displayName: "开发用户",
 };
+const conversationId = "00000000-0000-4000-8000-000000000002";
 
 function databaseFixture(rows: unknown[] = []) {
   const transaction = {
-    memoryActor: {
-      upsert: vi.fn().mockResolvedValue(undefined),
-    },
     chatConversation: {
-      upsert: vi.fn().mockResolvedValue({
-        id: "00000000-0000-4000-8000-000000000002",
+      findFirst: vi.fn().mockResolvedValue({
+        id: conversationId,
+        title: "新对话",
+        archivedAt: null,
+        lastMessageAt: new Date("2026-08-16T00:00:00.000Z"),
+        createdAt: new Date("2026-08-16T00:00:00.000Z"),
       }),
       update: vi.fn().mockResolvedValue(undefined),
     },
@@ -56,17 +62,16 @@ describe("chat persistence", () => {
       ],
     };
 
-    await saveChatMessage({ actor, message, position: 2 }, database as never);
+    await saveChatMessage({ actor, conversationId, message, position: 2 }, database as never);
 
-    expect(transaction.memoryActor.upsert).toHaveBeenCalledWith({
-      where: { id: actor.id },
-      update: { displayName: actor.displayName },
-      create: actor,
+    expect(transaction.chatConversation.findFirst).toHaveBeenCalledWith({
+      where: { id: conversationId, actorId: actor.id },
+      select: expect.any(Object),
     });
     expect(transaction.chatMessage.upsert).toHaveBeenCalledWith({
       where: {
         conversationId_clientMessageId: {
-          conversationId: "00000000-0000-4000-8000-000000000002",
+          conversationId,
           clientMessageId: "assistant-1",
         },
       },
@@ -95,7 +100,7 @@ describe("chat persistence", () => {
       parts: [{ type: "data-viewReferences", data: { references: [] } }],
     }]);
 
-    const messages = await loadChatMessages(actor, database as never);
+    const messages = await loadChatMessages(actor, conversationId, database as never);
 
     expect(transaction.chatMessage.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -111,5 +116,14 @@ describe("chat persistence", () => {
       role: "assistant",
       parts: [{ type: "data-viewReferences", data: { references: [] } }],
     }]);
+  });
+
+  it("rejects a conversation id that does not belong to the current actor", async () => {
+    const { database, transaction } = databaseFixture();
+    transaction.chatConversation.findFirst.mockResolvedValue(null);
+
+    await expect(loadChatMessages(actor, conversationId, database as never))
+      .rejects.toBeInstanceOf(ChatConversationAccessError);
+    expect(transaction.chatMessage.findMany).not.toHaveBeenCalled();
   });
 });

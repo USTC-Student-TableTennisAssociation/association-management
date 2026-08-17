@@ -35,6 +35,16 @@ enum ChatMessageRole {
   SYSTEM
 }
 
+enum AuthUserRole {
+  ADMIN
+  MEMBER
+}
+
+enum AuthUserStatus {
+  ACTIVE
+  DISABLED
+}
+
 enum MemoryAmbientHigherMemoryScope {
   workspace
   recent
@@ -468,6 +478,10 @@ model MemoryChatAssertionReceipt {
   queueReason           String                           @map("queue_reason") @db.Text
   status                MemoryChatAssertionReceiptStatus @default(queued)
   submittedAt           DateTime                         @map("submitted_at") @db.Timestamptz(3)
+  conversationId        String?                          @map("conversation_id") @db.Uuid
+  timezone              String?                          @db.Text
+  semanticContext       Json?                            @map("semantic_context") @db.JsonB
+  retrieval             Json?                            @db.JsonB
   startedAt             DateTime?                        @map("started_at") @db.Timestamptz(3)
   completedAt           DateTime?                        @map("completed_at") @db.Timestamptz(3)
   publishedAssertions   Int                              @default(0) @map("published_assertions")
@@ -479,12 +493,14 @@ model MemoryChatAssertionReceipt {
   createdAt             DateTime                         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  actor       MemoryActor       @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  compilation  MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  actor        MemoryActor       @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  conversation ChatConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
   @@unique([actorId, clientMessageId])
   @@index([compilationId, submittedAt])
   @@index([actorId, updatedAt])
+  @@index([conversationId, submittedAt])
   @@map("memory_chat_assertion_receipts")
 }
 
@@ -492,6 +508,7 @@ model MemoryChatAssertionReceipt {
 model MemoryChatEvidence {
   id                 String   @id @default(uuid()) @db.Uuid
   compilationId      String   @map("compilation_id") @db.Uuid
+  conversationId     String?  @map("conversation_id") @db.Uuid
   clientMessageId    String   @map("client_message_id") @db.Text
   submittedByActorId String   @map("submitted_by_actor_id") @db.Uuid
   submittedAt        DateTime @map("submitted_at") @db.Timestamptz(3)
@@ -501,12 +518,14 @@ model MemoryChatEvidence {
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   compilation    MemoryCompilation                 @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  conversation   ChatConversation?                 @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   submittedBy    MemoryActor                       @relation(fields: [submittedByActorId], references: [id], onDelete: Restrict)
   assertionLinks MemoryAssertionChatEvidenceLink[]
   objectMentions MemoryChatObjectMention[]
 
   @@unique([submittedByActorId, clientMessageId])
   @@index([compilationId, submittedAt])
+  @@index([conversationId, submittedAt])
   @@map("memory_chat_evidence")
 }
 
@@ -537,21 +556,65 @@ model MemoryActor {
   chatAssertionCaptures MemoryChatAssertionCapture[]
   chatAssertionReceipts MemoryChatAssertionReceipt[]
   chatConversations     ChatConversation[]
+  authUser              AuthUser?
 
   @@map("memory_actors")
 }
 
-/// 第一版每个 Actor 只有一个默认对话；后续可在不改变 Message 协议的前提下扩展标题、列表与归档。
+/// Actor 的私有 AI 对话。共享组织认知通过 Assertion / Business View 汇合，不通过暴露完整对话汇合。
 model ChatConversation {
-  id        String   @id @default(uuid()) @db.Uuid
-  actorId   String   @unique @map("actor_id") @db.Uuid
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id            String    @id @default(uuid()) @db.Uuid
+  actorId       String    @map("actor_id") @db.Uuid
+  title         String    @default("新对话") @db.Text
+  archivedAt    DateTime? @map("archived_at") @db.Timestamptz(3)
+  lastMessageAt DateTime  @default(now()) @map("last_message_at") @db.Timestamptz(3)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  actor    MemoryActor   @relation(fields: [actorId], references: [id], onDelete: Cascade)
-  messages ChatMessage[]
+  actor             MemoryActor                  @relation(fields: [actorId], references: [id], onDelete: Cascade)
+  messages          ChatMessage[]
+  chatEvidence      MemoryChatEvidence[]
+  assertionReceipts MemoryChatAssertionReceipt[]
 
+  @@index([actorId, archivedAt, lastMessageAt])
   @@map("chat_conversations")
+}
+
+/// 登录凭据与权限主体。Actor 保留长期行为来源，Person Object 表示现实中的人。
+model AuthUser {
+  id                  String         @id @default(uuid()) @db.Uuid
+  loginName           String         @map("login_name") @db.Text
+  normalizedLoginName String         @unique @map("normalized_login_name") @db.Text
+  passwordHash        String         @map("password_hash") @db.Text
+  role                AuthUserRole   @default(MEMBER)
+  status              AuthUserStatus @default(ACTIVE)
+  actorId             String         @unique @map("actor_id") @db.Uuid
+  personObjectId      String?        @unique @map("person_object_id") @db.Uuid
+  lastLoginAt         DateTime?      @map("last_login_at") @db.Timestamptz(3)
+  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  actor        MemoryActor         @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  personObject MemoryGlobalObject? @relation(fields: [personObjectId], references: [id], onDelete: SetNull)
+  sessions     AuthSession[]
+
+  @@map("auth_users")
+}
+
+/// 数据库会话只保存随机 token 的摘要；原始 token 只出现在 HttpOnly Cookie 中。
+model AuthSession {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  tokenHash  String   @unique @map("token_hash") @db.Text
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz(3)
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user AuthUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+  @@map("auth_sessions")
 }
 
 /// 持久化浏览器实际展示的完整 AI SDK UIMessage parts，而不是只保存最终纯文本。
@@ -616,6 +679,7 @@ model MemoryGlobalObject {
   semanticAssertionLinks MemoryAssertionSemanticObjectLink[]
   higherMemory           MemoryObjectHigherMemory?
   semanticCards          SemanticCard[]
+  authUsers              AuthUser[]
 
   @@unique([compilationId, globalObjectKey])
   @@index([compilationId])
@@ -678,6 +742,20 @@ model MemoryAmbientHigherMemory {
 
   @@index([maintainedAt])
   @@map("memory_ambient_higher_memories")
+}
+
+/// Business View 的高层动态摘要；Frame 仍由代码中的 View Definition 提供。
+model SemanticViewHigherMemory {
+  id                String   @id @default(uuid()) @db.Uuid
+  viewKey           String   @unique @map("view_key") @db.Text
+  contentMarkdown   String   @map("content_markdown") @db.Text
+  maintainedAt      DateTime @map("maintained_at") @db.Timestamptz(3)
+  maintenanceReason String   @map("maintenance_reason") @db.Text
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([maintainedAt])
+  @@map("semantic_view_higher_memories")
 }
 
 /// Reference Assertion 对 Global Object 的语义覆盖；不要求 Object 名称出现在 Assertion 正文中。

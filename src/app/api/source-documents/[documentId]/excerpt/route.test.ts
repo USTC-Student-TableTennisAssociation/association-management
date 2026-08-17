@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sourceState = vi.hoisted(() => ({ read: vi.fn() }));
+const authState = vi.hoisted(() => ({ current: vi.fn() }));
+
+vi.mock("@/auth/session", () => ({
+  currentAuthUser: authState.current,
+  unauthorizedResponse: () => Response.json({ error: "请先登录。" }, { status: 401 }),
+}));
 
 vi.mock("@/memory/source-document", () => ({
   readSourceDocumentRange: sourceState.read,
@@ -11,6 +17,7 @@ import { GET } from "@/app/api/source-documents/[documentId]/excerpt/route";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  authState.current.mockResolvedValue({ userId: "user-1" });
   sourceState.read.mockResolvedValue({
     document: { id: "doc-1", title: "测试原文" },
     blocks: [{ sourceBlockId: "block-1", markdown: "按需正文" }],

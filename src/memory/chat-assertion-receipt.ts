@@ -3,7 +3,12 @@ import { z } from "zod";
 
 import { getDatabase } from "@/db";
 import { Prisma } from "@/generated/prisma/client";
-import type { ChatAssertionCaptureResult } from "@/memory/chat-assertion";
+import type {
+  ChatAssertionCaptureInput,
+  ChatAssertionCaptureResult,
+  ChatAssertionSemanticContext,
+} from "@/memory/chat-assertion";
+import type { MemoryRetrievalResult } from "@/memory/types";
 
 export type ChatAssertionReceiptStatus =
   | "queued"
@@ -40,6 +45,10 @@ type QueueReceiptInput = ChatAssertionReceiptKey & {
   submittedAt: string;
   execution: ChatAssertionExecution;
   queueReason: string;
+  conversationId?: string;
+  timezone?: string;
+  semanticContext?: ChatAssertionSemanticContext;
+  retrieval?: MemoryRetrievalResult;
 };
 
 const affectedObjectsSchema = z.array(z.object({
@@ -57,6 +66,21 @@ function validDate(value: string): Date {
 function errorMessage(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   return raw.replace(/\s+/g, " ").trim().slice(0, 2_000) || "未知错误";
+}
+
+function jsonInput(value: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+}
+
+function persistedPayload(input: QueueReceiptInput) {
+  return {
+    ...(input.conversationId ? { conversationId: input.conversationId } : {}),
+    ...(input.timezone ? { timezone: input.timezone } : {}),
+    ...(input.semanticContext
+      ? { semanticContext: jsonInput(input.semanticContext) }
+      : {}),
+    ...(input.retrieval ? { retrieval: jsonInput(input.retrieval) } : {}),
+  };
 }
 
 export async function queueChatAssertionReceipt(input: QueueReceiptInput): Promise<void> {
@@ -92,6 +116,7 @@ export async function queueChatAssertionReceipt(input: QueueReceiptInput): Promi
         queueReason: input.queueReason,
         status: "queued",
         submittedAt,
+        ...persistedPayload(input),
       },
       update: {
         compilationId: compilation.id,
@@ -99,6 +124,7 @@ export async function queueChatAssertionReceipt(input: QueueReceiptInput): Promi
         queueReason: input.queueReason,
         status: "queued",
         submittedAt,
+        ...persistedPayload(input),
         startedAt: null,
         completedAt: null,
         publishedAssertions: 0,
@@ -110,6 +136,53 @@ export async function queueChatAssertionReceipt(input: QueueReceiptInput): Promi
       },
     });
   });
+}
+
+/** Load the durable work payload; after() only needs to retain this stable key. */
+export async function loadChatAssertionWritebackJob(
+  key: ChatAssertionReceiptKey,
+): Promise<ChatAssertionCaptureInput> {
+  const database = getDatabase();
+  const row = await database.memoryChatAssertionReceipt.findUnique({
+    where: {
+      actorId_clientMessageId: {
+        actorId: key.actorId,
+        clientMessageId: key.clientMessageId,
+      },
+    },
+    select: {
+      actor: { select: { id: true, displayName: true } },
+      conversationId: true,
+      clientMessageId: true,
+      execution: true,
+      queueReason: true,
+      status: true,
+      submittedAt: true,
+      timezone: true,
+      semanticContext: true,
+      retrieval: true,
+    },
+  });
+  if (!row) throw new Error("找不到持久化的 Assertion 写回任务");
+  if (row.execution !== "background") {
+    throw new Error("前台 Assertion 回执不能作为后台写回任务执行");
+  }
+  if (row.status !== "queued") {
+    throw new Error(`Assertion 写回任务当前状态不是 queued：${row.status}`);
+  }
+  if (!row.timezone || !row.semanticContext || !row.retrieval) {
+    throw new Error("Assertion 写回任务缺少可恢复的完整输入");
+  }
+  return {
+    actor: row.actor,
+    ...(row.conversationId ? { conversationId: row.conversationId } : {}),
+    clientMessageId: row.clientMessageId,
+    submittedAt: row.submittedAt.toISOString(),
+    timezone: row.timezone,
+    semanticContext: row.semanticContext as unknown as ChatAssertionSemanticContext,
+    retrieval: row.retrieval as unknown as MemoryRetrievalResult,
+    queueDecision: { reason: row.queueReason },
+  };
 }
 
 export async function markChatAssertionReceiptRunning(

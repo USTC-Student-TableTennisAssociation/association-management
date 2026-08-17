@@ -101,7 +101,8 @@ function jsonReplacer() {
 
 export function debugJson(value: unknown): string {
   try {
-    return redactDebugSecrets(JSON.stringify(value, jsonReplacer(), 2));
+    const json = JSON.stringify(value, jsonReplacer(), 2);
+    return redactDebugSecrets(json === undefined ? "undefined" : json);
   } catch (error) {
     return redactDebugSecrets(`[无法序列化：${error instanceof Error ? error.message : String(error)}]`);
   }

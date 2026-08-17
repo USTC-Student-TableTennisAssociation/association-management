@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { currentAuthUser, unauthorizedResponse } from "@/auth/session";
+
 import {
   decideObjectChangeProposal,
   ObjectManagementValidationError,
@@ -14,6 +16,7 @@ export async function POST(
   context: { params: Promise<{ proposalId: string }> },
 ) {
   try {
+    if (!await currentAuthUser()) return unauthorizedResponse();
     const { proposalId } = await context.params;
     const decision = decisionSchema.parse(await request.json());
     return Response.json(

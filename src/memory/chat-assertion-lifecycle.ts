@@ -9,6 +9,7 @@ import {
 import {
   completeChatAssertionReceipt,
   failChatAssertionReceipt,
+  loadChatAssertionWritebackJob,
   markChatAssertionReceiptRunning,
   type ChatAssertionReceiptKey,
 } from "@/memory/chat-assertion-receipt";
@@ -21,6 +22,7 @@ import { addObjectTargetsToQueueDecision } from "@/memory/higher-memory-queue";
 
 export type ChatMemoryMaintenanceInput = {
   assertion?: ChatAssertionCaptureInput;
+  assertionJob?: ChatAssertionReceiptKey;
   assertionReceipt?: ChatAssertionReceiptKey;
   completedAssertion?: {
     input: ChatAssertionCaptureInput;
@@ -65,8 +67,27 @@ export function createChatMemoryMaintenanceScheduler(
           publishedAssertions: 0,
           publishedAssertionIds: [],
           affectedObjectIds: [],
+          higherMemoryObjectIds: [],
           affectedObjects: [],
         };
+        let assertionInput = input.assertion;
+        if (!input.completedAssertion && !assertionInput && input.assertionJob) {
+          try {
+            assertionInput = await loadChatAssertionWritebackJob(input.assertionJob);
+            await trace?.appendSection(
+              "后台 Chat → Assertion 任务恢复",
+              "已使用持久化回执 key 重新加载完整语义上下文与检索快照；后台任务不依赖请求局部变量保存工作内容。",
+            );
+          } catch (error) {
+            console.error("[chat.assertion-job.load]", error);
+            await trace?.appendError("加载持久化 Assertion 写回任务失败", error);
+            try {
+              await failChatAssertionReceipt(input.assertionJob, error);
+            } catch (receiptError) {
+              console.error("[chat.assertion-receipt.failed]", receiptError);
+            }
+          }
+        }
         if (input.completedAssertion) {
           await trace?.appendSection(
             "后台 Chat → Assertion 跳过",
@@ -76,7 +97,7 @@ export function createChatMemoryMaintenanceScheduler(
               `- 关联 Object：${captureResult.affectedObjectIds.length} 个`,
             ].join("\n"),
           );
-        } else if (input.assertion) {
+        } else if (assertionInput) {
           try {
             if (input.assertionReceipt) {
               try {
@@ -88,11 +109,11 @@ export function createChatMemoryMaintenanceScheduler(
             }
             await trace?.appendSection(
               "后台 Chat → Assertion 开始",
-              "主回答模型已登记 Assertion 提取意图。",
+              "主回答已结束，现在独立判断用户原话是否值得固化。",
             );
-            captureResult = await captureChatAssertions(input.assertion, trace);
+            captureResult = await captureChatAssertions(assertionInput, trace);
             console.info("[chat.assertion-capture]", JSON.stringify({
-              clientMessageId: input.assertion.clientMessageId,
+              clientMessageId: assertionInput.clientMessageId,
               ...captureResult,
             }));
             if (input.assertionReceipt) {
@@ -118,22 +139,26 @@ export function createChatMemoryMaintenanceScheduler(
         } else {
           await trace?.appendSection(
             "后台 Chat → Assertion 跳过",
-            "主回答模型没有登记 Assertion 提取；Higher Memory 如有维护意图，仍可基于数据库中已有 Assertion 继续。",
+            "本轮没有可执行的回答后 Assertion 任务；Higher Memory 如有维护意图，仍可基于数据库中已有 Assertion 继续。",
           );
         }
 
         let higherMemoryInput = input.higherMemory;
-        const assertionContext = input.assertion ?? input.completedAssertion?.input;
+        const assertionContext = assertionInput ?? input.completedAssertion?.input;
         if (assertionContext && captureResult.publishedAssertions > 0) {
           try {
             const compilationId = assertionContext.retrieval.compilationId ??
               assertionContext.retrieval.trace?.snapshot.id;
-            const automaticallyAffected = await findExistingHigherMemoryObjectIds({
+            const existingHigherMemoryObjectIds = await findExistingHigherMemoryObjectIds({
               objectIds: captureResult.affectedObjectIds,
               compilationId,
             });
+            const automaticallyAffected = [...new Set([
+              ...captureResult.higherMemoryObjectIds,
+              ...existingHigherMemoryObjectIds,
+            ])];
             if (automaticallyAffected.length) {
-              const automaticReason = "本轮新发布 Assertion 涉及已有 Higher Memory，自动刷新以避免旧高层认知遮住新事实。";
+              const automaticReason = "回答后的知识固化判断选中了少数重要 Object，或新 Assertion 需要刷新已有 Higher Memory。";
               higherMemoryInput = {
                 clientMessageId: higherMemoryInput?.clientMessageId ?? assertionContext.clientMessageId,
                 submittedAt: higherMemoryInput?.submittedAt ?? assertionContext.submittedAt,
@@ -149,9 +174,9 @@ export function createChatMemoryMaintenanceScheduler(
               await trace?.appendSection(
                 "Higher Memory 自动补偿触发",
                 [
-                  `新发布的 ${captureResult.publishedAssertions} 条 Assertion 关联了已有 Higher Memory。`,
+                  `新发布的 ${captureResult.publishedAssertions} 条 Assertion 关联了需要维护高层认知的 Object。`,
                   `自动加入维护的 Object：${automaticallyAffected.map((id) => `\`${id}\``).join("、")}`,
-                  "这里只刷新已经存在的 Higher Memory，不会因此为普通 Object 新建 Higher Memory。",
+                  "新建只针对后台 Agent 明确选中的重要 Object；已有 Higher Memory 只要受新 Assertion 影响就刷新。",
                 ].join("\n"),
               );
             }

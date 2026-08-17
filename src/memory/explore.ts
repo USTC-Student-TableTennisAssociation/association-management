@@ -54,7 +54,7 @@ export type MemoryExploreAssertion = {
 };
 
 export type MemoryExploreResult = {
-  kind: "search-memory" | "follow-object";
+  kind: "search-memory" | "follow-object" | "business-context" | "artifact-knowledge";
   mode: MemoryRetrievalResult["mode"];
   compilationId?: string;
   query?: string;
