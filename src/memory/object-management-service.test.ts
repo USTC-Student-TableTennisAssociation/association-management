@@ -40,11 +40,13 @@ function objectRow(options?: { withCard?: boolean }) {
     literalReferences: [],
     semanticAssertionLinks: [],
     higherMemory: null,
-    semanticCards: options?.withCard
+    relatedViewCards: options?.withCard
       ? [{
-          id: "00000000-0000-4000-8000-000000000050",
-          viewKey: "society_information",
-          cardTypeKey: "PositionCard",
+          card: {
+            id: "00000000-0000-4000-8000-000000000050",
+            viewKey: "society_information",
+            cardTypeKey: "PositionCard",
+          },
         }]
       : [],
   };

@@ -8,7 +8,6 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { Pool } from "pg";
 
 import { Prisma, PrismaClient } from "../src/generated/prisma/client.js";
-import { protectedBusinessViewImportMessage } from "./business-view-import-protection.js";
 
 type SourceMetadata = {
   path: string;
@@ -1008,22 +1007,6 @@ async function importColdStart(
   const pool = new Pool({ connectionString });
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
   try {
-    const [protectedViews, proposalCount] = await Promise.all([
-      prisma.semanticCard.groupBy({
-        by: ["viewKey"],
-        where: { compilationId: { not: null } },
-        _count: { _all: true },
-      }),
-      prisma.semanticCardProposal.count(),
-    ]);
-    const protectedViewMessage = protectedBusinessViewImportMessage(
-      protectedViews.map((view) => ({
-        viewKey: view.viewKey,
-        cardCount: view._count._all,
-      })),
-      proposalCount,
-    );
-    if (protectedViewMessage) throw new Error(protectedViewMessage);
     await prisma.$transaction(async (transaction) => {
       // GlobalObject 端使用 RESTRICT，不能只依赖 Compilation/Assertion 的级联顺序。
       // 先移除当前快照的解析连接，再原子替换整个单一 Compilation。

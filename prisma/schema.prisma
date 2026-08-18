@@ -13,12 +13,24 @@ enum MemoryAssertionKind {
   reference
 }
 
-enum SemanticCardProposalStatus {
+enum ProposalStatus {
   pending
   approved
   rejected
   applied
   failed
+}
+
+enum InstalledViewStatus {
+  enabled
+  disabled
+  incompatible
+}
+
+enum ViewCommandInitiator {
+  human
+  ai
+  system
 }
 
 enum MemoryChatAssertionReceiptStatus {
@@ -331,8 +343,6 @@ model MemoryCompilation {
   objectHigherMemories    MemoryObjectHigherMemory[]
   globalObjects           MemoryGlobalObject[]
   assertionEmbeddingIndex MemoryAssertionEmbeddingIndex?
-  semanticCards           SemanticCard[]
-  semanticCardProposals   SemanticCardProposal[]
   objectChangeProposals   MemoryObjectChangeProposal[]
 
   @@index([sourceSha256])
@@ -427,17 +437,15 @@ model MemoryAssertion {
   contextDependent                Boolean             @map("context_dependent")
   createdAt                       DateTime            @default(now()) @map("created_at")
 
-  compilation              MemoryCompilation                       @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  sourceRegion             MemorySourceRegion?                     @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
-  chatCapture              MemoryChatAssertionCapture?             @relation(fields: [chatCaptureId], references: [id], onDelete: Cascade)
-  chatEvidenceLinks        MemoryAssertionChatEvidenceLink[]
-  fragmentReferences       MemoryAssertionFragmentReference[]
-  literalGlobalReferences  MemoryGlobalAssertionLiteralReference[]
-  semanticObjectLinks      MemoryAssertionSemanticObjectLink[]
-  sourceBlockLinks         MemoryAssertionSourceBlock[]
-  embedding                MemoryAssertionEmbedding?
-  contentDimensionSupports SemanticContentDimensionSupport[]
-  slotBindingSupports      SemanticSlotBindingSupport[]
+  compilation             MemoryCompilation                       @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  sourceRegion            MemorySourceRegion?                     @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  chatCapture             MemoryChatAssertionCapture?             @relation(fields: [chatCaptureId], references: [id], onDelete: Cascade)
+  chatEvidenceLinks       MemoryAssertionChatEvidenceLink[]
+  fragmentReferences      MemoryAssertionFragmentReference[]
+  literalGlobalReferences MemoryGlobalAssertionLiteralReference[]
+  semanticObjectLinks     MemoryAssertionSemanticObjectLink[]
+  sourceBlockLinks        MemoryAssertionSourceBlock[]
+  embedding               MemoryAssertionEmbedding?
 
   @@unique([sourceRegionId, sourceClaimId])
   @@unique([chatCaptureId, sourceClaimId])
@@ -678,7 +686,7 @@ model MemoryGlobalObject {
   literalReferences      MemoryGlobalAssertionLiteralReference[]
   semanticAssertionLinks MemoryAssertionSemanticObjectLink[]
   higherMemory           MemoryObjectHigherMemory?
-  semanticCards          SemanticCard[]
+  relatedViewCards       ViewCardRelatedObject[]
   authUsers              AuthUser[]
 
   @@unique([compilationId, globalObjectKey])
@@ -744,8 +752,8 @@ model MemoryAmbientHigherMemory {
   @@map("memory_ambient_higher_memories")
 }
 
-/// Business View 的高层动态摘要；Frame 仍由代码中的 View Definition 提供。
-model SemanticViewHigherMemory {
+/// Business View 的高层动态摘要；它不是精确业务状态的权威来源。
+model ViewHigherMemory {
   id                String   @id @default(uuid()) @db.Uuid
   viewKey           String   @unique @map("view_key") @db.Text
   contentMarkdown   String   @map("content_markdown") @db.Text
@@ -754,8 +762,10 @@ model SemanticViewHigherMemory {
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  installedView InstalledView @relation(fields: [viewKey], references: [viewKey], onDelete: Cascade)
+
   @@index([maintainedAt])
-  @@map("semantic_view_higher_memories")
+  @@map("view_higher_memories")
 }
 
 /// Reference Assertion 对 Global Object 的语义覆盖；不要求 Object 名称出现在 Assertion 正文中。
@@ -845,117 +855,160 @@ model MemoryAssertionEmbedding {
   @@map("memory_assertion_embeddings")
 }
 
-/// 业务 View 中的一张正式 Card。知识投影可锚定 Global Object；原生 Runtime Card 不强制来源身份。
-model SemanticCard {
-  id             String   @id @default(uuid()) @db.Uuid
-  compilationId  String?  @map("compilation_id") @db.Uuid
-  sourceObjectId String?  @map("source_object_id") @db.Uuid
-  viewKey        String   @map("view_key") @db.Text
-  cardTypeKey    String   @map("card_type_key") @db.Text
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+/// 已安装 View 的持久化运行状态。所有 View 共享同一套 Runtime API。
+model InstalledView {
+  viewKey       String              @id @map("view_key") @db.Text
+  moduleId      String              @map("module_id") @db.Text
+  moduleVersion String              @map("module_version") @db.Text
+  schemaVersion String              @map("schema_version") @db.Text
+  stateVersion  BigInt              @default(0) @map("state_version")
+  status        InstalledViewStatus @default(enabled)
+  settingsJson  Json                @map("settings_json") @db.JsonB
+  createdAt     DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime            @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  compilation       MemoryCompilation?         @relation(fields: [compilationId], references: [id], onDelete: Restrict)
-  sourceObject      MemoryGlobalObject?        @relation(fields: [sourceObjectId], references: [id], onDelete: Restrict)
-  contentDimensions SemanticContentDimension[]
-  outgoingSlots     SemanticSlotBinding[]      @relation("SemanticSlotSource")
-  incomingSlots     SemanticSlotBinding[]      @relation("SemanticSlotTarget")
+  cards        ViewCard[]
+  proposals    ViewCommandProposal[]
+  executions   ViewCommandExecution[]
+  outbox       DomainEventOutbox[]
+  higherMemory ViewHigherMemory?
+
+  @@map("installed_views")
+}
+
+/// View-local identity 的 Card；不使用 Compilation 或 Object 充当 Card identity。
+model ViewCard {
+  id          String   @id @default(uuid()) @db.Uuid
+  viewKey     String   @map("view_key") @db.Text
+  cardTypeKey String   @map("card_type_key") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  installedView  InstalledView           @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
+  dimensions     ViewDimensionValue[]
+  outgoingSlots  ViewSlotBinding[]       @relation("ViewSlotSource")
+  incomingSlots  ViewSlotBinding[]       @relation("ViewSlotTarget")
+  relatedObjects ViewCardRelatedObject[]
 
   @@index([viewKey, cardTypeKey])
-  @@index([sourceObjectId])
-  @@map("semantic_cards")
+  @@map("view_cards")
 }
 
-/// Card 中开放、可由 Chat AI 提议演化的认知内容。
-model SemanticContentDimension {
-  id              String   @id @default(uuid()) @db.Uuid
-  cardId          String   @map("card_id") @db.Uuid
-  name            String   @db.Text
-  contentMarkdown String   @map("content_markdown") @db.Text
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+/// Schema 声明的强类型 Dimension 值；值以 JSONB 存储并由 Runtime 校验。
+model ViewDimensionValue {
+  cardId       String   @map("card_id") @db.Uuid
+  dimensionKey String   @map("dimension_key") @db.Text
+  valueJson    Json     @map("value_json") @db.JsonB
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  card     SemanticCard                      @relation(fields: [cardId], references: [id], onDelete: Cascade)
-  supports SemanticContentDimensionSupport[]
+  card ViewCard @relation(fields: [cardId], references: [id], onDelete: Cascade)
 
-  @@unique([cardId, name])
-  @@map("semantic_content_dimensions")
+  @@id([cardId, dimensionKey])
+  @@map("view_dimension_values")
 }
 
-/// 旧版可选来源关联；正式 ContentDimension 本身不依赖 Assertion 才成立。
-model SemanticContentDimensionSupport {
-  contentDimensionId String @map("content_dimension_id") @db.Uuid
-  assertionId        String @map("assertion_id") @db.Uuid
-
-  contentDimension SemanticContentDimension @relation(fields: [contentDimensionId], references: [id], onDelete: Cascade)
-  assertion        MemoryAssertion          @relation(fields: [assertionId], references: [id], onDelete: Restrict)
-
-  @@id([contentDimensionId, assertionId])
-  @@index([assertionId])
-  @@map("semantic_content_dimension_supports")
-}
-
-/// 开发者定义 Slot schema；数据库仅保存当前正式 Card-to-Card binding。
-model SemanticSlotBinding {
+/// 仅允许连接同一 View 内 Card 的 Slot binding。
+model ViewSlotBinding {
   sourceCardId String   @map("source_card_id") @db.Uuid
   slotKey      String   @map("slot_key") @db.Text
   targetCardId String   @map("target_card_id") @db.Uuid
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  sourceCard SemanticCard                 @relation("SemanticSlotSource", fields: [sourceCardId], references: [id], onDelete: Cascade)
-  targetCard SemanticCard                 @relation("SemanticSlotTarget", fields: [targetCardId], references: [id], onDelete: Restrict)
-  supports   SemanticSlotBindingSupport[]
+  sourceCard ViewCard @relation("ViewSlotSource", fields: [sourceCardId], references: [id], onDelete: Cascade)
+  targetCard ViewCard @relation("ViewSlotTarget", fields: [targetCardId], references: [id], onDelete: Restrict)
 
   @@id([sourceCardId, slotKey, targetCardId])
   @@index([targetCardId])
-  @@map("semantic_slot_bindings")
+  @@map("view_slot_bindings")
 }
 
-/// 旧版可选来源关联；正式 SlotBinding 本身不依赖 Assertion 才成立。
-model SemanticSlotBindingSupport {
-  sourceCardId String @map("source_card_id") @db.Uuid
-  slotKey      String @map("slot_key") @db.Text
-  targetCardId String @map("target_card_id") @db.Uuid
-  assertionId  String @map("assertion_id") @db.Uuid
+/// Card 与稳定认知 Object 的极简关联；没有 role、relation type 或 Assertion support。
+model ViewCardRelatedObject {
+  cardId    String   @map("card_id") @db.Uuid
+  objectId  String   @map("object_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  binding   SemanticSlotBinding @relation(fields: [sourceCardId, slotKey, targetCardId], references: [sourceCardId, slotKey, targetCardId], onDelete: Cascade)
-  assertion MemoryAssertion     @relation(fields: [assertionId], references: [id], onDelete: Restrict)
+  card   ViewCard           @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  object MemoryGlobalObject @relation(fields: [objectId], references: [id], onDelete: Restrict)
 
-  @@id([sourceCardId, slotKey, targetCardId, assertionId])
-  @@index([assertionId])
-  @@map("semantic_slot_binding_supports")
+  @@id([cardId, objectId])
+  @@index([objectId])
+  @@map("view_card_related_objects")
 }
 
-/// Chat 中等待用户明确批准或拒绝的最薄 Proposal 持久化。
-model SemanticCardProposal {
-  id            String                     @id @default(uuid()) @db.Uuid
-  compilationId String                     @map("compilation_id") @db.Uuid
-  viewKey       String                     @map("view_key") @db.Text
-  status        SemanticCardProposalStatus @default(pending)
-  reason        String                     @db.Text
-  payload       Json                       @db.JsonB
-  createdAt     DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
-  decidedAt     DateTime?                  @map("decided_at") @db.Timestamptz(3)
-  appliedAt     DateTime?                  @map("applied_at") @db.Timestamptz(3)
-  failureReason String?                    @map("failure_reason") @db.Text
+/// AI/Skill 在 approval_required 模式下保存的 Domain Command Proposal。
+model ViewCommandProposal {
+  id                   String         @id @default(uuid()) @db.Uuid
+  viewKey              String         @map("view_key") @db.Text
+  commandKey           String         @map("command_key") @db.Text
+  commandVersion       String         @map("command_version") @db.Text
+  inputJson            Json           @map("input_json") @db.JsonB
+  expectedStateVersion BigInt         @map("expected_state_version")
+  proposedByActorId    String?        @map("proposed_by_actor_id") @db.Uuid
+  skillId              String?        @map("skill_id") @db.Text
+  status               ProposalStatus @default(pending)
+  failureReason        String?        @map("failure_reason") @db.Text
+  createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  decidedAt            DateTime?      @map("decided_at") @db.Timestamptz(3)
+  appliedAt            DateTime?      @map("applied_at") @db.Timestamptz(3)
 
-  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Restrict)
+  installedView InstalledView @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
 
   @@index([viewKey, status, createdAt])
-  @@map("semantic_card_proposals")
+  @@map("view_command_proposals")
+}
+
+model ViewCommandExecution {
+  id                 String               @id @default(uuid()) @db.Uuid
+  viewKey            String               @map("view_key") @db.Text
+  commandKey         String               @map("command_key") @db.Text
+  commandVersion     String               @map("command_version") @db.Text
+  inputJson          Json                 @map("input_json") @db.JsonB
+  actorId            String?              @map("actor_id") @db.Uuid
+  initiator          ViewCommandInitiator
+  skillId            String?              @map("skill_id") @db.Text
+  stateVersionBefore BigInt               @map("state_version_before")
+  stateVersionAfter  BigInt               @map("state_version_after")
+  resultSummaryJson  Json?                @map("result_summary_json") @db.JsonB
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  installedView InstalledView @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
+
+  @@index([viewKey, createdAt])
+  @@map("view_command_executions")
+}
+
+model DomainEventOutbox {
+  id           String    @id @default(uuid()) @db.Uuid
+  eventType    String    @map("event_type") @db.Text
+  eventVersion String    @map("event_version") @db.Text
+  viewKey      String    @map("view_key") @db.Text
+  stateVersion BigInt    @map("state_version")
+  payloadJson  Json      @map("payload_json") @db.JsonB
+  metadataJson Json      @map("metadata_json") @db.JsonB
+  occurredAt   DateTime  @default(now()) @map("occurred_at") @db.Timestamptz(3)
+  publishedAt  DateTime? @map("published_at") @db.Timestamptz(3)
+  attempts     Int       @default(0)
+
+  installedView InstalledView @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
+
+  @@index([publishedAt, occurredAt])
+  @@index([viewKey, stateVersion])
+  @@map("domain_event_outbox")
 }
 
 /// 对 GlobalObject 身份的可审计修改建议；批准前不改变名称、归属或 Assertion 引用。
 model MemoryObjectChangeProposal {
-  id            String                     @id @default(uuid()) @db.Uuid
-  compilationId String                     @map("compilation_id") @db.Uuid
-  status        SemanticCardProposalStatus @default(pending)
-  reason        String                     @db.Text
-  payload       Json                       @db.JsonB
-  createdAt     DateTime                   @default(now()) @map("created_at") @db.Timestamptz(3)
-  decidedAt     DateTime?                  @map("decided_at") @db.Timestamptz(3)
-  appliedAt     DateTime?                  @map("applied_at") @db.Timestamptz(3)
-  failureReason String?                    @map("failure_reason") @db.Text
+  id            String         @id @default(uuid()) @db.Uuid
+  compilationId String         @map("compilation_id") @db.Uuid
+  status        ProposalStatus @default(pending)
+  reason        String         @db.Text
+  payload       Json           @db.JsonB
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+  decidedAt     DateTime?      @map("decided_at") @db.Timestamptz(3)
+  appliedAt     DateTime?      @map("applied_at") @db.Timestamptz(3)
+  failureReason String?        @map("failure_reason") @db.Text
 
   compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
 

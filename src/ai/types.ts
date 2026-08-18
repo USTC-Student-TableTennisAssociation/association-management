@@ -5,16 +5,14 @@ import type { ObjectChangeProposalPresentation } from "@/memory/object-managemen
 import type { SourceDocumentReferenceBundle } from "@/memory/source-document-types";
 import type { ArtifactReferenceBundle } from "@/library/artifact-references";
 import type { LibraryPlanPresentation } from "@/library/types";
-import type { ViewProposalPresentation } from "@/semantic-view/types";
 import type {
-  BusinessViewKey,
-  BusinessViewPresentation,
-  SemanticViewReferenceBundle,
-} from "@/semantic-view/types";
+  ViewCommandProposalNotice,
+  ViewReferenceBundle,
+} from "@/agent-runtime/view-types";
 
 export type ChatPageContext = {
-  activeViewKey?: BusinessViewKey;
-  activePresentation: BusinessViewPresentation | "full_chat" | "library";
+  activeViewKey?: string;
+  activePresentation: "inspector" | "full_chat" | "library";
   activeFolderId?: string;
   activeCardId?: string;
   activeNodeId?: string;
@@ -26,9 +24,9 @@ export type ClubChatMessage = UIMessage<
   {
     memorySearch: MemorySearchBundle;
     sourceReferences: SourceDocumentReferenceBundle;
-    viewReferences: SemanticViewReferenceBundle;
     artifactReferences: ArtifactReferenceBundle;
-    viewProposal: ViewProposalPresentation;
+    viewReferences: ViewReferenceBundle;
+    viewCommandProposal: ViewCommandProposalNotice;
     objectChangeProposal: ObjectChangeProposalPresentation;
     libraryProposal: LibraryPlanPresentation;
   }

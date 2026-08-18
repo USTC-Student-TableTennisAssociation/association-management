@@ -138,24 +138,7 @@ async function createUserInTransaction(
       personObject: { select: { id: true, canonicalName: true } },
     },
   });
-  const existingPersonCard = await database.semanticCard.findFirst({
-    where: {
-      sourceObjectId: personObject.id,
-      viewKey: "society_information",
-      cardTypeKey: "PersonCard",
-    },
-    select: { id: true },
-  });
-  const personCard = existingPersonCard ?? await database.semanticCard.create({
-    data: {
-      compilationId: compilation.id,
-      sourceObjectId: personObject.id,
-      viewKey: "society_information",
-      cardTypeKey: "PersonCard",
-    },
-    select: { id: true },
-  });
-  return { ...user, personCardId: personCard.id };
+  return user;
 }
 
 export async function createAuthUser(

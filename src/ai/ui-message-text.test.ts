@@ -33,39 +33,28 @@ describe("finalStepMessageText", () => {
     expect(finalStepMessageText(message)).toBe("继往开来是什么活动？");
   });
 
-  it("keeps a structured View Proposal in later negotiation context", () => {
+  it("keeps a View Command Proposal in later negotiation context", () => {
     const message: ClubChatMessage = {
       id: "assistant-proposal",
       role: "assistant",
       parts: [
         { type: "text", text: "我建议单独展示社团星级。" },
         {
-          type: "data-viewProposal",
+          type: "data-viewCommandProposal",
           data: {
-            id: "00000000-0000-4000-8000-000000000099",
+            proposalId: "00000000-0000-4000-8000-000000000099",
             viewKey: "society_information",
-            status: "pending",
-            reason: "星级是稳定业务方面。",
-            createdAt: "2026-08-11T00:00:00.000Z",
-            changes: [{
-              type: "SET_CONTENT_DIMENSION",
-              title: "设置「社团星级」",
-              cardSelector: "00000000-0000-4000-8000-000000000091",
-              cardId: "00000000-0000-4000-8000-000000000091",
-              cardTypeKey: "SocietyCard",
-              cardLabel: "中国科学技术大学学生乒乓球协会 · 社团卡片",
-              dimensionName: "社团星级",
-              before: null,
-              after: "三星级社团",
-              supports: [],
-            }],
+            commandKey: "society.update_profile",
+            commandVersion: "1",
+            stateVersion: "3",
+            input: { cardId: "00000000-0000-4000-8000-000000000091", rating: "三星级社团" },
           },
         },
       ],
     };
 
-    expect(modelHistoryMessageText(message)).toContain("三星级社团");
-    expect(modelHistoryMessageText(message)).toContain("此前结构化 Proposal");
+    expect(modelHistoryMessageText(message)).toContain("society.update_profile@1");
+    expect(modelHistoryMessageText(message)).toContain("View Command Proposal");
   });
 
   it("keeps an Object Change Proposal in later negotiation context", () => {

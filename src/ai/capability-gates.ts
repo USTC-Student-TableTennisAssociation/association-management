@@ -1,7 +1,6 @@
 import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 
-import { businessViewKeySchema } from "@/semantic-view/types";
 
 export const capabilityGatewayToolNames = [
   "openBusinessContext",
@@ -29,7 +28,7 @@ export const artifactToolNames = [
 ] as const;
 
 const actionToolNames = {
-  business_view: ["loadSkill", "queueChatAssertionCapture", "proposeViewChange"],
+  business_view: ["runViewCommand"],
   object: ["inspectObjectIdentity", "proposeObjectChange"],
   library: ["listLibrary", "inspectLibraryNodes", "proposeLibraryPlan"],
 } as const;
@@ -68,8 +67,9 @@ export function activeCapabilityToolNames(state: OpenedCapabilities): string[] {
 }
 
 export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers: {
+  viewKeySchema: z.ZodType<string>;
   openBusinessContext: (input: {
-    viewKey: "society_information" | "activity_operations";
+    viewKey: string;
     focus: string;
     targetHints: string[];
   }) => Promise<unknown>;
@@ -80,7 +80,7 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
       description:
         "当回答需要 Echo 的业务状态、View 结构能力、组织知识、人物/活动背景时调用。它会立即读取指定正式 View，返回实时 cardTypes schema、相关 Cards、Card Object、Object Higher Memory，以及描述本次读取实际证明内容的 semantics.observations / semantics.answerability。普通闲聊和仅处理用户已给文字时不要调用。",
       inputSchema: z.object({
-        viewKey: businessViewKeySchema
+        viewKey: handlers.viewKeySchema
           .describe("根据每轮已提供的 View Frame 选择一个首要 View"),
         focus: z.string().trim().min(1).max(500)
           .describe("用户围绕目标真正想了解的业务问题"),

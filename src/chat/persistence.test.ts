@@ -49,14 +49,14 @@ describe("chat persistence", () => {
       parts: [
         { type: "text" as const, text: "完整回答" },
         {
-          type: "data-viewProposal" as const,
+          type: "data-viewCommandProposal" as const,
           data: {
-            id: "00000000-0000-4000-8000-000000000099",
-            viewKey: "society_information" as const,
-            status: "pending" as const,
-            reason: "测试",
-            createdAt: "2026-08-15T00:00:00.000Z",
-            changes: [],
+            proposalId: "00000000-0000-4000-8000-000000000099",
+            viewKey: "society_information",
+            commandKey: "society.update_profile",
+            commandVersion: "1",
+            stateVersion: "0",
+            input: { cardId: "00000000-0000-4000-8000-000000000091", rating: "三星" },
           },
         },
       ],
@@ -97,7 +97,10 @@ describe("chat persistence", () => {
     }, {
       clientMessageId: "assistant-1",
       role: "ASSISTANT",
-      parts: [{ type: "data-viewReferences", data: { references: [] } }],
+      parts: [
+        { type: "text", text: "请查看 View。" },
+        { type: "data-viewReferences", data: { references: [] } },
+      ],
     }]);
 
     const messages = await loadChatMessages(actor, conversationId, database as never);
@@ -111,6 +114,13 @@ describe("chat persistence", () => {
       id: "user-1",
       role: "user",
       parts: [{ type: "text", text: "采购怎么报销？" }],
+    }, {
+      id: "assistant-1",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "请查看 View。" },
+        { type: "data-viewReferences", data: { references: [] } },
+      ],
     }]);
   });
 

@@ -13,6 +13,7 @@ import remarkGfm from "remark-gfm";
 
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import type { ArtifactReference } from "@/library/artifact-references";
+import type { ViewInformationReference } from "@/agent-runtime/view-types";
 import {
   compactChatRequestMessages,
   finalStepMessageText,
@@ -30,26 +31,12 @@ import type {
   SourceDocumentReference,
 } from "@/memory/source-document-types";
 import { ObjectChangeProposalCard } from "@/memory/object-management-components";
-import {
-  SemanticViewWorkspace,
-  ViewProposalCard,
-} from "@/semantic-view/components";
-import { proposalChangeFocus } from "@/semantic-view/proposal-preview";
-import {
-  ACTIVITY_OPERATIONS_VIEW,
-  SOCIETY_INFORMATION_VIEW,
-  type BusinessViewKey,
-  type BusinessViewPresentation,
-  type SemanticViewFocus,
-  type SemanticViewReference,
-  type ViewProposalPresentation,
-} from "@/semantic-view/types";
+import { GenericViewInspector } from "@/view-runtime/generic-ui/generic-view-inspector";
+import { ViewCommandProposalCard } from "@/view-runtime/generic-ui/view-command-proposal-card";
 
 const initialMessages: ClubChatMessage[] = [];
 
 type ChatHistoryState = "loading" | "ready" | "error";
-type WorkspaceKey = "chat" | "knowledge-graph" | "library" | "compilation" | BusinessViewKey;
-
 type CurrentUser = {
   userId: string;
   loginName: string;
@@ -58,7 +45,6 @@ type CurrentUser = {
   personObject: {
     id: string;
     canonicalName: string;
-    personCardId: string | null;
   } | null;
 };
 
@@ -68,6 +54,16 @@ type ConversationSummary = {
   archivedAt: string | null;
   lastMessageAt: string;
   createdAt: string;
+};
+
+type InstalledViewSummary = {
+  viewKey: string;
+  label: string;
+  description: string;
+  moduleVersion: string;
+  schemaVersion: string;
+  stateVersion: string;
+  status: "enabled" | "disabled" | "incompatible";
 };
 
 function messageReasoning(message: ClubChatMessage) {
@@ -133,7 +129,7 @@ function resultCount(
 }
 
 function completedToolLabel(toolName: string, output: unknown) {
-  if (toolName === "readSemanticView") {
+  if (toolName === "readView") {
     const root = record(output);
     const cards = Array.isArray(root?.cards) ? root.cards.length : 0;
     const cardTypes = Array.isArray(root?.cardTypes) ? root.cardTypes.length : 0;
@@ -175,7 +171,7 @@ function toolActivities(
     if (
       toolName !== "searchMemory" &&
       toolName !== "followObject" &&
-      toolName !== "readSemanticView" &&
+      toolName !== "readView" &&
       toolName !== "readSourceDocument"
     ) return [];
 
@@ -196,7 +192,7 @@ function toolActivities(
               ? "全文"
               : "后续内容";
     const runningLabel =
-      toolName === "readSemanticView"
+      toolName === "readView"
         ? "正在读取社团信息…"
         : toolName === "readSourceDocument"
           ? `正在读取原文${sourceModeLabel}…`
@@ -219,7 +215,7 @@ function toolActivities(
       case "output-denied":
         return [{
           id: part.toolCallId,
-          label: toolName === "readSemanticView"
+          label: toolName === "readView"
             ? "社团信息读取失败"
             : toolName === "readSourceDocument"
               ? "原文读取失败"
@@ -232,7 +228,7 @@ function toolActivities(
         if (!part.approval.approved) {
           return [{
             id: part.toolCallId,
-            label: toolName === "readSemanticView"
+            label: toolName === "readView"
               ? "社团信息读取未执行"
               : toolName === "readSourceDocument"
                 ? "原文读取未执行"
@@ -246,7 +242,7 @@ function toolActivities(
           id: part.toolCallId,
           label: isActiveAssistant
             ? runningLabel
-            : toolName === "readSemanticView"
+            : toolName === "readView"
               ? "社团信息读取已中断"
               : toolName === "readSourceDocument"
                 ? "原文读取已中断"
@@ -260,7 +256,7 @@ function toolActivities(
           id: part.toolCallId,
           label: isActiveAssistant
             ? runningLabel
-            : toolName === "readSemanticView"
+            : toolName === "readView"
               ? "社团信息读取已中断"
               : toolName === "readSourceDocument"
                 ? "原文读取已中断"
@@ -320,10 +316,10 @@ function MarkdownText({
   inverse = false,
 }: {
   text: string;
-  references?: SemanticViewReference[];
+  references?: ViewInformationReference[];
   sourceReferences?: SourceDocumentReference[];
   artifactReferences?: ArtifactReference[];
-  onOpenViewReference?: (reference: SemanticViewReference) => void;
+  onOpenViewReference?: (reference: ViewInformationReference) => void;
   onOpenSourceReference?: (reference: SourceDocumentReference) => void;
   inverse?: boolean;
 }) {
@@ -563,7 +559,6 @@ function ChatSurface({
   onStop,
   onOpenViewReference,
   onOpenSourceReference,
-  onPreviewProposal,
 }: {
   messages: ClubChatMessage[];
   status: ChatStatus;
@@ -576,9 +571,8 @@ function ChatSurface({
   onInputChange: (value: string) => void;
   onSubmit: (value: string) => void;
   onStop: () => void;
-  onOpenViewReference: (reference: SemanticViewReference) => void;
+  onOpenViewReference: (reference: ViewInformationReference) => void;
   onOpenSourceReference: (reference: SourceDocumentReference) => void;
-  onPreviewProposal: (proposal: ViewProposalPresentation) => void;
 }) {
   const isSending = status === "submitted" || status === "streaming";
   const canInteract = historyState === "ready";
@@ -622,7 +616,7 @@ function ChatSurface({
             const isActiveAssistant = !isUser && isSending && messageIndex === messages.length - 1;
             const activities = toolActivities(message, isActiveAssistant);
             const search = message.parts.filter((part) => part.type === "data-memorySearch").at(-1)?.data;
-            const proposals = message.parts.filter((part) => part.type === "data-viewProposal");
+            const proposals = message.parts.filter((part) => part.type === "data-viewCommandProposal");
             const objectChangeProposals = message.parts.filter(
               (part) => part.type === "data-objectChangeProposal",
             );
@@ -677,11 +671,7 @@ function ChatSurface({
                   ) : null}
                   {search ? <SeedMapPanel seedMap={search.seedMap} /> : null}
                   {proposals.map((part) => (
-                    <ViewProposalCard
-                      key={part.data.id}
-                      proposal={part.data}
-                      onPreview={onPreviewProposal}
-                    />
+                    <ViewCommandProposalCard key={part.data.proposalId} proposal={part.data} />
                   ))}
                   {objectChangeProposals.map((part) => (
                     <ObjectChangeProposalCard
@@ -909,17 +899,10 @@ function SourceDocumentDialog({
 
 export default function Home() {
   const [input, setInput] = useState("");
-  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceKey>("chat");
+  const [activeWorkspace, setActiveWorkspace] = useState<string>("chat");
   const [activeLibraryFolderId, setActiveLibraryFolderId] = useState<string>();
-  const [activePresentation, setActivePresentation] = useState<BusinessViewPresentation>("overview");
-  const [semanticViewFocus, setSemanticViewFocus] = useState<SemanticViewFocus>();
-  const [activePageEntity, setActivePageEntity] = useState<{
-    activeCardId: string;
-    activeNodeId?: string;
-    activeObjectName: string;
-  }>();
-  const [previewProposal, setPreviewProposal] = useState<ViewProposalPresentation>();
-  const [previewChangeIndex, setPreviewChangeIndex] = useState(0);
+  const [viewFocusCardId, setViewFocusCardId] = useState<string>();
+  const [installedViews, setInstalledViews] = useState<InstalledViewSummary[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sourceReference, setSourceReference] = useState<SourceDocumentReference>();
   const [currentUser, setCurrentUser] = useState<CurrentUser>();
@@ -1041,18 +1024,29 @@ export default function Home() {
     return () => controller.abort();
   }, [activeConversationId, setMessages]);
 
+  useEffect(() => {
+    if (!currentUser) return;
+    const controller = new AbortController();
+    void fetch("/api/views", { cache: "no-store", signal: controller.signal })
+      .then(async (response) => {
+        const body = await response.json() as { views?: InstalledViewSummary[]; error?: string };
+        if (!response.ok || !body.views) throw new Error(body.error ?? "无法读取 View 列表");
+        setInstalledViews(body.views.filter((view) => view.status === "enabled"));
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) console.error("[views.list]", cause);
+      });
+    return () => controller.abort();
+  }, [currentUser]);
+
   const pageContext: ChatPageContext = activeWorkspace === "chat" || activeWorkspace === "knowledge-graph"
     ? { activePresentation: "full_chat" }
     : activeWorkspace === "library" || activeWorkspace === "compilation"
       ? { activePresentation: "library", activeFolderId: activeLibraryFolderId }
       : {
           activeViewKey: activeWorkspace,
-          activePresentation,
-          ...(activePresentation === "playbook" && activePageEntity
-            ? activePageEntity
-            : semanticViewFocus?.cardId
-              ? { activeCardId: semanticViewFocus.cardId }
-              : {}),
+          activePresentation: "inspector",
+          ...(viewFocusCardId ? { activeCardId: viewFocusCardId } : {}),
         };
 
   function submit(content: string) {
@@ -1129,84 +1123,32 @@ export default function Home() {
   function openFullChat() {
     setActiveWorkspace("chat");
     setDrawerOpen(false);
-    setPreviewProposal(undefined);
   }
 
-  function openBusinessView(viewKey: BusinessViewKey) {
+  function openBusinessView(viewKey: string) {
     setActiveWorkspace(viewKey);
-    setActivePresentation("overview");
-    setSemanticViewFocus(undefined);
-    setActivePageEntity(undefined);
-    setPreviewProposal(undefined);
+    setViewFocusCardId(undefined);
   }
 
   function openKnowledgeGraph() {
     setActiveWorkspace("knowledge-graph");
-    setSemanticViewFocus(undefined);
-    setActivePageEntity(undefined);
-    setPreviewProposal(undefined);
+    setViewFocusCardId(undefined);
   }
 
   function openLibrary() {
     setActiveWorkspace("library");
-    setSemanticViewFocus(undefined);
-    setPreviewProposal(undefined);
+    setViewFocusCardId(undefined);
   }
 
   function openCompilation() {
     setActiveWorkspace("compilation");
-    setSemanticViewFocus(undefined);
-    setPreviewProposal(undefined);
+    setViewFocusCardId(undefined);
   }
 
-  function openViewReference(reference: SemanticViewReference) {
+  function openViewReference(reference: ViewInformationReference) {
     setActiveWorkspace(reference.target.viewKey);
-    setActivePresentation("cards");
     setDrawerOpen(true);
-    setPreviewProposal(undefined);
-    setSemanticViewFocus(
-      reference.target.kind === "view"
-        ? undefined
-        : reference.target.kind === "card"
-          ? { cardId: reference.target.cardId }
-          : reference.target.kind === "dimension"
-            ? {
-                cardId: reference.target.cardId,
-                dimensionName: reference.target.dimensionName,
-              }
-            : {
-                cardId: reference.target.cardId,
-                slotKey: reference.target.slotKey,
-              },
-    );
-  }
-
-  function showProposalChange(proposal: ViewProposalPresentation, index: number) {
-    const boundedIndex = Math.max(0, Math.min(index, proposal.changes.length - 1));
-    const change = proposal.changes[boundedIndex];
-    if (!change) return;
-    setPreviewProposal(proposal);
-    setPreviewChangeIndex(boundedIndex);
-    setSemanticViewFocus(proposalChangeFocus(change));
-    setActiveWorkspace(proposal.viewKey);
-    setActivePresentation("cards");
-    setDrawerOpen(true);
-  }
-
-  function handlePreviewProposalChange(proposal: ViewProposalPresentation) {
-    if (proposal.status === "pending") {
-      showProposalChange(proposal, previewChangeIndex);
-      return;
-    }
-    setPreviewProposal(undefined);
-    setPreviewChangeIndex(0);
-    setSemanticViewFocus(undefined);
-  }
-
-  function exitProposalPreview() {
-    setPreviewProposal(undefined);
-    setPreviewChangeIndex(0);
-    setSemanticViewFocus(undefined);
+    setViewFocusCardId(reference.target.kind === "card" ? reference.target.cardId : undefined);
   }
 
   if (!currentUser) {
@@ -1270,14 +1212,17 @@ export default function Home() {
             <p className="text-[10px] font-medium tracking-wide text-zinc-400">业务视图</p>
           </div>
           <div className="space-y-px">
-            <button type="button" onClick={() => openBusinessView(SOCIETY_INFORMATION_VIEW)} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === SOCIETY_INFORMATION_VIEW ? "bg-[#e9e9e9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
-              <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="9" cy="8" r="3" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0M15 7.5a2.5 2.5 0 0 1 0 5M16.5 15a4 4 0 0 1 4 4" strokeLinecap="round" /></svg>
-              社团信息
-            </button>
-            <button type="button" onClick={() => openBusinessView(ACTIVITY_OPERATIONS_VIEW)} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === ACTIVITY_OPERATIONS_VIEW ? "bg-[#e9e9e9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
-              <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M5 5h14v14H5z" strokeLinejoin="round" /><path d="M8 3v4m8-4v4M8 11h8m-8 4h5" strokeLinecap="round" /></svg>
-              活动运营
-            </button>
+            {installedViews.map((view) => (
+              <button
+                key={view.viewKey}
+                type="button"
+                onClick={() => openBusinessView(view.viewKey)}
+                className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === view.viewKey ? "bg-[#e9e9e9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}
+              >
+                <span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
+                {view.label}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -1307,7 +1252,6 @@ export default function Home() {
             ))}
           </div>
         </div>
-
         <div className="border-t border-zinc-200/80 pt-2">
           <div className="flex items-center gap-2 rounded-lg px-1.5 py-1.5">
             <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#d9dfdc] text-[10px] font-semibold text-zinc-700">
@@ -1331,7 +1275,7 @@ export default function Home() {
         }`}>
           {activeWorkspace === "chat" ? (
             <div className="flex h-full min-h-0 w-full flex-col bg-white">
-              <ChatSurface messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="full-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onPreviewProposal={(proposal) => showProposalChange(proposal, 0)} />
+              <ChatSurface messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="full-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} />
             </div>
           ) : activeWorkspace === "knowledge-graph" ? (
             <KnowledgeGraphWorkspace
@@ -1360,21 +1304,10 @@ export default function Home() {
               }}
             />
           ) : (
-            <SemanticViewWorkspace
+            <GenericViewInspector
               key={activeWorkspace}
               viewKey={activeWorkspace}
-              presentation={activePresentation}
-              focus={semanticViewFocus}
-              proposalPreview={previewProposal}
-              proposalChangeIndex={previewChangeIndex}
-              onFocusChange={setSemanticViewFocus}
-              onProposalChangeIndex={(index) => {
-                if (previewProposal) showProposalChange(previewProposal, index);
-              }}
-              onProposalChange={handlePreviewProposalChange}
-              onExitProposalPreview={exitProposalPreview}
-              onPresentationChange={setActivePresentation}
-              onPageContextChange={setActivePageEntity}
+              focusCardId={viewFocusCardId}
               onOpenAI={() => setDrawerOpen(true)}
               onAskAI={(prompt) => {
                 setInput(prompt);
@@ -1396,12 +1329,12 @@ export default function Home() {
                       ? "资料库 · 基础编译"
                       : activeWorkspace === "knowledge-graph"
                         ? "组织认知 · 知识图谱"
-                        : `${activeWorkspace === ACTIVITY_OPERATIONS_VIEW ? "活动运营" : "社团信息"} · ${activePresentation === "overview" ? "概览" : activePresentation === "playbook" ? "操作手册" : "卡片"}`}
+                        : `${installedViews.find((view) => view.viewKey === activeWorkspace)?.label ?? activeWorkspace} · 只读 Inspector`}
                 </h2>
               </div>
               <button type="button" onClick={() => setDrawerOpen(false)} aria-label="收起 AI 对话" className="flex size-7 items-center justify-center rounded-lg text-lg font-light text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700">×</button>
             </header>
-            <ChatSurface compact messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="drawer-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onPreviewProposal={(proposal) => showProposalChange(proposal, 0)} />
+            <ChatSurface compact messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="drawer-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} />
           </aside>
         ) : null}
       </div>
