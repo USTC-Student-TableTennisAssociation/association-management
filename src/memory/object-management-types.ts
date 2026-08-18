@@ -77,7 +77,7 @@ export type ObjectIdentityInspection = {
   references: ObjectIdentityReference[];
   dependencies: {
     higherMemory: boolean;
-    semanticCards: Array<{
+    relatedViewCards: Array<{
       id: string;
       viewKey: string;
       cardTypeKey: string;

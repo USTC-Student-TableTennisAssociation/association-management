@@ -44,11 +44,25 @@ import {
 } from "@/ai/debug-trace";
 import { createModelProfile } from "@/ai/model-profile";
 import { getChatModel } from "@/ai/provider";
-import { createRuntimeSkillToolset } from "@/ai/runtime-skills";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import { modelHistoryMessageText } from "@/ai/ui-message-text";
+import { buildViewContext } from "@/agent-runtime/view-context";
+import {
+  buildViewOrientationContext,
+  loadViewHigherMemory,
+} from "@/agent-runtime/view-orientation";
+import { createAgentViewToolset, registeredViewKeySchema } from "@/agent-runtime/view-toolset";
+import {
+  viewCommandProposalNoticeSchema,
+  viewReferenceBundleSchema,
+} from "@/agent-runtime/view-types";
 import { currentAuthUser } from "@/auth/session";
+import {
+  extensionRegistry,
+  viewCommandBus,
+  viewReadPort,
+} from "@/shell/composition-root";
 import { saveChatMessage } from "@/chat/persistence";
 import {
   artifactSearchEvidenceSemantics,
@@ -100,17 +114,6 @@ import type {
   MemorySearchTrace,
 } from "@/memory/types";
 import { emptySeedMap } from "@/memory/types";
-import { buildBusinessContext } from "@/semantic-view/business-context";
-import {
-  buildViewOrientationContext,
-  loadViewHigherMemory,
-} from "@/semantic-view/higher-memory";
-import { createSemanticViewToolset } from "@/semantic-view/toolset";
-import {
-  semanticViewReferenceBundleSchema,
-  viewProposalPresentationSchema,
-} from "@/semantic-view/ui-schema";
-import { businessViewKeySchema } from "@/semantic-view/types";
 
 export const maxDuration = 600;
 
@@ -144,8 +147,8 @@ function withoutTurnHandoff(message: ClubChatMessage): ClubChatMessage {
 }
 
 const pageContextSchema = z.object({
-  activeViewKey: businessViewKeySchema.optional(),
-  activePresentation: z.enum(["overview", "playbook", "cards", "full_chat", "library"]),
+  activeViewKey: registeredViewKeySchema(extensionRegistry).optional(),
+  activePresentation: z.enum(["inspector", "full_chat", "library"]),
   activeFolderId: z.string().uuid().optional(),
   activeCardId: z.string().uuid().optional(),
   activeNodeId: z.string().uuid().optional(),
@@ -165,13 +168,8 @@ function pageContextInstruction(context?: ChatPageContext): string {
       "这只用于理解当前工作位置；文件索引不是组织事实证据。",
     ].join("\n");
   }
-  const presentation = context.activePresentation === "overview"
-    ? context.activeViewKey === "society_information" ? "社团概览" : "活动总览"
-    : context.activePresentation === "playbook"
-      ? "操作手册（建议型流程地图，不代表 Runtime 执行进度）"
-      : "卡片";
   return [
-    `页面 soft context：用户当前正在查看 ${context.activeViewKey} · ${presentation}。`,
+    `页面 soft context：用户当前正在查看 ${context.activeViewKey} 的只读 Generic View Inspector。`,
     ...(context.activeObjectName || context.activeCardId || context.activeNodeId
       ? [
           `当前页面实体：${context.activeObjectName ?? "名称未提供"}` +
@@ -554,9 +552,9 @@ export async function POST(request: Request) {
     dataSchemas: {
       memorySearch: zodSchema(memorySearchSchema),
       sourceReferences: zodSchema(sourceDocumentReferenceBundleSchema),
-      viewReferences: zodSchema(semanticViewReferenceBundleSchema),
       artifactReferences: zodSchema(artifactReferenceBundleSchema),
-      viewProposal: zodSchema(viewProposalPresentationSchema),
+      viewReferences: zodSchema(viewReferenceBundleSchema),
+      viewCommandProposal: zodSchema(viewCommandProposalNoticeSchema),
       objectChangeProposal: zodSchema(objectChangeProposalPresentationSchema),
       libraryProposal: zodSchema(libraryPlanPresentationSchema),
     },
@@ -638,7 +636,7 @@ export async function POST(request: Request) {
     console.error("[chat.ambient-higher-memory.load]", error);
     await debugTrace.appendError("Ambient Higher Memory 加载失败", error);
   }
-  const viewOrientationContext = buildViewOrientationContext();
+  const viewOrientationContext = buildViewOrientationContext(extensionRegistry);
 
   let model;
   try {
@@ -711,7 +709,6 @@ export async function POST(request: Request) {
       const groundingState = new GroundingState(query, pageContext, semanticConversation);
       const artifactReferences = createArtifactReferenceRegistry();
       const openedCapabilities = createOpenedCapabilities();
-      const runtimeSkillToolset = createRuntimeSkillToolset();
       let mainModelCallNumber = 0;
       let exposedToolSchemaBytes = 0;
       let firstAuthoritativeTool: string | undefined;
@@ -720,7 +717,6 @@ export async function POST(request: Request) {
       let libraryQueryTruncated: boolean | undefined;
       let libraryMatchedCount = 0;
       const sourceLayersUsed = new Set<string>();
-      const missingViewHigherMemoryKeys = new Set<"society_information" | "activity_operations">();
       const mainModelCalls: ChatMainModelCall[] = [];
       const mainToolExecutions: ChatMainToolExecution[] = [];
       const sharedResultBudget = new ToolResultTokenBudget(exploreResultTokenBudget);
@@ -786,10 +782,16 @@ export async function POST(request: Request) {
           });
         },
       });
-      const semanticViewToolset = createSemanticViewToolset({
-        evidence,
+      const viewToolset = createAgentViewToolset({
+        actor: {
+          actorId: requestActor.id,
+          permissions: ["view.read", "view.write"],
+        },
+        registry: extensionRegistry,
+        readPort: viewReadPort,
+        commandBus: viewCommandBus,
         onProposal: (proposal) => {
-          writer.write({ type: "data-viewProposal", data: proposal });
+          writer.write({ type: "data-viewCommandProposal", data: proposal });
         },
       });
       const objectManagementToolset = createObjectManagementToolset({
@@ -818,7 +820,7 @@ export async function POST(request: Request) {
           ...snapshot.seedMap.assertions.map((item) => item.ref),
           ...(snapshot.seedMap.higherMemories ?? []).map((item) => item.ref),
           ...sourceDocumentToolset.availableReferenceRefs(),
-          ...semanticViewToolset.availableReferenceRefs(),
+          ...viewToolset.availableReferenceRefs(),
           ...artifactReferences.availableRefs(),
         ];
       };
@@ -901,28 +903,31 @@ export async function POST(request: Request) {
           }
         },
         onForegroundResult: (captureResult) => {
-          semanticViewToolset.registerPublishedMemory(captureResult);
           objectManagementToolset.registerPublishedMemory(captureResult);
         },
       });
       const knownArtifactNodeIds = new Set<string>();
       const gatewayTools = createCapabilityGatewayTools(openedCapabilities, {
+        viewKeySchema: registeredViewKeySchema(extensionRegistry),
         openBusinessContext: async ({ viewKey, focus, targetHints }) => {
+          const viewModule = extensionRegistry.getView(viewKey)!;
           const [snapshot, viewHigherMemory] = await Promise.all([
-            semanticViewToolset.prefetchView(viewKey),
+            viewToolset.readView(viewKey),
             loadViewHigherMemory(viewKey),
           ]);
-          if (!viewHigherMemory) missingViewHigherMemoryKeys.add(viewKey);
           const refersToCurrentPage = /(这个|这份|这里|当前|该节点|该对象|此处|本页)/u.test(query);
           const pageTargetHints = refersToCurrentPage && pageContext?.activeObjectName
             ? [...new Set([...targetHints, pageContext.activeObjectName])]
             : targetHints;
-          const businessContext = await buildBusinessContext({
+          const businessContext = await buildViewContext({
             snapshot,
+            viewLabel: viewModule.manifest.label,
+            viewDescription: viewModule.manifest.description,
+            cardTypes: viewModule.schema.cardTypes,
             focus,
             targetHints: pageTargetHints,
             activeCardId: refersToCurrentPage
-              ? pageContext?.activeNodeId ?? pageContext?.activeCardId
+              ? pageContext?.activeCardId
               : undefined,
           });
           groundingState.observeBusinessContext({
@@ -950,7 +955,7 @@ export async function POST(request: Request) {
           }
           return {
             view: businessContext.view,
-            cardTypes: snapshot.cardTypes,
+            cardTypes: viewModule.schema.cardTypes,
             viewHigherMemory: viewHigherMemory ?? null,
             relevantCards: businessContext.relevantCards,
             cardObjects: discovered.objects,
@@ -1074,7 +1079,6 @@ export async function POST(request: Request) {
       });
       const allTools: ToolSet = {
         ...gatewayTools,
-        ...runtimeSkillToolset.tools,
         ...memoryTools,
         expandEvidence: memoryTools.searchMemory,
         readMemoryWriteStatus: createMemoryWriteStatusTool({
@@ -1082,7 +1086,7 @@ export async function POST(request: Request) {
           conversationMessageIds: conversationUserMessageIds,
         }),
         readSourceDocument: sourceDocumentToolset.tool,
-        ...semanticViewToolset.tools,
+        ...viewToolset.tools,
         ...objectManagementToolset.tools,
         ...libraryToolset.tools,
         openArtifactKnowledge,
@@ -1106,11 +1110,9 @@ export async function POST(request: Request) {
           ...alwaysAvailableToolNames,
         ])]
           .filter((name) => Boolean(allTools[name]));
-        const loadedSkillInstructions = runtimeSkillToolset.instructions();
         if (!enabledDetails.length) {
           return [
             exploreSystem,
-            loadedSkillInstructions,
             groundingState.instruction(),
           ].filter(Boolean).join("\n\n");
         }
@@ -1128,7 +1130,6 @@ export async function POST(request: Request) {
             preferredKnowledgeLayer,
             toolNames: enabledDetails,
           }),
-          loadedSkillInstructions,
           groundingState.instruction(),
         ].join("\n\n");
       };
@@ -1258,7 +1259,7 @@ export async function POST(request: Request) {
             memoryQueryCount += 1;
           }
           if (event.toolOutput.type === "tool-result") {
-            const toolLayer = toolName === "readSemanticView" || toolName === "openBusinessContext"
+            const toolLayer = toolName === "readView" || toolName === "openBusinessContext"
               ? "business_view"
               : toolName === "searchMemory" || toolName === "expandEvidence" ||
                   toolName === "followObject"
@@ -1393,7 +1394,7 @@ export async function POST(request: Request) {
               data: citedSourceReferences,
             });
           }
-          const citedViewReferences = semanticViewToolset.citedReferences(finalAnswer);
+          const citedViewReferences = viewToolset.citedReferences(finalAnswer);
           if (citedViewReferences.references.length) {
             writer.write({
               type: "data-viewReferences",
@@ -1555,9 +1556,6 @@ export async function POST(request: Request) {
                   }
                 : {}),
               ...(consolidationInput ? { consolidation: consolidationInput } : {}),
-              ...(missingViewHigherMemoryKeys.size
-                ? { viewHigherMemoryKeys: [...missingViewHigherMemoryKeys] }
-                : {}),
             });
           } else {
             await debugTrace.appendSection(

@@ -32,7 +32,7 @@ export function createChatAssertionQueueTool(input: {
       "选择普通后台提取，或在正式 Business View 建档被缺失 Object 阻塞时选择前台提取。",
       "两种模式都复用同一个 Assertion Agent，并执行 Object 搜索、逐字 Evidence、查重、Embedding 与原子事务校验；",
       "若用户 Evidence 逐字提供稳定专名，且搜索后没有重复或歧义，线路可以创建被成功 Assertion 使用的新 Object。",
-      "execution=foreground_for_view 只用于：用户明确要求修改正式 View、当前缺少必要 Object，且主模型需要在本轮随后调用 proposeViewChange。它会等待发布结果并返回本轮可用于 Proposal 的 Object/Assertion IDs。",
+      "execution=foreground_for_view 只用于：用户明确要求修改正式 View、当前缺少必要 Object，且主模型需要在本轮随后调用 runViewCommand。它会等待发布结果并返回本轮可用于 Domain Command 的 Object/Assertion IDs。",
       "若当前消息同时包含事实确认和正式 View 修改请求，必须先读取 View、完成必要搜索并判断 Object 是否缺失，再选择执行模式；不要提前选 background 导致本轮 Proposal 继续被缺失 Object 阻塞。",
       "其他事实一律使用 execution=background，在回答完成后静默处理。",
       "也不会自动更新正式 Business View。不要向用户承诺稍后会自动建档或更新正式状态。",
@@ -95,7 +95,7 @@ export function createChatAssertionQueueTool(input: {
           publishedAssertionIds: foregroundResult.publishedAssertionIds,
           objects: foregroundResult.affectedObjects,
           message: foregroundResult.publishedAssertions
-            ? "Assertion/Object 已在本轮前台完成发布；可使用返回的 IDs 继续 proposeViewChange。"
+            ? "Assertion/Object 已在本轮前台完成发布；可使用返回的 IDs 继续 runViewCommand。"
             : "前台校验没有发布安全的 Assertion 或 Object；不要提出依赖缺失 Object 的 Proposal。",
         };
       }

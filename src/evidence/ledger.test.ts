@@ -2,20 +2,19 @@ import { describe, expect, it } from "vitest";
 
 import { EvidenceLedger } from "@/evidence/ledger";
 import { artifactSearchEvidenceSemantics } from "@/evidence/tool-semantics";
-import { describeBusinessContextEvidence } from "@/semantic-view/business-context";
+import { describeViewContextEvidence } from "@/agent-runtime/view-context";
 
 describe("EvidenceLedger", () => {
   it("records completed observations without creating a retrieval plan", () => {
     const ledger = new EvidenceLedger();
-    ledger.record(describeBusinessContextEvidence({
-      view: {
-        ref: "V1",
-        viewKey: "activity_operations",
-        viewLabel: "Activity Operations",
-        totalCardCount: 0,
-      },
+    ledger.record(describeViewContextEvidence({
+      viewRef: "V1",
+      viewKey: "activity_operations",
+      viewLabel: "Activity Operations",
+      totalCardCount: 0,
       targetHints: ["校内场地申请"],
       relevantCards: [],
+      references: [],
       unresolvedAspects: [],
     }));
 

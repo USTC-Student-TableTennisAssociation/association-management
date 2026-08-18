@@ -21,19 +21,11 @@ export function finalStepMessageText(message: ClubChatMessage): string {
 export function modelHistoryMessageText(message: ClubChatMessage): string {
   const answer = finalStepMessageText(message);
   const viewProposals = message.parts
-    .filter((part) => part.type === "data-viewProposal")
-    .map((part) => {
-      const changes = part.data.changes.map((change) => {
-        if (change.type === "CREATE_CARD") {
-          return `${change.title}：${change.objectName}`;
-        }
-        if (change.type === "SET_CONTENT_DIMENSION") {
-          return `${change.title}：${change.after}`;
-        }
-        return `${change.title}：${change.after.map((target) => target.objectName).join("、") || "清空"}`;
-      });
-      return `此前结构化 Proposal ${part.data.id}（${part.data.status}）：${changes.join("；")}`;
-    });
+    .filter((part) => part.type === "data-viewCommandProposal")
+    .map((part) =>
+      `此前 View Command Proposal ${part.data.proposalId}：` +
+      `${part.data.commandKey}@${part.data.commandVersion}`
+    );
   const objectProposals = message.parts
     .filter((part) => part.type === "data-objectChangeProposal")
     .map((part) =>
@@ -57,7 +49,7 @@ export function compactChatRequestMessages(
           parts: [
             { type: "text", text: finalStepMessageText(message) },
             ...message.parts.filter((part) =>
-              part.type === "data-viewProposal" ||
+              part.type === "data-viewCommandProposal" ||
               part.type === "data-objectChangeProposal" ||
               part.type === "data-sourceReferences" ||
               part.type === "data-viewReferences"

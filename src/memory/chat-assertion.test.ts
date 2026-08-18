@@ -548,7 +548,7 @@ describe("Chat Assertion capture agent", () => {
         source: "文档 · 测试",
       }],
       references: [],
-      dependencies: { higherMemory: false, semanticCards: [] },
+      dependencies: { higherMemory: false, relatedViewCards: [] },
     });
     const captureInput = input();
     captureInput.semanticContext.conversation[2].text =

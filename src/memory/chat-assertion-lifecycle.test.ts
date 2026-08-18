@@ -4,7 +4,6 @@ const lifecycleState = vi.hoisted(() => ({
   afterCallback: undefined as (() => Promise<void>) | undefined,
   capture: vi.fn(),
   maintain: vi.fn(),
-  findExisting: vi.fn(),
   receiptRunning: vi.fn(),
   receiptComplete: vi.fn(),
   receiptFail: vi.fn(),
@@ -26,9 +25,6 @@ vi.mock("@/memory/chat-assertion-receipt", () => ({
   markChatAssertionReceiptRunning: lifecycleState.receiptRunning,
   completeChatAssertionReceipt: lifecycleState.receiptComplete,
   failChatAssertionReceipt: lifecycleState.receiptFail,
-}));
-vi.mock("@/memory/object-higher-memory", () => ({
-  findExistingHigherMemoryObjectIds: lifecycleState.findExisting,
 }));
 vi.mock("@/memory/higher-memory-maintenance", () => ({
   maintainHigherMemories: lifecycleState.maintain,
@@ -63,7 +59,6 @@ beforeEach(() => {
     lifecycleState.order.push("higher-memory:start");
     return { objectMemories: 1, ambientMemories: 0 };
   });
-  lifecycleState.findExisting.mockResolvedValue([]);
   lifecycleState.consolidate.mockResolvedValue({
     objectUpdates: [{
       globalObjectId: "object-1",

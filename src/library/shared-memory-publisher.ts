@@ -856,7 +856,7 @@ async function commitPublications(
         literalReferences: { none: {} },
         semanticAssertionLinks: { none: {} },
         higherMemory: { is: null },
-        semanticCards: { none: {} },
+        relatedViewCards: { none: {} },
       },
     });
 

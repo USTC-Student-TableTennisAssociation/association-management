@@ -1,40 +1,69 @@
-## 改动内容
+## 目标
 
-请简要说明本次 PR 修改了什么，包括涉及的页面、功能、模块或文档。
+这个 PR 解决什么问题？为什么需要现在做？
 
-关联 Issue / 任务：无 / #编号
-如果本 PR 解决了某个 Issue，可写 `Closes #编号`。
+关联 Issue / 任务：
 
-## 改动类型
+## 改动
 
-* [ ] 新功能
-* [ ] Bug 修复
-* [ ] UI / 样式调整
-* [ ] 文档更新
-* [ ] 重构 / 代码整理
-* [ ] 数据库 / Prisma 变更
-* [ ] 部署 / 配置变更
-* [ ] 其他：
+- （请填写）
+- （请填写）
 
-## 验证方式
+## 架构影响
 
-* [ ] 仅文档修改，无需运行构建
-* [ ] 本地运行通过
-* [ ] `pnpm lint` 通过
-* [ ] `pnpm build` 通过
-* [ ] 已手动测试相关页面或功能
-* [ ] 未完整测试，原因：
+请选择所有适用项，并在下方说明。
 
-## 数据库 / 部署说明
+- [ ] Cognitive Runtime（Object / Assertion / Evidence / Higher Memory）
+- [ ] Runtime Contract 或 Extension Registry
+- [ ] View Schema / Card Type / Typed Dimension / Slot
+- [ ] Domain Command / Invariant / Event / Proposal
+- [ ] Presentation / Generic Inspector
+- [ ] Skill / Agent Runtime
+- [ ] Tool Capability Contract / Tool Provider
+- [ ] Auth / Permission
+- [ ] Prisma Schema / Database
+- [ ] API / Deployment / Environment
+- [ ] 无架构影响
 
-如果本次 PR 涉及 Prisma、数据库结构、migration、环境变量、构建配置或部署流程，请在这里说明。
+说明：
 
-无相关影响可填写：无。
+## Runtime 边界检查
+
+- [ ] Generic Inspector 仍然只读
+- [ ] 所有 View 写入仍然通过 Domain Command
+- [ ] 没有引入跨 View Slot
+- [ ] Related Objects 仍然只表达 Card → Object 关联
+- [ ] View Module 没有导入 Prisma、Shell 或 Runtime 实现
+- [ ] Skill 依赖 Capability Contract，而不是具体 Tool Provider
+- [ ] 不适用，原因：
+
+## 数据库与权限
+
+说明 Prisma Schema、migration、State Version、权限或外部副作用的影响。没有则填“无”。
+
+## 验证
+
+- [ ] `pnpm lint`
+- [ ] `pnpm test`
+- [ ] `pnpm exec tsc --noEmit`
+- [ ] `pnpm prisma validate`
+- [ ] `pnpm build`
+- [ ] 已手工验证相关 UI / API / AI 链路
+- [ ] 仅文档改动
+
+具体结果：
+
+## 截图或运行记录
+
+有 UI、模型行为或运行链路变化时提供。
+
+## 未完成事项
+
+列出本 PR 中不包含、没有验证或需要后续处理的内容。
 
 ## 提交前确认
 
-* [ ] 分支命名符合规范，例如 `feat/xxx`、`fix/xxx`、`docs/xxx`
-* [ ] commit 信息能说明具体改动内容
-* [ ] 没有提交 `.env`、密钥、数据库连接串等敏感信息
-* [ ] 没有提交 `.next/`、`node_modules/` 等本地生成文件
-* [ ] 没有包含与本次任务无关的大量格式化修改
+- [ ] 没有提交 `.env`、密钥、真实私密数据或数据库连接信息
+- [ ] 没有提交 `.next/`、`node_modules/` 等本地产物
+- [ ] 改动范围与 PR 目标一致
+- [ ] 文档与代码保持同步

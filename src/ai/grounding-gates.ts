@@ -108,12 +108,7 @@ type BusinessContextObservation = {
   targetHints: string[];
   relevantCards: Array<{
     ref?: string;
-    objectName: string;
-    contentDimensions?: Array<{
-      ref?: string;
-      contentMarkdown?: string | null;
-      isMissing?: boolean;
-    }>;
+    dimensions: Readonly<Record<string, unknown>>;
   }>;
   coverage?: EvidenceCoverage;
   semantics: EvidenceSemantics;
@@ -286,8 +281,8 @@ export class GroundingState {
     if (!relevantCards.length) return;
     this.targetLocated = true;
     if (relevantCards.some((card) =>
-      card.contentDimensions?.some((dimension) =>
-        !dimension.isMissing && Boolean(dimension.contentMarkdown?.trim())
+      Object.values(card.dimensions).some((value) =>
+        value !== undefined && value !== null && value !== ""
       )
     )) {
       this.targetReadable = true;

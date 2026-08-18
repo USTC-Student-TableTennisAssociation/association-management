@@ -100,9 +100,11 @@ export async function inspectObjectIdentity(
         include: { assertion: true },
       },
       higherMemory: { select: { id: true } },
-      semanticCards: {
-        orderBy: [{ viewKey: "asc" }, { cardTypeKey: "asc" }],
-        select: { id: true, viewKey: true, cardTypeKey: true },
+      relatedViewCards: {
+        orderBy: { createdAt: "asc" },
+        select: {
+          card: { select: { id: true, viewKey: true, cardTypeKey: true } },
+        },
       },
     },
   });
@@ -155,7 +157,7 @@ export async function inspectObjectIdentity(
     ],
     dependencies: {
       higherMemory: Boolean(object.higherMemory),
-      semanticCards: object.semanticCards,
+      relatedViewCards: object.relatedViewCards.map((relation) => relation.card),
     },
   };
 }
@@ -296,7 +298,7 @@ async function validateObjectChange(
       );
     }
     for (const id of affected) structuralObjects.add(id);
-    const cards = affected.flatMap((id) => inspections.get(id)!.dependencies.semanticCards);
+    const cards = affected.flatMap((id) => inspections.get(id)!.dependencies.relatedViewCards);
     if (options.rejectBusinessViewDependencies && cards.length) {
       throw new ObjectManagementValidationError(
         `身份重写会影响 ${cards.length} 张正式 Business View Card；请先处理业务视角依赖：` +
@@ -399,7 +401,7 @@ function presentationChanges(
         (id) => validated.inspections.get(id)!.object.canonicalName,
       );
       const cards = objectIdsInChange(change).flatMap(
-        (id) => validated.inspections.get(id)!.dependencies.semanticCards,
+        (id) => validated.inspections.get(id)!.dependencies.relatedViewCards,
       );
       return {
         type: change.type,
@@ -414,7 +416,7 @@ function presentationChanges(
       };
     }
     const source = validated.inspections.get(change.sourceObjectId)!;
-    const cards = source.dependencies.semanticCards;
+    const cards = source.dependencies.relatedViewCards;
     return {
       type: change.type,
       title: `拆分“${source.object.canonicalName}”`,

@@ -1,9 +1,16 @@
-import { businessViewRetrievalDescriptions } from "@/semantic-view/card-types";
+import { extensionRegistry } from "@/shell/composition-root";
+
+function businessViewRetrievalDescriptions(): string {
+  return extensionRegistry.listViews().map((view) =>
+    `${view.manifest.key}（${view.manifest.label}）：` +
+    (view.manifest.retrievalDescription ?? view.manifest.description)
+  ).join("\n");
+}
 
 type PreferredKnowledgeLayer = "business_view" | "shared_brain" | "library" | "unknown";
 
 export const knownRuntimeToolNames = [
-  "readSemanticView",
+  "readView",
   "expandEvidence",
   "searchMemory",
   "followObject",
@@ -11,8 +18,7 @@ export const knownRuntimeToolNames = [
   "readSourceDocument",
   "inspectObjectIdentity",
   "proposeObjectChange",
-  "proposeViewChange",
-  "loadSkill",
+  "runViewCommand",
   "listLibrary",
   "inspectLibraryNodes",
   "previewLibraryFiles",
@@ -55,11 +61,11 @@ export function buildCapabilityInstructions(input: {
     ].join("\n"),
   ];
 
-  if (has(toolNames, "readSemanticView")) {
+  if (has(toolNames, "readView")) {
     sections.push([
       "【Business View 读取】",
       `正式 View 的职责范围：\n${businessViewRetrievalDescriptions()}`,
-      "问题命中上述范围时，使用 readSemanticView；若服务端已经预读取完整快照，不要重复调用。isFullSnapshot=true 只表示没有 retrieval omission，空槽位不证明现实中不存在。",
+      "问题命中上述范围时，使用 readView；若服务端已经预读取完整快照，不要重复调用。Snapshot 是统一 ViewReadPort 在 observedAt 的完整读取，空 Slot 不证明现实中不存在。",
       "View 足以覆盖用户所问的当前正式状态时直接回答；不足、陈旧或用户要求历史/来源细节时，再读其他知识层。",
     ].join("\n"));
   }
@@ -152,18 +158,10 @@ export function buildCapabilityInstructions(input: {
     );
   }
 
-  if (has(toolNames, "proposeViewChange")) {
+  if (has(toolNames, "runViewCommand")) {
     sections.push([
-      "正式修改 Business View 时，先读取当前 View，再用 proposeViewChange 提议。Proposal 需要用户批准才会生效，不能把用户对事实的确认当作对尚未展示 Proposal 的批准。",
+      "正式修改 Business View 时，先读取当前 View，再用 runViewCommand 调用已声明 Domain Command。不得伪造原始 Card Graph mutation。approval_required 模式会生成 Proposal，不能把用户对事实的确认当作对尚未展示 Proposal 的批准。",
       "fallback 暴露的稳定、可复用且明确属于 View 职责的缺口才值得提议；一次性或过细信息不要吸收。",
-    ].join("\n"));
-  }
-
-  if (has(toolNames, "loadSkill")) {
-    sections.push([
-      "【按需 Skill】",
-      "当用户要创建或修复目录、流程地图、操作指南等包含容器、成员、起点或路径的 Card/Slot 子图时，在 proposeViewChange 前加载 business-view-graph-authoring。它只提供构图方法，具体 Card Type 和 Slot 必须以本轮实时 View schema 为准。",
-      "普通问答、读取现状和单个 ContentDimension 修改不要加载 Skill。Skill 不是权限门，也不能替代 Proposal 校验。",
     ].join("\n"));
   }
 

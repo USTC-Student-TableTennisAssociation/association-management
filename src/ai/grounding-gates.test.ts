@@ -5,7 +5,7 @@ import {
   GroundingState,
   type GroundingContract,
 } from "@/ai/grounding-gates";
-import { describeBusinessContextEvidence } from "@/semantic-view/business-context";
+import { describeViewContextEvidence } from "@/agent-runtime/view-context";
 
 function contract(overrides: Partial<GroundingContract> = {}): GroundingContract {
   return {
@@ -38,10 +38,14 @@ function emptyBusinessContext(targetHints: string[]) {
       observationComplete: true,
       contentPresence: "absent" as const,
     },
-    semantics: describeBusinessContextEvidence({
-      view,
+    semantics: describeViewContextEvidence({
+      viewKey: view.viewKey,
+      viewLabel: view.viewLabel,
+      viewRef: view.ref,
+      totalCardCount: view.totalCardCount,
       targetHints,
       relevantCards,
+      references: [],
       unresolvedAspects: [],
     }),
   };
@@ -169,7 +173,7 @@ describe("grounding gates", () => {
       "操作建议可以写更多细节吗？",
       {
         activeViewKey: "activity_operations",
-        activePresentation: "playbook",
+        activePresentation: "inspector",
         activeObjectName: "校内场地申请操作指南",
       },
     );

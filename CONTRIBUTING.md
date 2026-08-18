@@ -1,75 +1,135 @@
 # 贡献指南
 
-欢迎参与高校社团多周期智能管理系统的建设。
+感谢你帮助完善 Echo。本项目希望同时保持两件事：业务表达可以继续生长，Runtime 的基础边界依然简单。
 
-本项目面向高校社团的日常协作、活动管理、资料沉淀和换届交接场景，当前技术栈为 Next.js、TypeScript 和 Tailwind CSS。协作时请尽量保持改动清晰、记录完整、沟通及时，方便其他维护者理解、检查和继续迭代。
+请先阅读 [README](README.md) 和 [Echo Runtime 架构](docs/architecture/Echo-Runtime架构.md)。
 
-## 阅读入口
+## 开发流程
 
-第一次参与项目前，请先阅读：
+1. 从最新的 `main` 创建一个单一目的的工作分支。
+2. 在尽可能小的模块边界内完成改动。
+3. 为新的合同、命令、校验规则和回归问题添加测试。
+4. 运行与改动风险匹配的检查。
+5. 在 PR 中说明业务影响、架构边界、数据库影响和验证结果。
 
-- [Git 工作流](docs/collaboration/01-git-workflow.md)：分支、commit、Pull Request、常用命令和命名规范。
-- [PR 与 Review 规范](docs/collaboration/02-pr-and-review.md)：PR 描述、Review 沟通和高风险改动说明。
+建议的分支名：
 
-更细的协作说明会放在 `docs/collaboration/` 下。随着项目推进，后续可补充数据模型、AI 能力接入、权限与部署等专项说明。
+```text
+feat/view-activity-calendar
+fix/command-state-conflict
+refactor/tool-runtime
+docs/runtime-contracts
+```
 
-## 基本协作规则
+## 必须保持的架构边界
 
-- 从最新的 `main` 分支新建工作分支，不直接在 `main` 上开发或推送代码。
-- 一个分支尽量只处理一件事，例如一个功能、一个 bug、一组样式调整或一组文档调整。
-- commit 信息应简洁说明改动内容。
-- PR 说明应包含改动内容、验证方式和需要注意的风险。
-- 涉及 AI 聊天入口、长期记忆、知识条目、活动状态、任务流转、权限或数据结构的改动，请提前说明影响范围。
+### Contracts
 
-## 本地开发
+`src/contracts/` 只描述 Echo Runtime 的稳定协议。
 
-安装依赖：
+- 不能包含 `activity_operations`、`society_information` 或具体 Card Type 判断。
+- 不能导入 Plugin、Shell、Prisma 或 Next.js。
+- 新增合同前先确认它是否真的需要被所有 View 共享。
+
+### View Module
+
+View Module 的本体是 Card Schema 与业务运行规则。
+
+- View Module 可以定义 Card Types、Typed Dimensions、View-local Slots、Related Object Policy、Commands、Invariants 和 Events。
+- View Module 不得导入 Prisma、`src/db`、Next Route、`view-runtime` 实现或其他 Plugin 实现。
+- Command Handler 只能通过 `ViewTransaction` 读写自己的 Card Graph。
+- 不得为一个 View 创建私有的 Card API 或绕过统一 Command Bus。
+- 不得创建跨 View Slot。跨 View 协作使用 `ViewReadPort` 阅读，需要写入时分别调用各 View 的 Command。
+
+### Dimensions、Slots 与 Related Objects
+
+- 结构化业务值使用 Typed Dimension。
+- Card → Card 的业务关系使用 Slot。
+- Card → 稳定认知 Object 的关联使用 Related Objects。
+- 事实、依据和时间背景留在 Assertion / Evidence 体系中。
+- Related Objects 不增加 role、relation type 或 Assertion support。
+
+### Presentation
+
+- Generic Inspector 始终只读。
+- 专属 Presentation 可以提供业务操作 UI，但只能调用 Domain Command。
+- Presentation 不得直接写数据库、Card Graph 或构造 Raw Graph Mutation。
+- Presentation 通过目标 `ViewManifest.version` 表达它所面向的 View Module 合同。
+
+### Skill 与 AI
+
+- Skill 通过 `ViewReadPort` 读取快照，通过 Command Bus 改变状态。
+- AI 在写入前必须读取 View 并提供 `expectedStateVersion`。
+- AI 和 Skill 必须遵守 Installed View 的 `aiWritePolicy`。
+- Skill 依赖 Tool Capability Contract，不依赖 Gmail、Outlook 等具体 Provider。
+
+### Tool Provider
+
+- Capability Contract 由 Echo 定义 key、version、input/output schema、语义和权限。
+- Provider 只提供 `execute` 实现，不得重新声明同名 Contract Schema。
+- Tool Provider 不得直接修改 View State。Tool 结果需要进入业务状态时，应再调用 Domain Command。
+
+### Composition Root
+
+`src/shell/` 是唯一可以同时看到具体 Plugin 和 Runtime 实现的地方。Core 不能反向导入 Shell。
+
+## 新增 View Module
+
+1. 在 `src/plugins/<plugin-id>/view/` 定义 Schema、Commands 和 Events。
+2. 为 Card Type 选择稳定 key，并明确每个 Dimension、Slot 与 Related Object Policy。
+3. 只暴露业务语义的 Domain Commands，不暴露 `createCard` / `setSlot` 等原语。
+4. 通过 `EchoPluginManifest` 贡献 View。
+5. 在 `src/shell/composition-root.ts` 完成第一方 Plugin 注册。
+6. 添加 Registry、Command、Invariant 和架构边界测试。
+
+View Core 必须能在没有专属 Presentation 和 Skill 的情况下通过 Generic Inspector 与 Command API 独立运行。
+
+## 数据库改动
+
+- `prisma/schema.prisma` 是当前持久化结构的唯一模型来源。
+- Schema 改动必须附带 Prisma migration，并运行 `pnpm prisma validate` 与 `pnpm prisma:generate`。
+- Card Graph 的通用约束应由 Runtime 和数据库共同保护；具体业务约束应放在 View Schema、Command 或 Invariant。
+- 不在具体 Plugin 中直接使用 Prisma。
+- PR 必须说明数据库结构影响以及实际执行过的验证。
+
+## 本地命令
 
 ```bash
 pnpm install
-```
-
-启动开发服务器：
-
-```bash
+cp .env.example .env
+pnpm prisma:dev
+pnpm prisma:deploy
+pnpm prisma:generate
 pnpm dev
 ```
 
-提交前建议至少运行：
+提交前的完整检查：
 
 ```bash
 pnpm lint
-```
-
-如果改动影响页面渲染、构建配置、依赖、数据结构或核心交互，建议再运行：
-
-```bash
+pnpm test
+pnpm exec tsc --noEmit
+pnpm prisma validate
 pnpm build
 ```
 
-纯文档改动通常不需要运行构建，但请在 PR 中说明。
+纯文档改动可以不运行应用构建，但要检查链接、命令、路径和文档中描述的能力是否存在。
 
-## 仓库安全
+## 安全与数据
 
 不要提交：
 
-- `.env` 或任何真实环境变量文件。
-- API Key、数据库连接字符串、密码、密钥、token。
-- 真实社团成员名单、联系方式、活动隐私记录或未经脱敏的用户数据。
-- AI 服务调用凭证、提示词中包含的真实隐私数据或外部平台密钥。
-- 本地构建产物，例如 `.next/`。
-- 依赖目录，例如 `node_modules/`。
-- 与本次任务无关的大量格式化修改。
+- `.env`、API Key、密码、Token 或数据库连接信息；
+- 未脱敏的成员信息、组织内部材料、财务记录或私人对话；
+- `.next/`、`node_modules/`、`.echo-debug/`、`.echo-library/` 等本地产物；
+- 与当前 PR 无关的批量格式化或生成文件。
 
-如果不确定某个文件能不能提交，先问维护者。
+## PR 要求
 
-## 遇到问题怎么办
+PR 需要清楚回答：
 
-遇到 Git 冲突、命令报错、PR 不知道如何处理时，请保留现场，并向维护者提供：
-
-- 你正在哪个分支。
-- 你运行了什么命令。
-- 终端报了什么错。
-- 你原本想完成什么。
-
-清晰的问题描述通常比反复尝试更容易定位问题。
+- 改了什么，为什么；
+- 影响哪些 Contracts、View、Commands、API 或认知链路；
+- 是否改变 Prisma Schema、权限或外部副作用；
+- 运行了哪些自动检查和人工验证；
+- 还有哪些未完成或无法验证的部分。

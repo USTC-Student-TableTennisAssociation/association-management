@@ -19,7 +19,6 @@ export type AuthPrincipal = {
   personObject: {
     id: string;
     canonicalName: string;
-    personCardId: string | null;
   } | null;
 };
 
@@ -36,7 +35,6 @@ function principalFromSession(session: {
     personObject: {
       id: string;
       canonicalName: string;
-      semanticCards: Array<{ id: string }>;
     } | null;
   };
 }): AuthPrincipal {
@@ -49,7 +47,6 @@ function principalFromSession(session: {
       ? {
           id: session.user.personObject.id,
           canonicalName: session.user.personObject.canonicalName,
-          personCardId: session.user.personObject.semanticCards[0]?.id ?? null,
         }
       : null,
   };
@@ -77,15 +74,6 @@ export async function currentAuthUser(): Promise<AuthPrincipal | null> {
             select: {
               id: true,
               canonicalName: true,
-              semanticCards: {
-                where: {
-                  viewKey: "society_information",
-                  cardTypeKey: "PersonCard",
-                },
-                orderBy: { createdAt: "asc" },
-                take: 1,
-                select: { id: true },
-              },
             },
           },
         },

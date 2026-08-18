@@ -21,8 +21,6 @@ import {
   maintainHigherMemories,
   type HigherMemoryMaintenanceInput,
 } from "@/memory/higher-memory-maintenance";
-import { maintainViewHigherMemory } from "@/semantic-view/higher-memory";
-import type { BusinessViewKey } from "@/semantic-view/types";
 
 export type ChatMemoryMaintenanceInput = {
   assertion?: ChatAssertionCaptureInput;
@@ -34,7 +32,6 @@ export type ChatMemoryMaintenanceInput = {
   };
   consolidation?: KnowledgeConsolidationInput;
   higherMemory?: HigherMemoryMaintenanceInput;
-  viewHigherMemoryKeys?: BusinessViewKey[];
 };
 
 export type ChatMemoryMaintenanceScheduler = {
@@ -66,7 +63,7 @@ export function createChatMemoryMaintenanceScheduler(
           "后台对话记忆线路开始",
           [
             "主回答已经结束。以下处理在后台执行，不影响本轮回答是否成功。",
-            "固定顺序：Assertion 发布 → Knowledge Consolidation → Object/Ambient Higher Memory → 缺失的 View Higher Memory 重建。",
+            "固定顺序：Assertion 发布 → Knowledge Consolidation → Object/Ambient Higher Memory。View Higher Memory 由 Domain Event Outbox 消费者维护。",
           ].join("\n"),
         );
         let captureResult: ChatAssertionCaptureResult = input.completedAssertion?.result ?? {
@@ -236,21 +233,6 @@ export function createChatMemoryMaintenanceScheduler(
           );
         }
 
-        for (const viewKey of [...new Set(input.viewHigherMemoryKeys ?? [])]) {
-          try {
-            await maintainViewHigherMemory(
-              viewKey,
-              "对话读取 View 时发现 Higher Memory 缺失或已不符合当前精简格式",
-            );
-            await trace?.appendSection(
-              "View Higher Memory 重建",
-              `已根据当前批准的 ${viewKey} 正式 View 状态重建精简 Higher Memory。`,
-            );
-          } catch (error) {
-            console.error("[chat.view-higher-memory]", error);
-            await trace?.appendError(`重建 ${viewKey} View Higher Memory 失败`, error);
-          }
-        }
       } finally {
         await trace?.flush();
       }
@@ -274,6 +256,3 @@ export function createChatMemoryMaintenanceScheduler(
     },
   };
 }
-
-/** Backward-compatible name for tests/callers that still only publish Assertions. */
-export const createChatAssertionCaptureScheduler = createChatMemoryMaintenanceScheduler;
