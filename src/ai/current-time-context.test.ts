@@ -9,11 +9,9 @@ describe("buildCurrentTimeInstruction", () => {
       "Asia/Shanghai",
     );
 
-    expect(instruction).toContain("2026-08-13T02:03:04.000Z");
-    expect(instruction).toContain("组织本地时间：2026-08-13 10:03:04");
-    expect(instruction).toContain("组织时区：Asia/Shanghai");
-    expect(instruction).toContain("不是组织事实证据");
-    expect(instruction).toContain("不能仅凭当前时间断言");
+    expect(instruction).toContain("当前组织时间：2026-08-13 10:03:04（Asia/Shanghai）");
+    expect(instruction).toContain("不能证明组织信息当前仍然有效");
+    expect(instruction).not.toContain("2026-08-13T02:03:04.000Z");
   });
 
   it("rejects an invalid timezone", () => {

@@ -3,15 +3,18 @@ import { describe, expect, it } from "vitest";
 import {
   activityOperationsCardTypes,
   businessViewDefinition,
+  cardTypePromptContract,
   cardTypeDefinition,
   societyInformationCardTypes,
 } from "@/semantic-view/card-types";
 import {
   assertActivityOperationsDimensionValue,
   assertGroundedAssertionSupports,
+  assertSemanticCardStructure,
   assertSameBusinessView,
   assertSlotTarget,
   SemanticViewValidationError,
+  type StructuralCardState,
 } from "@/semantic-view/service";
 import { viewChangePayloadSchema } from "@/semantic-view/types";
 
@@ -241,8 +244,17 @@ describe("activity_operations minimal skeleton", () => {
     });
     expect(activityOperationsCardTypes.TaskCard.slots).toEqual({});
     expect(activityOperationsCardTypes.ActivityPlaybookCard.slots).toMatchObject({
-      nodes: { allowedTargetCardTypes: ["GuideNodeCard"], cardinality: "many" },
-      start_nodes: { allowedTargetCardTypes: ["GuideNodeCard"], cardinality: "many" },
+      nodes: {
+        allowedTargetCardTypes: ["GuideNodeCard"],
+        cardinality: "many",
+        minimumTargetCount: 1,
+      },
+      start_nodes: {
+        allowedTargetCardTypes: ["GuideNodeCard"],
+        cardinality: "many",
+        minimumTargetCount: 1,
+        subsetOfSlotKey: "nodes",
+      },
     });
     expect(activityOperationsCardTypes.GuideNodeCard.slots).toMatchObject({
       next: { allowedTargetCardTypes: ["GuideNodeCard"], cardinality: "many" },
@@ -254,6 +266,14 @@ describe("activity_operations minimal skeleton", () => {
       allowedTargetViewKey: "society_information",
       cardinality: "one",
     });
+  });
+
+  it("publishes structural constraints in the generic Card/Slot contract", () => {
+    const contract = cardTypePromptContract("activity_operations");
+    expect(contract).toContain("nodes（指南节点，many，target=GuideNodeCard，min=1");
+    expect(contract).toContain("subsetOf=nodes");
+    expect(contract).toContain("sameContainer=ActivityPlaybookCard.nodes");
+    expect(contract).toContain("当 节点类型=DECISION 时必填 Slots：when_yes、when_no");
   });
 
   it("allows only the explicit Assignment.assignee cross-View target", () => {
@@ -308,6 +328,21 @@ describe("activity_operations minimal skeleton", () => {
     expect(payload.viewKey).toBe("activity_operations");
   });
 
+  it("allows a complete graph proposal to contain more than twenty generic changes", () => {
+    const changes = Array.from({ length: 21 }, (_, index) => ({
+      type: "CREATE_CARD" as const,
+      cardRef: `task_${index}`,
+      name: `任务 ${index}`,
+      cardTypeKey: "TaskCard",
+    }));
+
+    expect(viewChangePayloadSchema.parse({
+      viewKey: "activity_operations",
+      reason: "一次提交完整的 Card/Slot 子图。",
+      changes,
+    }).changes).toHaveLength(21);
+  });
+
   it("keeps AI status and participant-count values inside the Portfolio contract", () => {
     const activity = {
       selector: "activity",
@@ -351,5 +386,156 @@ describe("activity_operations minimal skeleton", () => {
       "纵向位置",
       "1.5",
     )).toThrow(/0 到 100 的整数/);
+  });
+});
+
+function structuralCard(input: Partial<StructuralCardState> & Pick<
+  StructuralCardState,
+  "selector" | "cardTypeKey" | "objectName"
+>): StructuralCardState {
+  return {
+    viewKey: "activity_operations",
+    contentDimensions: {},
+    slots: {},
+    ...input,
+  };
+}
+
+function minimalPlaybookGraph(): StructuralCardState[] {
+  return [
+    structuralCard({
+      selector: "playbook",
+      cardTypeKey: "ActivityPlaybookCard",
+      objectName: "场地申请",
+      contentDimensions: { 名称: "场地申请", 泳道顺序: "申请人\n审批人" },
+      slots: { nodes: ["prepare", "done"], start_nodes: ["prepare"] },
+    }),
+    structuralCard({
+      selector: "prepare",
+      cardTypeKey: "GuideNodeCard",
+      objectName: "准备材料",
+      contentDimensions: {
+        名称: "准备材料",
+        节点类型: "ACTION",
+        泳道: "申请人",
+        纵向位置: "0",
+      },
+      slots: { next: ["done"] },
+    }),
+    structuralCard({
+      selector: "done",
+      cardTypeKey: "GuideNodeCard",
+      objectName: "完成",
+      contentDimensions: {
+        名称: "完成",
+        节点类型: "END",
+        泳道: "审批人",
+        纵向位置: "1",
+      },
+      slots: {},
+    }),
+  ];
+}
+
+describe("declarative Card/Slot structure constraints", () => {
+  it("accepts a complete, reachable playbook subgraph", () => {
+    const cards = minimalPlaybookGraph();
+    expect(() => assertSemanticCardStructure(
+      cards,
+      new Set(cards.map((card) => card.selector)),
+    )).not.toThrow();
+  });
+
+  it("rejects an empty playbook shell", () => {
+    const playbook = structuralCard({
+      selector: "playbook",
+      cardTypeKey: "ActivityPlaybookCard",
+      objectName: "空地图",
+      contentDimensions: { 名称: "空地图", 泳道顺序: "申请人" },
+    });
+    expect(() => assertSemanticCardStructure(
+      [playbook],
+      new Set([playbook.selector]),
+    )).toThrow(/指南节点.*至少需要 1 个目标 Card/);
+  });
+
+  it("commits contained nodes together with their playbook", () => {
+    const cards = minimalPlaybookGraph();
+    delete cards[1].contentDimensions.节点类型;
+    expect(() => assertSemanticCardStructure(
+      cards,
+      new Set(["playbook"]),
+    )).toThrow(/准备材料.*必须设置 ContentDimension「节点类型」/);
+  });
+
+  it("requires start nodes to belong to nodes and reach the whole map", () => {
+    const cards = minimalPlaybookGraph();
+    cards[0].slots.start_nodes = ["done"];
+    expect(() => assertSemanticCardStructure(
+      cards,
+      new Set(["playbook"]),
+    )).toThrow(/无法从 start_nodes 到达/);
+
+    cards[0].slots.start_nodes = ["outside"];
+    expect(() => assertSemanticCardStructure(
+      cards,
+      new Set(["playbook"]),
+    )).toThrow(/start_nodes 必须是 nodes 的子集/);
+  });
+
+  it("keeps paths and lane values inside their playbook container", () => {
+    const cards = minimalPlaybookGraph();
+    cards.push(
+      structuralCard({
+        selector: "other_playbook",
+        cardTypeKey: "ActivityPlaybookCard",
+        objectName: "另一张地图",
+        contentDimensions: { 名称: "另一张地图", 泳道顺序: "其他人" },
+        slots: { nodes: ["other_node"], start_nodes: ["other_node"] },
+      }),
+      structuralCard({
+        selector: "other_node",
+        cardTypeKey: "GuideNodeCard",
+        objectName: "其他节点",
+        contentDimensions: {
+          名称: "其他节点",
+          节点类型: "END",
+          泳道: "其他人",
+          纵向位置: "0",
+        },
+        slots: {},
+      }),
+    );
+    cards[1].slots.next = ["other_node"];
+    expect(() => assertSemanticCardStructure(
+      cards,
+      new Set(["prepare"]),
+    )).toThrow(/只能连接同一 ActivityPlaybookCard 中的节点/);
+
+    cards[1].slots.next = ["done"];
+    cards[1].contentDimensions.泳道 = "不存在的泳道";
+    expect(() => assertSemanticCardStructure(
+      cards,
+      new Set(["prepare"]),
+    )).toThrow(/必须来自所属容器的「泳道顺序」/);
+  });
+
+  it("requires both branches for a decision node", () => {
+    const cards = minimalPlaybookGraph();
+    cards[1].contentDimensions.节点类型 = "DECISION";
+    cards[1].slots = { when_yes: ["done"] };
+    expect(() => assertSemanticCardStructure(
+      cards,
+      new Set(["prepare"]),
+    )).toThrow(/必须设置 Slots：when_no/);
+  });
+
+  it("rejects a flow sentence masquerading as a lane list", () => {
+    const cards = minimalPlaybookGraph();
+    cards[0].contentDimensions.泳道顺序 = "申请人 → 管理方 → 审批人";
+    expect(() => assertSemanticCardStructure(
+      cards,
+      new Set(["playbook"]),
+    )).toThrow(/不能用“→”串接流程步骤/);
   });
 });

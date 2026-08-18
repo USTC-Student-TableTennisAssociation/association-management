@@ -146,6 +146,32 @@ describe("Activity Playbook projection", () => {
     expect(playbook).not.toHaveProperty("progress");
   });
 
+  it("keeps nodes visible when a legacy playbook omitted their declared lane", () => {
+    const result = buildActivityPlaybooks(view([
+      card({
+        id: playbookId,
+        cardTypeKey: "ActivityPlaybookCard",
+        objectName: "旧地图",
+        contentDimensions: [dimension("泳道顺序", "申请人")],
+        slots: [{
+          key: "nodes",
+          label: "指南节点",
+          meaning: "",
+          cardinality: "many",
+          targets: [target(venueId, "审批")],
+        }],
+      }),
+      card({
+        id: venueId,
+        cardTypeKey: "GuideNodeCard",
+        objectName: "审批",
+        contentDimensions: [dimension("泳道", "审批人")],
+      }),
+    ]));
+
+    expect(result.playbooks[0].lanes).toEqual(["申请人", "审批人"]);
+  });
+
   it("ships several internally connected starter maps instead of one giant flow", () => {
     expect(ACTIVITY_PLAYBOOK_STARTERS.map((starter) => starter.name)).toEqual(
       ACTIVITY_PLAYBOOK_STARTER_NAMES,

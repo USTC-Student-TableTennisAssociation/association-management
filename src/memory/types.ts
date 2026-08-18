@@ -199,12 +199,27 @@ export type MemoryRetrievalResult = {
   trace?: MemorySearchTrace;
 };
 
+export type EvidenceCoverage = {
+  level: "complete" | "partial" | "insufficient";
+  missingAspects: string[];
+  /** Whether the selected source itself was read without pagination/lookup gaps. */
+  observationComplete?: boolean;
+  /** Presence is independent from observation completeness: a complete View may be empty. */
+  contentPresence?: "present" | "absent" | "unknown";
+};
+
+export type EvidenceCoverageByLayer = Partial<Record<EvidenceLayer, EvidenceCoverage>>;
+
 export type MemorySearchBundle = {
   mode: MemoryRetrievalResult["mode"];
   seedMap: StructuredSeedMap;
   /** Final answer citations. Kept outside the optional Locate trace. */
   answerUsedAssertionRefs?: string[];
   answerUsedHigherMemoryRefs?: string[];
+  /** Server-observed retrieval coverage for this answer turn. */
+  coverage?: EvidenceCoverage;
+  /** Layer-scoped coverage; unlike `coverage`, later tools do not erase other layers. */
+  coverageByLayer?: EvidenceCoverageByLayer;
   trace?: MemorySearchTrace;
 };
 
@@ -216,3 +231,6 @@ export interface MemoryRetriever {
 export function emptySeedMap(facets: MemoryFacet[] = []): StructuredSeedMap {
   return { facets, objects: [], assertions: [], connections: [] };
 }
+import type { EvidenceLayer } from "@/evidence/types";
+
+export type { EvidenceLayer } from "@/evidence/types";

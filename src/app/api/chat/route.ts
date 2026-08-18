@@ -11,11 +11,18 @@ import {
   streamText,
   tool,
   type ToolSet,
+  type UIMessageChunk,
   zodSchema,
 } from "ai";
 import { z } from "zod";
 
 import { latestUserQuery, messageText } from "@/ai/chat-policy";
+import { citedRefs } from "@/ai/citation-refs";
+import {
+  auditGroundedAnswer,
+  GroundingState,
+  type GroundingAudit,
+} from "@/ai/grounding-gates";
 import {
   activeCapabilityToolNames,
   capabilityGatewayToolNames,
@@ -37,15 +44,22 @@ import {
 } from "@/ai/debug-trace";
 import { createModelProfile } from "@/ai/model-profile";
 import { getChatModel } from "@/ai/provider";
+import { createRuntimeSkillToolset } from "@/ai/runtime-skills";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import { modelHistoryMessageText } from "@/ai/ui-message-text";
 import { currentAuthUser } from "@/auth/session";
 import { saveChatMessage } from "@/chat/persistence";
 import {
+  artifactSearchEvidenceSemantics,
+  retrievalEvidenceSemantics,
+} from "@/evidence/tool-semantics";
+import {
   findArtifactsByTitle,
   getArtifactPublishedKnowledge,
 } from "@/library/artifact-knowledge";
+import { artifactReferenceBundleSchema } from "@/library/artifact-reference-ui-schema";
+import { createArtifactReferenceRegistry } from "@/library/artifact-references";
 import { createLibraryToolset } from "@/library/toolset";
 import { libraryPlanPresentationSchema } from "@/library/ui-schema";
 import {
@@ -80,6 +94,7 @@ import { objectChangeProposalPresentationSchema } from "@/memory/object-manageme
 import { createSourceDocumentToolset } from "@/memory/source-document-toolset";
 import { sourceDocumentReferenceBundleSchema } from "@/memory/source-document-ui-schema";
 import type {
+  EvidenceCoverageByLayer,
   MemoryRetrievalResult,
   MemorySearchBundle,
   MemorySearchTrace,
@@ -105,7 +120,7 @@ const EXPLORE_PROTOCOL_RESERVE_TOKENS = 4_000;
 
 
 const FINAL_ANSWER_INSTRUCTION =
-  "当前是本轮最后的回答 step，工具已停用。请立即基于现有正式 View、Assertion 或已经读取的原文完成最终回答；若证据不足则明确说明，并保留正确的 [V#]/[A#]/[S#] 引用。";
+  "当前是本轮最后的回答 step，工具已停用。请立即基于现有正式 View、Assertion、已经读取的原文或资料库索引完成最终回答；若证据不足则明确说明，并保留正确的 [V#]/[A#]/[S#]/[F#] 引用。";
 
 const TURN_HANDOFF_TOOL = "submitTurnHandoff";
 const turnHandoffSchema = z.object({
@@ -132,6 +147,9 @@ const pageContextSchema = z.object({
   activeViewKey: businessViewKeySchema.optional(),
   activePresentation: z.enum(["overview", "playbook", "cards", "full_chat", "library"]),
   activeFolderId: z.string().uuid().optional(),
+  activeCardId: z.string().uuid().optional(),
+  activeNodeId: z.string().uuid().optional(),
+  activeObjectName: z.string().trim().min(1).max(200).optional(),
 }).refine(
   (context) => ["full_chat", "library"].includes(context.activePresentation) || Boolean(context.activeViewKey),
   { message: "Business View presentation 必须提供 activeViewKey" },
@@ -154,6 +172,14 @@ function pageContextInstruction(context?: ChatPageContext): string {
       : "卡片";
   return [
     `页面 soft context：用户当前正在查看 ${context.activeViewKey} · ${presentation}。`,
+    ...(context.activeObjectName || context.activeCardId || context.activeNodeId
+      ? [
+          `当前页面实体：${context.activeObjectName ?? "名称未提供"}` +
+            `${context.activeCardId ? `；Card ID=${context.activeCardId}` : ""}` +
+            `${context.activeNodeId ? `；Node ID=${context.activeNodeId}` : ""}。`,
+          "用户说“这个、该节点、当前对象、这里”时优先按该实体理解；用户明确点名其他实体时，以明确名称为准。",
+        ]
+      : []),
     "这只用于理解用户当前工作位置；可以优先考虑当前 View，但不能限制已有 Shared Brain retrieval，也不能把页面状态当作事实依据。",
   ].join("\n");
 }
@@ -319,11 +345,25 @@ const traceSchema = z.object({
   warnings: z.array(z.string()),
 });
 
+const evidenceCoverageSchema = z.object({
+  level: z.enum(["complete", "partial", "insufficient"]),
+  missingAspects: z.array(z.string()),
+  observationComplete: z.boolean().optional(),
+  contentPresence: z.enum(["present", "absent", "unknown"]).optional(),
+});
+
 const memorySearchSchema = z.object({
   mode: z.enum(["disabled", "fixture", "object-assertion"]),
   seedMap: seedMapSchema,
   answerUsedAssertionRefs: z.array(z.string()).optional(),
   answerUsedHigherMemoryRefs: z.array(z.string()).optional(),
+  coverage: evidenceCoverageSchema.optional(),
+  coverageByLayer: z.object({
+    business_view: evidenceCoverageSchema.optional(),
+    library: evidenceCoverageSchema.optional(),
+    shared_brain: evidenceCoverageSchema.optional(),
+    source_document: evidenceCoverageSchema.optional(),
+  }).optional(),
   trace: traceSchema.optional(),
 });
 
@@ -361,6 +401,7 @@ function searchBundle(
   answerUsedAssertionRefs: string[] = [],
   answerUsedHigherMemoryRefs: string[] = [],
   locateTrace?: MemorySearchTrace,
+  coverageByLayer?: EvidenceCoverageByLayer,
 ): MemorySearchBundle {
   const trace = locateTrace ?? actualSeedTrace(result);
   return {
@@ -368,10 +409,69 @@ function searchBundle(
     seedMap: result.seedMap,
     answerUsedAssertionRefs,
     answerUsedHigherMemoryRefs,
+    ...(coverageByLayer ? { coverageByLayer } : {}),
     ...(trace
       ? { trace }
       : {}),
   };
+}
+
+/** Buffer model prose until the final server-side grounding audit has passed. */
+function bufferFinalAnswerStream<T extends UIMessageChunk>(
+  stream: ReadableStream<UIMessageChunk>,
+  resolveFinalText: (rawText: string) => string,
+): ReadableStream<T> {
+  let currentStepText = "";
+  let lastCompletedText = "";
+  let pendingFinishStep: UIMessageChunk | undefined;
+  let answerEmitted = false;
+
+  const emitAnswer = (controller: TransformStreamDefaultController<UIMessageChunk>) => {
+    if (answerEmitted) return;
+    answerEmitted = true;
+    const text = resolveFinalText(lastCompletedText || currentStepText);
+    const id = "grounded-final-answer";
+    controller.enqueue({ type: "text-start", id });
+    if (text) controller.enqueue({ type: "text-delta", id, delta: text });
+    controller.enqueue({ type: "text-end", id });
+  };
+
+  return stream.pipeThrough(new TransformStream<UIMessageChunk, UIMessageChunk>({
+    transform(chunk, controller) {
+      if (pendingFinishStep && chunk.type !== "finish") {
+        controller.enqueue(pendingFinishStep);
+        pendingFinishStep = undefined;
+      }
+      switch (chunk.type) {
+        case "start-step":
+          currentStepText = "";
+          controller.enqueue(chunk);
+          return;
+        case "text-start":
+        case "text-end":
+          return;
+        case "text-delta":
+          currentStepText += chunk.delta;
+          return;
+        case "finish-step":
+          lastCompletedText = currentStepText;
+          pendingFinishStep = chunk;
+          return;
+        case "finish":
+          emitAnswer(controller);
+          if (pendingFinishStep) controller.enqueue(pendingFinishStep);
+          pendingFinishStep = undefined;
+          controller.enqueue(chunk);
+          return;
+        default:
+          controller.enqueue(chunk);
+      }
+    },
+    flush(controller) {
+      if (!answerEmitted && (lastCompletedText || currentStepText)) emitAnswer(controller);
+      if (pendingFinishStep) controller.enqueue(pendingFinishStep);
+    },
+  })) as ReadableStream<T>;
 }
 
 function compactExploreStepMessages(messages: ModelMessage[]): ModelMessage[] {
@@ -455,6 +555,7 @@ export async function POST(request: Request) {
       memorySearch: zodSchema(memorySearchSchema),
       sourceReferences: zodSchema(sourceDocumentReferenceBundleSchema),
       viewReferences: zodSchema(semanticViewReferenceBundleSchema),
+      artifactReferences: zodSchema(artifactReferenceBundleSchema),
       viewProposal: zodSchema(viewProposalPresentationSchema),
       objectChangeProposal: zodSchema(objectChangeProposalPresentationSchema),
       libraryProposal: zodSchema(libraryPlanPresentationSchema),
@@ -607,6 +708,10 @@ export async function POST(request: Request) {
     originalMessages: messages,
     execute: async ({ writer }) => {
       const evidence = new MemoryEvidenceAccumulator(context.retrieval);
+      const groundingState = new GroundingState(query, pageContext, semanticConversation);
+      const artifactReferences = createArtifactReferenceRegistry();
+      const openedCapabilities = createOpenedCapabilities();
+      const runtimeSkillToolset = createRuntimeSkillToolset();
       let mainModelCallNumber = 0;
       let exposedToolSchemaBytes = 0;
       let firstAuthoritativeTool: string | undefined;
@@ -621,6 +726,8 @@ export async function POST(request: Request) {
       const sharedResultBudget = new ToolResultTokenBudget(exploreResultTokenBudget);
       let hasSearchedMemory = false;
       let latestLocateTrace: MemorySearchTrace | undefined;
+      let finalRawText = "";
+      let finalAudit: GroundingAudit | undefined;
       const memoryTools = createMemoryExploreToolset({
         evidence,
         resultTokenBudget: exploreResultTokenBudget,
@@ -644,7 +751,12 @@ export async function POST(request: Request) {
           };
         },
         onEvidence: (current, discovered) => {
+          openedCapabilities.sharedBrain = true;
           hasSearchedMemory = true;
+          if (discovered.coverage) {
+            groundingState.observeCoverage("shared_brain", discovered.coverage);
+          }
+          groundingState.observeSemantics(discovered.semantics);
           console.info(
             "[chat.explore]",
             JSON.stringify({
@@ -664,7 +776,13 @@ export async function POST(request: Request) {
           );
           writer.write({
             type: "data-memorySearch",
-            data: searchBundle(current, [], [], latestLocateTrace),
+            data: searchBundle(
+              current,
+              [],
+              [],
+              latestLocateTrace,
+              groundingState.contract().coverageByLayer,
+            ),
           });
         },
       });
@@ -683,13 +801,35 @@ export async function POST(request: Request) {
         onProposal: (proposal) => {
           writer.write({ type: "data-libraryProposal", data: proposal });
         },
+        onPreview: (preview) => groundingState.observeLibraryPreview(preview),
       });
       const sourceDocumentToolset = createSourceDocumentToolset({
         evidence,
         resultTokenBudget: exploreResultTokenBudget,
         sharedResultBudget,
+        onRead: (sourceRead) => {
+          groundingState.observeSourceDocument(sourceRead);
+          groundingState.observeSemantics(sourceRead.semantics);
+        },
       });
-      const openedCapabilities = createOpenedCapabilities();
+      const validReferenceRefs = () => {
+        const snapshot = evidence.snapshot();
+        return [
+          ...snapshot.seedMap.assertions.map((item) => item.ref),
+          ...(snapshot.seedMap.higherMemories ?? []).map((item) => item.ref),
+          ...sourceDocumentToolset.availableReferenceRefs(),
+          ...semanticViewToolset.availableReferenceRefs(),
+          ...artifactReferences.availableRefs(),
+        ];
+      };
+      const auditAnswer = (rawText: string): GroundingAudit => {
+        if (finalAudit && rawText.trim() === finalRawText.trim()) return finalAudit;
+        return auditGroundedAnswer({
+          text: rawText,
+          contract: groundingState.contract(),
+          validRefs: validReferenceRefs(),
+        });
+      };
       const exploreSystem = [
         context.system,
         currentTimeInstruction,
@@ -773,10 +913,24 @@ export async function POST(request: Request) {
             loadViewHigherMemory(viewKey),
           ]);
           if (!viewHigherMemory) missingViewHigherMemoryKeys.add(viewKey);
+          const refersToCurrentPage = /(这个|这份|这里|当前|该节点|该对象|此处|本页)/u.test(query);
+          const pageTargetHints = refersToCurrentPage && pageContext?.activeObjectName
+            ? [...new Set([...targetHints, pageContext.activeObjectName])]
+            : targetHints;
           const businessContext = await buildBusinessContext({
             snapshot,
             focus,
-            targetHints,
+            targetHints: pageTargetHints,
+            activeCardId: refersToCurrentPage
+              ? pageContext?.activeNodeId ?? pageContext?.activeCardId
+              : undefined,
+          });
+          groundingState.observeBusinessContext({
+            view: businessContext.view,
+            targetHints: pageTargetHints,
+            relevantCards: businessContext.relevantCards,
+            coverage: businessContext.evidence.coverage,
+            semantics: businessContext.semantics,
           });
           const discovered = evidence.merge(businessContext.evidence);
           firstAuthoritativeTool ??= "openBusinessContext";
@@ -785,70 +939,142 @@ export async function POST(request: Request) {
             sourceLayersUsed.add("shared_brain");
             writer.write({
               type: "data-memorySearch",
-              data: searchBundle(evidence.snapshot(), [], [], latestLocateTrace),
+              data: searchBundle(
+                evidence.snapshot(),
+                [],
+                [],
+                latestLocateTrace,
+                groundingState.contract().coverageByLayer,
+              ),
             });
           }
           return {
             view: businessContext.view,
+            cardTypes: snapshot.cardTypes,
             viewHigherMemory: viewHigherMemory ?? null,
             relevantCards: businessContext.relevantCards,
             cardObjects: discovered.objects,
             objectHigherMemories: discovered.higherMemories ?? [],
             formalCardMissing: businessContext.formalCardMissing,
             unresolvedAspects: businessContext.unresolvedAspects,
-            next: businessContext.unresolvedAspects.length
-              ? "如果缺口会影响回答，使用 expandEvidence；如果用户确认或后续可靠证据已经足以填补一个稳定、可复用的正式 View 缺口，还应使用 openActions(business_view) 生成待审批 Proposal；否则直接回答。"
+            coverage: businessContext.evidence.coverage,
+            semantics: businessContext.semantics,
+            next: businessContext.formalCardMissing
+              ? "当前正式 View 的存在性与收录状态已经可以直接回答：没有匹配 Card。只有用户还要求相关业务事实或补建依据时，才使用 expandEvidence；相关资料不得冒充正式 View。"
+              : businessContext.unresolvedAspects.length
+                ? "如果缺口会影响回答，使用 expandEvidence；如果用户确认或后续可靠证据已经足以填补一个稳定、可复用的正式 View 缺口，还应使用 openActions(business_view) 生成待审批 Proposal；否则直接回答。"
               : "当前 View + Object Higher Memory 已没有显式缺口，优先直接回答。",
           };
         },
         findArtifacts: async ({ title }) => {
           const result = await findArtifactsByTitle({ title });
-          result.items.forEach((item) => knownArtifactNodeIds.add(item.nodeId));
+          const referencedResult = artifactReferences.attachSearchReferences(result);
+          const semantics = artifactSearchEvidenceSemantics(referencedResult);
+          referencedResult.items.forEach((item) => knownArtifactNodeIds.add(item.nodeId));
+          groundingState.observeArtifactSearch(referencedResult);
+          groundingState.observeSemantics(semantics);
           firstAuthoritativeTool ??= "openArtifacts";
           sourceLayersUsed.add("library");
-          return result;
+          return { ...referencedResult, semantics };
         },
       });
       const openArtifactKnowledge = tool({
         description:
-          "对 openArtifacts 已找到的一个真实文件，直接读取该文件已发布到 Shared Brain 的 Object、Object Higher Memory 和 Assertion。这是文件 provenance 确定性桥梁，不做语义猜测。",
+          "对 openArtifacts 已找到的一个真实文件，按主题读取该文件已发布到 Shared Brain 的 Assertion 和相关 Object。这是文件 provenance 确定性桥梁；默认不混入可能综合其他来源的 Object Higher Memory。",
         inputSchema: z.object({
           nodeId: z.string().uuid()
             .describe("必须原样使用 openArtifacts 本轮返回的 nodeId"),
+          query: z.string().trim().min(1).max(500).optional()
+            .describe("要在该文件已发布知识中定位的主题；省略时按稳定顺序浏览"),
+          topK: z.number().int().min(1).max(40).default(12),
+          cursor: z.number().int().min(0).default(0)
+            .describe("上一页 nextCursor；首次调用传 0"),
+          includeConnections: z.boolean().default(false),
+          includeHigherMemory: z.boolean().default(false)
+            .describe("默认关闭；开启后返回的是跨来源 Object 背景，不能归因于当前文件"),
         }),
-        execute: async ({ nodeId }) => {
+        execute: async ({
+          nodeId,
+          query: artifactQuery,
+          topK,
+          cursor,
+          includeConnections,
+          includeHigherMemory,
+        }) => {
           if (!knownArtifactNodeIds.has(nodeId)) {
             throw new Error("必须先用 openArtifacts 定位真实文件 nodeId");
           }
-          const result = await getArtifactPublishedKnowledge({ nodeId });
+          const result = await getArtifactPublishedKnowledge({
+            nodeId,
+            query: artifactQuery,
+            assertionLimit: topK,
+            cursor,
+            includeConnections,
+            includeHigherMemory,
+          });
           const discovered = evidence.merge(result.evidence);
+          const semantics = retrievalEvidenceSemantics({
+            id: `artifact_knowledge.${nodeId}.${cursor}`,
+            layer: "shared_brain",
+            scope: `artifact:${nodeId}`,
+            subject: result.artifact.name,
+            question: artifactQuery ?? `该文件发布了哪些 Shared Brain 知识`,
+            coverage: result.evidence.coverage,
+            refs: [
+              ...(discovered.higherMemories ?? []).map((item) => item.ref),
+              ...discovered.assertions.map((item) => item.ref),
+            ],
+            authority: "supporting",
+            presentSummary: "该文件存在已发布且可读取的 Shared Brain 证据。",
+            absentSummary: "该文件当前页没有返回可用的已发布 Assertion。",
+            unknownSummary: "该文件的已发布知识尚未被完整观察。",
+          });
+          groundingState.observeArtifactKnowledge({
+            nodeId,
+            assertionCount: result.evidence.assertions.length,
+            coverage: result.evidence.coverage,
+          });
+          groundingState.observeSemantics(semantics);
           sourceLayersUsed.add("library");
           if (discovered.assertions.length || discovered.higherMemories?.length) {
             sourceLayersUsed.add("shared_brain");
             writer.write({
               type: "data-memorySearch",
-              data: searchBundle(evidence.snapshot(), [], [], latestLocateTrace),
+              data: searchBundle(
+                evidence.snapshot(),
+                [],
+                [],
+                latestLocateTrace,
+                groundingState.contract().coverageByLayer,
+              ),
             });
           }
           return {
-            artifact: result.artifact,
+            artifact: {
+              ...result.artifact,
+              ref: artifactReferences.referenceForNode(nodeId),
+            },
+            page: result.page,
             publishedObjects: discovered.objects,
             objectHigherMemories: discovered.higherMemories ?? [],
             publishedAssertions: discovered.assertions,
             connections: discovered.connections,
             truncated: discovered.truncated,
+            coverage: result.evidence.coverage,
+            semantics,
             warnings: discovered.warnings,
           };
         },
       });
       const submitTurnHandoff = tool({
         description:
-          "只在本轮最终回答已经完整写出时调用。判断当前用户原话是否可能包含值得独立知识审查的新事实、纠正、决定、计划或状态变化；不负责写入。",
+          "与本轮完整最终回答在同一次响应中调用。只判断当前用户原话是否包含值得独立知识审查的新事实、纠正、决定、计划或状态变化；纯问题和检索过程不审查。",
         inputSchema: turnHandoffSchema,
         execute: async (handoff) => ({ accepted: true, ...handoff }),
       });
       const allTools: ToolSet = {
         ...gatewayTools,
+        ...runtimeSkillToolset.tools,
         ...memoryTools,
         expandEvidence: memoryTools.searchMemory,
         readMemoryWriteStatus: createMemoryWriteStatusTool({
@@ -860,9 +1086,11 @@ export async function POST(request: Request) {
         ...objectManagementToolset.tools,
         ...libraryToolset.tools,
         openArtifactKnowledge,
+        queueChatAssertionCapture: assertionQueueToolset.tool,
         submitTurnHandoff,
       };
       const alwaysAvailableToolNames = [
+        "searchMemory",
         "readMemoryWriteStatus",
         TURN_HANDOFF_TOOL,
       ];
@@ -873,30 +1101,44 @@ export async function POST(request: Request) {
         Boolean(allTools[name])
       );
       const stepSystem = () => {
-        const enabledDetails = detailedToolNames(openedCapabilities)
+        const enabledDetails = [...new Set([
+          ...detailedToolNames(openedCapabilities),
+          ...alwaysAvailableToolNames,
+        ])]
           .filter((name) => Boolean(allTools[name]));
-        if (!enabledDetails.length) return exploreSystem;
+        const loadedSkillInstructions = runtimeSkillToolset.instructions();
+        if (!enabledDetails.length) {
+          return [
+            exploreSystem,
+            loadedSkillInstructions,
+            groundingState.instruction(),
+          ].filter(Boolean).join("\n\n");
+        }
         const preferredKnowledgeLayer = openedCapabilities.artifacts &&
-            !openedCapabilities.businessContext
+            !openedCapabilities.businessContext && !openedCapabilities.sharedBrain
           ? "library" as const
           : openedCapabilities.businessContext
             ? "business_view" as const
-            : "unknown" as const;
+            : openedCapabilities.sharedBrain
+              ? "shared_brain" as const
+              : "unknown" as const;
         return [
           exploreSystem,
           buildCapabilityInstructions({
             preferredKnowledgeLayer,
             toolNames: enabledDetails,
           }),
+          loadedSkillInstructions,
+          groundingState.instruction(),
         ].join("\n\n");
       };
       await debugTrace.appendJsonSection("本轮工具暴露", {
         exposedToolNames,
-        note: "首次调用只看到三个类别入口、记忆状态和隐藏 Handoff；详细工具按需开放。",
+        note: "首次调用提供三个类别入口、主题语义搜索、记忆状态与 Handoff；其他详细工具按需开放。",
       });
       const result = streamText({
         model,
-        system: exploreSystem,
+        system: stepSystem(),
         messages: context.messages,
         tools: allTools,
         toolChoice: "auto",
@@ -905,8 +1147,11 @@ export async function POST(request: Request) {
           ({ steps }) => {
             const finalStep = steps.at(-1);
             if (!finalStep?.text.trim()) return false;
-            const calls = finalStep.toolCalls;
-            return calls.length === 1 && calls[0].toolName === TURN_HANDOFF_TOOL;
+            // Handoff is optional knowledge-review metadata, not a completion
+            // gate. Continue only when this step also requested real work.
+            return finalStep.toolCalls.every(
+              (call) => call.toolName === TURN_HANDOFF_TOOL,
+            );
           },
         ],
         prepareStep: ({ stepNumber, messages: stepMessages }) => {
@@ -1065,6 +1310,7 @@ export async function POST(request: Request) {
                     relevantCards: businessResult.relevantCards,
                     formalCardMissing: businessResult.formalCardMissing,
                     unresolvedAspects: businessResult.unresolvedAspects,
+                    semantics: businessResult.semantics,
                     next: businessResult.next,
                   };
                 })()
@@ -1107,6 +1353,13 @@ export async function POST(request: Request) {
           );
         },
         onFinish: async ({ text, finishReason, totalUsage, steps }) => {
+          finalRawText = text;
+          finalAudit = auditGroundedAnswer({
+            text,
+            contract: groundingState.contract(),
+            validRefs: validReferenceRefs(),
+          });
+          const finalAnswer = finalAudit.text;
           await debugTrace.appendSection(
             "主回答完成",
             [
@@ -1115,40 +1368,62 @@ export async function POST(request: Request) {
               "",
               debugCodeBlock(debugJson(totalUsage), "json"),
               "",
-              "### 最终回答",
+              "### 模型原始回答",
               "",
               debugCodeBlock(text),
+              "",
+              "### Grounding Gate",
+              "",
+              debugCodeBlock(debugJson({
+                contract: groundingState.contract(),
+                changed: finalAudit.changed,
+                mode: finalAudit.mode,
+                issues: finalAudit.issues,
+              }), "json"),
+              "",
+              "### 实际发送回答",
+              "",
+              debugCodeBlock(finalAnswer),
             ].join("\n"),
           );
-          const citedSourceReferences = sourceDocumentToolset.citedReferences(text);
+          const citedSourceReferences = sourceDocumentToolset.citedReferences(finalAnswer);
           if (citedSourceReferences.references.length) {
             writer.write({
               type: "data-sourceReferences",
               data: citedSourceReferences,
             });
           }
-          const citedViewReferences = semanticViewToolset.citedReferences(text);
+          const citedViewReferences = semanticViewToolset.citedReferences(finalAnswer);
           if (citedViewReferences.references.length) {
             writer.write({
               type: "data-viewReferences",
               data: citedViewReferences,
             });
           }
+          const citedArtifactReferences = artifactReferences.citedReferences(finalAnswer);
+          if (citedArtifactReferences.references.length) {
+            writer.write({
+              type: "data-artifactReferences",
+              data: citedArtifactReferences,
+            });
+          }
           const accumulatedRetrieval = evidence.snapshot();
           const assertionQueueDecision = assertionQueueToolset.decision();
           const foregroundAssertionDecision = assertionQueueToolset.foregroundDecision();
           const foregroundAssertionResult = assertionQueueToolset.foregroundResult();
-          const handoffCall = steps.at(-1)?.toolCalls.find((call) =>
-            call.toolName === TURN_HANDOFF_TOOL
-          );
+          const handoffCall = steps
+            .flatMap((step) => step.toolCalls)
+            .findLast((call) => call.toolName === TURN_HANDOFF_TOOL);
           const parsedHandoff = turnHandoffSchema.safeParse(handoffCall?.input);
           const handoff = parsedHandoff.success ? parsedHandoff.data : undefined;
           const handoffIsValid = Boolean(
             handoff &&
               handoff.candidateQuotes.every((quote) => query.includes(quote)) &&
-              (handoff.reviewNeeded || handoff.candidateQuotes.length === 0),
+              (handoff.reviewNeeded
+                ? handoff.candidateQuotes.length > 0
+                : handoff.candidateQuotes.length === 0),
           );
-          const reviewNeeded = !handoffIsValid || Boolean(handoff?.reviewNeeded);
+          const reviewNeeded = handoffIsValid && Boolean(handoff?.reviewNeeded);
           const candidateQuotes = handoffIsValid
             ? handoff!.candidateQuotes
             : [];
@@ -1158,7 +1433,7 @@ export async function POST(request: Request) {
             candidateQuotes,
             fallbackReason: handoffIsValid
               ? null
-              : "最终 step 未提交有效 Handoff，按需要审查处理。",
+              : "未提交有效 Handoff；本轮跳过自动知识审查，避免未验证内容回灌。",
           });
           const semanticContext = {
             conversation: semanticConversation.slice(-8),
@@ -1166,24 +1441,8 @@ export async function POST(request: Request) {
             pageContext,
             modelCalls: [],
             toolExecutions: mainToolExecutions,
-            finalAnswer: text,
+            finalAnswer,
           };
-          const consolidationToolNames = new Set([
-            "openBusinessContext",
-            "openArtifacts",
-            "expandEvidence",
-            "searchMemory",
-            "followObject",
-            "readSourceDocument",
-            "openArtifactKnowledge",
-            "proposeViewChange",
-            "proposeObjectChange",
-            "proposeLibraryPlan",
-          ]);
-          const structuralConsolidationNeeded = mainToolExecutions.some((execution) =>
-            execution.success && consolidationToolNames.has(execution.toolName)
-          );
-          const consolidationNeeded = reviewNeeded || structuralConsolidationNeeded;
           const automaticWritebackDecision = !foregroundAssertionResult && reviewNeeded
             ? {
                 reason: candidateQuotes.length
@@ -1192,6 +1451,9 @@ export async function POST(request: Request) {
               }
             : undefined;
           const backgroundAssertionDecision = assertionQueueDecision ?? automaticWritebackDecision;
+          const consolidationNeeded = Boolean(
+            foregroundAssertionResult || backgroundAssertionDecision,
+          );
           const receiptKey = latestUserMessage
             ? {
                 actorId: requestActor.id,
@@ -1220,7 +1482,7 @@ export async function POST(request: Request) {
               }
             : undefined;
           let writebackStatus = !reviewNeeded
-            ? "skipped_by_handoff"
+            ? handoffIsValid ? "skipped_by_handoff" : "skipped_invalid_handoff"
             : "eligible";
           let durableBackgroundJob = false;
           let writebackPersistenceDurationMs = 0;
@@ -1313,9 +1575,11 @@ export async function POST(request: Request) {
             );
           }
           const answerSourceLayers = new Set<string>();
-          if (/\[V\d+\]/.test(text)) answerSourceLayers.add("business_view");
-          if (/\[(?:H|A)\d+\]/.test(text)) answerSourceLayers.add("shared_brain");
-          if (/\[S\d+\]/.test(text)) answerSourceLayers.add("source_document");
+          if (citedRefs(finalAnswer, "V").length) answerSourceLayers.add("business_view");
+          if (citedRefs(finalAnswer, "H").length || citedRefs(finalAnswer, "A").length) {
+            answerSourceLayers.add("shared_brain");
+          }
+          if (citedRefs(finalAnswer, "S").length) answerSourceLayers.add("source_document");
           if (libraryQueryCount > 0) {
             answerSourceLayers.add("library");
           }
@@ -1346,6 +1610,7 @@ export async function POST(request: Request) {
             openedCapabilities: {
               businessContext: openedCapabilities.businessContext,
               artifacts: openedCapabilities.artifacts,
+              sharedBrain: openedCapabilities.sharedBrain,
               actionAreas: [...openedCapabilities.actionAreas],
             },
             exposedToolSchemaBytes,
@@ -1365,9 +1630,8 @@ export async function POST(request: Request) {
             viewPrefetchDurationMs: 0,
             writebackPersistenceDurationMs,
           });
-          const usedRefs = citedAssertionRefs(text, accumulatedRetrieval.seedMap);
-          const usedHigherMemoryRefs = [...text.matchAll(/\[(H\d+)\]/g)]
-            .map((match) => match[1])
+          const usedRefs = citedAssertionRefs(finalAnswer, accumulatedRetrieval.seedMap);
+          const usedHigherMemoryRefs = citedRefs(finalAnswer, "H")
             .filter((ref, index, refs) =>
               (accumulatedRetrieval.seedMap.higherMemories ?? []).some((item) => item.ref === ref) &&
               refs.indexOf(ref) === index
@@ -1407,7 +1671,13 @@ export async function POST(request: Request) {
           if (hasSearchedMemory) {
             writer.write({
               type: "data-memorySearch",
-              data: searchBundle(citedRetrieval, usedRefs, usedHigherMemoryRefs, latestLocateTrace),
+              data: searchBundle(
+                citedRetrieval,
+                usedRefs,
+                usedHigherMemoryRefs,
+                latestLocateTrace,
+                groundingState.contract().coverageByLayer,
+              ),
             });
           }
           console.info(
@@ -1424,7 +1694,7 @@ export async function POST(request: Request) {
         },
       });
 
-      writer.merge(result.toUIMessageStream({
+      const modelUIStream = result.toUIMessageStream({
         sendReasoning: true,
         onError: (error) => {
           console.error(
@@ -1434,7 +1704,10 @@ export async function POST(request: Request) {
           void debugTrace.appendError("主回答模型流失败", error);
           return "AI 服务响应失败，请稍后重试。";
         },
-      }));
+      });
+      writer.merge(bufferFinalAnswerStream(modelUIStream, (rawText) =>
+        auditAnswer(rawText).text
+      ));
     },
     onEnd: async ({ messages: completedMessages, responseMessage }) => {
       const persistedResponse = withoutTurnHandoff(responseMessage);

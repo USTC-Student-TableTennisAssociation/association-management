@@ -76,7 +76,7 @@ export function createSemanticViewToolset(input: {
         "作为本次 Proposal 的可选依据。source-backed Card 使用本轮检索到、或由前台 Chat → Assertion 成功发布后返回的 GlobalObject id；activity_operations",
         "的原生 Runtime Card 可以直接使用 name 建立业务身份。",
         "只有稳定、可复用且属于当前 View 职责的缺口才应主动吸收；ContentDimension 是开放结构；",
-        "Slot key 只能使用开发者合同。",
+        "Slot key 只能使用开发者合同。合同标记为完整 Card 必填的 ContentDimension、最小 Slot、容器、子集、可达性与条件 Slot，必须在同一个 Proposal 中原子满足；不得只创建空壳 Card。",
         "支持的合同：",
         ...Object.values(businessViewDefinitions).map((view) =>
           cardTypePromptContract(view.key)
@@ -130,5 +130,6 @@ export function createSemanticViewToolset(input: {
     hasInspectedObject: (globalObjectId: string) =>
       inspectedObjectIds.has(globalObjectId) || foregroundObjectIds.has(globalObjectId),
     citedReferences: viewReferences.citedReferences,
+    availableReferenceRefs: viewReferences.availableRefs,
   };
 }

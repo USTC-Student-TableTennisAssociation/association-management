@@ -2,6 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
+import { retrievalEvidenceSemantics } from "@/evidence/tool-semantics";
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import {
   readSourceDocumentSelection,
@@ -9,6 +10,7 @@ import {
   type SourceDocumentSelection,
 } from "@/memory/source-document";
 import { createSourceDocumentReferenceRegistry } from "@/memory/source-document-references";
+import type { SourceDocumentReadResult } from "@/memory/source-document-types";
 
 const MAX_SOURCE_READS_PER_ANSWER = 8;
 
@@ -142,6 +144,7 @@ export function createSourceDocumentToolset(input: {
   evidence: MemoryEvidenceAccumulator;
   resultTokenBudget: number;
   sharedResultBudget?: ToolResultTokenBudget;
+  onRead?: (result: SourceDocumentReadResult) => void;
 }) {
   const references = createSourceDocumentReferenceRegistry();
   const continuations = new Map<string, Continuation>();
@@ -247,10 +250,36 @@ export function createSourceDocumentToolset(input: {
         maxCharacters,
       });
     }
-    return references.attachReference({
+    const referencedResult = references.attachReference({
       ...publicResult,
       ...(continuationCursor ? { continuationCursor } : {}),
     });
+    const contentPresent = Boolean(
+      referencedResult.blocks.length || referencedResult.outline?.length,
+    );
+    const semantics = retrievalEvidenceSemantics({
+      id: `source_document.${readCount}`,
+      layer: "source_document",
+      scope: `${referencedResult.document.id}:${referencedResult.selection.label}`,
+      subject: referencedResult.document.title,
+      question: `读取“${referencedResult.document.title}”的${referencedResult.selection.label}`,
+      coverage: {
+        level: referencedResult.isCompleteSelection ? "complete" : "partial",
+        missingAspects: referencedResult.isCompleteSelection
+          ? []
+          : ["当前原文选择仍有未返回内容，可使用 continuationCursor 继续读取。"],
+        observationComplete: referencedResult.isCompleteSelection,
+        contentPresence: contentPresent ? "present" : "absent",
+      },
+      refs: referencedResult.ref ? [referencedResult.ref] : [],
+      authority: "authoritative",
+      presentSummary: "本次 Source Document 读取返回了可引用的原文内容。",
+      absentSummary: "本次 Source Document 选择没有返回正文内容。",
+      unknownSummary: "本次 Source Document 读取尚未形成完整观察。",
+    });
+    const describedResult = { ...referencedResult, semantics };
+    input.onRead?.(describedResult);
+    return describedResult;
   }
 
   return {
@@ -270,5 +299,6 @@ export function createSourceDocumentToolset(input: {
       execute: executeRead,
     }),
     citedReferences: references.citedReferences,
+    availableReferenceRefs: references.availableRefs,
   };
 }

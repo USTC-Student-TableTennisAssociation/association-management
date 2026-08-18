@@ -1,3 +1,4 @@
+import { citedRefs } from "@/ai/citation-refs";
 import { getDatabase } from "@/db";
 import type {
   MemoryRetrievalResult,
@@ -28,9 +29,7 @@ export function citedAssertionRefs(
   seedMap: StructuredSeedMap,
 ): string[] {
   const valid = new Set(seedMap.assertions.map((item) => item.ref));
-  return [...text.matchAll(/\[(A\d+)\]/g)]
-    .map((match) => match[1])
-    .filter((ref, index, values) => valid.has(ref) && values.indexOf(ref) === index);
+  return citedRefs(text, "A").filter((ref) => valid.has(ref));
 }
 
 export function attachCitedSourceExcerpts(

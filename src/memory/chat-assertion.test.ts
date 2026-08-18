@@ -32,6 +32,7 @@ const emptyCaptureResult = {
   publishedAssertions: 0,
   publishedAssertionIds: [],
   affectedObjectIds: [],
+  higherMemoryObjectIds: [],
   affectedObjects: [],
 };
 
@@ -239,6 +240,7 @@ describe("Chat Assertion capture agent", () => {
       publishedAssertions: 1,
       publishedAssertionIds: [assertionId],
       affectedObjectIds: [personId],
+      higherMemoryObjectIds: [],
       affectedObjects: [{
         id: personId,
         canonicalName: "雷岳鑫",

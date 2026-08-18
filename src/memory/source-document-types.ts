@@ -50,6 +50,7 @@ export type SourceDocumentReadResult = {
   isFullDocument: boolean;
   isCompleteSelection: boolean;
   continuationCursor?: string;
+  semantics?: EvidenceSemantics;
 };
 
 export type SourceDocumentReference = {
@@ -66,3 +67,4 @@ export type SourceDocumentReference = {
 export type SourceDocumentReferenceBundle = {
   references: SourceDocumentReference[];
 };
+import type { EvidenceSemantics } from "@/evidence/types";

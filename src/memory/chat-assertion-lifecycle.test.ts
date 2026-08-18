@@ -9,6 +9,7 @@ const lifecycleState = vi.hoisted(() => ({
   receiptComplete: vi.fn(),
   receiptFail: vi.fn(),
   loadJob: vi.fn(),
+  consolidate: vi.fn(),
   order: [] as string[],
 }));
 
@@ -32,6 +33,9 @@ vi.mock("@/memory/object-higher-memory", () => ({
 vi.mock("@/memory/higher-memory-maintenance", () => ({
   maintainHigherMemories: lifecycleState.maintain,
 }));
+vi.mock("@/memory/knowledge-consolidator", () => ({
+  consolidateTurnKnowledge: lifecycleState.consolidate,
+}));
 
 import { createChatMemoryMaintenanceScheduler } from "@/memory/chat-assertion-lifecycle";
 
@@ -47,6 +51,7 @@ beforeEach(() => {
       publishedAssertions: 2,
       publishedAssertionIds: ["assertion-1", "assertion-2"],
       affectedObjectIds: ["object-1"],
+      higherMemoryObjectIds: [],
       affectedObjects: [{
         id: "object-1",
         canonicalName: "测试对象",
@@ -59,6 +64,15 @@ beforeEach(() => {
     return { objectMemories: 1, ambientMemories: 0 };
   });
   lifecycleState.findExisting.mockResolvedValue([]);
+  lifecycleState.consolidate.mockResolvedValue({
+    objectUpdates: [{
+      globalObjectId: "object-1",
+      canonicalName: "测试对象",
+      updateAreas: ["current_state"],
+      focus: "已发布的新 Assertion 改变了当前状态。",
+    }],
+    ambientUpdates: [],
+  });
   lifecycleState.loadJob.mockResolvedValue({
     clientMessageId: "message-durable",
     submittedAt: "2026-08-14T00:00:00.000Z",
@@ -131,8 +145,7 @@ describe("post-answer memory maintenance pipeline", () => {
     expect(lifecycleState.maintain).toHaveBeenCalledOnce();
   });
 
-  it("does not recapture a foreground publication and still refreshes existing Higher Memory", async () => {
-    lifecycleState.findExisting.mockResolvedValue(["object-1"]);
+  it("does not recapture a foreground publication and consolidates verified knowledge", async () => {
     const scheduler = createChatMemoryMaintenanceScheduler();
     scheduler.publish({
       completedAssertion: {
@@ -155,24 +168,34 @@ describe("post-answer memory maintenance pipeline", () => {
           }],
         },
       },
+      consolidation: {
+        clientMessageId: "message-foreground",
+        submittedAt: "2026-08-14T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+        semanticContext: {},
+        retrieval: { compilationId: "compilation-1" },
+      } as never,
     });
 
     await lifecycleState.afterCallback?.();
 
     expect(lifecycleState.capture).not.toHaveBeenCalled();
-    expect(lifecycleState.findExisting).toHaveBeenCalledWith({
-      objectIds: ["object-1"],
-      compilationId: "compilation-1",
-    });
+    expect(lifecycleState.consolidate).toHaveBeenCalledOnce();
     expect(lifecycleState.maintain).toHaveBeenCalledOnce();
     expect(lifecycleState.order).toEqual(["higher-memory:start"]);
   });
 
-  it("automatically refreshes an existing Higher Memory after publishing an Assertion", async () => {
-    lifecycleState.findExisting.mockResolvedValue(["object-1"]);
+  it("consolidates only after publishing an Assertion", async () => {
     const scheduler = createChatMemoryMaintenanceScheduler();
     scheduler.publish({
       assertion: {
+        clientMessageId: "message-3",
+        submittedAt: "2026-08-14T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+        semanticContext: {},
+        retrieval: { compilationId: "compilation-1" },
+      } as never,
+      consolidation: {
         clientMessageId: "message-3",
         submittedAt: "2026-08-14T00:00:00.000Z",
         timezone: "Asia/Shanghai",
@@ -183,10 +206,7 @@ describe("post-answer memory maintenance pipeline", () => {
 
     await lifecycleState.afterCallback?.();
 
-    expect(lifecycleState.findExisting).toHaveBeenCalledWith({
-      objectIds: ["object-1"],
-      compilationId: "compilation-1",
-    });
+    expect(lifecycleState.consolidate).toHaveBeenCalledOnce();
     expect(lifecycleState.maintain).toHaveBeenCalledWith(
       expect.objectContaining({
         queueDecision: expect.objectContaining({
@@ -202,16 +222,49 @@ describe("post-answer memory maintenance pipeline", () => {
     ]);
   });
 
-  it("does not create Higher Memory for an affected Object that has none", async () => {
+  it("does not maintain Higher Memory when consolidation selects no target", async () => {
+    lifecycleState.consolidate.mockResolvedValueOnce({
+      objectUpdates: [],
+      ambientUpdates: [],
+    });
     const scheduler = createChatMemoryMaintenanceScheduler();
-    scheduler.publish({ assertion: {
-      clientMessageId: "message-4",
-      retrieval: { compilationId: "compilation-1" },
-    } as never });
+    scheduler.publish({
+      assertion: {
+        clientMessageId: "message-4",
+        retrieval: { compilationId: "compilation-1" },
+      } as never,
+      consolidation: {
+        clientMessageId: "message-4",
+        submittedAt: "2026-08-14T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+        semanticContext: {},
+        retrieval: { compilationId: "compilation-1" },
+      } as never,
+    });
 
     await lifecycleState.afterCallback?.();
 
-    expect(lifecycleState.findExisting).toHaveBeenCalledOnce();
+    expect(lifecycleState.consolidate).toHaveBeenCalledOnce();
+    expect(lifecycleState.maintain).not.toHaveBeenCalled();
+  });
+
+  it("does not consolidate when the Assertion Agent publishes nothing", async () => {
+    lifecycleState.capture.mockResolvedValueOnce({
+      publishedAssertions: 0,
+      publishedAssertionIds: [],
+      affectedObjectIds: [],
+      higherMemoryObjectIds: [],
+      affectedObjects: [],
+    });
+    const scheduler = createChatMemoryMaintenanceScheduler();
+    scheduler.publish({
+      assertion: { clientMessageId: "message-empty" } as never,
+      consolidation: { clientMessageId: "message-empty" } as never,
+    });
+
+    await lifecycleState.afterCallback?.();
+
+    expect(lifecycleState.consolidate).not.toHaveBeenCalled();
     expect(lifecycleState.maintain).not.toHaveBeenCalled();
   });
 

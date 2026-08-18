@@ -978,6 +978,7 @@ export function SemanticViewWorkspace({
   onPresentationChange,
   onOpenAI,
   onAskAI,
+  onPageContextChange,
 }: {
   viewKey?: BusinessViewKey;
   presentation: BusinessViewPresentation;
@@ -991,6 +992,11 @@ export function SemanticViewWorkspace({
   onPresentationChange: (presentation: BusinessViewPresentation) => void;
   onOpenAI: () => void;
   onAskAI: (prompt: string) => void;
+  onPageContextChange?: (context?: {
+    activeCardId: string;
+    activeNodeId?: string;
+    activeObjectName: string;
+  }) => void;
 }) {
   const [view, setView] = useState<SemanticViewState>();
   const [error, setError] = useState<string>();
@@ -1099,7 +1105,10 @@ export function SemanticViewWorkspace({
       {view?.compatible ? (
         <div className="mt-7">
           {presentation === "playbook" && view.viewKey === ACTIVITY_OPERATIONS_VIEW
-            ? <ActivityPlaybookOverview onAskAI={onAskAI} />
+            ? <ActivityPlaybookOverview
+                onAskAI={onAskAI}
+                onContextChange={onPageContextChange}
+              />
             : presentation === "overview"
             ? view.viewKey === SOCIETY_INFORMATION_VIEW
               ? <SocietyInformationOverview view={view} />

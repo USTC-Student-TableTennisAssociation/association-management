@@ -12,6 +12,7 @@ export const knownRuntimeToolNames = [
   "inspectObjectIdentity",
   "proposeObjectChange",
   "proposeViewChange",
+  "loadSkill",
   "listLibrary",
   "inspectLibraryNodes",
   "previewLibraryFiles",
@@ -102,7 +103,13 @@ export function buildCapabilityInstructions(input: {
   if (has(toolNames, "searchMemory") || has(toolNames, "expandEvidence")) {
     sections.push([
       "【Shared Brain / Higher Memory】",
-      "openBusinessContext 已经完成正式 View、相关 Card 和 Card Object Higher Memory 的第一次读取。只有其 unresolvedAspects/formalCardMissing 或用户要求来源细节时，才使用 expandEvidence。targetHints 只保留用户所指实体的名称/别名，query 只表达未覆盖的具体问题；不要重复相同查询。",
+      has(toolNames, "searchMemory")
+        ? "searchMemory 是跨文件、跨对象的主题语义检索入口，可独立于 Business View 或 Library 使用。文件标题查询未命中、只打开了单个文件、或只读到前一页 Assertion，都不能替代这次检索。"
+        : "",
+      has(toolNames, "expandEvidence")
+        ? "openBusinessContext 已完成正式 View、相关 Card 和 Card Object Higher Memory 的第一次读取。其 unresolvedAspects/formalCardMissing 未覆盖问题或用户要求来源细节时，使用 expandEvidence。"
+        : "",
+      "targetHints 只保留用户所指实体的名称/别名，query 只表达具体信息需求；不要重复相同查询。",
       "返回 [H#] 时优先阅读并使用 Higher Memory。只有它未覆盖问题、用户要求细节/原话/来源、出现冲突或陈旧警告时，才下钻 Assertions。kind=grounded 的 [A#] 才是事实证据；kind=reference 只是原文导航。",
       "时间敏感结论必须保留历史、时段、当前或未来计划的区别；上传时间和聊天提交时间不能替代事实有效期。",
     ].join("\n"));
@@ -149,6 +156,14 @@ export function buildCapabilityInstructions(input: {
     sections.push([
       "正式修改 Business View 时，先读取当前 View，再用 proposeViewChange 提议。Proposal 需要用户批准才会生效，不能把用户对事实的确认当作对尚未展示 Proposal 的批准。",
       "fallback 暴露的稳定、可复用且明确属于 View 职责的缺口才值得提议；一次性或过细信息不要吸收。",
+    ].join("\n"));
+  }
+
+  if (has(toolNames, "loadSkill")) {
+    sections.push([
+      "【按需 Skill】",
+      "当用户要创建或修复目录、流程地图、操作指南等包含容器、成员、起点或路径的 Card/Slot 子图时，在 proposeViewChange 前加载 business-view-graph-authoring。它只提供构图方法，具体 Card Type 和 Slot 必须以本轮实时 View schema 为准。",
+      "普通问答、读取现状和单个 ContentDimension 修改不要加载 Skill。Skill 不是权限门，也不能替代 Proposal 校验。",
     ].join("\n"));
   }
 

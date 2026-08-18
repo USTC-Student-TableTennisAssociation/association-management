@@ -1,3 +1,4 @@
+import { citedRefs } from "@/ai/citation-refs";
 import type {
   SourceDocumentReadResult,
   SourceDocumentReference,
@@ -43,14 +44,13 @@ export function createSourceDocumentReferenceRegistry() {
 
   function citedReferences(text: string): SourceDocumentReferenceBundle {
     const available = new Map(references.map((reference) => [reference.ref, reference]));
-    const used = [...text.matchAll(/\[(S\d+)\]/g)]
-      .map((match) => match[1])
-      .filter(
-        (ref, index, values) =>
-          available.has(ref) && values.indexOf(ref) === index,
-      );
+    const used = citedRefs(text, "S").filter((ref) => available.has(ref));
     return { references: used.map((ref) => available.get(ref)!) };
   }
 
-  return { attachReference, citedReferences };
+  return {
+    attachReference,
+    citedReferences,
+    availableRefs: () => references.map((reference) => reference.ref),
+  };
 }

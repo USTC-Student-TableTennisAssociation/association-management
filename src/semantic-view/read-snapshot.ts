@@ -1,3 +1,4 @@
+import { citedRefs } from "@/ai/citation-refs";
 import type {
   SemanticViewReadSnapshot,
   SemanticViewReference,
@@ -105,13 +106,15 @@ export function createSemanticViewReferenceRegistry() {
 
   function citedReferences(text: string): SemanticViewReferenceBundle {
     const available = new Map(references.map((reference) => [reference.ref, reference]));
-    const used = [...text.matchAll(/\[(V\d+)\]/g)]
-      .map((match) => match[1])
-      .filter((ref, index, values) => available.has(ref) && values.indexOf(ref) === index);
+    const used = citedRefs(text, "V").filter((ref) => available.has(ref));
     return {
       references: used.map((ref) => available.get(ref)!),
     };
   }
 
-  return { buildSnapshot, citedReferences };
+  return {
+    buildSnapshot,
+    citedReferences,
+    availableRefs: () => references.map((reference) => reference.ref),
+  };
 }
