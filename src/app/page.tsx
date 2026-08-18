@@ -8,6 +8,8 @@ import {
   type ChatStatus,
 } from "ai";
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import type { ArtifactReference } from "@/library/artifact-references";
@@ -18,6 +20,7 @@ import {
 import { LibraryWorkspace } from "@/library/components/library-workspace";
 import { LibraryProposalCard } from "@/library/components/library-proposal-card";
 import { CompilationWorkspace } from "@/library/components/compilation-workspace";
+import { KnowledgeGraphWorkspace } from "@/memory/components/knowledge-graph-workspace";
 import type {
   MemoryChannelTrace,
   StructuredSeedMap,
@@ -42,26 +45,10 @@ import {
   type ViewProposalPresentation,
 } from "@/semantic-view/types";
 
-const initialMessages: ClubChatMessage[] = [
-  {
-    id: "welcome",
-    role: "assistant",
-    parts: [
-      {
-        type: "text",
-        text: "你好。我可以通过 Object–Assertion 基础视图检索并理解社团资料。",
-      },
-    ],
-  },
-];
-
-const quickPrompts = [
-  "新闻稿应该怎么写？",
-  "继往开来是什么活动？",
-  "2024 年继往开来什么时候举办？",
-];
+const initialMessages: ClubChatMessage[] = [];
 
 type ChatHistoryState = "loading" | "ready" | "error";
+type WorkspaceKey = "chat" | "knowledge-graph" | "library" | "compilation" | BusinessViewKey;
 
 type CurrentUser = {
   userId: string;
@@ -323,20 +310,22 @@ function ToolActivityList({ activities }: { activities: ToolActivity[] }) {
   );
 }
 
-function ReferencedAnswerText({
+function MarkdownText({
   text,
-  references,
-  sourceReferences,
-  artifactReferences,
+  references = [],
+  sourceReferences = [],
+  artifactReferences = [],
   onOpenViewReference,
   onOpenSourceReference,
+  inverse = false,
 }: {
   text: string;
-  references: SemanticViewReference[];
-  sourceReferences: SourceDocumentReference[];
-  artifactReferences: ArtifactReference[];
-  onOpenViewReference: (reference: SemanticViewReference) => void;
-  onOpenSourceReference: (reference: SourceDocumentReference) => void;
+  references?: SemanticViewReference[];
+  sourceReferences?: SourceDocumentReference[];
+  artifactReferences?: ArtifactReference[];
+  onOpenViewReference?: (reference: SemanticViewReference) => void;
+  onOpenSourceReference?: (reference: SourceDocumentReference) => void;
+  inverse?: boolean;
 }) {
   const referencesByRef = new Map(
     references.map((reference) => [reference.ref, reference]),
@@ -347,57 +336,74 @@ function ReferencedAnswerText({
   const artifactReferencesByRef = new Map(
     artifactReferences.map((reference) => [reference.ref, reference]),
   );
+
+  const markdown = text.replace(
+    /\[((?:V|S|F)\d+)\]/g,
+    "[$1](echo-ref:$1)",
+  );
+
   return (
-    <div className="whitespace-pre-wrap">
-      {text.split(/(\[(?:V|S|F)\d+\])/g).map((part, index) => {
-        const match = /^\[((?:V|S|F)\d+)\]$/.exec(part);
-        const reference = match ? referencesByRef.get(match[1]) : undefined;
-        const sourceReference = match
-          ? sourceReferencesByRef.get(match[1])
-          : undefined;
-        const artifactReference = match
-          ? artifactReferencesByRef.get(match[1])
-          : undefined;
-        if (!reference && !sourceReference && !artifactReference) {
-          return <span key={`${index}-${part}`}>{part}</span>;
-        }
-        if (artifactReference) {
-          return (
-            <span
-              key={`${index}-${artifactReference.ref}`}
-              className="mx-0.5 inline-flex items-center rounded-full border border-amber-300 bg-white px-2 py-0.5 text-xs font-medium text-amber-800 shadow-sm"
-              title={artifactReference.label}
-            >
-              {artifactReference.ref} · 资料库
-            </span>
-          );
-        }
-        if (sourceReference) {
-          return (
-            <button
-              key={`${index}-${sourceReference.ref}`}
-              type="button"
-              onClick={() => onOpenSourceReference(sourceReference)}
-              className="mx-0.5 inline-flex items-center rounded-full border border-sky-300 bg-white px-2 py-0.5 text-xs font-medium text-sky-800 shadow-sm hover:border-sky-500 hover:bg-sky-50"
-              title={`查看 ${sourceReference.label}`}
-            >
-              {sourceReference.ref} · 原文 ↗
-            </button>
-          );
-        }
-        if (!reference) return <span key={`${index}-${part}`}>{part}</span>;
-        return (
-          <button
-            key={`${index}-${reference.ref}`}
-            type="button"
-            onClick={() => onOpenViewReference(reference)}
-            className="mx-0.5 inline-flex items-center rounded-full border border-emerald-300 bg-white px-2 py-0.5 text-xs font-medium text-emerald-800 shadow-sm hover:border-emerald-500 hover:bg-emerald-50"
-            title={`打开 ${reference.label}`}
-          >
-            {reference.label} ↗
-          </button>
-        );
-      })}
+    <div className={`echo-markdown ${inverse ? "echo-markdown-inverse" : ""}`}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        urlTransform={(url) => url.startsWith("echo-ref:") ? url : defaultUrlTransform(url)}
+        components={{
+          a: ({ href, children }) => {
+            const referenceRef = href?.startsWith("echo-ref:")
+              ? href.slice("echo-ref:".length)
+              : undefined;
+            const reference = referenceRef
+              ? referencesByRef.get(referenceRef)
+              : undefined;
+            const sourceReference = referenceRef
+              ? sourceReferencesByRef.get(referenceRef)
+              : undefined;
+            const artifactReference = referenceRef
+              ? artifactReferencesByRef.get(referenceRef)
+              : undefined;
+
+            if (artifactReference) {
+              return (
+                <span className="echo-reference" title={artifactReference.label}>
+                  {artifactReference.ref} · 资料库
+                </span>
+              );
+            }
+            if (sourceReference) {
+              return (
+                <button
+                  type="button"
+                  onClick={() => onOpenSourceReference?.(sourceReference)}
+                  className="echo-reference"
+                  title={`查看 ${sourceReference.label}`}
+                >
+                  {sourceReference.ref} · 原文 ↗
+                </button>
+              );
+            }
+            if (reference) {
+              return (
+                <button
+                  type="button"
+                  onClick={() => onOpenViewReference?.(reference)}
+                  className="echo-reference"
+                  title={`打开 ${reference.label}`}
+                >
+                  {reference.label} ↗
+                </button>
+              );
+            }
+            if (referenceRef) return <span>{children}</span>;
+            return (
+              <a href={href} target="_blank" rel="noreferrer">
+                {children}
+              </a>
+            );
+          },
+        }}
+      >
+        {markdown}
+      </ReactMarkdown>
     </div>
   );
 }
@@ -577,6 +583,12 @@ function ChatSurface({
   const isSending = status === "submitted" || status === "streaming";
   const canInteract = historyState === "ready";
   const canSend = input.trim().length > 0 && !isSending && canInteract;
+  const isEmptyChat = !compact && messages.length === 0 && historyState === "ready";
+  const statusMessage = historyState === "loading"
+    ? "正在恢复对话…"
+    : historyState === "error"
+      ? historyError
+      : error?.message;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -591,9 +603,18 @@ function ChatSurface({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className={`min-h-0 flex-1 overflow-y-auto rounded-xl border border-zinc-200 bg-white shadow-sm ${compact ? "p-3" : "p-4 sm:p-6"}`}>
-        <div className="flex flex-col gap-4">
+    <div className={`flex min-h-0 flex-1 flex-col bg-white ${isEmptyChat ? "justify-center pb-16" : ""}`}>
+      <div className={isEmptyChat ? "shrink-0 overflow-visible" : "min-h-0 flex-1 overflow-y-auto overscroll-contain"}>
+        {messages.length === 0 && historyState === "ready" ? (
+          <div className={isEmptyChat ? "mb-4 px-6 text-center" : `flex min-h-full items-center justify-center px-6 text-center ${compact ? "pb-24" : "pb-36"}`}>
+            <div>
+              <h2 className={`font-medium tracking-[-0.025em] text-zinc-950 ${compact ? "text-lg" : "text-[21px]"}`}>
+                今天想一起完成什么？
+              </h2>
+            </div>
+          </div>
+        ) : (
+        <div className={`mx-auto flex w-full flex-col ${compact ? "gap-4 px-3.5 py-4" : "max-w-[46rem] gap-5 px-5 py-7 sm:px-6 sm:py-8"}`}>
           {messages.map((message, messageIndex) => {
             const isUser = message.role === "user";
             const text = finalStepMessageText(message);
@@ -625,18 +646,27 @@ function ChatSurface({
               .flatMap((assertion) => assertion.sources.map((source) => ({ assertion, source }))) ?? [];
 
             return (
-              <article key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-                <div className={`${compact ? "max-w-[96%]" : "max-w-[88%]"} rounded-lg px-3.5 py-2.5 text-sm leading-6 ${
-                  isUser ? "bg-emerald-700 text-white" : "border border-zinc-200 bg-zinc-50 text-zinc-800"
-                }`}>
-                  <ReferencedAnswerText
-                    text={text || (isActiveAssistant && !activities.length ? "正在回答…" : "")}
-                    references={viewReferences}
-                    sourceReferences={sourceReferences}
-                    artifactReferences={artifactReferences}
-                    onOpenViewReference={onOpenViewReference}
-                    onOpenSourceReference={onOpenSourceReference}
-                  />
+              <article key={message.id} className={`flex items-start ${isUser ? "justify-end" : "gap-2.5"}`}>
+                {!isUser ? (
+                  <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-[9px] font-semibold text-white">
+                    E
+                  </div>
+                ) : null}
+                <div className={`${isUser
+                  ? `${compact ? "max-w-[88%]" : "max-w-[75%]"} rounded-[18px] bg-[#f4f4f4] px-3.5 py-2 text-zinc-900`
+                  : "min-w-0 flex-1 text-zinc-800"
+                } text-[14px] leading-6`}>
+                  {text || (isActiveAssistant && !activities.length) ? (
+                    <MarkdownText
+                      text={text || "正在回答…"}
+                      references={viewReferences}
+                      sourceReferences={sourceReferences}
+                      artifactReferences={artifactReferences}
+                      onOpenViewReference={onOpenViewReference}
+                      onOpenSourceReference={onOpenSourceReference}
+                      inverse={isUser}
+                    />
+                  ) : null}
                   <ToolActivityList activities={activities} />
                   {reasoning ? (
                     <details className="mt-3 border-t border-zinc-200 pt-2 text-xs text-zinc-600">
@@ -713,49 +743,52 @@ function ChatSurface({
             );
           })}
           {status === "submitted" ? (
-            <article className="flex justify-start"><div className="rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-600">正在准备回答…</div></article>
+            <article className="flex items-center gap-2.5 text-[13px] text-zinc-500">
+              <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-[9px] font-semibold text-white">E</div>
+              <span>正在思考</span>
+              <span className="flex gap-1" aria-hidden="true">
+                <span className="size-1 animate-pulse rounded-full bg-zinc-400" />
+                <span className="size-1 animate-pulse rounded-full bg-zinc-400 [animation-delay:120ms]" />
+                <span className="size-1 animate-pulse rounded-full bg-zinc-400 [animation-delay:240ms]" />
+              </span>
+            </article>
           ) : null}
         </div>
+        )}
       </div>
 
-      {!compact ? (
-        <div className="grid gap-2 sm:grid-cols-3">
-          {quickPrompts.map((prompt) => (
-            <button key={prompt} type="button" disabled={isSending || !canInteract} onClick={() => onSubmit(prompt)} className="min-h-11 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-left text-sm text-zinc-700 shadow-sm hover:border-emerald-300 hover:text-emerald-800 disabled:opacity-60">
-              {prompt}
+      <div className={isEmptyChat
+        ? "shrink-0 bg-white px-4 pb-0 pt-0 sm:px-6"
+        : `shrink-0 bg-gradient-to-t from-white via-white to-white/0 px-4 pb-3 pt-2 ${compact ? "" : "sm:px-6 sm:pb-4"}`
+      }>
+        <form onSubmit={handleSubmit} className="mx-auto flex w-full max-w-[46rem] items-end gap-1.5 rounded-[24px] border border-zinc-200 bg-white p-2 shadow-[0_5px_22px_rgba(0,0,0,0.07)] transition-shadow focus-within:border-zinc-300 focus-within:shadow-[0_7px_26px_rgba(0,0,0,0.09)]">
+          <label className="sr-only" htmlFor={textareaId}>向 Echo 提问</label>
+          <textarea
+            id={textareaId}
+            value={input}
+            onChange={(event) => onInputChange(event.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+            disabled={isSending || !canInteract}
+            className="min-h-8 max-h-40 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1 text-[14px] leading-6 text-zinc-950 outline-none [field-sizing:content] placeholder:text-zinc-400 disabled:opacity-60"
+            placeholder={compact ? "继续提问" : "向 Echo 提问"}
+          />
+          {isSending ? (
+            <button type="button" onClick={onStop} aria-label="停止生成" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white transition hover:bg-zinc-700">
+              <span className="size-2.5 rounded-[2px] bg-white" />
             </button>
-          ))}
-        </div>
-      ) : null}
-
-      <form onSubmit={handleSubmit} className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm">
-        <label className="sr-only" htmlFor={textareaId}>输入消息</label>
-        <textarea
-          id={textareaId}
-          value={input}
-          onChange={(event) => onInputChange(event.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={compact ? 2 : 3}
-          disabled={isSending || !canInteract}
-          className={`${compact ? "min-h-20" : "min-h-24"} max-h-40 w-full resize-none rounded-md border border-zinc-200 bg-zinc-50 px-3 py-3 text-sm leading-6 text-zinc-950 outline-none focus:border-emerald-500 focus:bg-white focus:ring-2 focus:ring-emerald-100 disabled:opacity-70`}
-          placeholder={compact ? "询问当前页面，或继续已有对话…" : "询问组织资料、活动经验或工作事项…"}
-        />
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <p className={`min-h-5 text-xs ${historyState === "error" || error ? "text-red-600" : "text-zinc-500"}`} role="status">
-            {historyState === "loading"
-              ? "正在从服务器恢复对话…"
-              : historyState === "error"
-                ? historyError
-                : error?.message}
-          </p>
-          <div className="flex gap-2">
-            {isSending ? <button type="button" onClick={onStop} className="h-9 rounded-md border border-zinc-300 px-3 text-sm text-zinc-700">停止</button> : null}
-            <button type="submit" disabled={!canSend} className="h-9 rounded-md bg-emerald-700 px-4 text-sm font-medium text-white disabled:bg-zinc-300 disabled:text-zinc-500">
-              {isSending ? "生成中" : "发送"}
+          ) : (
+            <button type="submit" disabled={!canSend} aria-label="发送" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white transition hover:bg-zinc-700 disabled:bg-zinc-200 disabled:text-zinc-400">
+              <svg viewBox="0 0 24 24" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="2.2" aria-hidden="true">
+                <path d="M12 19V5m0 0-5 5m5-5 5 5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
             </button>
-          </div>
-        </div>
-      </form>
+          )}
+        </form>
+        {statusMessage ? (
+          <p className={`mx-auto mt-1.5 max-w-[46rem] truncate px-2 text-center text-[10px] ${historyState === "error" || error ? "text-red-600" : "text-zinc-400"}`} role="status">{statusMessage}</p>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -862,8 +895,8 @@ function SourceDocumentDialog({
                   {block.pages.length ? ` · p.${block.pages.join(", ")}` : ""}
                   {block.headingPath.length ? ` · ${block.headingPath.join(" / ")}` : ""}
                 </p>
-                <div className="whitespace-pre-wrap break-words text-sm leading-6 text-zinc-800">
-                  {block.markdown}
+                <div className="break-words text-sm leading-6 text-zinc-800">
+                  <MarkdownText text={block.markdown} />
                 </div>
               </article>
             ))}
@@ -876,7 +909,7 @@ function SourceDocumentDialog({
 
 export default function Home() {
   const [input, setInput] = useState("");
-  const [activeWorkspace, setActiveWorkspace] = useState<"chat" | "library" | "compilation" | BusinessViewKey>(SOCIETY_INFORMATION_VIEW);
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceKey>("chat");
   const [activeLibraryFolderId, setActiveLibraryFolderId] = useState<string>();
   const [activePresentation, setActivePresentation] = useState<BusinessViewPresentation>("overview");
   const [semanticViewFocus, setSemanticViewFocus] = useState<SemanticViewFocus>();
@@ -1008,7 +1041,7 @@ export default function Home() {
     return () => controller.abort();
   }, [activeConversationId, setMessages]);
 
-  const pageContext: ChatPageContext = activeWorkspace === "chat"
+  const pageContext: ChatPageContext = activeWorkspace === "chat" || activeWorkspace === "knowledge-graph"
     ? { activePresentation: "full_chat" }
     : activeWorkspace === "library" || activeWorkspace === "compilation"
       ? { activePresentation: "library", activeFolderId: activeLibraryFolderId }
@@ -1107,6 +1140,13 @@ export default function Home() {
     setPreviewProposal(undefined);
   }
 
+  function openKnowledgeGraph() {
+    setActiveWorkspace("knowledge-graph");
+    setSemanticViewFocus(undefined);
+    setActivePageEntity(undefined);
+    setPreviewProposal(undefined);
+  }
+
   function openLibrary() {
     setActiveWorkspace("library");
     setSemanticViewFocus(undefined);
@@ -1169,10 +1209,6 @@ export default function Home() {
     setSemanticViewFocus(undefined);
   }
 
-  const activeConversation = conversations.find((item) =>
-    item.id === activeConversationId
-  );
-
   if (!currentUser) {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-[#eef2ef] px-5 text-zinc-700">
@@ -1186,20 +1222,70 @@ export default function Home() {
   }
 
   return (
-    <main className="flex h-dvh min-h-0 overflow-hidden bg-[#f6f7f4] text-zinc-950">
-      <nav className="flex w-72 shrink-0 flex-col overflow-hidden border-r border-zinc-200 bg-[#153f35] px-4 py-6 text-white">
-        <div className="px-2">
-          <p className="text-2xl font-semibold tracking-tight">Echo</p>
-          <p className="mt-1 text-sm text-emerald-100/75">组织记忆与智能协作</p>
+    <main className="flex h-dvh min-h-0 overflow-hidden bg-white text-zinc-950">
+      <nav className="hidden w-[244px] shrink-0 flex-col overflow-hidden border-r border-[#e8e8e8] bg-[#f9f9f9] px-2.5 pb-2.5 pt-2 md:flex">
+        <div className="flex h-11 items-center justify-center">
+          <p className="text-[16px] font-semibold tracking-[-0.02em] text-zinc-900">Echo</p>
         </div>
-        <div className="mt-7 flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center justify-between px-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-100/55">AI 对话</p>
-            <button type="button" disabled={isSending} onClick={() => void createConversation()} className="rounded-md border border-white/15 px-2 py-1 text-xs text-emerald-50 hover:bg-white/10 disabled:opacity-40">+ 新建</button>
+
+        <button
+          type="button"
+          disabled={isSending}
+          onClick={() => void createConversation()}
+          className="mt-0.5 flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] font-medium text-zinc-800 transition hover:bg-[#ececec] disabled:opacity-40"
+        >
+          <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+            <path d="M12 20H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h10" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="m14 4 6 6m-7 1 6.5-6.5a1.4 1.4 0 0 0-2-2L11 9l-1 3 3-1Z" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          新对话
+        </button>
+
+        <div className="mt-2">
+          <p className="px-2 pb-1 text-[10px] font-medium tracking-wide text-zinc-400">组织认知</p>
+          <button type="button" onClick={openKnowledgeGraph} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === "knowledge-graph" ? "bg-[#e5ece9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
+            <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="6" cy="12" r="2.25" /><circle cx="17.5" cy="6" r="2.25" /><circle cx="18" cy="17.5" r="2.25" /><path d="m8 11 7.3-3.8M8.1 13l7.7 3.4M17.7 8.3l.2 7" strokeLinecap="round" /></svg>
+            知识图谱
+          </button>
+        </div>
+
+        <div className="mt-2 border-t border-zinc-200/70 pt-2">
+          <div className="px-2 pb-1">
+            <p className="text-[10px] font-medium tracking-wide text-zinc-400">资料工程</p>
           </div>
-          <div className="mt-2 min-h-0 space-y-1 overflow-y-auto pr-1">
+          <div className="space-y-px">
+            <button type="button" onClick={openLibrary} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === "library" ? "bg-[#e9e9e9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
+              <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10l2 2h5.5A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-10Z" strokeLinejoin="round" /></svg>
+              资料库
+            </button>
+            <button type="button" onClick={openCompilation} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === "compilation" ? "bg-[#e9e9e9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
+              <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3.5h8l3 3v14H7v-17Z" strokeLinejoin="round" /><path d="M10 11h5m-5 4h5M15 3.5V7h3" strokeLinecap="round" /></svg>
+              基础编译
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-2 border-t border-zinc-200/70 pt-2">
+          <div className="px-2 pb-1">
+            <p className="text-[10px] font-medium tracking-wide text-zinc-400">业务视图</p>
+          </div>
+          <div className="space-y-px">
+            <button type="button" onClick={() => openBusinessView(SOCIETY_INFORMATION_VIEW)} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === SOCIETY_INFORMATION_VIEW ? "bg-[#e9e9e9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
+              <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="9" cy="8" r="3" /><path d="M3.5 19a5.5 5.5 0 0 1 11 0M15 7.5a2.5 2.5 0 0 1 0 5M16.5 15a4 4 0 0 1 4 4" strokeLinecap="round" /></svg>
+              社团信息
+            </button>
+            <button type="button" onClick={() => openBusinessView(ACTIVITY_OPERATIONS_VIEW)} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === ACTIVITY_OPERATIONS_VIEW ? "bg-[#e9e9e9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
+              <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M5 5h14v14H5z" strokeLinejoin="round" /><path d="M8 3v4m8-4v4M8 11h8m-8 4h5" strokeLinecap="round" /></svg>
+              活动运营
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-zinc-200/80 pt-3">
+          <p className="px-2 text-[11px] font-medium text-zinc-500">最近对话</p>
+          <div className="mt-1 min-h-0 space-y-px overflow-y-auto pr-0.5">
             {conversations.map((conversation) => (
-              <div key={conversation.id} className={`group flex items-center rounded-lg ${activeWorkspace === "chat" && activeConversationId === conversation.id ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}>
+              <div key={conversation.id} className={`group flex items-center rounded-lg transition ${activeWorkspace === "chat" && activeConversationId === conversation.id ? "bg-[#e9e9e9] text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -1210,74 +1296,51 @@ export default function Home() {
                     activateConversation(conversation.id);
                     openFullChat();
                   }}
-                  className="min-w-0 flex-1 truncate px-3 py-2.5 text-left text-sm"
+                  className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-[12px] leading-5"
                   title={conversation.title}
                 >
                   {conversation.title}
                 </button>
-                <button type="button" aria-label="重命名对话" onClick={() => void renameConversation(conversation)} className="hidden px-1 text-xs opacity-60 group-hover:block">✎</button>
-                <button type="button" aria-label="归档对话" onClick={() => void archiveConversation(conversation)} className="hidden px-2 text-xs opacity-60 group-hover:block">×</button>
+                <button type="button" aria-label="重命名对话" title="重命名" onClick={() => void renameConversation(conversation)} className="hidden px-1 py-1.5 text-[11px] text-zinc-500 hover:text-zinc-950 group-hover:block">✎</button>
+                <button type="button" aria-label="归档对话" title="归档" onClick={() => void archiveConversation(conversation)} className="hidden px-1.5 py-1.5 text-sm leading-none text-zinc-500 hover:text-zinc-950 group-hover:block">×</button>
               </div>
             ))}
           </div>
         </div>
-        <div className="mt-5 border-t border-white/15 pt-5">
-          <p className="px-3 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-100/55">资料处理</p>
-          <button
-            type="button"
-            onClick={openLibrary}
-            className={`mt-2 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === "library" ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
-          >
-            <span aria-hidden="true">🗂️</span> 资料库
-          </button>
-          <button
-            type="button"
-            onClick={openCompilation}
-            className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === "compilation" ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
-          >
-            <span aria-hidden="true">▷</span> 基础编译
-          </button>
-        </div>
-        <div className="mt-5 border-t border-white/15 pt-5">
-          <p className="px-3 text-xs font-semibold uppercase tracking-[0.16em] text-emerald-100/55">业务视角</p>
-          <button
-            type="button"
-            onClick={() => openBusinessView(SOCIETY_INFORMATION_VIEW)}
-            className={`mt-2 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === SOCIETY_INFORMATION_VIEW ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
-          >
-            <span className="size-2 rounded-full bg-emerald-300" aria-hidden="true" /> 社团信息
-          </button>
-          <button
-            type="button"
-            onClick={() => openBusinessView(ACTIVITY_OPERATIONS_VIEW)}
-            className={`mt-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${activeWorkspace === ACTIVITY_OPERATIONS_VIEW ? "bg-white text-emerald-950" : "text-emerald-50 hover:bg-white/10"}`}
-          >
-            <span className="size-2 rounded-full bg-amber-300" aria-hidden="true" /> 活动运营
-          </button>
-        </div>
-        <div className="mt-5 border-t border-white/15 px-2 pt-4">
-          <p className="truncate text-sm font-medium">{currentUser.actor.displayName}</p>
-          <p className="mt-1 truncate text-xs text-emerald-100/55">{currentUser.personObject?.canonicalName ?? currentUser.loginName}</p>
-          <div className="mt-3 flex gap-2">
-            {currentUser.role === "ADMIN" ? <button onClick={() => window.location.assign("/admin/users")} className="rounded-md border border-white/15 px-2.5 py-1.5 text-xs hover:bg-white/10">账号管理</button> : null}
-            <button onClick={() => void logout()} className="rounded-md border border-white/15 px-2.5 py-1.5 text-xs hover:bg-white/10">退出</button>
+
+        <div className="border-t border-zinc-200/80 pt-2">
+          <div className="flex items-center gap-2 rounded-lg px-1.5 py-1.5">
+            <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#d9dfdc] text-[10px] font-semibold text-zinc-700">
+              {currentUser.actor.displayName.slice(0, 1).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[12px] font-medium leading-4 text-zinc-800">{currentUser.actor.displayName}</p>
+              <p className="truncate text-[10px] leading-4 text-zinc-500">{currentUser.personObject?.canonicalName ?? currentUser.loginName}</p>
+            </div>
+          </div>
+          <div className="flex gap-0.5 px-1">
+            {currentUser.role === "ADMIN" ? <button onClick={() => window.location.assign("/admin/users")} className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-200/70 hover:text-zinc-800">账号管理</button> : null}
+            <button onClick={() => void logout()} className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-200/70 hover:text-zinc-800">退出登录</button>
           </div>
         </div>
       </nav>
 
       <div className="flex min-h-0 min-w-0 flex-1">
         <section className={`min-h-0 min-w-0 flex-1 ${
-          activeWorkspace === "chat" ? "overflow-hidden" : "overflow-y-auto"
+          activeWorkspace === "chat" || activeWorkspace === "knowledge-graph" ? "overflow-hidden" : "overflow-y-auto"
         }`}>
           {activeWorkspace === "chat" ? (
-            <div className="mx-auto flex h-full min-h-0 w-full max-w-5xl flex-col px-6 py-7 lg:px-10">
-              <header className="mb-5">
-                <p className="text-sm font-medium text-emerald-700">全局智能层</p>
-                <h1 className="mt-1 truncate text-3xl font-semibold text-zinc-950">{activeConversation?.title ?? "AI 对话"}</h1>
-                <p className="mt-2 text-sm text-zinc-600">完整对话仅你可见；经记忆维护的高层理解、Assertion 与正式 Business View 可进入共享组织认知。</p>
-              </header>
+            <div className="flex h-full min-h-0 w-full flex-col bg-white">
               <ChatSurface messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="full-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onPreviewProposal={(proposal) => showProposalChange(proposal, 0)} />
             </div>
+          ) : activeWorkspace === "knowledge-graph" ? (
+            <KnowledgeGraphWorkspace
+              assistantOpen={drawerOpen}
+              onAskAI={(prompt) => {
+                setInput(prompt);
+                setDrawerOpen(true);
+              }}
+            />
           ) : activeWorkspace === "library" ? (
             <LibraryWorkspace
               initialFolderId={activeLibraryFolderId}
@@ -1322,20 +1385,21 @@ export default function Home() {
         </section>
 
         {activeWorkspace !== "chat" && drawerOpen ? (
-          <aside className="flex h-dvh w-[28rem] shrink-0 flex-col border-l border-zinc-200 bg-[#eef2ef] p-4 shadow-[-8px_0_24px_rgba(24,64,53,0.08)]">
-            <header className="mb-3 flex items-start justify-between gap-3 px-1">
+          <aside className="flex h-dvh w-[26rem] shrink-0 flex-col border-l border-zinc-200 bg-white shadow-[-8px_0_28px_rgba(0,0,0,0.04)]">
+            <header className="flex min-h-12 items-center justify-between gap-3 border-b border-zinc-100 px-3.5 py-2">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">当前上下文</p>
-                <h2 className="mt-1 font-semibold text-zinc-950">
+                <p className="text-[11px] font-medium text-zinc-400">当前上下文</p>
+                <h2 className="mt-0.5 text-sm font-medium text-zinc-800">
                   {activeWorkspace === "library"
                     ? "资料库 · 当前文件夹"
                     : activeWorkspace === "compilation"
                       ? "资料库 · 基础编译"
-                    : `${activeWorkspace === ACTIVITY_OPERATIONS_VIEW ? "活动运营" : "社团信息"} · ${activePresentation === "overview" ? "概览" : activePresentation === "playbook" ? "操作手册" : "卡片"}`}
+                      : activeWorkspace === "knowledge-graph"
+                        ? "组织认知 · 知识图谱"
+                        : `${activeWorkspace === ACTIVITY_OPERATIONS_VIEW ? "活动运营" : "社团信息"} · ${activePresentation === "overview" ? "概览" : activePresentation === "playbook" ? "操作手册" : "卡片"}`}
                 </h2>
-                <p className="mt-1 text-xs text-zinc-500">AI 仍可使用完整 Shared Brain。</p>
               </div>
-              <button type="button" onClick={() => setDrawerOpen(false)} aria-label="收起 AI 对话" className="rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50">×</button>
+              <button type="button" onClick={() => setDrawerOpen(false)} aria-label="收起 AI 对话" className="flex size-7 items-center justify-center rounded-lg text-lg font-light text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700">×</button>
             </header>
             <ChatSurface compact messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="drawer-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onPreviewProposal={(proposal) => showProposalChange(proposal, 0)} />
           </aside>

@@ -337,7 +337,6 @@ export function CompilationWorkspace({
           <div>
             <p className="text-sm font-medium text-emerald-700">资料库工作快照</p>
             <h1 className="mt-1 text-2xl font-semibold text-zinc-950">基础编译</h1>
-            <p className="mt-1 max-w-3xl text-sm leading-6 text-zinc-500">先用深度文件建立可靠对象语境，再粗编译重要材料、编目其余文件，最后完成跨来源 Object 归并并发布到 Shared Brain。失败会自动从 checkpoint 续跑。</p>
           </div>
           <div className="flex gap-2">
             <button type="button" onClick={onOpenLibrary} className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">返回资料库</button>

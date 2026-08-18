@@ -381,7 +381,6 @@ export function LibraryWorkspace({
           <div>
             <p className="text-sm font-medium text-emerald-700">组织原始资料</p>
             <h1 className="mt-1 text-2xl font-semibold text-zinc-950">资料库</h1>
-            <p className="mt-1 text-sm text-zinc-500">先保留、可整理；只有指定为粗编译或深度冷启动的文件才进入后续处理。</p>
           </div>
           <div className="flex gap-2">
             <button type="button" onClick={onOpenAI} className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50">与 Echo 整理</button>
