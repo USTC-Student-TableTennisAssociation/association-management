@@ -2,25 +2,227 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #18181b;
+  color-scheme: light;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: Arial, Helvetica, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
+  margin: 0;
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+button:not(:disabled) {
+  cursor: pointer;
+}
+
+::selection {
+  background: #d9f3e7;
+}
+
+* {
+  scrollbar-color: #d4d4d8 transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #d4d4d8;
+}
+
+.echo-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.echo-markdown > :first-child {
+  margin-top: 0;
+}
+
+.echo-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.echo-markdown p {
+  margin: 0 0 0.65em;
+}
+
+.echo-markdown h1,
+.echo-markdown h2,
+.echo-markdown h3,
+.echo-markdown h4 {
+  margin: 1.2em 0 0.45em;
+  color: #18181b;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.018em;
+}
+
+.echo-markdown h1 {
+  font-size: 1.45em;
+}
+
+.echo-markdown h2 {
+  font-size: 1.25em;
+}
+
+.echo-markdown h3 {
+  font-size: 1.1em;
+}
+
+.echo-markdown ul,
+.echo-markdown ol {
+  margin: 0.5em 0 0.75em;
+  padding-left: 1.55em;
+}
+
+.echo-markdown ul {
+  list-style: disc;
+}
+
+.echo-markdown ol {
+  list-style: decimal;
+}
+
+.echo-markdown li {
+  padding-left: 0.15em;
+}
+
+.echo-markdown li + li {
+  margin-top: 0.2em;
+}
+
+.echo-markdown li > ul,
+.echo-markdown li > ol {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+
+.echo-markdown .contains-task-list {
+  list-style: none;
+  padding-left: 0.25em;
+}
+
+.echo-markdown .task-list-item input {
+  margin-right: 0.5em;
+  accent-color: #18181b;
+}
+
+.echo-markdown blockquote {
+  margin: 0.75em 0;
+  border-left: 3px solid #d4d4d8;
+  padding: 0.15em 0 0.15em 1em;
+  color: #52525b;
+}
+
+.echo-markdown a {
+  color: #0f766e;
+  text-decoration: underline;
+  text-decoration-color: #99d5cc;
+  text-underline-offset: 3px;
+}
+
+.echo-markdown strong {
+  color: #18181b;
+  font-weight: 650;
+}
+
+.echo-markdown hr {
+  margin: 1.35em 0;
+  border: 0;
+  border-top: 1px solid #e4e4e7;
+}
+
+.echo-markdown code {
+  border-radius: 5px;
+  background: #f1f1f1;
+  padding: 0.14em 0.35em;
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+
+.echo-markdown pre {
+  margin: 0.75em 0 0.9em;
+  overflow-x: auto;
+  border-radius: 12px;
+  background: #171717;
+  padding: 0.9em 1em;
+  color: #f4f4f5;
+  line-height: 1.65;
+}
+
+.echo-markdown pre code {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+.echo-markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin: 1em 0;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.92em;
+}
+
+.echo-markdown th,
+.echo-markdown td {
+  border: 1px solid #e4e4e7;
+  padding: 0.55em 0.75em;
+  text-align: left;
+}
+
+.echo-markdown th {
+  background: #f7f7f8;
+  font-weight: 600;
+}
+
+.echo-markdown .echo-reference,
+.echo-reference {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 0.12rem;
+  border: 1px solid #d4d4d8;
+  border-radius: 999px;
+  background: #fff;
+  padding: 0.05rem 0.48rem;
+  color: #3f3f46;
+  font-size: 0.73rem;
+  font-weight: 550;
+  line-height: 1.45;
+  text-decoration: none;
+  vertical-align: 0.08em;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.echo-markdown .echo-reference:hover,
+.echo-reference:hover {
+  border-color: #a1a1aa;
+  background: #f4f4f5;
 }
