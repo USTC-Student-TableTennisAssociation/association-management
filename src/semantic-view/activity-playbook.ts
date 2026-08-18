@@ -163,6 +163,12 @@ export function buildActivityPlaybooks(
           label: "否",
         }] : []),
       ]);
+      const declaredLanes = dimension(playbook, "泳道顺序").split("\n")
+        .map((lane) => lane.trim()).filter(Boolean);
+      const lanes = [...new Set([
+        ...declaredLanes,
+        ...nodes.map((node) => node.lane),
+      ])];
       return {
         cardId: playbook.id,
         name: dimension(playbook, "名称") || playbook.objectName,
@@ -170,8 +176,7 @@ export function buildActivityPlaybooks(
         applicableScenario: dimension(playbook, "适用场景"),
         overview: dimension(playbook, "整体说明"),
         notes: dimension(playbook, "注意事项"),
-        lanes: dimension(playbook, "泳道顺序").split("\n")
-          .map((lane) => lane.trim()).filter(Boolean),
+        lanes,
         startNodeCardIds: targets(playbook, "start_nodes")
           .map((target) => target.cardId),
         nodes,

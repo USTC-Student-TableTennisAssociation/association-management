@@ -11,6 +11,7 @@ vi.mock("@/ai/provider", () => ({ getChatModel: () => ({}) }));
 vi.mock("@/db", () => ({ getDatabase: () => databaseState.database }));
 
 import {
+  ambientHigherMemoryQualityIssue,
   buildAmbientHigherMemoryContext,
   loadAmbientHigherMemories,
   maintainAmbientHigherMemories,
@@ -90,6 +91,12 @@ beforeEach(() => {
 });
 
 describe("ambient Higher Memory", () => {
+  it("rejects AI process diagnostics as durable environment memory", () => {
+    expect(ambientHigherMemoryQualityIssue(
+      "主模型没有 searchMemory 工具，所以 Shared Brain 缺少语义检索能力。",
+    )).toMatch(/系统能力诊断/);
+  });
+
   it("loads singleton scopes in workspace/recent order", async () => {
     await expect(loadAmbientHigherMemories()).resolves.toEqual([
       expect.objectContaining({ scope: "workspace" }),
@@ -116,7 +123,8 @@ describe("ambient Higher Memory", () => {
       toolName: "submitAmbientHigherMemory",
     });
     expect(call.prompt).toContain("我们最近正在准备一场比赛");
-    expect(call.prompt).toContain("不需要为了逐句确定性而重复搜索");
+    expect(call.prompt).toContain("不得直接把未验证的用户陈述或 Assistant 最终回答当作事实");
+    expect(call.prompt).toContain("严禁写入检索是否命中");
     expect(call.prompt).toContain("Person Object Higher Memory");
 
     const transaction = (databaseState.database as {
@@ -146,6 +154,24 @@ describe("ambient Higher Memory", () => {
 
     await expect(maintainAmbientHigherMemories(input())).resolves.toBe(0);
 
+    const database = databaseState.database as { $transaction: ReturnType<typeof vi.fn> };
+    expect(database.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("does not persist an agent output containing retrieval diagnostics", async () => {
+    aiState.generateText.mockResolvedValue({
+      toolCalls: [{
+        toolName: "submitAmbientHigherMemory",
+        input: {
+          memories: [{
+            scope: "recent",
+            contentMarkdown: "## 近期焦点\n\n主模型缺少 searchMemory 工具，因此当前检索路径没有覆盖 Shared Brain，后续需要继续修复系统能力；这只是本轮模型对工具调用过程的判断，不是团队近期工作的真实业务状态，也不应进入下一轮自动上下文。",
+          }],
+        },
+      }],
+    });
+
+    await expect(maintainAmbientHigherMemories(input())).resolves.toBe(0);
     const database = databaseState.database as { $transaction: ReturnType<typeof vi.fn> };
     expect(database.$transaction).not.toHaveBeenCalled();
   });

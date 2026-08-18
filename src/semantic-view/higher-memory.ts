@@ -15,6 +15,30 @@ const viewHigherMemorySchema = z.object({
   contentMarkdown: z.string().trim().min(40).max(800),
 });
 
+export function viewHigherMemoryQualityIssue(contentMarkdown: string): string | undefined {
+  const parsed = viewHigherMemorySchema.shape.contentMarkdown.safeParse(contentMarkdown);
+  if (!parsed.success) return "正文长度或格式不符合 View Higher Memory 约束";
+
+  const repeatedLines = new Map<string, number>();
+  for (const line of contentMarkdown.split(/\r?\n/)) {
+    const normalized = line.replace(/^#+\s*/, "").replace(/\s+/g, "").trim();
+    if (normalized.length < 8) continue;
+    const count = (repeatedLines.get(normalized) ?? 0) + 1;
+    if (count >= 3) return "正文包含重复段落";
+    repeatedLines.set(normalized, count);
+  }
+
+  const compact = contentMarkdown.replace(/\s+/g, "");
+  const windows = new Map<string, number>();
+  for (let index = 0; index + 16 <= compact.length; index += 4) {
+    const window = compact.slice(index, index + 16);
+    const count = (windows.get(window) ?? 0) + 1;
+    if (count >= 4) return "正文包含异常重复片段";
+    windows.set(window, count);
+  }
+  return undefined;
+}
+
 export type ViewHigherMemorySnapshot = {
   viewKey: BusinessViewKey;
   contentMarkdown: string;
@@ -28,7 +52,7 @@ export async function loadViewHigherMemory(
     where: { viewKey },
     select: { viewKey: true, contentMarkdown: true, maintainedAt: true },
   });
-  if (!row || row.contentMarkdown.length > 800) return undefined;
+  if (!row || viewHigherMemoryQualityIssue(row.contentMarkdown)) return undefined;
   return {
     viewKey,
     contentMarkdown: row.contentMarkdown,
@@ -87,6 +111,10 @@ export async function maintainViewHigherMemory(
     schema: viewHigherMemorySchema,
   });
   if (!output) throw new Error(`View Higher Memory 未提交：${viewKey}`);
+  const qualityIssue = viewHigherMemoryQualityIssue(output.contentMarkdown);
+  if (qualityIssue) {
+    throw new Error(`View Higher Memory 质量校验失败：${qualityIssue}`);
+  }
   await getDatabase().semanticViewHigherMemory.upsert({
     where: { viewKey },
     create: {

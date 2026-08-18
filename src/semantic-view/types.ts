@@ -8,6 +8,43 @@ export const businessViewKeySchema = z.union([
 ]);
 export type BusinessViewKey = z.infer<typeof businessViewKeySchema>;
 
+export type SlotContainerConstraint = {
+  cardTypeKey: string;
+  membershipSlotKey: string;
+};
+
+export type SlotReachabilityConstraint = {
+  coverSlotKey: string;
+  pathSlotKeys: readonly string[];
+};
+
+export type CardContainerConstraint = SlotContainerConstraint & {
+  minimumContainerCount: number;
+  maximumContainerCount?: number;
+};
+
+export type ConditionalSlotRequirement = {
+  dimensionName: string;
+  equals: string;
+  requiredSlotKeys: readonly string[];
+};
+
+export type ContentDimensionConstraint =
+  | {
+      kind: "line_list";
+      dimensionName: string;
+      minimumItems: number;
+      maximumItems: number;
+      maximumItemLength: number;
+      disallowedSeparators?: readonly string[];
+    }
+  | {
+      kind: "container_line_list_member";
+      dimensionName: string;
+      container: SlotContainerConstraint;
+      containerDimensionName: string;
+    };
+
 const cardSelectorSchema = z.string().trim().min(1).max(100).describe(
   "已有 Card UUID，或同一 proposal 内 CREATE_CARD 的 new:<cardRef>",
 );
@@ -40,7 +77,7 @@ export const setSlotChangeSchema = z.object({
   type: z.literal("SET_SLOT"),
   card: cardSelectorSchema,
   slotKey: z.string().trim().min(1).max(100),
-  targets: z.array(cardSelectorSchema).max(20),
+  targets: z.array(cardSelectorSchema).max(50),
   supportingAssertionIds: supportingAssertionIdsSchema,
 });
 
@@ -53,7 +90,7 @@ export const viewChangeSchema = z.discriminatedUnion("type", [
 export const viewChangePayloadSchema = z.object({
   viewKey: businessViewKeySchema,
   reason: z.string().trim().min(1).max(1_000),
-  changes: z.array(viewChangeSchema).min(1).max(20),
+  changes: z.array(viewChangeSchema).min(1).max(200),
 });
 
 export type ViewChangePayload = z.infer<typeof viewChangePayloadSchema>;
@@ -121,6 +158,10 @@ export type SemanticViewCardType = {
   label: string;
   meaning: string;
   seedContentDimensions: string[];
+  requiredContentDimensions?: string[];
+  container?: CardContainerConstraint;
+  conditionalSlotRequirements?: ConditionalSlotRequirement[];
+  contentDimensionConstraints?: ContentDimensionConstraint[];
   slots: Array<{
     key: string;
     label: string;
@@ -128,6 +169,10 @@ export type SemanticViewCardType = {
     cardinality: "one" | "many";
     allowedTargetCardTypes: string[];
     allowedTargetViewKey?: BusinessViewKey;
+    minimumTargetCount?: number;
+    subsetOfSlotKey?: string;
+    sameContainer?: SlotContainerConstraint;
+    reachability?: SlotReachabilityConstraint;
   }>;
 };
 

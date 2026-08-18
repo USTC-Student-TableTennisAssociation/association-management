@@ -35,7 +35,19 @@ type VirtualCard = {
   objectId?: string;
   objectName: string;
   cardTypeKey: string;
+  contentDimensions: Record<string, string>;
+  slots: Record<string, string[]>;
 };
+
+export type StructuralCardState = Pick<
+  VirtualCard,
+  | "selector"
+  | "viewKey"
+  | "objectName"
+  | "cardTypeKey"
+  | "contentDimensions"
+  | "slots"
+>;
 
 function cardDisplayName(card: {
   id: string;
@@ -243,7 +255,7 @@ function resolveCard(
 }
 
 export function assertActivityOperationsDimensionValue(
-  card: VirtualCard,
+  card: Pick<VirtualCard, "viewKey" | "cardTypeKey">,
   name: string,
   contentMarkdown: string,
 ): void {
@@ -321,6 +333,215 @@ export function assertSlotTarget(input: {
   }
 }
 
+function containersFor(
+  cards: readonly StructuralCardState[],
+  member: StructuralCardState,
+  constraint: { cardTypeKey: string; membershipSlotKey: string },
+): StructuralCardState[] {
+  return cards.filter((card) =>
+    card.viewKey === member.viewKey &&
+    card.cardTypeKey === constraint.cardTypeKey &&
+    (card.slots[constraint.membershipSlotKey] ?? []).includes(member.selector)
+  );
+}
+
+function lineList(value: string | undefined): string[] {
+  return (value ?? "").split("\n").map((item) => item.trim()).filter(Boolean);
+}
+
+/**
+ * Interprets declarative Card/Slot structure constraints against a projected graph.
+ * Drafts outside a Proposal may remain partial; selectors passed here are being
+ * committed as complete by the current atomic Proposal.
+ */
+export function assertSemanticCardStructure(
+  cards: readonly StructuralCardState[],
+  completeCardSelectors: ReadonlySet<string>,
+): void {
+  const cardsBySelector = new Map(cards.map((card) => [card.selector, card]));
+  const selectorsToValidate = new Set(completeCardSelectors);
+  const pendingContainers = [...selectorsToValidate];
+  while (pendingContainers.length) {
+    const selector = pendingContainers.shift()!;
+    const card = cardsBySelector.get(selector);
+    if (!card) continue;
+    const cardType = cardTypeDefinition(card.viewKey, card.cardTypeKey);
+    if (!cardType) continue;
+    for (const slot of Object.values(cardType.slots)) {
+      for (const targetSelector of card.slots[slot.key] ?? []) {
+        const target = cardsBySelector.get(targetSelector);
+        const targetContainer = target
+          ? cardTypeDefinition(target.viewKey, target.cardTypeKey)?.container
+          : undefined;
+        if (
+          !target ||
+          target.viewKey !== card.viewKey ||
+          targetContainer?.cardTypeKey !== card.cardTypeKey ||
+          targetContainer.membershipSlotKey !== slot.key ||
+          selectorsToValidate.has(targetSelector)
+        ) {
+          continue;
+        }
+        selectorsToValidate.add(targetSelector);
+        pendingContainers.push(targetSelector);
+      }
+    }
+  }
+
+  for (const selector of selectorsToValidate) {
+    const card = cardsBySelector.get(selector);
+    if (!card) {
+      throw new SemanticViewValidationError(`待校验 Card ${selector} 不存在`);
+    }
+    const cardType = cardTypeDefinition(card.viewKey, card.cardTypeKey);
+    if (!cardType) {
+      throw new SemanticViewValidationError(`不支持的 Card Type：${card.cardTypeKey}`);
+    }
+
+    for (const dimensionName of cardType.requiredContentDimensions ?? []) {
+      if (!card.contentDimensions[dimensionName]?.trim()) {
+        throw new SemanticViewValidationError(
+          `${card.objectName} 作为完整 ${cardType.label} 必须设置 ContentDimension「${dimensionName}」`,
+        );
+      }
+    }
+
+    if (cardType.container) {
+      const containers = containersFor(cards, card, cardType.container);
+      if (containers.length < cardType.container.minimumContainerCount) {
+        throw new SemanticViewValidationError(
+          `${card.objectName} 必须通过 ${cardType.container.cardTypeKey}.${cardType.container.membershipSlotKey} 归属于容器 Card`,
+        );
+      }
+      if (
+        cardType.container.maximumContainerCount !== undefined &&
+        containers.length > cardType.container.maximumContainerCount
+      ) {
+        throw new SemanticViewValidationError(
+          `${card.objectName} 最多只能归属于 ${cardType.container.maximumContainerCount} 个 ${cardType.container.cardTypeKey}`,
+        );
+      }
+    }
+
+    for (const slot of Object.values(cardType.slots)) {
+      const targets = card.slots[slot.key] ?? [];
+      if (
+        slot.minimumTargetCount !== undefined &&
+        targets.length < slot.minimumTargetCount
+      ) {
+        throw new SemanticViewValidationError(
+          `${card.objectName} 的 Slot「${slot.label}」至少需要 ${slot.minimumTargetCount} 个目标 Card`,
+        );
+      }
+      if (slot.subsetOfSlotKey) {
+        const superset = new Set(card.slots[slot.subsetOfSlotKey] ?? []);
+        const outside = targets.filter((target) => !superset.has(target));
+        if (outside.length) {
+          throw new SemanticViewValidationError(
+            `${card.objectName} 的 Slot ${slot.key} 必须是 ${slot.subsetOfSlotKey} 的子集`,
+          );
+        }
+      }
+      if (slot.sameContainer) {
+        const sourceContainers = new Set(
+          containersFor(cards, card, slot.sameContainer).map((container) =>
+            container.selector
+          ),
+        );
+        for (const targetSelector of targets) {
+          const target = cardsBySelector.get(targetSelector);
+          if (!target) {
+            throw new SemanticViewValidationError(
+              `${card.objectName} 的 Slot ${slot.key} 引用了不存在的 Card ${targetSelector}`,
+            );
+          }
+          const sharesContainer = containersFor(cards, target, slot.sameContainer)
+            .some((container) => sourceContainers.has(container.selector));
+          if (!sharesContainer) {
+            throw new SemanticViewValidationError(
+              `${card.objectName} 的 Slot「${slot.label}」只能连接同一 ${slot.sameContainer.cardTypeKey} 中的节点`,
+            );
+          }
+        }
+      }
+      if (slot.reachability) {
+        const covered = new Set(card.slots[slot.reachability.coverSlotKey] ?? []);
+        const visited = new Set<string>();
+        const pending = [...targets];
+        while (pending.length) {
+          const currentSelector = pending.shift()!;
+          if (visited.has(currentSelector)) continue;
+          visited.add(currentSelector);
+          const current = cardsBySelector.get(currentSelector);
+          if (!current) continue;
+          for (const pathSlotKey of slot.reachability.pathSlotKeys) {
+            for (const target of current.slots[pathSlotKey] ?? []) {
+              if (!visited.has(target)) pending.push(target);
+            }
+          }
+        }
+        const unreachable = [...covered].filter((target) => !visited.has(target));
+        if (unreachable.length) {
+          throw new SemanticViewValidationError(
+            `${card.objectName} 的 ${slot.reachability.coverSlotKey} 中有 ${unreachable.length} 个节点无法从 ${slot.key} 到达`,
+          );
+        }
+      }
+    }
+
+    for (const requirement of cardType.conditionalSlotRequirements ?? []) {
+      if (card.contentDimensions[requirement.dimensionName]?.trim() !== requirement.equals) {
+        continue;
+      }
+      const missingSlots = requirement.requiredSlotKeys.filter(
+        (slotKey) => (card.slots[slotKey] ?? []).length === 0,
+      );
+      if (missingSlots.length) {
+        throw new SemanticViewValidationError(
+          `${card.objectName} 在 ${requirement.dimensionName}=${requirement.equals} 时必须设置 Slots：${missingSlots.join("、")}`,
+        );
+      }
+    }
+
+    for (const constraint of cardType.contentDimensionConstraints ?? []) {
+      const value = card.contentDimensions[constraint.dimensionName]?.trim();
+      if (!value) continue;
+      if (constraint.kind === "line_list") {
+        const items = lineList(value);
+        if (
+          items.length < constraint.minimumItems ||
+          items.length > constraint.maximumItems ||
+          items.some((item) => item.length > constraint.maximumItemLength)
+        ) {
+          throw new SemanticViewValidationError(
+            `${card.objectName} 的「${constraint.dimensionName}」必须是 ${constraint.minimumItems} 到 ${constraint.maximumItems} 行、每行不超过 ${constraint.maximumItemLength} 个字符的列表`,
+          );
+        }
+        const separator = constraint.disallowedSeparators?.find((item) =>
+          value.includes(item)
+        );
+        if (separator) {
+          throw new SemanticViewValidationError(
+            `${card.objectName} 的「${constraint.dimensionName}」必须每行写一个条目，不能用“${separator}”串接流程步骤`,
+          );
+        }
+        continue;
+      }
+
+      const containers = containersFor(cards, card, constraint.container);
+      const belongsToList = containers.some((container) =>
+        lineList(container.contentDimensions[constraint.containerDimensionName])
+          .includes(value)
+      );
+      if (!belongsToList) {
+        throw new SemanticViewValidationError(
+          `${card.objectName} 的「${constraint.dimensionName}」必须来自所属容器的「${constraint.containerDimensionName}」`,
+        );
+      }
+    }
+  }
+}
+
 async function validateProposal(
   database: DatabaseClient,
   payload: ViewChangePayload,
@@ -349,6 +570,13 @@ async function validateProposal(
       objectId: card.sourceObjectId ?? undefined,
       objectName: cardDisplayName(card),
       cardTypeKey: card.cardTypeKey,
+      contentDimensions: Object.fromEntries(
+        card.contentDimensions.map((dimension) => [
+          dimension.name,
+          dimension.contentMarkdown,
+        ]),
+      ),
+      slots: {},
     },
   ]));
 
@@ -374,9 +602,33 @@ async function validateProposal(
           objectId: card.sourceObjectId ?? undefined,
           objectName: cardDisplayName(card),
           cardTypeKey: card.cardTypeKey,
+          contentDimensions: Object.fromEntries(
+            card.contentDimensions.map((dimension) => [
+              dimension.name,
+              dimension.contentMarkdown,
+            ]),
+          ),
+          slots: {},
         });
       }
     }
+  }
+
+  const persistedCardsById = new Map(
+    [...cardsBySelector.values()].flatMap((card) => card.id ? [[card.id, card]] : []),
+  );
+  const existingBindings = persistedCardsById.size
+    ? await database.semanticSlotBinding.findMany({
+        where: { sourceCardId: { in: [...persistedCardsById.keys()] } },
+        select: { sourceCardId: true, slotKey: true, targetCardId: true },
+      })
+    : [];
+  for (const binding of existingBindings) {
+    const sourceCard = persistedCardsById.get(binding.sourceCardId);
+    if (!sourceCard) continue;
+    const targets = sourceCard.slots[binding.slotKey] ?? [];
+    targets.push(binding.targetCardId);
+    sourceCard.slots[binding.slotKey] = targets;
   }
 
   const createChanges = payload.changes.filter(
@@ -475,6 +727,8 @@ async function validateProposal(
       ...(object ? { objectId: object.id } : {}),
       objectName: change.name ?? object!.canonicalName,
       cardTypeKey: change.cardTypeKey,
+      contentDimensions: change.name ? { "名称": change.name } : {},
+      slots: {},
     });
   }
 
@@ -502,6 +756,9 @@ async function validateProposal(
 
   const touchedDimensions = new Set<string>();
   const touchedSlots = new Set<string>();
+  const completeCardSelectors = new Set(
+    createChanges.map((change) => `new:${change.cardRef}`),
+  );
   for (const change of payload.changes) {
     if (change.type === "CREATE_CARD") continue;
     const sourceCard = resolveCard(cardsBySelector, change.card);
@@ -524,6 +781,17 @@ async function validateProposal(
         );
       }
       touchedDimensions.add(key);
+      sourceCard.contentDimensions[change.name] = change.contentMarkdown;
+      const sourceType = cardTypeDefinition(sourceCard.viewKey, sourceCard.cardTypeKey);
+      const isStructuralDimension =
+        sourceType?.requiredContentDimensions?.includes(change.name) ||
+        sourceType?.conditionalSlotRequirements?.some(
+          (requirement) => requirement.dimensionName === change.name,
+        ) ||
+        sourceType?.contentDimensionConstraints?.some(
+          (constraint) => constraint.dimensionName === change.name,
+        );
+      if (isStructuralDimension) completeCardSelectors.add(change.card);
       for (const assertionId of change.supportingAssertionIds) {
         if (
           !sourceCard.objectId ||
@@ -578,7 +846,24 @@ async function validateProposal(
         );
       }
     }
+    sourceCard.slots[change.slotKey] = [...change.targets];
+    const isStructuralSlot = Boolean(
+      slot.minimumTargetCount !== undefined ||
+      slot.subsetOfSlotKey ||
+      slot.sameContainer ||
+      slot.reachability ||
+      sourceType?.container ||
+      sourceType?.conditionalSlotRequirements?.some((requirement) =>
+        requirement.requiredSlotKeys.includes(change.slotKey)
+      ),
+    );
+    if (isStructuralSlot) completeCardSelectors.add(change.card);
   }
+
+  assertSemanticCardStructure(
+    [...cardsBySelector.values()],
+    completeCardSelectors,
+  );
 
   return { cardsBySelector, assertionsById };
 }
@@ -1066,9 +1351,57 @@ export function supportedCardTypeSummary(
     label: cardType.label,
     meaning: cardType.meaning,
     seedContentDimensions: [...cardType.seedContentDimensions],
+    ...(cardType.requiredContentDimensions
+      ? { requiredContentDimensions: [...cardType.requiredContentDimensions] }
+      : {}),
+    ...(cardType.container
+      ? { container: { ...cardType.container } }
+      : {}),
+    ...(cardType.conditionalSlotRequirements
+      ? {
+          conditionalSlotRequirements: cardType.conditionalSlotRequirements.map(
+            (requirement) => ({
+              ...requirement,
+              requiredSlotKeys: [...requirement.requiredSlotKeys],
+            }),
+          ),
+        }
+      : {}),
+    ...(cardType.contentDimensionConstraints
+      ? {
+          contentDimensionConstraints: cardType.contentDimensionConstraints.map(
+            (constraint) => constraint.kind === "line_list"
+              ? {
+                  ...constraint,
+                  ...(constraint.disallowedSeparators
+                    ? {
+                        disallowedSeparators: [
+                          ...constraint.disallowedSeparators,
+                        ],
+                      }
+                    : {}),
+                }
+              : {
+                  ...constraint,
+                  container: { ...constraint.container },
+                },
+          ),
+        }
+      : {}),
     slots: Object.values(cardType.slots).map((slot) => ({
       ...slot,
       allowedTargetCardTypes: [...slot.allowedTargetCardTypes],
+      ...(slot.sameContainer
+        ? { sameContainer: { ...slot.sameContainer } }
+        : {}),
+      ...(slot.reachability
+        ? {
+            reachability: {
+              ...slot.reachability,
+              pathSlotKeys: [...slot.reachability.pathSlotKeys],
+            },
+          }
+        : {}),
     })),
   }));
 }

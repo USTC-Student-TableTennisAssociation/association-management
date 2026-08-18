@@ -89,7 +89,7 @@ describe("chat persistence", () => {
     });
   });
 
-  it("restores messages in persisted order without flattening structured parts", async () => {
+  it("filters structured-only assistant placeholders while restoring history", async () => {
     const { database, transaction } = databaseFixture([{
       clientMessageId: "user-1",
       role: "USER",
@@ -111,10 +111,6 @@ describe("chat persistence", () => {
       id: "user-1",
       role: "user",
       parts: [{ type: "text", text: "采购怎么报销？" }],
-    }, {
-      id: "assistant-1",
-      role: "assistant",
-      parts: [{ type: "data-viewReferences", data: { references: [] } }],
     }]);
   });
 

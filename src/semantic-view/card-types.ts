@@ -2,6 +2,11 @@ import {
   ACTIVITY_OPERATIONS_VIEW,
   SOCIETY_INFORMATION_VIEW,
   type BusinessViewKey,
+  type CardContainerConstraint,
+  type ConditionalSlotRequirement,
+  type ContentDimensionConstraint,
+  type SlotContainerConstraint,
+  type SlotReachabilityConstraint,
 } from "@/semantic-view/types";
 import {
   ACTIVITY_DIMENSIONS,
@@ -18,6 +23,14 @@ export type SlotDefinition = {
   allowedTargetCardTypes: readonly string[];
   allowedTargetViewKey?: BusinessViewKey;
   cardinality: "one" | "many";
+  /** Minimum target count required when this Card is committed as structurally complete. */
+  minimumTargetCount?: number;
+  /** Every target must also occur in this sibling Slot on the same source Card. */
+  subsetOfSlotKey?: string;
+  /** Source and targets must be members of the same container Card. */
+  sameContainer?: SlotContainerConstraint;
+  /** Targets of this Slot must reach every target in coverSlotKey through pathSlotKeys. */
+  reachability?: SlotReachabilityConstraint;
 };
 
 export type CardTypeDefinition = {
@@ -26,6 +39,10 @@ export type CardTypeDefinition = {
   label: string;
   meaning: string;
   seedContentDimensions: readonly string[];
+  requiredContentDimensions?: readonly string[];
+  container?: CardContainerConstraint;
+  conditionalSlotRequirements?: readonly ConditionalSlotRequirement[];
+  contentDimensionConstraints?: readonly ContentDimensionConstraint[];
   slots: Readonly<Record<string, SlotDefinition>>;
 };
 
@@ -141,6 +158,13 @@ function activityOperationsCardType(
   meaning: string,
   seedContentDimensions: readonly string[] = [],
   slots: Readonly<Record<string, SlotDefinition>> = {},
+  constraints: Pick<
+    CardTypeDefinition,
+    | "requiredContentDimensions"
+    | "container"
+    | "conditionalSlotRequirements"
+    | "contentDimensionConstraints"
+  > = {},
 ): CardTypeDefinition {
   return {
     key,
@@ -149,6 +173,7 @@ function activityOperationsCardType(
     meaning,
     seedContentDimensions,
     slots,
+    ...constraints,
   };
 }
 
@@ -191,6 +216,7 @@ export const activityOperationsCardTypes = {
         meaning: "这张操作手册中可导航、可解释的全部节点。",
         allowedTargetCardTypes: ["GuideNodeCard"],
         cardinality: "many",
+        minimumTargetCount: 1,
       },
       start_nodes: {
         key: "start_nodes",
@@ -198,7 +224,27 @@ export const activityOperationsCardTypes = {
         meaning: "建议型流程地图的一个或多个阅读起点。",
         allowedTargetCardTypes: ["GuideNodeCard"],
         cardinality: "many",
+        minimumTargetCount: 1,
+        subsetOfSlotKey: "nodes",
+        reachability: {
+          coverSlotKey: "nodes",
+          pathSlotKeys: ["next", "when_yes", "when_no"],
+        },
       },
+    },
+    {
+      requiredContentDimensions: [
+        PLAYBOOK_DIMENSIONS.name,
+        PLAYBOOK_DIMENSIONS.lanes,
+      ],
+      contentDimensionConstraints: [{
+        kind: "line_list",
+        dimensionName: PLAYBOOK_DIMENSIONS.lanes,
+        minimumItems: 1,
+        maximumItems: 20,
+        maximumItemLength: 100,
+        disallowedSeparators: ["→", "->", "⇒"],
+      }],
     },
   ),
   GuideNodeCard: activityOperationsCardType(
@@ -213,6 +259,10 @@ export const activityOperationsCardTypes = {
         meaning: "从当前节点可以继续阅读的普通后续节点；可表示并行建议。",
         allowedTargetCardTypes: ["GuideNodeCard"],
         cardinality: "many",
+        sameContainer: {
+          cardTypeKey: "ActivityPlaybookCard",
+          membershipSlotKey: "nodes",
+        },
       },
       when_yes: {
         key: "when_yes",
@@ -220,6 +270,10 @@ export const activityOperationsCardTypes = {
         meaning: "判断为是时建议查看的节点。",
         allowedTargetCardTypes: ["GuideNodeCard"],
         cardinality: "one",
+        sameContainer: {
+          cardTypeKey: "ActivityPlaybookCard",
+          membershipSlotKey: "nodes",
+        },
       },
       when_no: {
         key: "when_no",
@@ -227,6 +281,10 @@ export const activityOperationsCardTypes = {
         meaning: "判断为否时建议查看的节点。",
         allowedTargetCardTypes: ["GuideNodeCard"],
         cardinality: "one",
+        sameContainer: {
+          cardTypeKey: "ActivityPlaybookCard",
+          membershipSlotKey: "nodes",
+        },
       },
       definition: {
         key: "definition",
@@ -242,6 +300,34 @@ export const activityOperationsCardTypes = {
         allowedTargetCardTypes: ["ArtifactCard"],
         cardinality: "many",
       },
+    },
+    {
+      requiredContentDimensions: [
+        GUIDE_NODE_DIMENSIONS.name,
+        GUIDE_NODE_DIMENSIONS.nodeType,
+        GUIDE_NODE_DIMENSIONS.lane,
+        GUIDE_NODE_DIMENSIONS.row,
+      ],
+      container: {
+        cardTypeKey: "ActivityPlaybookCard",
+        membershipSlotKey: "nodes",
+        minimumContainerCount: 1,
+        maximumContainerCount: 1,
+      },
+      conditionalSlotRequirements: [{
+        dimensionName: GUIDE_NODE_DIMENSIONS.nodeType,
+        equals: "DECISION",
+        requiredSlotKeys: ["when_yes", "when_no"],
+      }],
+      contentDimensionConstraints: [{
+        kind: "container_line_list_member",
+        dimensionName: GUIDE_NODE_DIMENSIONS.lane,
+        container: {
+          cardTypeKey: "ActivityPlaybookCard",
+          membershipSlotKey: "nodes",
+        },
+        containerDimensionName: PLAYBOOK_DIMENSIONS.lanes,
+      }],
     },
   ),
   ActivityCard: activityOperationsCardType(
@@ -434,10 +520,36 @@ export function cardTypePromptContract(viewKey: BusinessViewKey): string {
     view.aiSemanticInstructions,
     ...Object.values(view.cardTypes).map((cardType) => {
       const slots = Object.values(cardType.slots) as SlotDefinition[];
+      const slotContract = (slot: SlotDefinition) => [
+        `${slot.key}（${slot.label}，${slot.cardinality}，target=${slot.allowedTargetCardTypes.join("|")}`,
+        slot.minimumTargetCount === undefined ? "" : `，min=${slot.minimumTargetCount}`,
+        slot.subsetOfSlotKey ? `，subsetOf=${slot.subsetOfSlotKey}` : "",
+        slot.sameContainer
+          ? `，sameContainer=${slot.sameContainer.cardTypeKey}.${slot.sameContainer.membershipSlotKey}`
+          : "",
+        slot.reachability
+          ? `，从此 Slot 经 ${slot.reachability.pathSlotKeys.join("|")} 必须覆盖 ${slot.reachability.coverSlotKey}`
+          : "",
+        "）",
+      ].join("");
       return [
         `${cardType.key}（${cardType.label}）：${cardType.meaning}`,
         `  seed ContentDimensions：${cardType.seedContentDimensions.join("、") || "无；ContentDimension 仍是开放结构"}`,
-        `  slots：${slots.length ? slots.map((slot) => `${slot.key}（${slot.label}，${slot.cardinality}，target=${slot.allowedTargetCardTypes.join("|")}）`).join("；") : "无"}`,
+        ...(cardType.requiredContentDimensions?.length
+          ? [`  完整 Card 必填 ContentDimensions：${cardType.requiredContentDimensions.join("、")}`]
+          : []),
+        ...(cardType.container
+          ? [`  必须归属于 ${cardType.container.cardTypeKey}.${cardType.container.membershipSlotKey}，容器数 ${cardType.container.minimumContainerCount}..${cardType.container.maximumContainerCount ?? "many"}`]
+          : []),
+        ...(cardType.conditionalSlotRequirements?.map((requirement: ConditionalSlotRequirement) =>
+          `  当 ${requirement.dimensionName}=${requirement.equals} 时必填 Slots：${requirement.requiredSlotKeys.join("、")}`
+        ) ?? []),
+        ...(cardType.contentDimensionConstraints?.map((constraint: ContentDimensionConstraint) =>
+          constraint.kind === "line_list"
+            ? `  ${constraint.dimensionName} 必须每行一个条目，数量 ${constraint.minimumItems}..${constraint.maximumItems}`
+            : `  ${constraint.dimensionName} 必须属于容器 ${constraint.container.cardTypeKey} 的 ${constraint.containerDimensionName}`
+        ) ?? []),
+        `  slots：${slots.length ? slots.map(slotContract).join("；") : "无"}`,
       ].join("\n");
     }),
   ].join("\n");

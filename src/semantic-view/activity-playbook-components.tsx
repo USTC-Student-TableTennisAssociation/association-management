@@ -76,6 +76,19 @@ function PlaybookMap({
     () => new Map(playbook.nodes.map((node) => [node.cardId, node])),
     [playbook.nodes],
   );
+
+  if (playbook.nodes.length === 0) {
+    return (
+      <div className="flex min-h-48 items-center justify-center rounded-xl border border-dashed border-amber-300 bg-amber-50/60 px-6 py-10 text-center shadow-sm">
+        <div className="max-w-lg">
+          <p className="text-sm font-semibold text-amber-950">这张流程地图还没有指南节点</p>
+          <p className="mt-2 text-sm leading-6 text-amber-800">
+            当前只保存了手册说明，尚未形成可导航的节点与路径。请在编辑器中添加节点，或让 AI 重新生成完整的 Card/Slot 子图。
+          </p>
+        </div>
+      </div>
+    );
+  }
   const width = Math.max(playbook.lanes.length * laneWidth, 880);
   const maxRow = Math.max(0, ...playbook.nodes.map((node) => node.row));
   const height = topOffset + maxRow * rowHeight + nodeHeight + 80;
@@ -362,8 +375,14 @@ function NodeEditor({
 
 export function ActivityPlaybookOverview({
   onAskAI,
+  onContextChange,
 }: {
   onAskAI: (prompt: string) => void;
+  onContextChange?: (context?: {
+    activeCardId: string;
+    activeNodeId?: string;
+    activeObjectName: string;
+  }) => void;
 }) {
   const [collection, setCollection] = useState<ActivityPlaybookCollection>();
   const [selectedPlaybookId, setSelectedPlaybookId] = useState<string>();
@@ -401,6 +420,19 @@ export function ActivityPlaybookOverview({
   const selectedNode = playbook?.nodes.find((node) => node.cardId === selectedNodeId);
   const missingStarterCount = ACTIVITY_PLAYBOOK_STARTER_NAMES.filter((name) =>
     !collection?.playbooks.some((item) => item.name === name)).length;
+
+  useEffect(() => {
+    if (!playbook) {
+      onContextChange?.();
+      return;
+    }
+    onContextChange?.({
+      activeCardId: selectedNode?.cardId ?? playbook.cardId,
+      ...(selectedNode ? { activeNodeId: selectedNode.cardId } : {}),
+      activeObjectName: selectedNode?.name ?? playbook.name,
+    });
+    return () => onContextChange?.();
+  }, [onContextChange, playbook, selectedNode]);
 
   async function mutate(action: ActivityPlaybookAction) {
     setBusy(true);

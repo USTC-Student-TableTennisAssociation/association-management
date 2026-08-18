@@ -2,6 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
+import { retrievalEvidenceSemantics } from "@/evidence/tool-semantics";
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import {
   followObject as followMemoryObject,
@@ -74,8 +75,31 @@ export function createMemoryExploreToolset(input: {
       throw new MemoryExploreContextBudgetError(input.resultTokenBudget);
     }
     const discovered = input.evidence.merge(result);
-    input.onEvidence?.(input.evidence.snapshot(), discovered);
-    return discovered;
+    const question = discovered.query ?? discovered.focus ?? "当前 Shared Brain 检索问题";
+    const described: MemoryExploreResult = {
+      ...discovered,
+      semantics: retrievalEvidenceSemantics({
+        id: `shared_brain.${discovered.kind}.${toolCalls}`,
+        layer: "shared_brain",
+        scope: discovered.globalObjectId
+          ? `GlobalObject:${discovered.globalObjectId}`
+          : `query:${question}`,
+        subject: question,
+        question,
+        coverage: discovered.coverage,
+        refs: [
+          ...(discovered.higherMemories ?? []).map((item) => item.ref),
+          ...discovered.assertions.map((item) => item.ref),
+        ],
+        authority: "supporting",
+        presentSummary: "本次聚焦 Shared Brain 检索返回了可用证据。",
+        absentSummary:
+          "本次聚焦 Shared Brain 检索没有返回足以回答的证据；这不等于其他知识层或现实中不存在该信息。",
+        unknownSummary: "本次 Shared Brain 检索没有形成完整的证据覆盖判断。",
+      }),
+    };
+    input.onEvidence?.(input.evidence.snapshot(), described);
+    return described;
   }
 
   return {

@@ -47,16 +47,16 @@ export async function findArtifactsByTitle(input: {
   const matched = rows.flatMap((row) => {
     const name = searchable(row.name);
     const path = searchable(row.originalRelativePath ?? "");
-    const score = name === title
-      ? 0
+    const match = name === title
+      ? { score: 0, matchKind: "exact_title" as const }
       : name.includes(title)
-        ? 1
+        ? { score: 1, matchKind: "title_contains" as const }
         : path.includes(title)
-          ? 2
+          ? { score: 2, matchKind: "path_contains" as const }
           : title.includes(name) && name.length >= 6
-            ? 3
+            ? { score: 3, matchKind: "query_contains_title" as const }
             : undefined;
-    return score === undefined ? [] : [{ row, score }];
+    return match === undefined ? [] : [{ row, ...match }];
   }).sort((left, right) =>
     left.score - right.score || left.row.name.localeCompare(right.row.name, "zh-CN")
   );
@@ -66,12 +66,13 @@ export async function findArtifactsByTitle(input: {
     matchedCount: matched.length,
     returnedCount: Math.min(matched.length, limit),
     truncated: matched.length > limit,
-    items: matched.slice(0, limit).map(({ row }) => {
+    items: matched.slice(0, limit).map(({ row, matchKind }) => {
       const run = row.blob?.processingRuns[0];
       return {
         nodeId: row.id,
         name: row.name,
         path: row.originalRelativePath,
+        matchKind,
         mimeType: row.blob?.mimeType,
         profile: row.processingProfile,
         status: row.processingStatus,
@@ -101,7 +102,11 @@ export async function findArtifactsByTitle(input: {
 
 export async function getArtifactPublishedKnowledge(input: {
   nodeId: string;
+  query?: string;
   assertionLimit?: number;
+  cursor?: number;
+  includeHigherMemory?: boolean;
+  includeConnections?: boolean;
 }): Promise<{
   artifact: {
     nodeId: string;
@@ -112,6 +117,13 @@ export async function getArtifactPublishedKnowledge(input: {
     publishedAt: string | null;
     publishedAssertionCount: number;
     publishedObjectCount: number;
+  };
+  page: {
+    query: string | null;
+    cursor: number;
+    returnedAssertionCount: number;
+    matchedAssertionCount: number;
+    nextCursor: number | null;
   };
   evidence: MemoryExploreResult;
 }> {
@@ -185,21 +197,19 @@ export async function getArtifactPublishedKnowledge(input: {
   const allAssertions = regions.flatMap((region) =>
     region.assertions.map((assertion) => ({ region, assertion }))
   );
-  const limit = Math.min(Math.max(input.assertionLimit ?? 40, 1), 80);
-  const selectedAssertions = allAssertions.slice(0, limit);
-  const placeholderObjectIds = selectedAssertions.flatMap(({ assertion }) =>
+  const allPlaceholderObjectIds = allAssertions.flatMap(({ assertion }) =>
     [...assertion.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g)]
       .map((match) => match[1].trim())
   );
-  const objectIds = [...new Set([
-    ...placeholderObjectIds,
-    ...selectedAssertions.flatMap(({ assertion }) =>
+  const allObjectIds = [...new Set([
+    ...allPlaceholderObjectIds,
+    ...allAssertions.flatMap(({ assertion }) =>
       assertion.semanticObjectLinks.map((link) => link.globalObjectId)
     ),
   ])];
-  const objectRows = objectIds.length
+  const allObjectRows = allObjectIds.length
     ? await database.memoryGlobalObject.findMany({
-        where: { compilationId: compilation.id, id: { in: objectIds } },
+        where: { compilationId: compilation.id, id: { in: allObjectIds } },
         select: {
           id: true,
           globalObjectKey: true,
@@ -208,9 +218,48 @@ export async function getArtifactPublishedKnowledge(input: {
             select: { id: true, contentMarkdown: true, maintainedAt: true },
           },
         },
-      })
+    })
     : [];
-  const objectById = new Map(objectRows.map((object) => [object.id, object]));
+  const objectById = new Map(allObjectRows.map((object) => [object.id, object]));
+
+  const queryTerms = (input.query ?? "")
+    .split(/[\s,，、;；/]+/u)
+    .map(searchable)
+    .filter(Boolean);
+  const rankedAssertions = allAssertions.map((item, index) => {
+    const objectNames = [
+      ...item.assertion.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g),
+    ].map((match) => objectById.get(match[1].trim())?.canonicalName ?? "");
+    const haystack = searchable([
+      item.assertion.globalStatementTemplateMarkdown,
+      item.assertion.sourceClaimId,
+      item.region.label,
+      item.region.sourceTitle ?? node.name,
+      ...objectNames,
+    ].join(" "));
+    const score = queryTerms.reduce(
+      (total, term) => total + (haystack.includes(term) ? Math.max(1, term.length) : 0),
+      0,
+    );
+    return { ...item, index, score };
+  });
+  const matchedAssertions = queryTerms.length
+    ? rankedAssertions
+        .filter((item) => item.score > 0)
+        .sort((left, right) => right.score - left.score || left.index - right.index)
+    : rankedAssertions;
+  const limit = Math.min(Math.max(input.assertionLimit ?? 12, 1), 40);
+  const cursor = Math.min(Math.max(input.cursor ?? 0, 0), matchedAssertions.length);
+  const selectedAssertions = matchedAssertions.slice(cursor, cursor + limit);
+  const selectedObjectIds = [...new Set(selectedAssertions.flatMap(({ assertion }) => [
+    ...[...assertion.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g)]
+      .map((match) => match[1].trim()),
+    ...assertion.semanticObjectLinks.map((link) => link.globalObjectId),
+  ]))];
+  const objectRows = selectedObjectIds.flatMap((id) => {
+    const object = objectById.get(id);
+    return object ? [object] : [];
+  });
   const objectRefById = new Map(objectRows.map((object, index) => [object.id, `O${index + 1}`]));
   const assertionRefById = new Map(
     selectedAssertions.map(({ assertion }, index) => [assertion.id, `A${index + 1}`]),
@@ -271,14 +320,16 @@ export async function getArtifactPublishedKnowledge(input: {
     lexicalMatch: false,
     semanticMatch: true,
   }));
-  const connections = objectRows.flatMap((object) =>
-    (assertionsByObjectId.get(object.id) ?? []).map((assertionRef) => ({
-      assertionRef,
-      objectRef: objectRefById.get(object.id)!,
-    }))
-  );
-  const higherMemories = objectRows.flatMap((object, index) =>
-    object.higherMemory
+  const connections = input.includeConnections === false
+    ? []
+    : objectRows.flatMap((object) =>
+        (assertionsByObjectId.get(object.id) ?? []).map((assertionRef) => ({
+          assertionRef,
+          objectRef: objectRefById.get(object.id)!,
+        }))
+      );
+  const higherMemories = input.includeHigherMemory
+    ? objectRows.flatMap((object, index) => object.higherMemory
       ? [{
           ref: `H${index + 1}`,
           id: object.higherMemory.id,
@@ -287,7 +338,12 @@ export async function getArtifactPublishedKnowledge(input: {
           maintainedAt: object.higherMemory.maintainedAt.toISOString(),
         }]
       : []
-  );
+    )
+    : [];
+  const nextCursor = cursor + selectedAssertions.length < matchedAssertions.length
+    ? cursor + selectedAssertions.length
+    : null;
+  const publishedObjectCount = run?.publishedObjectCount ?? allObjectRows.length;
   return {
     artifact: {
       nodeId: node.id,
@@ -297,13 +353,20 @@ export async function getArtifactPublishedKnowledge(input: {
       status: node.processingStatus,
       publishedAt: run?.publishedAt?.toISOString() ?? null,
       publishedAssertionCount: run?.publishedAssertionCount ?? 0,
-      publishedObjectCount: run?.publishedObjectCount ?? 0,
+      publishedObjectCount,
+    },
+    page: {
+      query: input.query?.trim() || null,
+      cursor,
+      returnedAssertionCount: assertions.length,
+      matchedAssertionCount: matchedAssertions.length,
+      nextCursor,
     },
     evidence: {
       kind: "artifact-knowledge",
       mode: "object-assertion",
       compilationId: compilation.id,
-      query: node.name,
+      query: input.query?.trim() || node.name,
       objects,
       ...(higherMemories.length ? { higherMemories } : {}),
       assertions,
@@ -314,14 +377,46 @@ export async function getArtifactPublishedKnowledge(input: {
         connections: connections.length,
       },
       truncated: {
-        objects: false,
-        assertions: allAssertions.length > selectedAssertions.length,
+        objects: publishedObjectCount > objects.length || allObjectRows.length > objects.length,
+        assertions: nextCursor !== null,
       },
-      warnings: allAssertions.length
-        ? []
-        : [run?.publishedAt
+      coverage: {
+        level: !assertions.length
+          ? "insufficient"
+          : nextCursor !== null
+            ? "partial"
+            : "complete",
+        missingAspects: !assertions.length
+          ? [queryTerms.length
+              ? "目标文件中没有检索到与当前主题匹配的已发布 Assertion。"
+              : "目标文件当前没有可用于回答的已发布 Assertion。"]
+          : nextCursor !== null
+            ? [`仍有 ${matchedAssertions.length - cursor - assertions.length} 条匹配 Assertion 尚未读取。`]
+            : [],
+        observationComplete: nextCursor === null,
+        contentPresence: assertions.length
+          ? "present"
+          : nextCursor === null
+            ? "absent"
+            : "unknown",
+      },
+      warnings: !allAssertions.length
+        ? [run?.publishedAt
             ? "编译记录显示已发布，但当前 Shared Brain 未找到该 Blob 的 SourceRegion。"
-            : "该文件当前没有已发布的 Shared Brain 知识。"],
+            : "该文件当前没有已发布的 Shared Brain 知识。"]
+        : queryTerms.length && !matchedAssertions.length
+          ? ["该文件已发布知识中没有匹配当前主题的 Assertion；这不代表整个 Shared Brain 没有相关知识。"]
+          : [
+              ...(publishedObjectCount > objects.length
+                ? [`该文件发布了 ${publishedObjectCount} 个 Object，本页只返回与所选 Assertion 相连的 ${objects.length} 个。`]
+                : []),
+              ...(nextCursor !== null
+                ? [`仍有 ${matchedAssertions.length - cursor - assertions.length} 条匹配 Assertion，可使用 nextCursor=${nextCursor} 继续。`]
+                : []),
+              ...(input.includeHigherMemory
+                ? ["Object Higher Memory 可能综合其他来源，只能作为关联背景，不能归因于当前文件。"]
+                : []),
+            ],
     },
   };
 }

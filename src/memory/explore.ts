@@ -1,4 +1,5 @@
 import { getDatabase } from "@/db";
+import type { EvidenceSemantics } from "@/evidence/types";
 import { lexicalMatch } from "@/memory/database-locate";
 import {
   renderResolvedAssertion,
@@ -13,6 +14,7 @@ import {
   type RetrievalCuratorContext,
 } from "@/memory/retrieval-curator";
 import type {
+  EvidenceCoverage,
   MemoryAssertionKind,
   MemoryHigherMemorySeed,
   MemoryObjectAssertionConnection,
@@ -74,6 +76,8 @@ export type MemoryExploreResult = {
     objects: boolean;
     assertions: boolean;
   };
+  coverage?: EvidenceCoverage;
+  semantics?: EvidenceSemantics;
   warnings: string[];
 };
 
@@ -690,12 +694,47 @@ export async function searchMemory(
             : ""),
       ]
     : [];
+  const coverage: EvidenceCoverage = assertionCuration
+    ? {
+        level: assertionCuration.coverage,
+        missingAspects: [...assertionCuration.missingAspects],
+        observationComplete: assertionCuration.coverage === "complete",
+        contentPresence: compact.assertions.length || compact.higherMemories?.length
+          ? "present"
+          : "absent",
+      }
+    : compact.higherMemories?.length &&
+        targetIds.every((id) => higherMemoryTargetIds.has(id))
+      ? {
+          level: "complete",
+          missingAspects: [],
+          observationComplete: true,
+          contentPresence: "present",
+        }
+      : compact.assertions.length
+        ? {
+            level: compact.truncated.assertions ? "partial" : "complete",
+            missingAspects: compact.truncated.assertions
+              ? ["当前检索仍有未返回的匹配 Assertion。"]
+              : [],
+            observationComplete: !compact.truncated.assertions,
+            contentPresence: "present",
+          }
+        : {
+            level: "insufficient",
+            missingAspects: [target.warning ?? "当前检索没有返回足以回答的 Assertion 或 Higher Memory。"],
+            observationComplete: !compact.truncated.assertions && !compact.truncated.objects,
+            contentPresence: compact.truncated.assertions || compact.truncated.objects
+              ? "unknown"
+              : "absent",
+          };
   return resultWithCounts({
     kind: "search-memory",
     mode: retrieval.mode,
     ...(compilationId ? { compilationId } : {}),
     query: normalizedQuery,
     ...compact,
+    coverage,
     warnings: [
       ...(retrieval.trace?.warnings ?? []),
       ...(target.warning ? [target.warning] : []),
@@ -969,6 +1008,12 @@ function emptyFollowResult(input: {
     assertions: [],
     connections: [],
     truncated: { objects: false, assertions: false },
+    coverage: {
+      level: "insufficient",
+      missingAspects: [input.warning],
+      observationComplete: true,
+      contentPresence: "absent",
+    },
     warnings: [input.warning],
   });
 }
@@ -1162,6 +1207,31 @@ export async function followObject(
       assertions:
         scanTruncated || rankedAssertions.length > selectedAssertions.length,
     },
+    coverage: assertionCuration
+      ? {
+          level: assertionCuration.coverage,
+          missingAspects: [...assertionCuration.missingAspects],
+          observationComplete: assertionCuration.coverage === "complete",
+          contentPresence: assertions.length ? "present" : "absent",
+        }
+      : assertions.length
+        ? {
+            level: scanTruncated || rankedAssertions.length > selectedAssertions.length
+              ? "partial"
+              : "complete",
+            missingAspects: scanTruncated || rankedAssertions.length > selectedAssertions.length
+              ? ["当前 Object 仍有未返回的关联 Assertion。"]
+              : [],
+            observationComplete: !scanTruncated &&
+              rankedAssertions.length <= selectedAssertions.length,
+            contentPresence: "present",
+          }
+        : {
+            level: "insufficient",
+            missingAspects: ["当前 Object 没有返回足以回答的关联 Assertion。"],
+            observationComplete: !scanTruncated,
+            contentPresence: scanTruncated ? "unknown" : "absent",
+          },
     warnings: [
       ...(scanTruncated
         ? [`仅扫描了前 ${FOLLOW_ASSERTION_SCAN_LIMIT} 个关联 Assertion`]

@@ -10,6 +10,7 @@ import {
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
+import type { ArtifactReference } from "@/library/artifact-references";
 import {
   compactChatRequestMessages,
   finalStepMessageText,
@@ -326,12 +327,14 @@ function ReferencedAnswerText({
   text,
   references,
   sourceReferences,
+  artifactReferences,
   onOpenViewReference,
   onOpenSourceReference,
 }: {
   text: string;
   references: SemanticViewReference[];
   sourceReferences: SourceDocumentReference[];
+  artifactReferences: ArtifactReference[];
   onOpenViewReference: (reference: SemanticViewReference) => void;
   onOpenSourceReference: (reference: SourceDocumentReference) => void;
 }) {
@@ -341,16 +344,33 @@ function ReferencedAnswerText({
   const sourceReferencesByRef = new Map(
     sourceReferences.map((reference) => [reference.ref, reference]),
   );
+  const artifactReferencesByRef = new Map(
+    artifactReferences.map((reference) => [reference.ref, reference]),
+  );
   return (
     <div className="whitespace-pre-wrap">
-      {text.split(/(\[(?:V|S)\d+\])/g).map((part, index) => {
-        const match = /^\[((?:V|S)\d+)\]$/.exec(part);
+      {text.split(/(\[(?:V|S|F)\d+\])/g).map((part, index) => {
+        const match = /^\[((?:V|S|F)\d+)\]$/.exec(part);
         const reference = match ? referencesByRef.get(match[1]) : undefined;
         const sourceReference = match
           ? sourceReferencesByRef.get(match[1])
           : undefined;
-        if (!reference && !sourceReference) {
+        const artifactReference = match
+          ? artifactReferencesByRef.get(match[1])
+          : undefined;
+        if (!reference && !sourceReference && !artifactReference) {
           return <span key={`${index}-${part}`}>{part}</span>;
+        }
+        if (artifactReference) {
+          return (
+            <span
+              key={`${index}-${artifactReference.ref}`}
+              className="mx-0.5 inline-flex items-center rounded-full border border-amber-300 bg-white px-2 py-0.5 text-xs font-medium text-amber-800 shadow-sm"
+              title={artifactReference.label}
+            >
+              {artifactReference.ref} · 资料库
+            </span>
+          );
         }
         if (sourceReference) {
           return (
@@ -594,6 +614,9 @@ function ChatSurface({
             const sourceReferences = message.parts
               .filter((part) => part.type === "data-sourceReferences")
               .at(-1)?.data.references ?? [];
+            const artifactReferences = message.parts
+              .filter((part) => part.type === "data-artifactReferences")
+              .at(-1)?.data.references ?? [];
             const trace = search?.trace;
             const answerUsedAssertionRefs = search?.answerUsedAssertionRefs ?? trace?.answerUsedAssertionRefs ?? [];
             const usedAssertionRefs = new Set(answerUsedAssertionRefs);
@@ -610,6 +633,7 @@ function ChatSurface({
                     text={text || (isActiveAssistant && !activities.length ? "正在回答…" : "")}
                     references={viewReferences}
                     sourceReferences={sourceReferences}
+                    artifactReferences={artifactReferences}
                     onOpenViewReference={onOpenViewReference}
                     onOpenSourceReference={onOpenSourceReference}
                   />
@@ -856,6 +880,11 @@ export default function Home() {
   const [activeLibraryFolderId, setActiveLibraryFolderId] = useState<string>();
   const [activePresentation, setActivePresentation] = useState<BusinessViewPresentation>("overview");
   const [semanticViewFocus, setSemanticViewFocus] = useState<SemanticViewFocus>();
+  const [activePageEntity, setActivePageEntity] = useState<{
+    activeCardId: string;
+    activeNodeId?: string;
+    activeObjectName: string;
+  }>();
   const [previewProposal, setPreviewProposal] = useState<ViewProposalPresentation>();
   const [previewChangeIndex, setPreviewChangeIndex] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -983,7 +1012,15 @@ export default function Home() {
     ? { activePresentation: "full_chat" }
     : activeWorkspace === "library" || activeWorkspace === "compilation"
       ? { activePresentation: "library", activeFolderId: activeLibraryFolderId }
-      : { activeViewKey: activeWorkspace, activePresentation };
+      : {
+          activeViewKey: activeWorkspace,
+          activePresentation,
+          ...(activePresentation === "playbook" && activePageEntity
+            ? activePageEntity
+            : semanticViewFocus?.cardId
+              ? { activeCardId: semanticViewFocus.cardId }
+              : {}),
+        };
 
   function submit(content: string) {
     const text = content.trim();
@@ -1066,6 +1103,7 @@ export default function Home() {
     setActiveWorkspace(viewKey);
     setActivePresentation("overview");
     setSemanticViewFocus(undefined);
+    setActivePageEntity(undefined);
     setPreviewProposal(undefined);
   }
 
@@ -1273,6 +1311,7 @@ export default function Home() {
               onProposalChange={handlePreviewProposalChange}
               onExitProposalPreview={exitProposalPreview}
               onPresentationChange={setActivePresentation}
+              onPageContextChange={setActivePageEntity}
               onOpenAI={() => setDrawerOpen(true)}
               onAskAI={(prompt) => {
                 setInput(prompt);

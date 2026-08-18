@@ -32,6 +32,13 @@ function presentLibraryNode(node: LibraryNodeView, detail: "compact" | "full") {
 
 export function createLibraryToolset(input: {
   onProposal?: (proposal: LibraryPlanPresentation) => void;
+  onPreview?: (result: {
+    requestedCount: number;
+    returnedCount: number;
+    missingNodeIds: string[];
+    partial: boolean;
+    items: Awaited<ReturnType<typeof previewLibraryFiles>>;
+  }) => void;
 }) {
   return {
     tools: {
@@ -147,6 +154,7 @@ export function createLibraryToolset(input: {
           "默认只复用数据库原文或直接读取文本，不启动 MinerU。PDF/DOCX/PPTX/XLSX 无可复用原文时，只有 parseIfMissing=true 才调用当前高精度 MinerU，可能较慢。",
           "parseIfMissing=true 仅用于文件名/路径确实无法判断的个别文件，且需确认当前运行机可承受 MinerU；每次最多 3 份，不得批量扫描。",
           "图片不在这个工具里启动视觉模型；图片保留给基础编译的独立多模态线路。",
+          "结果始终返回 requestedCount、returnedCount 和 missingNodeIds；不得把部分返回误解为其余文件不存在或没有内容。",
         ].join("\n"),
         inputSchema: z.object({
           nodeIds: z.array(z.string().uuid()).min(1).max(3)
@@ -156,9 +164,24 @@ export function createLibraryToolset(input: {
           parseIfMissing: z.boolean().default(false)
             .describe("数据库无原文时是否允许在当前机器启动高精度 MinerU；默认否"),
         }),
-        execute: async ({ nodeIds, maxChars, parseIfMissing }) => ({
-          items: await previewLibraryFiles({ nodeIds, maxChars, parseIfMissing }),
-        }),
+        execute: async ({ nodeIds, maxChars, parseIfMissing }) => {
+          const requestedNodeIds = [...new Set(nodeIds)];
+          const items = await previewLibraryFiles({
+            nodeIds: requestedNodeIds,
+            maxChars,
+            parseIfMissing,
+          });
+          const returnedNodeIds = new Set(items.map((item) => item.id));
+          const result = {
+            requestedCount: requestedNodeIds.length,
+            returnedCount: items.length,
+            missingNodeIds: requestedNodeIds.filter((id) => !returnedNodeIds.has(id)),
+            partial: items.length !== requestedNodeIds.length,
+            items,
+          };
+          input.onPreview?.(result);
+          return result;
+        },
       }),
       readLibraryCompilation: tool({
         description: [
