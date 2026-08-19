@@ -7,7 +7,16 @@ import {
   isToolUIPart,
   type ChatStatus,
 } from "ai";
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  FormEvent,
+  KeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -32,6 +41,7 @@ import type {
 } from "@/memory/source-document-types";
 import { ObjectChangeProposalCard } from "@/memory/object-management-components";
 import { GenericViewInspector } from "@/view-runtime/generic-ui/generic-view-inspector";
+import { WorkViewWorkspace } from "@/view-runtime/generic-ui/work-view-workspace";
 import { ViewCommandProposalCard } from "@/view-runtime/generic-ui/view-command-proposal-card";
 
 const initialMessages: ClubChatMessage[] = [];
@@ -59,12 +69,16 @@ type ConversationSummary = {
 type InstalledViewSummary = {
   viewKey: string;
   label: string;
+  specializedLabel?: string;
   description: string;
   moduleVersion: string;
   schemaVersion: string;
   stateVersion: string;
   status: "enabled" | "disabled" | "incompatible";
 };
+
+type SurfaceMode = "work" | "knowledge" | "library";
+type LibraryMode = "files" | "processing";
 
 function messageReasoning(message: ClubChatMessage) {
   return message.parts
@@ -899,11 +913,20 @@ function SourceDocumentDialog({
 
 export default function Home() {
   const [input, setInput] = useState("");
-  const [activeWorkspace, setActiveWorkspace] = useState<string>("chat");
+  const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>("work");
+  const [libraryMode, setLibraryMode] = useState<LibraryMode>("files");
+  const [activeWorkViewKey, setActiveWorkViewKey] = useState<string>();
   const [activeLibraryFolderId, setActiveLibraryFolderId] = useState<string>();
   const [viewFocusCardId, setViewFocusCardId] = useState<string>();
   const [installedViews, setInstalledViews] = useState<InstalledViewSummary[]>([]);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [installedViewsLoaded, setInstalledViewsLoaded] = useState(false);
+  const [workInspectorOpen, setWorkInspectorOpen] = useState(false);
+  const [surfacePaneVisible, setSurfacePaneVisible] = useState(false);
+  const [aiPaneVisible, setAiPaneVisible] = useState(true);
+  const [surfaceFirst, setSurfaceFirst] = useState(true);
+  const [surfaceShare, setSurfaceShare] = useState(50);
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
   const [sourceReference, setSourceReference] = useState<SourceDocumentReference>();
   const [currentUser, setCurrentUser] = useState<CurrentUser>();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -1031,23 +1054,37 @@ export default function Home() {
       .then(async (response) => {
         const body = await response.json() as { views?: InstalledViewSummary[]; error?: string };
         if (!response.ok || !body.views) throw new Error(body.error ?? "无法读取 View 列表");
-        setInstalledViews(body.views.filter((view) => view.status === "enabled"));
+        const enabledViews = body.views.filter((view) => view.status === "enabled");
+        setInstalledViews(enabledViews);
+        setActiveWorkViewKey((current) => {
+          const restored = current ?? window.localStorage.getItem("echo.activeWorkView") ?? undefined;
+          return enabledViews.some((view) => view.viewKey === restored)
+            ? restored
+            : enabledViews[0]?.viewKey;
+        });
       })
       .catch((cause) => {
         if (!controller.signal.aborted) console.error("[views.list]", cause);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setInstalledViewsLoaded(true);
       });
     return () => controller.abort();
   }, [currentUser]);
 
-  const pageContext: ChatPageContext = activeWorkspace === "chat" || activeWorkspace === "knowledge-graph"
+  const pageContext: ChatPageContext = !surfacePaneVisible
     ? { activePresentation: "full_chat" }
-    : activeWorkspace === "library" || activeWorkspace === "compilation"
-      ? { activePresentation: "library", activeFolderId: activeLibraryFolderId }
-      : {
-          activeViewKey: activeWorkspace,
-          activePresentation: "inspector",
-          ...(viewFocusCardId ? { activeCardId: viewFocusCardId } : {}),
-        };
+    : surfaceMode === "knowledge"
+      ? { activePresentation: "knowledge" }
+      : surfaceMode === "library"
+        ? { activePresentation: "library", activeFolderId: activeLibraryFolderId }
+        : activeWorkViewKey
+          ? {
+              activeViewKey: activeWorkViewKey,
+              activePresentation: workInspectorOpen ? "inspector" : "work",
+              ...(viewFocusCardId ? { activeCardId: viewFocusCardId } : {}),
+            }
+          : { activePresentation: "full_chat" };
 
   function submit(content: string) {
     const text = content.trim();
@@ -1084,8 +1121,7 @@ export default function Home() {
     }
     setConversations((current) => [body.conversation!, ...current]);
     activateConversation(body.conversation.id);
-    setActiveWorkspace("chat");
-    setDrawerOpen(false);
+    setAiPaneVisible(true);
   }
 
   async function renameConversation(conversation: ConversationSummary) {
@@ -1120,35 +1156,68 @@ export default function Home() {
     window.location.assign("/login");
   }
 
-  function openFullChat() {
-    setActiveWorkspace("chat");
-    setDrawerOpen(false);
-  }
-
-  function openBusinessView(viewKey: string) {
-    setActiveWorkspace(viewKey);
+  function openWorkView(viewKey: string) {
+    setSurfaceMode("work");
+    setActiveWorkViewKey(viewKey);
+    window.localStorage.setItem("echo.activeWorkView", viewKey);
     setViewFocusCardId(undefined);
-  }
-
-  function openKnowledgeGraph() {
-    setActiveWorkspace("knowledge-graph");
-    setViewFocusCardId(undefined);
-  }
-
-  function openLibrary() {
-    setActiveWorkspace("library");
-    setViewFocusCardId(undefined);
-  }
-
-  function openCompilation() {
-    setActiveWorkspace("compilation");
-    setViewFocusCardId(undefined);
+    setWorkInspectorOpen(false);
+    setSurfacePaneVisible(true);
   }
 
   function openViewReference(reference: ViewInformationReference) {
-    setActiveWorkspace(reference.target.viewKey);
-    setDrawerOpen(true);
+    setSurfaceMode("work");
+    setActiveWorkViewKey(reference.target.viewKey);
+    window.localStorage.setItem("echo.activeWorkView", reference.target.viewKey);
+    setWorkInspectorOpen(false);
+    setSurfacePaneVisible(true);
+    setAiPaneVisible(true);
     setViewFocusCardId(reference.target.kind === "card" ? reference.target.cardId : undefined);
+  }
+
+  function selectSurfaceMode(mode: SurfaceMode) {
+    setSurfaceMode(mode);
+    setViewFocusCardId(undefined);
+    if (mode === "work") setWorkInspectorOpen(false);
+  }
+
+  function beginPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!surfacePaneVisible || !aiPaneVisible) return;
+    event.preventDefault();
+    const body = document.body;
+    const previousCursor = body.style.cursor;
+    const previousUserSelect = body.style.userSelect;
+    body.style.cursor = "col-resize";
+    body.style.userSelect = "none";
+
+    const update = (clientX: number) => {
+      const bounds = splitContainerRef.current?.getBoundingClientRect();
+      if (!bounds || !bounds.width) return;
+      const fromLeft = (clientX - bounds.left) / bounds.width * 100;
+      const next = surfaceFirst ? fromLeft : 100 - fromLeft;
+      setSurfaceShare(Math.min(80, Math.max(20, next)));
+    };
+    const move = (pointerEvent: PointerEvent) => update(pointerEvent.clientX);
+    const finish = () => {
+      body.style.cursor = previousCursor;
+      body.style.userSelect = previousUserSelect;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
+    };
+    update(event.clientX);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
+  }
+
+  function resizeWithKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    setSurfaceShare((current) =>
+      Math.min(80, Math.max(20, current + direction * (surfaceFirst ? 5 : -5)))
+    );
   }
 
   if (!currentUser) {
@@ -1163,180 +1232,337 @@ export default function Home() {
     );
   }
 
-  return (
-    <main className="flex h-dvh min-h-0 overflow-hidden bg-white text-zinc-950">
-      <nav className="hidden w-[244px] shrink-0 flex-col overflow-hidden border-r border-[#e8e8e8] bg-[#f9f9f9] px-2.5 pb-2.5 pt-2 md:flex">
-        <div className="flex h-11 items-center justify-center">
-          <p className="text-[16px] font-semibold tracking-[-0.02em] text-zinc-900">Echo</p>
-        </div>
-
-        <button
-          type="button"
-          disabled={isSending}
-          onClick={() => void createConversation()}
-          className="mt-0.5 flex h-[34px] w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] font-medium text-zinc-800 transition hover:bg-[#ececec] disabled:opacity-40"
-        >
-          <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-            <path d="M12 20H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h10" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="m14 4 6 6m-7 1 6.5-6.5a1.4 1.4 0 0 0-2-2L11 9l-1 3 3-1Z" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          新对话
-        </button>
-
-        <div className="mt-2">
-          <p className="px-2 pb-1 text-[10px] font-medium tracking-wide text-zinc-400">组织认知</p>
-          <button type="button" onClick={openKnowledgeGraph} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === "knowledge-graph" ? "bg-[#e5ece9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
-            <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><circle cx="6" cy="12" r="2.25" /><circle cx="17.5" cy="6" r="2.25" /><circle cx="18" cy="17.5" r="2.25" /><path d="m8 11 7.3-3.8M8.1 13l7.7 3.4M17.7 8.3l.2 7" strokeLinecap="round" /></svg>
-            知识图谱
+  const bothPanesVisible = surfacePaneVisible && aiPaneVisible;
+  const surfaceSidebarFirst = !bothPanesVisible || surfaceFirst;
+  const aiSidebarFirst = !bothPanesVisible || !surfaceFirst;
+  const surfaceStyle = bothPanesVisible
+    ? { flexBasis: 0, flexGrow: surfaceShare }
+    : { flexBasis: 0, flexGrow: 1 };
+  const aiStyle = bothPanesVisible
+    ? { flexBasis: 0, flexGrow: 100 - surfaceShare }
+    : { flexBasis: 0, flexGrow: 1 };
+  const surfaceSidebar = surfaceMode === "work" ? (
+    <aside className={`flex w-40 shrink-0 flex-col overflow-hidden bg-[#f8f9f7] ${
+      surfaceSidebarFirst ? "border-r" : "border-l"
+    } border-zinc-200`}>
+      <div className="flex h-12 shrink-0 items-center px-4">
+        <p className="text-[11px] font-semibold tracking-wide text-zinc-500">工作视图</p>
+      </div>
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2.5 pb-3">
+        {installedViews.map((view) => (
+          <button
+            key={view.viewKey}
+            type="button"
+            onClick={() => openWorkView(view.viewKey)}
+            className={`w-full rounded-lg px-2.5 py-2 text-left text-xs transition ${
+              activeWorkViewKey === view.viewKey
+                ? "bg-white font-medium text-zinc-950 shadow-sm ring-1 ring-zinc-200"
+                : "text-zinc-600 hover:bg-white hover:text-zinc-900"
+            }`}
+          >
+            {view.specializedLabel ?? view.label}
           </button>
-        </div>
+        ))}
+      </div>
+    </aside>
+  ) : null;
 
-        <div className="mt-2 border-t border-zinc-200/70 pt-2">
-          <div className="px-2 pb-1">
-            <p className="text-[10px] font-medium tracking-wide text-zinc-400">资料工程</p>
-          </div>
-          <div className="space-y-px">
-            <button type="button" onClick={openLibrary} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === "library" ? "bg-[#e9e9e9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
-              <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H10l2 2h5.5A2.5 2.5 0 0 1 20 8.5v8A2.5 2.5 0 0 1 17.5 19h-11A2.5 2.5 0 0 1 4 16.5v-10Z" strokeLinejoin="round" /></svg>
-              资料库
+  const surfaceMain = (
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
+      <header className="flex h-12 shrink-0 items-center justify-center border-b border-zinc-200 bg-white px-3">
+        <div className="flex rounded-lg bg-zinc-100 p-1" aria-label="工作区模式">
+          {([
+            ["work", "工作"],
+            ["knowledge", "知识"],
+            ["library", "资料"],
+          ] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => selectSurfaceMode(mode)}
+              aria-pressed={surfaceMode === mode}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                surfaceMode === mode
+                  ? "bg-white text-zinc-950 shadow-sm"
+                  : "text-zinc-500 hover:text-zinc-800"
+              }`}
+            >
+              {label}
             </button>
-            <button type="button" onClick={openCompilation} className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === "compilation" ? "bg-[#e9e9e9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
-              <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3.5h8l3 3v14H7v-17Z" strokeLinejoin="round" /><path d="M10 11h5m-5 4h5M15 3.5V7h3" strokeLinecap="round" /></svg>
-              基础编译
-            </button>
-          </div>
+          ))}
         </div>
+      </header>
 
-        <div className="mt-2 border-t border-zinc-200/70 pt-2">
-          <div className="px-2 pb-1">
-            <p className="text-[10px] font-medium tracking-wide text-zinc-400">业务视图</p>
+      {surfaceMode === "work" ? (
+        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+          {activeWorkViewKey ? (
+            workInspectorOpen ? (
+              <GenericViewInspector
+                key={activeWorkViewKey}
+                viewKey={activeWorkViewKey}
+                focusCardId={viewFocusCardId}
+                onClose={() => setWorkInspectorOpen(false)}
+                onOpenAI={() => setAiPaneVisible(true)}
+                onAskAI={(prompt) => {
+                  setInput(prompt);
+                  setAiPaneVisible(true);
+                }}
+              />
+            ) : (
+              <WorkViewWorkspace
+                key={activeWorkViewKey}
+                viewKey={activeWorkViewKey}
+                focusCardId={viewFocusCardId}
+                onOpenInspector={() => setWorkInspectorOpen(true)}
+                onAskAI={(prompt) => {
+                  setInput(prompt);
+                  setAiPaneVisible(true);
+                }}
+              />
+            )
+          ) : (
+            <div className="flex h-full items-center justify-center p-8 text-center text-sm text-zinc-400">
+              {installedViewsLoaded ? "没有可用的 Work View。" : "正在恢复 Work View…"}
+            </div>
+          )}
+        </div>
+      ) : surfaceMode === "knowledge" ? (
+          <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
+            <KnowledgeGraphWorkspace
+              assistantOpen={aiPaneVisible}
+              onAskAI={(prompt) => {
+                setInput(prompt);
+                setAiPaneVisible(true);
+              }}
+            />
           </div>
-          <div className="space-y-px">
-            {installedViews.map((view) => (
+        ) : (
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+            {libraryMode === "files" ? (
+              <LibraryWorkspace
+                initialFolderId={activeLibraryFolderId}
+                onFolderChange={setActiveLibraryFolderId}
+                onOpenProcessing={() => setLibraryMode("processing")}
+                onOpenAI={() => setAiPaneVisible(true)}
+                onAskAI={(prompt) => {
+                  setInput(prompt);
+                  setAiPaneVisible(true);
+                }}
+              />
+            ) : (
+              <CompilationWorkspace
+                onOpenLibrary={() => setLibraryMode("files")}
+                onAskAI={(prompt) => {
+                  setInput(prompt);
+                  setAiPaneVisible(true);
+                }}
+              />
+            )}
+          </div>
+        )}
+    </div>
+  );
+
+  const surfacePane = surfacePaneVisible ? (
+    <section
+      aria-label="工作区"
+      className="flex h-full min-h-0 min-w-0 overflow-hidden bg-white"
+      style={surfaceStyle}
+    >
+      {surfaceSidebarFirst ? surfaceSidebar : null}
+      {surfaceMain}
+      {surfaceSidebarFirst ? null : surfaceSidebar}
+    </section>
+  ) : null;
+
+  const aiSidebar = (
+    <nav
+      aria-label="AI 对话"
+      className={`flex shrink-0 flex-col overflow-hidden bg-[#f9f9f9] px-2.5 pb-2.5 pt-2 ${
+        bothPanesVisible ? "w-[220px]" : "w-[244px]"
+      } ${aiSidebarFirst ? "border-r" : "border-l"} border-[#e8e8e8]`}
+    >
+      <div className="flex h-11 shrink-0 items-center justify-center">
+        <p className="text-[16px] font-semibold tracking-[-0.02em] text-zinc-900">Echo</p>
+      </div>
+
+      <button
+        type="button"
+        disabled={isSending}
+        onClick={() => void createConversation()}
+        className="mt-0.5 flex h-[34px] w-full shrink-0 items-center gap-2.5 rounded-lg px-2 text-left text-[12px] font-medium text-zinc-800 transition hover:bg-[#ececec] disabled:opacity-40"
+      >
+        <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+          <path d="M12 20H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h10" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="m14 4 6 6m-7 1 6.5-6.5a1.4 1.4 0 0 0-2-2L11 9l-1 3 3-1Z" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        新对话
+      </button>
+
+      <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-zinc-200/80 pt-3">
+        <p className="px-2 text-[11px] font-medium text-zinc-500">最近对话</p>
+        <div className="mt-1 min-h-0 space-y-px overflow-y-auto pr-0.5">
+          {conversations.map((conversation) => (
+            <div key={conversation.id} className={`group flex items-center rounded-lg transition ${
+              activeConversationId === conversation.id
+                ? "bg-[#e9e9e9] text-zinc-950"
+                : "text-zinc-700 hover:bg-[#ececec]"
+            }`}>
               <button
-                key={view.viewKey}
                 type="button"
-                onClick={() => openBusinessView(view.viewKey)}
-                className={`flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-[12px] transition ${activeWorkspace === view.viewKey ? "bg-[#e9e9e9] font-medium text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}
+                onClick={() => {
+                  if (isSending || conversation.id === activeConversationId) return;
+                  activateConversation(conversation.id);
+                }}
+                className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-[12px] leading-5"
+                title={conversation.title}
               >
-                <span className="size-2 rounded-full bg-emerald-500" aria-hidden="true" />
-                {view.label}
+                {conversation.title}
               </button>
-            ))}
+              <button type="button" aria-label="重命名对话" title="重命名" onClick={() => void renameConversation(conversation)} className="hidden px-1 py-1.5 text-[11px] text-zinc-500 hover:text-zinc-950 group-hover:block">✎</button>
+              <button type="button" aria-label="归档对话" title="归档" onClick={() => void archiveConversation(conversation)} className="hidden px-1.5 py-1.5 text-sm leading-none text-zinc-500 hover:text-zinc-950 group-hover:block">×</button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="shrink-0 border-t border-zinc-200/80 pt-2">
+        <div className="flex items-center gap-2 rounded-lg px-1.5 py-1.5">
+          <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#d9dfdc] text-[10px] font-semibold text-zinc-700">
+            {currentUser.actor.displayName.slice(0, 1).toUpperCase()}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[12px] font-medium leading-4 text-zinc-800">{currentUser.actor.displayName}</p>
+            <p className="truncate text-[10px] leading-4 text-zinc-500">{currentUser.personObject?.canonicalName ?? currentUser.loginName}</p>
           </div>
         </div>
+        <div className="flex gap-0.5 px-1">
+          {currentUser.role === "ADMIN" ? <button onClick={() => window.location.assign("/admin/users")} className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-200/70 hover:text-zinc-800">账号管理</button> : null}
+          <button onClick={() => void logout()} className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-200/70 hover:text-zinc-800">退出登录</button>
+        </div>
+      </div>
+    </nav>
+  );
 
-        <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-zinc-200/80 pt-3">
-          <p className="px-2 text-[11px] font-medium text-zinc-500">最近对话</p>
-          <div className="mt-1 min-h-0 space-y-px overflow-y-auto pr-0.5">
-            {conversations.map((conversation) => (
-              <div key={conversation.id} className={`group flex items-center rounded-lg transition ${activeWorkspace === "chat" && activeConversationId === conversation.id ? "bg-[#e9e9e9] text-zinc-950" : "text-zinc-700 hover:bg-[#ececec]"}`}>
+  const aiChat = (
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-white">
+      <ChatSurface compact={bothPanesVisible} messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="ai-pane-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} />
+    </div>
+  );
+
+  const aiPane = aiPaneVisible ? (
+    <section
+      aria-label="AI Pane"
+      className="flex h-full min-h-0 min-w-0 overflow-hidden bg-white"
+      style={aiStyle}
+    >
+      {aiSidebarFirst ? aiSidebar : null}
+      {aiChat}
+      {aiSidebarFirst ? null : aiSidebar}
+    </section>
+  ) : null;
+
+  const divider = bothPanesVisible ? (
+    <div
+      role="separator"
+      aria-label="调整工作区与 AI 宽度"
+      aria-orientation="vertical"
+      aria-valuemin={20}
+      aria-valuemax={80}
+      aria-valuenow={Math.round(surfaceShare)}
+      tabIndex={0}
+      onPointerDown={beginPaneResize}
+      onKeyDown={resizeWithKeyboard}
+      onDoubleClick={() => setSurfaceShare(50)}
+      className="group relative z-10 w-2 shrink-0 cursor-col-resize bg-zinc-100 outline-none hover:bg-emerald-100 focus:bg-emerald-100"
+    >
+      <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-zinc-300 group-hover:bg-emerald-500" />
+    </div>
+  ) : null;
+
+  return (
+    <main className="relative flex h-dvh min-h-0 overflow-hidden bg-white text-zinc-950">
+      <div className="fixed right-3 top-3 z-40 flex items-start gap-2">
+        {!surfacePaneVisible ? (
+          <button
+            type="button"
+            onClick={() => setSurfacePaneVisible(true)}
+            className="h-8 rounded-lg border border-zinc-200 bg-white/95 px-3 text-xs font-medium text-zinc-700 shadow-sm backdrop-blur hover:bg-zinc-50"
+          >
+            打开工作区
+          </button>
+        ) : null}
+        <div className="relative">
+          <button
+            type="button"
+            aria-label="布局设置"
+            aria-expanded={layoutMenuOpen}
+            title="布局设置"
+            onClick={() => setLayoutMenuOpen((open) => !open)}
+            className="flex size-8 items-center justify-center rounded-lg border border-zinc-200 bg-white/95 text-zinc-500 shadow-sm backdrop-blur hover:bg-zinc-50 hover:text-zinc-800"
+          >
+            <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+              <rect x="3.5" y="5" width="7" height="14" rx="1.5" />
+              <rect x="13.5" y="5" width="7" height="14" rx="1.5" />
+            </svg>
+          </button>
+          {layoutMenuOpen ? (
+            <div className="absolute right-0 mt-2 w-44 rounded-xl border border-zinc-200 bg-white p-1.5 text-xs shadow-xl">
+              <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">布局</p>
+              <button
+                type="button"
+                disabled={!bothPanesVisible}
+                onClick={() => {
+                  setSurfaceFirst((current) => !current);
+                  setLayoutMenuOpen(false);
+                }}
+                className="w-full rounded-lg px-2 py-2 text-left text-zinc-700 hover:bg-zinc-100 disabled:opacity-35"
+              >
+                左右交换
+              </button>
+              <button
+                type="button"
+                disabled={!bothPanesVisible}
+                onClick={() => {
+                  setSurfaceShare(50);
+                  setLayoutMenuOpen(false);
+                }}
+                className="w-full rounded-lg px-2 py-2 text-left text-zinc-700 hover:bg-zinc-100 disabled:opacity-35"
+              >
+                恢复等宽
+              </button>
+              <button
+                type="button"
+                disabled={!surfacePaneVisible || !aiPaneVisible}
+                onClick={() => {
+                  setAiPaneVisible(false);
+                  setLayoutMenuOpen(false);
+                }}
+                className="w-full rounded-lg px-2 py-2 text-left text-zinc-700 hover:bg-zinc-100 disabled:opacity-35"
+              >
+                隐藏 AI
+              </button>
+              {surfacePaneVisible ? (
                 <button
                   type="button"
+                  disabled={!aiPaneVisible}
                   onClick={() => {
-                    if (isSending || conversation.id === activeConversationId) {
-                      openFullChat();
-                      return;
-                    }
-                    activateConversation(conversation.id);
-                    openFullChat();
+                    setSurfacePaneVisible(false);
+                    setLayoutMenuOpen(false);
                   }}
-                  className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-[12px] leading-5"
-                  title={conversation.title}
+                  className="w-full rounded-lg px-2 py-2 text-left text-zinc-700 hover:bg-zinc-100 disabled:opacity-35"
                 >
-                  {conversation.title}
+                  隐藏工作区
                 </button>
-                <button type="button" aria-label="重命名对话" title="重命名" onClick={() => void renameConversation(conversation)} className="hidden px-1 py-1.5 text-[11px] text-zinc-500 hover:text-zinc-950 group-hover:block">✎</button>
-                <button type="button" aria-label="归档对话" title="归档" onClick={() => void archiveConversation(conversation)} className="hidden px-1.5 py-1.5 text-sm leading-none text-zinc-500 hover:text-zinc-950 group-hover:block">×</button>
-              </div>
-            ))}
-          </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
-        <div className="border-t border-zinc-200/80 pt-2">
-          <div className="flex items-center gap-2 rounded-lg px-1.5 py-1.5">
-            <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#d9dfdc] text-[10px] font-semibold text-zinc-700">
-              {currentUser.actor.displayName.slice(0, 1).toUpperCase()}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[12px] font-medium leading-4 text-zinc-800">{currentUser.actor.displayName}</p>
-              <p className="truncate text-[10px] leading-4 text-zinc-500">{currentUser.personObject?.canonicalName ?? currentUser.loginName}</p>
-            </div>
-          </div>
-          <div className="flex gap-0.5 px-1">
-            {currentUser.role === "ADMIN" ? <button onClick={() => window.location.assign("/admin/users")} className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-200/70 hover:text-zinc-800">账号管理</button> : null}
-            <button onClick={() => void logout()} className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-200/70 hover:text-zinc-800">退出登录</button>
-          </div>
-        </div>
-      </nav>
-
-      <div className="flex min-h-0 min-w-0 flex-1">
-        <section className={`min-h-0 min-w-0 flex-1 ${
-          activeWorkspace === "chat" || activeWorkspace === "knowledge-graph" ? "overflow-hidden" : "overflow-y-auto"
-        }`}>
-          {activeWorkspace === "chat" ? (
-            <div className="flex h-full min-h-0 w-full flex-col bg-white">
-              <ChatSurface messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="full-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} />
-            </div>
-          ) : activeWorkspace === "knowledge-graph" ? (
-            <KnowledgeGraphWorkspace
-              assistantOpen={drawerOpen}
-              onAskAI={(prompt) => {
-                setInput(prompt);
-                setDrawerOpen(true);
-              }}
-            />
-          ) : activeWorkspace === "library" ? (
-            <LibraryWorkspace
-              initialFolderId={activeLibraryFolderId}
-              onFolderChange={setActiveLibraryFolderId}
-              onOpenAI={() => setDrawerOpen(true)}
-              onAskAI={(prompt) => {
-                setInput(prompt);
-                setDrawerOpen(true);
-              }}
-            />
-          ) : activeWorkspace === "compilation" ? (
-            <CompilationWorkspace
-              onOpenLibrary={openLibrary}
-              onAskAI={(prompt) => {
-                setInput(prompt);
-                setDrawerOpen(true);
-              }}
-            />
-          ) : (
-            <GenericViewInspector
-              key={activeWorkspace}
-              viewKey={activeWorkspace}
-              focusCardId={viewFocusCardId}
-              onOpenAI={() => setDrawerOpen(true)}
-              onAskAI={(prompt) => {
-                setInput(prompt);
-                setDrawerOpen(true);
-              }}
-            />
-          )}
-        </section>
-
-        {activeWorkspace !== "chat" && drawerOpen ? (
-          <aside className="flex h-dvh w-[26rem] shrink-0 flex-col border-l border-zinc-200 bg-white shadow-[-8px_0_28px_rgba(0,0,0,0.04)]">
-            <header className="flex min-h-12 items-center justify-between gap-3 border-b border-zinc-100 px-3.5 py-2">
-              <div>
-                <p className="text-[11px] font-medium text-zinc-400">当前上下文</p>
-                <h2 className="mt-0.5 text-sm font-medium text-zinc-800">
-                  {activeWorkspace === "library"
-                    ? "资料库 · 当前文件夹"
-                    : activeWorkspace === "compilation"
-                      ? "资料库 · 基础编译"
-                      : activeWorkspace === "knowledge-graph"
-                        ? "组织认知 · 知识图谱"
-                        : `${installedViews.find((view) => view.viewKey === activeWorkspace)?.label ?? activeWorkspace} · 只读 Inspector`}
-                </h2>
-              </div>
-              <button type="button" onClick={() => setDrawerOpen(false)} aria-label="收起 AI 对话" className="flex size-7 items-center justify-center rounded-lg text-lg font-light text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700">×</button>
-            </header>
-            <ChatSurface compact messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="drawer-chat-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} />
-          </aside>
-        ) : null}
+      </div>
+      <div ref={splitContainerRef} className="flex min-h-0 min-w-0 flex-1">
+        {surfaceFirst ? surfacePane : aiPane}
+        {divider}
+        {surfaceFirst ? aiPane : surfacePane}
       </div>
       {sourceReference ? (
         <SourceDocumentDialog

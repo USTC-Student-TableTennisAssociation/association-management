@@ -148,19 +148,22 @@ function withoutTurnHandoff(message: ClubChatMessage): ClubChatMessage {
 
 const pageContextSchema = z.object({
   activeViewKey: registeredViewKeySchema(extensionRegistry).optional(),
-  activePresentation: z.enum(["inspector", "full_chat", "library"]),
+  activePresentation: z.enum(["work", "inspector", "full_chat", "knowledge", "library"]),
   activeFolderId: z.string().uuid().optional(),
   activeCardId: z.string().uuid().optional(),
   activeNodeId: z.string().uuid().optional(),
   activeObjectName: z.string().trim().min(1).max(200).optional(),
 }).refine(
-  (context) => ["full_chat", "library"].includes(context.activePresentation) || Boolean(context.activeViewKey),
+  (context) => ["full_chat", "knowledge", "library"].includes(context.activePresentation) || Boolean(context.activeViewKey),
   { message: "Business View presentation 必须提供 activeViewKey" },
 );
 
 function pageContextInstruction(context?: ChatPageContext): string {
   if (!context || context.activePresentation === "full_chat") {
     return "页面 soft context：用户当前位于全屏 AI 对话。不要因此限制 Shared Brain 检索范围。";
+  }
+  if (context.activePresentation === "knowledge") {
+    return "页面 soft context：用户当前正在查看 Knowledge Graph。这只用于理解当前工作位置；图谱可帮助选择检索方向，但不能替代本轮实际读取的事实证据。";
   }
   if (context.activePresentation === "library") {
     return [
@@ -169,7 +172,9 @@ function pageContextInstruction(context?: ChatPageContext): string {
     ].join("\n");
   }
   return [
-    `页面 soft context：用户当前正在查看 ${context.activeViewKey} 的只读 Generic View Inspector。`,
+    context.activePresentation === "inspector"
+      ? `页面 soft context：用户当前正在查看 ${context.activeViewKey} 的高级只读 Generic View Inspector。`
+      : `页面 soft context：用户当前正在查看 Work View ${context.activeViewKey}。`,
     ...(context.activeObjectName || context.activeCardId || context.activeNodeId
       ? [
           `当前页面实体：${context.activeObjectName ?? "名称未提供"}` +

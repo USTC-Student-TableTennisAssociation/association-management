@@ -335,11 +335,11 @@ export function CompilationWorkspace({
       <header className="border-b border-zinc-200 bg-white px-6 py-5 lg:px-8">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-sm font-medium text-emerald-700">资料库工作快照</p>
-            <h1 className="mt-1 text-2xl font-semibold text-zinc-950">基础编译</h1>
+            <p className="text-sm font-medium text-emerald-700">资料库处理流程</p>
+            <h1 className="mt-1 text-2xl font-semibold text-zinc-950">导入与处理</h1>
           </div>
           <div className="flex gap-2">
-            <button type="button" onClick={onOpenLibrary} className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">返回资料库</button>
+            <button type="button" onClick={onOpenLibrary} className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">返回文件</button>
             <button type="button" onClick={() => onAskAI("请根据当前基础编译进度和失败项，帮我分析需要重试或调整处理档位的文件。") } className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50">询问 Echo</button>
           </div>
         </div>
