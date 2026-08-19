@@ -119,11 +119,13 @@ function FilePreview({ item }: { item: LibraryNodeView }) {
 export function LibraryWorkspace({
   initialFolderId,
   onFolderChange,
+  onOpenProcessing,
   onAskAI,
   onOpenAI,
 }: {
   initialFolderId?: string;
   onFolderChange?: (folderId: string) => void;
+  onOpenProcessing: () => void;
   onAskAI: (prompt: string) => void;
   onOpenAI: () => void;
 }) {
@@ -383,6 +385,7 @@ export function LibraryWorkspace({
             <h1 className="mt-1 text-2xl font-semibold text-zinc-950">资料库</h1>
           </div>
           <div className="flex gap-2">
+            <button type="button" onClick={onOpenProcessing} className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50">导入与处理</button>
             <button type="button" onClick={onOpenAI} className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50">与 Echo 整理</button>
             <button type="button" onClick={() => onAskAI("请先查看当前资料库的文件和处理档位，帮我判断哪些值得粗编译或深度冷启动，先给建议，不要直接修改。") } className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800">请 AI 帮我筛选</button>
           </div>

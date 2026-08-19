@@ -12,7 +12,7 @@ import type {
 
 export type ChatPageContext = {
   activeViewKey?: string;
-  activePresentation: "inspector" | "full_chat" | "library";
+  activePresentation: "work" | "inspector" | "full_chat" | "knowledge" | "library";
   activeFolderId?: string;
   activeCardId?: string;
   activeNodeId?: string;

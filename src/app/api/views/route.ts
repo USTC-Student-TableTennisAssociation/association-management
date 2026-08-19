@@ -26,6 +26,7 @@ export async function GET() {
             ...state,
             stateVersion: state.stateVersion.toString(),
             label: viewModule.manifest.label,
+            specializedLabel: viewModule.manifest.specializedLabel,
             description: viewModule.manifest.description,
           }]
         : [];

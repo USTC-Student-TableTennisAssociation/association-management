@@ -13,11 +13,13 @@ function displayValue(value: unknown): string {
 export function GenericViewInspector({
   viewKey,
   focusCardId,
+  onClose,
   onOpenAI,
   onAskAI,
 }: {
   viewKey: string;
   focusCardId?: string;
+  onClose?: () => void;
   onOpenAI?: () => void;
   onAskAI?: (prompt: string) => void;
 }) {
@@ -78,6 +80,7 @@ export function GenericViewInspector({
           </div>
         </div>
         <div className="flex gap-2">
+          {onClose ? <button type="button" onClick={onClose} className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50">返回工作视图</button> : null}
           <button type="button" onClick={() => setReloadSequence((value) => value + 1)} className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">刷新</button>
           {onOpenAI ? <button type="button" onClick={onOpenAI} className="rounded-lg bg-emerald-800 px-3 py-2 text-sm text-white hover:bg-emerald-900">打开 AI</button> : null}
         </div>
