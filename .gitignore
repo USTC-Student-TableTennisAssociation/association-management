@@ -48,3 +48,6 @@ next-env.d.ts
 # Reimbursement tool - large OCR traineddata files
 chi_sim.traineddata
 eng.traineddata
+
+# Reimbursement tool - local debug output
+shuchu.txt

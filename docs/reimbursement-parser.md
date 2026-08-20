@@ -150,6 +150,8 @@ noSpace = text.replace(/\s+/g, '')   ← 去空格扁平化
 3. 无匹配:       any                                   → matchedBy='unmatched'
 ```
 
+**双向漏配报告**：匹配从发票侧遍历后，再反向检查所有购买截图——未被任何发票匹配的截图单独标出（`invoiceFile='未匹配'`）。`checkAmountConsistency` 据此分别产出 `发票 (X) 未能匹配到对应的购买截图` 与 `购买截图 (Y) 未能匹配到对应的发票`，避免只报发票侧漏配、看不出某张截图缺发票。
+
 #### 商品模糊匹配（`buildMatchedItems`）
 
 发票商品名与购买截图商品名做双向 `includes` 匹配，`filter` + `reduce` 汇总所有匹配项数量（而非 `find` 只取第一个）。
@@ -234,6 +236,59 @@ pnpm parse:json
 # 显示 OCR 详细日志
 pnpm parse -- --verbose
 ```
+
+## LLM 增强层（可选）
+
+纯启发式主流程之外的可选增强层，**默认关闭、失败静默降级、永不改写主结果**。它补上启发式做不到的四类能力（按执行顺序）：
+
+1. **文档分类修正**（`reclassifyWithLLM`）—— 启发式分类高度依赖文件名关键词权重，文件名不含"发票/截图"等提示时易误判（如购买截图被误判成荣誉证书）。对分类可疑的文件（置信度<0.5 或属易混类型）用 LLM **从内容重新判断**，不同则修正 `documentType` 并重跑该类型的字段提取（`documentTypeReclassified=true`）。
+2. **多模态 OCR 救援**（`rescueWithVisionLLM`）—— 对启发式 OCR 死局直接把原图喂给视觉模型：
+   - 手写签领表实拍图 → 补出奖品名与签领数量（`signItemsSource='vision-llm'`）
+   - 新闻稿截图左上角"青春科大"标题 OCR 抓不到 → 视觉确认是否含标题（写入 `llmNotes.newsHasTitle`）
+3. **购买截图跨平台提取**（`extractPurchaseWithLLM`）—— 启发式只针对淘宝格式，京东/拼多多/抖音等平台文案不同会提取失败。当启发式未提取到关键字段（实付款/商品/订单号缺其二）时，用文本 LLM 从 OCR 原文补提取，兼容各平台"实付款/实付金额/应付款""订单号/单号"等同义字段。只回填缺失字段，不覆盖启发式已提取的（`llmNotes.purchaseExtractedByLLM=true`）。
+4. **语义合规审查**（`reviewComplianceWithLLM`）—— 把已提取的结构化字段喂给 LLM，对照 `yaoqiu.txt` 与《社团财务报销流程》规则检查：
+   - `rule-invoice-header`：开票信息一字不差（单位名称/税号/地址/电话/开户行/账号、抬头类型=企业）
+   - `rule-invoice-items-match`：发票商品类别/明细与购物截图一致
+   - `rule-signoff-count`：签领数量与审批单购买数量一致
+   - `rule-budget-coverage`：审批单预算明细中"应有发票或截图"的品目是否都有对应材料（输出 `uncoveredBudgetItems`，对应 yaoqiu 输出要求 #4）
+
+### 用法
+
+```bash
+# 启用 LLM 增强层（需先配置 .env）
+pnpm parse:llm
+# 或对指定文件
+pnpm parse -- --llm 文件1.pdf 文件2.jpg
+# 同时看详细日志
+pnpm parse -- --llm --verbose
+```
+
+### 环境变量（OpenAI 兼容协议）
+
+在 `.env` 中配置（端点须兼容 `/chat/completions`；多模态救援需模型支持图片输入）：
+
+```
+AI_API_KEY=...
+AI_API_BASE_URL=https://api.openai.com/v1
+AI_MODEL=...   # 文本审查模型；多模态救援另需支持图片输入的模型
+```
+
+> **与主流程共用同一组 key**：报销工具读的是 `AI_API_KEY` / `AI_API_BASE_URL` / `AI_MODEL`，与仓库 `src/app/api/chat` 路由、`src/app/api/guidance` 路由**共用同一套凭据与计量池**，不单独配置。`.env` 被 `.gitignore` 排除（仅 `.env.example` 入库，值为空），故每位部署者用自己的 key；缺 key 时 LLM 增强层静默降级为纯启发式，不影响主流程。
+
+> **USTC 网关实测（2026-08）**：`AI_API_BASE_URL=https://api.llm.ustc.edu.cn/v1`。
+> - **语义合规审查**：`deepseek-v4-pro` 可用，约 50–60 秒返回结构化 findings（已验证 8 项规则）。
+> - **多模态 OCR 救援**：该 key 允许的模型中，`unlimited-ocr` 能吃图但对手写签领表/新闻稿返回空或超时（仅对清晰印刷图有效），其余模型（`deepseek-v4-pro`、`glm-5.2`、`qwen3.8-*`、`k3` 等）均不支持多模态。**故当前网关环境下视觉救援会优雅降级**（签领表 `signItemsSource='vision-llm-failed'`、新闻稿 `llmNotes.visionRescueFailed=true`），签领表仍走"建议人工核对"。代码逻辑正确，待网关提供可用视觉模型后即可自动生效，无需改代码。
+> - 若要分离审查与救援模型，可通过 `LLMOptions.model`（审查）覆盖；视觉救援当前复用同一 `AI_MODEL`，需在 `reimbursement-llm.ts` 的 `rescueWithVisionLLM` 中单独指定支持图片的模型名。
+
+### 设计约束
+
+- **不改主结果**：LLM 结果是 advisory，只新增 `llmReview` / `signItemsSource` / `llmNotes` 等 optional 字段，绝不改写 `isComplete` / `isValid` / `summary` / 启发式 `warnings`，也不自动阻断提交。
+- **默认零网络**：不传 `--llm` 时主流程与纯启发式完全一致，无任何网络调用、无凭据依赖。
+- **降级**：缺凭据 / 端点不可达 / 视觉模型不支持图片 / JSON 解析失败 —— 一律静默降级到纯启发式结果，退出码 0。
+
+### 主流程接入
+
+`parseReimbursementMaterials(filePaths, { llm: { enabled: true } })` 即在内部自动跑增强；也可对已算出的结果二次调用独立函数 `enhanceWithLLM(result, opts)`（位于 `src/lib/tools/reimbursement-llm.ts`）。返回类型 `ReimbursementCheckResult` 新增的 `llmReview?` 字段便于 Agent 直接消费。
 
 ## 核心 API
 

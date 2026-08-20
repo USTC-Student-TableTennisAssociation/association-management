@@ -101,6 +101,10 @@ export type FileParseResult = {
   fileName: string;
   filePath: string;
   documentType: DocumentType;
+  /** 启发式分类置信度（0~1，越低越可能误判，LLM 分类修正层据此触发） */
+  classificationConfidence?: number;
+  /** 文档类型是否经 LLM 修正过（LLM 增强层，可选） */
+  documentTypeReclassified?: boolean;
   /** 从文件中提取的原始文本 */
   rawText: string;
   /** 结构化字段（通用） */
@@ -119,6 +123,16 @@ export type FileParseResult = {
   purchaseDetail?: PurchaseDetail;
   approvalDetail?: ApprovalDetail;
   signItems?: SignItem[];
+  /** 签领项来源：启发式 / 视觉 LLM 救援 / 救援失败（LLM 增强层，可选） */
+  signItemsSource?: 'heuristic' | 'vision-llm' | 'vision-llm-failed';
+  /** LLM 增强层附加注释（多模态救援结果等，可选） */
+  llmNotes?: {
+    newsHasTitle?: boolean;
+    newsTitleText?: string;
+    visionRescueFailed?: boolean;
+    /** 购买截图由 LLM 跨平台提取补全字段 */
+    purchaseExtractedByLLM?: boolean;
+  };
   /** 该文件的警告 */
   warnings: string[];
 };
@@ -139,6 +153,8 @@ export type ReimbursementCheckResult = {
   summary: string;
   /** 发票与购买截图匹配结果 */
   matchResults?: MatchResult[];
+  /** LLM 增强层合规审查结果（可选，仅当 options.llm.enabled 时出现） */
+  llmReview?: import('./reimbursement-llm').LLMReviewResult;
 };
 
 export type MatchResult = {
@@ -180,7 +196,12 @@ export type ParserOptions = {
   lang?: string;
   /** 是否启用详细日志 */
   verbose?: boolean;
+  /** LLM 增强层配置（可选，默认关闭，详见 reimbursement-llm.ts） */
+  llm?: import('./reimbursement-llm').LLMOptions;
 };
+
+// LLM 增强层类型 re-export，便于外部从主入口统一引入
+export type { LLMOptions, LLMReviewResult, LLMFinding } from './reimbursement-llm';
 
 // ============================================================
 // 文档类型关键词映射（加强版）
@@ -695,46 +716,81 @@ export function extractMerchantName(text: string): string {
   return '';
 }
 
-/** 从发票文本中提取卖方名称 */
+/** 从发票文本中提取销售方名称（在"销售方"区块内提取，避免误抓购买方） */
 export function extractSellerName(text: string): string {
-  // 销售方名称在 PDF 中是特定位置
-  const patterns = [
-    /浦江志鼎|永康市红红火火|义乌市固腾/,
-    /销售方[^寿]*?名称[^寿]*?[：:]\s*(.+?)(?:\s|$)/,
-    /销售方[：:]\s*(.+?)(?:\s|$)/,
-  ];
+  // 销售方信息集中在"销售方"之后、"购买方"之前（或文末），先截取该区块
+  const sellerSection = (() => {
+    const idx = text.indexOf('销售方');
+    if (idx < 0) return text;
+    const rest = text.slice(idx);
+    // 销售方区块到下一个"购买方"或"开票"为止
+    const end = rest.search(/购买方|开票人|开票日期|价税合计/);
+    return end >= 0 ? rest.slice(0, end) : rest;
+  })();
 
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) {
-      if (typeof match[1] === 'string') {
-        const name = match[1].trim();
-        if (name && name.length < 40) return name;
-      }
-      return match[0]; // for direct keyword match
-    }
+  // "名称：xxx" 后取到换行（用 [^\n]+ 避免非贪婪遇空格截断）
+  const nameMatch = sellerSection.match(/名称[：:]\s*([^\n]+)/);
+  if (nameMatch && nameMatch[1]) {
+    const name = nameMatch[1].trim();
+    if (name && name.length < 40 && name !== '名称：') return name;
   }
 
-  // 尝试在长文本中找到公司名模式
-  const companyMatch = text.match(/([^\d\s]{4,}(?:有限公司|厂|店|旗舰店))/);
+  // 兜底：在销售方区块内找公司名后缀模式
+  const companyMatch = sellerSection.match(/([^\d\s]{2,}(?:有限公司|厂|店|旗舰店|经营部|商行|工作室))/);
   if (companyMatch) return companyMatch[1];
 
   return '';
 }
 
+/**
+ * 从发票文本中提取购买方税号（纳税人识别号/统一社会信用代码）。
+ * 报销场景购买方固定为学校，税号固定为 12100000485001086E —— 优先用学校税号，
+ * 避免正则把发票号等纯数字串误匹配为税号。仅当购买方不是学校时才尝试从文本提取。
+ */
+export function extractBuyerTaxId(text: string): string {
+  // 报销场景购买方即学校，税号固定（PPTX《社团财务报销流程》slide 6 规定）
+  if (text.includes('中国科学技术大学')) return '12100000485001086E';
+
+  // 非学校购买方（如基金会经费）：在"购买方"区块内精确提取税号
+  // 税号含字母（社会信用代码）或为15/18位，需排除20位发票号等纯数字串
+  const buyerSection = text.split(/销售方/)[0] || text;
+  const patterns = [
+    /纳税人识别号[：:]\s*([A-Z0-9]{15,18}(?:[A-Z][A-Z0-9]{0,2})?)/i,
+    /统一社会信用代码[^\n]*?[：:]\s*([A-Z0-9]{18})/i,
+  ];
+  for (const p of patterns) {
+    const m = buyerSection.match(p);
+    if (m && m[1] && /[A-Z]/i.test(m[1])) return m[1]; // 税号必含字母，排除纯数字发票号
+  }
+  return '';
+}
+
+/** 从发票文本中提取销售方税号（在"销售方"区块内查找）。 */
+export function extractSellerTaxId(text: string): string {
+  const sellerSection = text.split(/销售方/)[1] || '';
+  const m = sellerSection.match(/纳税人识别号[：:]\s*([A-Z0-9]{15,20})/i)
+    || sellerSection.match(/统一社会信用代码[^\n]*?[：:]\s*([A-Z0-9]{15,20})/i);
+  return m && m[1] ? m[1] : '';
+}
+
 /** 从文本中提取购买方名称 */
 export function extractBuyerName(text: string): string {
-  const patterns = [
-    /购买方[（(]名称[)）][：:]\s*(.+?)(?:\s|$)/,
-    /名称[：:]\s*(.+?)(?:\s|$)/,
-    /中国科学技术大学/,
-  ];
+  // 报销场景购买方固定为学校，优先直接命中校名（最可靠，不受 PDF 排版/空格影响）
+  const uniMatch = text.match(/中国科学技术大学/);
+  if (uniMatch) return uniMatch[0];
 
-  for (const pattern of patterns) {
+  // 否则从"购买方(名称)：xxx"或"名称：xxx"中取冒号后到换行的值
+  // 注意用 [^\n]+ 而非 .+?(?:\s|$)——后者非贪婪遇空格即停，会把"名称："本身当结果
+  const labelPatterns = [
+    /购买方[（(]名称[)）][：:]\s*([^\n]+)/,
+    /名称[：:]\s*([^\n]+)/,
+  ];
+  for (const pattern of labelPatterns) {
     const match = text.match(pattern);
-    if (match) {
-      if (match[1]) return match[1].trim();
-      return match[0]; // "中国科学技术大学"
+    if (match && match[1]) {
+      const val = match[1].trim();
+      // 剔除只剩标签残留（如"名称："误命中）的情况
+      if (val && !/^[名称：:\s]+$/.test(val)) return val;
     }
   }
 
@@ -913,17 +969,67 @@ export function extractPurchaseItems(text: string): { items: ItemInfo[]; itemCou
 export function extractInvoiceItems(text: string): ItemInfo[] {
   const items: ItemInfo[] = [];
 
-  // 改进版 regex: *xxx*商品名 捕获到下一个数字/特殊字符前为止，然后清理空格
-  const itemRegex = /\*[^*]+\*\s*([^*\s\d]+(?:\s[^*\s\d]+)*)/g;
+  // 中国电子发票商品行结构：*类别*商品名  规格  单位  数量  单价  金额  税率  税额
+  // pdfjs 解析时表头与值会被拆成两段、且中文常被插入空格（如"横 幅"）。
+  // 关键规律（已用真实发票验证）：商品行 "*类别*商品名 数字..."，商品名取到第一个数字前；
+  // 数量是商品名后该行最后一个 1~4 位纯整数，它前面那个小数是单价，单价×数量≈金额（校验用）。
+  // 注意：金额必须用【保留空格的原文】tokenize——去空格会让 "42.77 0.43" 粘成 "42.770.43"，
+  // 小数点连在一起破坏 token 边界，导致数量丢失。故商品名用 noSpace 提取，数量用原文提取。
+
+  const noSpace = text.replace(/\s+/g, '');
+
+  // 匹配 *类别*商品名：商品名是中文字母，遇数字结束。group(2)=商品名
+  const itemRegex = /\*([^*]+)\*([^\d*]{1,30}?)(?=\d|\*)/g;
   let match;
-  while ((match = itemRegex.exec(text)) !== null) {
-    const name = match[1].trim().replace(/\s+/g, '');
-    if (name && name.length > 0 && !items.some(i => i.name === name)) {
-      items.push({ name, quantity: 1 });
+  while ((match = itemRegex.exec(noSpace)) !== null) {
+    let name = match[2].replace(/[：:·、\-，,。.]+/g, '');
+    if (!name || name.length === 0) continue;
+    if (items.some(i => i.name === name)) continue;
+
+    // 在原文里定位该商品名，从其后取一段带空格的文本做数量提取。
+    // 原文商品名可能带空格（如"横 幅"），用去空格后的 name 在原文里模糊定位。
+    const nameNoSp = name.replace(/\s+/g, '');
+    let rowTail = '';
+    // 在原文找 "*...*<name>" 模式（name 允许字间有空格）
+    const origItemRe = new RegExp('\\*[^*]+\\*' + nameNoSp.split('').join('\\s*') + '\\s*([\\s\\S]{0,100}?)(?=\\*|$)');
+    const origMatch = text.match(origItemRe);
+    if (origMatch) {
+      rowTail = origMatch[1];
     }
+    // 在带空格的 rowTail 上 tokenize 数字（空格分隔，不会粘连）
+    const tokens = rowTail.match(/\d+(?:\.\d+)?/g) || [];
+
+    let quantity = 1;
+    if (tokens.length >= 2) {
+      // 最后一个 1~4 位纯整数（无小数点）= 数量
+      for (let i = tokens.length - 1; i >= 0; i--) {
+        if (/^\d{1,4}$/.test(tokens[i])) {
+          const q = parseInt(tokens[i], 10);
+          if (q > 0 && q < 10000) { quantity = q; break; }
+        }
+      }
+      // 校验：数量前一个小数（单价）× 数量 ≈ 行内金额（误差<10%），不符则回退为1。
+      // 金额取"合理金额"——排除超长 token（规格号/订单号常 >8 位，如 504941001100 会污染校验）。
+      if (quantity !== 1) {
+        const reasonableAmounts = tokens
+          .map(Number)
+          .filter(n => n > 0 && n < 100000); // 排除规格号/订单号等超长数字
+        const amount = reasonableAmounts.length ? Math.max(...reasonableAmounts) : 0;
+        const qtyIdx = tokens.findIndex(t => /^\d{1,4}$/.test(t) && parseInt(t, 10) === quantity);
+        const price = qtyIdx > 0 ? parseFloat(tokens[qtyIdx - 1]) : 0;
+        if (price > 0 && amount > 0) {
+          const expected = price * quantity;
+          if (Math.abs(expected - amount) / amount > 0.10) {
+            quantity = 1;
+          }
+        }
+      }
+    }
+
+    items.push({ name, quantity });
   }
 
-  // 如果没有匹配到，尝试从文本中找商品名
+  // 兜底：按常见奖品关键词（启发式都没匹配到时）
   if (items.length === 0) {
     const keywords = ['奖牌', '横幅', '荣誉证书', '证书'];
     for (const kw of keywords) {
@@ -1093,12 +1199,13 @@ export async function parseFile(
   const fileName = path.basename(filePath);
   const rawText = await extractText(filePath, options);
 
-  const { documentType } = classifyDocument(rawText, fileName);
+  const { documentType, confidence } = classifyDocument(rawText, fileName);
 
   const result: FileParseResult = {
     fileName,
     filePath,
     documentType: documentType || '未知',
+    classificationConfidence: confidence,
     rawText,
     merchantName: '',
     totalAmount: '',
@@ -1114,6 +1221,29 @@ export async function parseFile(
   };
 
   // 根据文档类型提取结构化信息
+  applyFieldExtraction(result, rawText);
+
+  // 检查提取结果中的警告
+  if (result.documentType === '未知') {
+    result.warnings.push('无法识别文档类型，请人工确认');
+  }
+
+  if (!rawText.trim()) {
+    result.warnings.push('未能从文件中提取到文本内容（可能是扫描件或纯图片PDF）');
+  }
+
+  if (result.documentType === '签领表' && result.signItems && result.signItems.length === 0) {
+    result.warnings.push('签领表为实拍图，OCR 识别效果不佳，建议人工核对奖品名称和签领数量');
+  }
+
+  return result;
+}
+
+/**
+ * 按文档类型把结构化字段提取结果写入 result。
+ * 抽成独立函数，供 LLM 分类修正后重跑对应类型的提取复用。
+ */
+export function applyFieldExtraction(result: FileParseResult, rawText: string): void {
   switch (result.documentType) {
     case '发票': {
       result.invoiceNumber = extractInvoiceNumber(rawText);
@@ -1129,24 +1259,19 @@ export async function parseFile(
       result.itemsWithQuantity = invoiceItems;
       result.items = invoiceItems.map(i => i.name);
 
-      // 构建详细结构
       result.invoiceDetail = {
         invoiceNumber: result.invoiceNumber,
         date: result.date,
         buyerName: result.buyerName,
-        buyerTaxId: '',
+        buyerTaxId: extractBuyerTaxId(rawText),
         sellerName: result.sellerName,
-        sellerTaxId: '',
+        sellerTaxId: extractSellerTaxId(rawText),
         amount: invAmounts.amount,
         taxAmount: invAmounts.taxAmount,
         totalAmount: invAmounts.totalAmount,
         items: invoiceItems,
         taxRate: '',
       };
-
-      // 提取税号
-      const buyerTaxMatch = rawText.match(/统一社会信用代码[^（(]*?[：:]\s*(\w+)/);
-      if (buyerTaxMatch) result.invoiceDetail.buyerTaxId = buyerTaxMatch[1];
       break;
     }
 
@@ -1201,7 +1326,6 @@ export async function parseFile(
         budgetItems,
       };
 
-      // 提取组织方
       const orgMatch = rawText.match(/项目组织方\s*(.{4,30}?)(?:\s{2,}|$)/);
       if (orgMatch) result.approvalDetail.organizingParty = orgMatch[1].trim();
       break;
@@ -1226,21 +1350,6 @@ export async function parseFile(
     default:
       break;
   }
-
-  // 检查提取结果中的警告
-  if (result.documentType === '未知') {
-    result.warnings.push('无法识别文档类型，请人工确认');
-  }
-
-  if (!rawText.trim()) {
-    result.warnings.push('未能从文件中提取到文本内容（可能是扫描件或纯图片PDF）');
-  }
-
-  if (result.documentType === '签领表' && result.signItems && result.signItems.length === 0) {
-    result.warnings.push('签领表为实拍图，OCR 识别效果不佳，建议人工核对奖品名称和签领数量');
-  }
-
-  return result;
 }
 
 // ============================================================
@@ -1309,6 +1418,25 @@ export function matchInvoicesAndPurchases(results: FileParseResult[]): MatchResu
     }
   }
 
+  // 反向检查：找出没有被任何发票匹配到的购买截图，单独标出。
+  // （原逻辑只从发票侧遍历，购买截图侧"漏配"从不报告，导致用户看不出某张截图缺发票。）
+  const matchedPurchaseFiles = new Set(
+    matches.filter(m => m.matchedBy !== 'unmatched').map(m => m.purchaseFile),
+  );
+  for (const pr of purchases) {
+    if (!matchedPurchaseFiles.has(pr.fileName)) {
+      matches.push({
+        invoiceFile: '未匹配',
+        purchaseFile: pr.fileName,
+        matchedBy: 'unmatched',
+        invoiceAmount: '',
+        purchaseAmount: pr.totalAmount,
+        items: [],
+        consistent: false,
+      });
+    }
+  }
+
   return matches;
 }
 
@@ -1349,7 +1477,12 @@ export function checkAmountConsistency(results: FileParseResult[]): string[] {
   const matches = matchInvoicesAndPurchases(results);
   for (const m of matches) {
     if (m.matchedBy === 'unmatched') {
-      warnings.push(`发票 (${m.invoiceFile}) 未能匹配到对应的购买截图`);
+      // 区分两种漏配：发票没匹配到截图 / 截图没匹配到发票
+      if (m.invoiceFile === '未匹配') {
+        warnings.push(`购买截图 (${m.purchaseFile}) 未能匹配到对应的发票`);
+      } else {
+        warnings.push(`发票 (${m.invoiceFile}) 未能匹配到对应的购买截图`);
+      }
     } else if (!m.consistent) {
       warnings.push(
         `发票金额 (¥${m.invoiceAmount}) 与购买截图实付金额 (¥${m.purchaseAmount}) 不一致，请确认`
@@ -1649,7 +1782,7 @@ export async function parseReimbursementMaterials(
     summary = parts.join('\n');
   }
 
-  return {
+  const result: ReimbursementCheckResult = {
     isComplete,
     isValid,
     files: fileResults,
@@ -1658,4 +1791,16 @@ export async function parseReimbursementMaterials(
     summary,
     matchResults,
   };
+
+  // 6. LLM 增强层（可选，默认关闭；失败静默降级，绝不影响主结果）
+  if (options?.llm?.enabled) {
+    try {
+      const { enhanceWithLLM } = await import('./reimbursement-llm');
+      await enhanceWithLLM(result, options.llm, new Date().toISOString());
+    } catch {
+      /* LLM 增强层不可用（缺依赖/缺凭据/网络失败），保持纯启发式结果 */
+    }
+  }
+
+  return result;
 }

@@ -10,6 +10,7 @@
  *   npm run test:json                # JSON 格式输出
  */
 
+import 'dotenv/config';
 import {
   parseReimbursementMaterials,
   FileParseResult,
@@ -24,6 +25,7 @@ async function main() {
   // 解析命令行参数
   const args = process.argv.slice(2);
   const verbose = args.includes('--verbose');
+  const useLLM = args.includes('--llm');
 
   // 获取要处理的文件列表（过滤掉选项参数）
   let filePaths: string[] = args.filter(a => !a.startsWith('--'));
@@ -76,6 +78,7 @@ async function main() {
   const result = await parseReimbursementMaterials(validPaths, {
     lang: 'chi_sim+eng',
     verbose,
+    llm: useLLM ? { enabled: true, verbose } : undefined,
   });
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
@@ -183,7 +186,12 @@ async function main() {
       } else if (m.matchedBy === 'amount') {
         console.log(`✅ ${m.invoiceFile} ↔ ${m.purchaseFile}（通过金额匹配 ¥${m.invoiceAmount}）`);
       } else {
-        console.log(`❌ ${m.invoiceFile} 未匹配到购买截图`);
+        // unmatched：区分"发票没匹配到截图"与"截图没匹配到发票"
+        if (m.invoiceFile === '未匹配') {
+          console.log(`❌ ${m.purchaseFile} 未匹配到发票`);
+        } else {
+          console.log(`❌ ${m.invoiceFile} 未匹配到购买截图`);
+        }
       }
       if (m.items.length > 0) {
         for (const item of m.items) {
@@ -213,6 +221,55 @@ async function main() {
     for (const pm of cc.problematicMaterials) {
       console.log(`   [${pm.material}]`);
       pm.issues.forEach((issue: string) => console.log(`     - ${issue}`));
+    }
+  }
+
+  // 打印 LLM 增强层审查结果
+  if (useLLM) {
+    console.log('\n--- 🤖 LLM 增强层审查 ---\n');
+    if (result.llmReview) {
+      const review = result.llmReview;
+      const order = { error: 0, warning: 1, info: 2 } as const;
+      const findings = [...review.findings].sort(
+        (a, b) => order[a.severity] - order[b.severity],
+      );
+      if (findings.length > 0) {
+        for (const f of findings) {
+          const tag = f.severity === 'error' ? '❌ error'
+            : f.severity === 'warning' ? '⚠️  warning'
+            : 'ℹ️  info';
+          const mat = f.material ? ` [${f.material}]` : '';
+          console.log(`${tag} (${f.ruleId})${mat} ${f.message}`);
+          if (f.suggestion) console.log(`        ↳ ${f.suggestion}`);
+        }
+      } else {
+        console.log('（LLM 未发现合规问题）');
+      }
+      if (review.uncoveredBudgetItems && review.uncoveredBudgetItems.length > 0) {
+        console.log('\n📌 预算明细中应有但未找到对应发票/截图的品目:');
+        review.uncoveredBudgetItems.forEach((b) => console.log(`   - ${b}`));
+      }
+      if (review.summary) {
+        console.log(`\n📝 审查总结: ${review.summary}`);
+      }
+      console.log(`\n   模型: ${review.model} · 时间: ${review.reviewedAt}`);
+    } else {
+      console.log('⚠️ LLM 未启用或调用失败（已降级到纯启发式结果）。');
+      console.log('   请确认 .env 中已配置 AI_API_KEY / AI_API_BASE_URL / AI_MODEL 且网络可达。');
+    }
+
+    // 打印多模态救援结果（签领表 / 新闻稿）
+    const rescuedSign = result.files.find((f) => f.signItemsSource === 'vision-llm');
+    const failedSign = result.files.find((f) => f.signItemsSource === 'vision-llm-failed');
+    const rescuedNews = result.files.find((f) => f.llmNotes?.newsHasTitle === true);
+    if (rescuedSign || failedSign || rescuedNews) {
+      console.log('\n🖼️  多模态救援:');
+      if (rescuedSign) console.log(`   ✅ 签领表 (${rescuedSign.fileName}) 已由视觉模型补出签领信息`);
+      if (failedSign) console.log(`   ⚠️  签领表 (${failedSign.fileName}) 视觉救援失败，保留启发式结果`);
+      if (rescuedNews) {
+        const title = rescuedNews.llmNotes?.newsTitleText || '';
+        console.log(`   ✅ 新闻稿 (${rescuedNews.fileName}) 视觉确认含青春科大标题${title ? `：${title}` : ''}`);
+      }
     }
   }
 
