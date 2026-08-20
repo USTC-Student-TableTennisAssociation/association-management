@@ -646,6 +646,9 @@ function ChatSurface({
             const artifactReferences = message.parts
               .filter((part) => part.type === "data-artifactReferences")
               .at(-1)?.data.references ?? [];
+            const streamStatus = message.parts
+              .filter((part) => part.type === "data-streamStatus")
+              .at(-1)?.data;
             const trace = search?.trace;
             const answerUsedAssertionRefs = search?.answerUsedAssertionRefs ?? trace?.answerUsedAssertionRefs ?? [];
             const usedAssertionRefs = new Set(answerUsedAssertionRefs);
@@ -682,6 +685,26 @@ function ChatSurface({
                       <p className="mt-1 text-zinc-500">这是模型生成的中间过程，不作为组织事实依据。</p>
                       <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap rounded-md bg-zinc-100 p-3 font-mono leading-5 text-zinc-700">{reasoning}</div>
                     </details>
+                  ) : null}
+                  {streamStatus && streamStatus.status !== "completed" ? (
+                    <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                      本轮回答未完整完成：{streamStatus.status === "failed"
+                        ? streamStatus.failureCode === "timeout"
+                          ? "模型响应超时"
+                          : streamStatus.failureCode === "stream_aborted"
+                            ? "连接或请求被中断"
+                            : streamStatus.failureCode === "upstream_error"
+                              ? "上游模型服务返回错误"
+                              : "模型流异常结束"
+                        : streamStatus.completionKind === "tool_call"
+                          ? "模型停在工具调用阶段，未生成最终正文"
+                          : "模型未生成完整正文"}。
+                      已保留中间内容
+                      {streamStatus.retryCount > 0
+                        ? `，模型层已自动重试 ${streamStatus.retryCount} 次`
+                        : ""}
+                      ，可重新发起请求。
+                    </div>
                   ) : null}
                   {search ? <SeedMapPanel seedMap={search.seedMap} /> : null}
                   {proposals.map((part) => (

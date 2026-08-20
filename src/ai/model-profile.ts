@@ -6,6 +6,9 @@ export type ModelProfile = {
   historyMaxTokens: number;
   memoryMaxTokens: number;
   maxRequestBytes: number;
+  maxRetries: number;
+  modelFirstChunkTimeoutMs: number;
+  modelChunkTimeoutMs: number;
 };
 
 type Environment = Record<string, string | undefined>;
@@ -93,6 +96,27 @@ export function createModelProfile(
       2_000_000,
       256_000,
       10_000_000,
+    ),
+    maxRetries: environmentInteger(
+      environment,
+      "AI_MAX_RETRIES",
+      2,
+      0,
+      5,
+    ),
+    modelFirstChunkTimeoutMs: environmentInteger(
+      environment,
+      "AI_MODEL_FIRST_CHUNK_TIMEOUT_MS",
+      180_000,
+      1_000,
+      1_800_000,
+    ),
+    modelChunkTimeoutMs: environmentInteger(
+      environment,
+      "AI_MODEL_CHUNK_TIMEOUT_MS",
+      180_000,
+      1_000,
+      1_800_000,
     ),
   };
 }

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { latestUserQuery, messageText } from "@/ai/chat-policy";
+import {
+  isMemoryWriteStatusQuery,
+  latestUserQuery,
+  messageText,
+} from "@/ai/chat-policy";
 import type { ClubChatMessage } from "@/ai/types";
 
 function message(id: string, role: "user" | "assistant", text: string): ClubChatMessage {
@@ -21,5 +25,18 @@ describe("chat policy", () => {
         message("3", "user", "latest"),
       ]),
     ).toBe("latest");
+  });
+
+  it("recognizes requests that require a fresh memory write receipt", () => {
+    expect(isMemoryWriteStatusQuery(
+      "请查询这条消息的真实处理回执，必须调用 readMemoryWriteStatus。",
+    )).toBe(true);
+    expect(isMemoryWriteStatusQuery("刚才的事实是否已经写入 Assertion？")).toBe(true);
+    expect(isMemoryWriteStatusQuery("后台处理到哪一步了？")).toBe(true);
+  });
+
+  it("does not treat general Assertion questions as receipt queries", () => {
+    expect(isMemoryWriteStatusQuery("Assertion 是什么？")).toBe(false);
+    expect(isMemoryWriteStatusQuery("请检索历任会长资料")).toBe(false);
   });
 });

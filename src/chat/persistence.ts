@@ -165,9 +165,13 @@ function firstMessageTitle(message: ClubChatMessage): string | undefined {
   return text.length > 32 ? `${text.slice(0, 32)}…` : text;
 }
 
-function hasPersistableContent(message: ClubChatMessage): boolean {
+export function hasPersistableChatContent(message: ClubChatMessage): boolean {
   if (message.role !== "assistant") return true;
-  return message.parts.some((part) => part.type === "text" && part.text.trim().length > 0);
+  return message.parts.some((part) =>
+    (part.type === "text" && part.text.trim().length > 0) ||
+    (part.type === "reasoning" && part.text.trim().length > 0) ||
+    part.type.startsWith("data-")
+  );
 }
 
 export async function saveChatMessage(input: {
@@ -176,7 +180,7 @@ export async function saveChatMessage(input: {
   message: ClubChatMessage;
   position: number;
 }, database: PrismaClient = getDatabase()): Promise<void> {
-  if (!hasPersistableContent(input.message)) return;
+  if (!hasPersistableChatContent(input.message)) return;
   await database.$transaction(async (transaction) => {
     const conversation = await requireOwnedConversation(
       transaction,
@@ -242,7 +246,7 @@ export async function loadChatMessages(
         role: uiRole(row.role),
         parts: storedPartsSchema.parse(row.parts) as ClubChatMessage["parts"],
       };
-      return hasPersistableContent(message) ? [message] : [];
+      return hasPersistableChatContent(message) ? [message] : [];
     });
   });
 }

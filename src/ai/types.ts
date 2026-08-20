@@ -1,5 +1,6 @@
 import type { UIMessage } from "ai";
 
+import type { ChatStreamStatus } from "@/ai/chat-stream-status";
 import type { MemorySearchBundle } from "@/memory/types";
 import type { ObjectChangeProposalPresentation } from "@/memory/object-management-types";
 import type { SourceDocumentReferenceBundle } from "@/memory/source-document-types";
@@ -29,5 +30,6 @@ export type ClubChatMessage = UIMessage<
     viewCommandProposal: ViewCommandProposalNotice;
     objectChangeProposal: ObjectChangeProposalPresentation;
     libraryProposal: LibraryPlanPresentation;
+    streamStatus: ChatStreamStatus;
   }
 >;

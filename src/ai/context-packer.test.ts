@@ -19,6 +19,9 @@ const roomyProfile: ModelProfile = {
   historyMaxTokens: 40_000,
   memoryMaxTokens: 64_000,
   maxRequestBytes: 2_000_000,
+  maxRetries: 2,
+  modelFirstChunkTimeoutMs: 180_000,
+  modelChunkTimeoutMs: 180_000,
 };
 
 function message(role: "user" | "assistant", content: string): ModelMessage {

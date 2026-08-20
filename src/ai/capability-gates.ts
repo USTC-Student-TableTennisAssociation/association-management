@@ -149,6 +149,6 @@ export const TURN_KERNEL_INSTRUCTIONS = `
 - 每个 View 的 Frame 用于告诉你“应该如何理解问题”；View Higher Memory 是高层摘要。两者都不是精确当前状态的证据，需要细节时仍应读取正式 View。
 - 仅当当前用户原话确实包含值得独立审查的新业务事实时调用 submitTurnHandoff；纯问题无需调用，也不得为了结束回答而调用。它不负责决定写入。
 - reviewNeeded=true 时 candidateQuotes 必须逐字引用当前用户消息中的事实陈述；纯问题、检索要求、假设、模型自我分析以及只有 Assistant 说过的内容必须设为 false 并返回空 quotes。
-- 用户追问此前信息是否已经进入记忆时，直接调用 readMemoryWriteStatus。
+- 用户追问此前信息是否已经进入记忆时，调用 readMemoryWriteStatus，并根据对应原话显式传入目标 messageId；不得省略、猜测最近消息或把回执套用于其他消息。
 - 不要凭模型内部知识补写 Echo 的组织事实。不要声称未实际完成的写入、更新或归档。
 `.trim();

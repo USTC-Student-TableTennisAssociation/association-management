@@ -16,7 +16,11 @@ import {
 } from "ai";
 import { z } from "zod";
 
-import { latestUserQuery, messageText } from "@/ai/chat-policy";
+import {
+  isMemoryWriteStatusQuery,
+  latestUserQuery,
+  messageText,
+} from "@/ai/chat-policy";
 import { citedRefs } from "@/ai/citation-refs";
 import {
   auditGroundedAnswer,
@@ -44,6 +48,12 @@ import {
 } from "@/ai/debug-trace";
 import { createModelProfile } from "@/ai/model-profile";
 import { getChatModel } from "@/ai/provider";
+import {
+  chatStreamStatusSchema,
+  classifyChatStreamStatus,
+  createModelCallAttemptTracker,
+  type ChatStreamObservation,
+} from "@/ai/chat-stream-status";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import { modelHistoryMessageText } from "@/ai/ui-message-text";
@@ -63,7 +73,7 @@ import {
   viewCommandBus,
   viewReadPort,
 } from "@/shell/composition-root";
-import { saveChatMessage } from "@/chat/persistence";
+import { hasPersistableChatContent, saveChatMessage } from "@/chat/persistence";
 import {
   artifactSearchEvidenceSemantics,
   retrievalEvidenceSemantics,
@@ -387,6 +397,22 @@ function safeStreamErrorSummary(error: unknown) {
       : {}),
   };
 }
+
+function classifyStreamFailureCode(
+  error: unknown,
+): ChatStreamObservation["failureCode"] {
+  const summary = safeStreamErrorSummary(error);
+  const name = summary.name.toLowerCase();
+  const message = summary.message.toLowerCase();
+  if (name.includes("abort") || message.includes("aborted") || message.includes("abort")) {
+    return "stream_aborted";
+  }
+  if (name.includes("timeout") || message.includes("timeout") || message.includes("timed out")) {
+    return "timeout";
+  }
+  return "upstream_error";
+}
+
 function actualSeedTrace(result: MemoryRetrievalResult) {
   if (!result.trace) return undefined;
   return {
@@ -562,6 +588,7 @@ export async function POST(request: Request) {
       viewCommandProposal: zodSchema(viewCommandProposalNoticeSchema),
       objectChangeProposal: zodSchema(objectChangeProposalPresentationSchema),
       libraryProposal: zodSchema(libraryPlanPresentationSchema),
+      streamStatus: zodSchema(chatStreamStatusSchema),
     },
   });
   if (!validation.success) return jsonError("消息格式错误。", 400);
@@ -569,6 +596,7 @@ export async function POST(request: Request) {
   const messages = validation.data;
   const query = latestUserQuery(messages);
   if (!query) return jsonError("消息内容不能为空。", 400);
+  const requiresMemoryWriteStatusRefresh = isMemoryWriteStatusQuery(query);
   const latestUserMessageIndex = messages.findLastIndex((message) => message.role === "user");
   const latestUserMessage = messages[latestUserMessageIndex];
   const submittedAt = new Date();
@@ -620,9 +648,12 @@ export async function POST(request: Request) {
         : {}),
     }];
   });
-  const conversationUserMessageIds = semanticConversation
+  const conversationUserMessages = semanticConversation
     .filter((message) => message.role === "user")
-    .map((message) => message.messageId);
+    .map((message) => ({
+      messageId: message.messageId,
+      text: message.text,
+    }));
   const memoryMaintenance = createChatMemoryMaintenanceScheduler(debugTrace);
   let ambientHigherMemories: AmbientHigherMemorySnapshot[] = [];
   try {
@@ -729,6 +760,26 @@ export async function POST(request: Request) {
       let latestLocateTrace: MemorySearchTrace | undefined;
       let finalRawText = "";
       let finalAudit: GroundingAudit | undefined;
+      const streamObservation: ChatStreamObservation = {
+        reasoningChars: 0,
+        contentChars: 0,
+        toolCallCount: 0,
+        modelCallCount: 0,
+        retryCount: 0,
+        streamEnded: false,
+      };
+      const modelCallAttempts = createModelCallAttemptTracker();
+      let currentStepTextChars = 0;
+      let lastCompletedStepTextChars = 0;
+      let lastStreamStatusJson: string | undefined;
+      const writeStreamStatus = () => {
+        const status = classifyChatStreamStatus(streamObservation);
+        const statusJson = JSON.stringify(status);
+        if (statusJson === lastStreamStatusJson) return;
+        lastStreamStatusJson = statusJson;
+        writer.write({ type: "data-streamStatus", data: status });
+        void debugTrace.appendJsonSection("Chat Stream Status", status);
+      };
       const memoryTools = createMemoryExploreToolset({
         evidence,
         resultTokenBudget: exploreResultTokenBudget,
@@ -1088,7 +1139,8 @@ export async function POST(request: Request) {
         expandEvidence: memoryTools.searchMemory,
         readMemoryWriteStatus: createMemoryWriteStatusTool({
           actorId: requestActor.id,
-          conversationMessageIds: conversationUserMessageIds,
+          conversationMessages: conversationUserMessages,
+          currentMessageId: latestUserMessage.id,
         }),
         readSourceDocument: sourceDocumentToolset.tool,
         ...viewToolset.tools,
@@ -1174,6 +1226,16 @@ export async function POST(request: Request) {
                 : instructions,
             };
           }
+          if (stepNumber === 0 && requiresMemoryWriteStatusRefresh) {
+            return {
+              activeTools: ["readMemoryWriteStatus"] as const,
+              toolChoice: {
+                type: "tool" as const,
+                toolName: "readMemoryWriteStatus",
+              },
+              instructions,
+            };
+          }
           return {
             ...(stepNumber > 0
               ? { messages: compactExploreStepMessages(stepMessages) }
@@ -1189,9 +1251,48 @@ export async function POST(request: Request) {
         },
         temperature: 0.3,
         maxOutputTokens: profile.maxOutputTokens,
+        maxRetries: profile.maxRetries,
+        timeout: {
+          firstChunkMs: profile.modelFirstChunkTimeoutMs,
+          chunkMs: profile.modelChunkTimeoutMs,
+        },
         abortSignal: request.signal,
+        onChunk: ({ chunk }) => {
+          switch (chunk.type) {
+            case "start-step":
+              currentStepTextChars = 0;
+              break;
+            case "text-delta":
+              currentStepTextChars += chunk.text.length;
+              streamObservation.contentChars = currentStepTextChars;
+              break;
+            case "finish-step":
+              lastCompletedStepTextChars = currentStepTextChars;
+              break;
+            case "reasoning-delta":
+              streamObservation.reasoningChars += chunk.text.length;
+              break;
+            case "tool-call":
+              streamObservation.toolCallCount += 1;
+              break;
+            case "error":
+              streamObservation.error = safeStreamErrorSummary(chunk.error);
+              streamObservation.failureCode = classifyStreamFailureCode(chunk.error);
+              streamObservation.contentChars = lastCompletedStepTextChars || currentStepTextChars;
+              break;
+            case "abort":
+              streamObservation.streamEnded = false;
+              streamObservation.failureCode = chunk.reason
+                ? classifyStreamFailureCode(new Error(chunk.reason))
+                : "stream_aborted";
+              streamObservation.contentChars = lastCompletedStepTextChars || currentStepTextChars;
+              writeStreamStatus();
+              break;
+          }
+        },
         onLanguageModelCallStart: async (event) => {
           mainModelCallNumber += 1;
+          Object.assign(streamObservation, modelCallAttempts.started());
           if (mainModelCallNumber === 1) {
             exposedToolSchemaBytes = new TextEncoder().encode(
               debugJson(event.tools ?? []),
@@ -1232,6 +1333,7 @@ export async function POST(request: Request) {
           );
         },
         onLanguageModelCallEnd: async (event) => {
+          modelCallAttempts.ended();
           const transcript = mainModelCalls.find((call) => call.callId === event.callId);
           if (transcript) transcript.output = renderDebugModelOutput(event.content);
           await debugTrace.appendSection(
@@ -1360,12 +1462,37 @@ export async function POST(request: Request) {
         },
         onFinish: async ({ text, finishReason, totalUsage, steps }) => {
           finalRawText = text;
+          streamObservation.finishReason = finishReason;
+          streamObservation.streamEnded = true;
+          streamObservation.contentChars = text.length;
+          const terminalStatus = classifyChatStreamStatus(streamObservation);
+          if (terminalStatus.status !== "completed") {
+            writeStreamStatus();
+            memoryMaintenance.cancel("主回答未完整完成，因此后台记忆线路未启动。");
+            await debugTrace.appendJsonSection("主回答未完整完成", {
+              finishReason,
+              status: terminalStatus.status,
+              completionKind: terminalStatus.completionKind,
+              failureCode: terminalStatus.failureCode,
+              reasoningChars: streamObservation.reasoningChars,
+              contentChars: streamObservation.contentChars,
+              modelCallCount: streamObservation.modelCallCount,
+              retryCount: streamObservation.retryCount,
+            });
+            return;
+          }
           finalAudit = auditGroundedAnswer({
             text,
             contract: groundingState.contract(),
             validRefs: validReferenceRefs(),
           });
           const finalAnswer = finalAudit.text;
+          streamObservation.finishReason = finishReason;
+          streamObservation.streamEnded = true;
+          streamObservation.contentChars = finalAnswer.length;
+          streamObservation.error = undefined;
+          streamObservation.failureCode = undefined;
+          writeStreamStatus();
           await debugTrace.appendSection(
             "主回答完成",
             [
@@ -1700,11 +1827,16 @@ export async function POST(request: Request) {
       const modelUIStream = result.toUIMessageStream({
         sendReasoning: true,
         onError: (error) => {
+          streamObservation.error = safeStreamErrorSummary(error);
+          streamObservation.failureCode = classifyStreamFailureCode(error);
+          streamObservation.streamEnded = false;
+          streamObservation.contentChars = lastCompletedStepTextChars || currentStepTextChars;
+          writeStreamStatus();
           console.error(
             "[chat.model-stream]",
             JSON.stringify(safeStreamErrorSummary(error)),
           );
-          void debugTrace.appendError("主回答模型流失败", error);
+          void debugTrace.appendError("主回答流错误事件（可能由后续步骤恢复）", error);
           return "AI 服务响应失败，请稍后重试。";
         },
       });
@@ -1714,7 +1846,7 @@ export async function POST(request: Request) {
     },
     onEnd: async ({ messages: completedMessages, responseMessage }) => {
       const persistedResponse = withoutTurnHandoff(responseMessage);
-      if (!modelHistoryMessageText(persistedResponse).trim()) return;
+      if (!hasPersistableChatContent(persistedResponse)) return;
       const responsePosition = completedMessages.findLastIndex(
         (message) => message.id === responseMessage.id,
       );

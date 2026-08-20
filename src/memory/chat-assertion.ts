@@ -195,7 +195,15 @@ type PreparedAssertion = {
 };
 
 type PreparedAssertionResult =
-  | { success: true; assertion: PreparedAssertion }
+  | {
+      success: true;
+      assertion: PreparedAssertion;
+      placeholderNormalization?: {
+        originalTemplate: string;
+        normalizedTemplate: string;
+        objectRefs: string[];
+      };
+    }
   | { success: false; reason: string };
 
 class ObjectCreationConflictError extends Error {
@@ -302,6 +310,137 @@ function containsObjectName(value: string, object: ObjectCandidate): boolean {
     const normalizedName = identityText(name);
     return Boolean(normalizedName) && normalizedValue.includes(normalizedName);
   });
+}
+
+type LiteralObjectOccurrence = {
+  start: number;
+  end: number;
+  name: string;
+  nameOrdinal: number;
+};
+
+function rangesOverlap(
+  left: Pick<LiteralObjectOccurrence, "start" | "end">,
+  right: Pick<LiteralObjectOccurrence, "start" | "end">,
+): boolean {
+  return left.start < right.end && right.start < left.end;
+}
+
+function unambiguousLiteralObjectOccurrence(
+  template: string,
+  object: ObjectCandidate,
+  protectedRanges: Array<{ start: number; end: number }>,
+): LiteralObjectOccurrence | undefined {
+  const occurrences: LiteralObjectOccurrence[] = [];
+  for (const [nameOrdinal, name] of objectNames(object).entries()) {
+    let start = template.indexOf(name);
+    while (start >= 0) {
+      const occurrence = { start, end: start + name.length, name, nameOrdinal };
+      if (!protectedRanges.some((range) => rangesOverlap(occurrence, range))) {
+        occurrences.push(occurrence);
+      }
+      start = template.indexOf(name, start + 1);
+    }
+  }
+  const uniqueOccurrences = [...new Map(
+    occurrences.map((occurrence) => [
+      `${occurrence.start}:${occurrence.end}`,
+      occurrence,
+    ]),
+  ).values()].sort((left, right) => left.start - right.start || left.end - right.end);
+  if (!uniqueOccurrences.length) return undefined;
+
+  const clusters: LiteralObjectOccurrence[][] = [];
+  for (const occurrence of uniqueOccurrences) {
+    const cluster = clusters.at(-1);
+    if (!cluster || !cluster.some((candidate) => rangesOverlap(candidate, occurrence))) {
+      clusters.push([occurrence]);
+      continue;
+    }
+    cluster.push(occurrence);
+  }
+  if (clusters.length !== 1) return undefined;
+
+  const ranked = [...clusters[0]].sort((left, right) =>
+    (right.end - right.start) - (left.end - left.start) ||
+    left.nameOrdinal - right.nameOrdinal
+  );
+  const best = ranked[0];
+  const equallySpecific = ranked.filter((occurrence) =>
+    occurrence.end - occurrence.start === best.end - best.start
+  );
+  return equallySpecific.length === 1 ? best : undefined;
+}
+
+function normalizeLiteralObjectPlaceholders(
+  template: string,
+  declaredRefs: string[],
+  bindingsByRef: Map<string, BoundObjectCandidate>,
+): {
+  template: string;
+  normalizedRefs: string[];
+  failureReason?: string;
+} {
+  const placeholders = [...template.matchAll(/\{\{object:([^{}]+)\}\}/g)];
+  const placeholderRefs = placeholders.map((match) => match[1].trim());
+  const missingRefs = declaredRefs.filter((ref) => !placeholderRefs.includes(ref));
+  if (!missingRefs.length) return { template, normalizedRefs: [] };
+  if (placeholderRefs.some((ref) => !declaredRefs.includes(ref))) {
+    return {
+      template,
+      normalizedRefs: [],
+      failureReason: "模板中已有未在 objectRefs 声明的占位符。",
+    };
+  }
+
+  const protectedRanges = placeholders.map((match) => ({
+    start: match.index!,
+    end: match.index! + match[0].length,
+  }));
+  const replacements: Array<LiteralObjectOccurrence & { objectRef: string }> = [];
+  for (const objectRef of missingRefs) {
+    const object = bindingsByRef.get(objectRef);
+    if (!object) {
+      return {
+        template,
+        normalizedRefs: [],
+        failureReason: `Object ${objectRef} 尚未形成有效绑定。`,
+      };
+    }
+    const occurrence = unambiguousLiteralObjectOccurrence(template, object, protectedRanges);
+    if (!occurrence) {
+      return {
+        template,
+        normalizedRefs: [],
+        failureReason:
+          `Object“${object.canonicalName}”未在模板正文中以唯一、无歧义的名称或别名出现。`,
+      };
+    }
+    replacements.push({ ...occurrence, objectRef });
+  }
+  for (let leftIndex = 0; leftIndex < replacements.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < replacements.length; rightIndex += 1) {
+      if (rangesOverlap(replacements[leftIndex], replacements[rightIndex])) {
+        return {
+          template,
+          normalizedRefs: [],
+          failureReason: "多个 Object 的名称或别名在模板正文中发生重叠。",
+        };
+      }
+    }
+  }
+
+  let normalizedTemplate = template;
+  for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
+    normalizedTemplate =
+      normalizedTemplate.slice(0, replacement.start) +
+      `{{object:${replacement.objectRef}}}` +
+      normalizedTemplate.slice(replacement.end);
+  }
+  return {
+    template: normalizedTemplate,
+    normalizedRefs: replacements.map((replacement) => replacement.objectRef),
+  };
 }
 
 function emptyCaptureResult(): ChatAssertionCaptureResult {
@@ -634,23 +773,39 @@ function prepareAssertion(
   if (extracted.globalStatementTemplateMarkdown.includes("{{fragment:")) {
     return { success: false, reason: "聊天 Assertion 不允许使用文档 fragment 占位符。" };
   }
-  const placeholders = [...extracted.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g)];
-  if (!placeholders.length) {
-    return { success: false, reason: "命题没有关联任何经搜索确认的 GlobalObject。" };
-  }
-  const placeholderRefs = placeholders.map((match) => match[1].trim());
   const declaredRefs = [...new Set(extracted.objectRefs)];
-  const rejectedRef = [...new Set([...placeholderRefs, ...declaredRefs])]
+  const initialPlaceholders = [
+    ...extracted.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g),
+  ];
+  const initialPlaceholderRefs = initialPlaceholders.map((match) => match[1].trim());
+  const rejectedRef = [...new Set([...initialPlaceholderRefs, ...declaredRefs])]
     .find((ref) => rejectedBindingsByRef.has(ref));
   if (rejectedRef) {
     return { success: false, reason: `Object ${rejectedRef} 未通过校验：${rejectedBindingsByRef.get(rejectedRef)}` };
   }
   if (
-    placeholderRefs.some((ref) => !bindingsByRef.has(ref)) ||
+    initialPlaceholderRefs.some((ref) => !bindingsByRef.has(ref)) ||
     declaredRefs.some((ref) => !bindingsByRef.has(ref))
   ) {
     return { success: false, reason: "命题引用了未声明或未经校验的局部 Object ref。" };
   }
+  const normalization = normalizeLiteralObjectPlaceholders(
+    extracted.globalStatementTemplateMarkdown,
+    declaredRefs,
+    bindingsByRef,
+  );
+  if (normalization.failureReason) {
+    return {
+      success: false,
+      reason: `无法安全自动补全 Object 占位符：${normalization.failureReason}`,
+    };
+  }
+  const statementTemplate = normalization.template;
+  const placeholders = [...statementTemplate.matchAll(/\{\{object:([^{}]+)\}\}/g)];
+  if (!placeholders.length) {
+    return { success: false, reason: "命题没有关联任何经搜索确认的 GlobalObject。" };
+  }
+  const placeholderRefs = placeholders.map((match) => match[1].trim());
   if (declaredRefs.some((ref) => !placeholderRefs.includes(ref)) ||
       new Set(placeholderRefs).size !== declaredRefs.length) {
     return { success: false, reason: "objectRefs 与命题中的 Object 占位符不一致。" };
@@ -680,7 +835,7 @@ function prepareAssertion(
       }
     }
   }
-  const templateWithoutPlaceholders = extracted.globalStatementTemplateMarkdown
+  const templateWithoutPlaceholders = statementTemplate
     .replace(/\{\{object:[^{}]+\}\}/g, "");
   for (const objectRef of declaredRefs) {
     const object = bindingsByRef.get(objectRef)!;
@@ -701,7 +856,7 @@ function prepareAssertion(
     const objectRef = match[1].trim();
     const object = bindingsByRef.get(objectRef)!;
     const startIndex = match.index!;
-    const before = extracted.globalStatementTemplateMarkdown.slice(cursor, startIndex);
+    const before = statementTemplate.slice(cursor, startIndex);
     sourceTemplate += before;
     globalTemplate += before;
     const sourceStart = codePointLength(sourceTemplate);
@@ -719,7 +874,7 @@ function prepareAssertion(
     });
     cursor = startIndex + match[0].length;
   }
-  const trailing = extracted.globalStatementTemplateMarkdown.slice(cursor);
+  const trailing = statementTemplate.slice(cursor);
   sourceTemplate += trailing;
   globalTemplate += trailing;
   const currentMessage = userMessagesById.get(currentMessageId)!;
@@ -734,19 +889,29 @@ function prepareAssertion(
       reason: `当前消息是对“${relayedSpeaker}”说法的转述，命题却丢失了转述来源或事实强度。`,
     };
   }
-  return { success: true, assertion: {
-    id: assertionId,
-    sourceClaimId,
-    statementTemplateMarkdown: sourceTemplate,
-    globalStatementTemplateMarkdown: globalTemplate,
-    renderedStatement: sourceTemplate,
-    references,
-    contentHash: sha256(sourceTemplate),
-    evidence: extracted.evidence.map((item) => ({
-      messageId: item.messageId,
-      quotes: [...new Set(item.quotes)],
-    })),
-  } };
+  return {
+    success: true,
+    assertion: {
+      id: assertionId,
+      sourceClaimId,
+      statementTemplateMarkdown: sourceTemplate,
+      globalStatementTemplateMarkdown: globalTemplate,
+      renderedStatement: sourceTemplate,
+      references,
+      contentHash: sha256(sourceTemplate),
+      evidence: extracted.evidence.map((item) => ({
+        messageId: item.messageId,
+        quotes: [...new Set(item.quotes)],
+      })),
+    },
+    placeholderNormalization: normalization.normalizedRefs.length
+      ? {
+          originalTemplate: extracted.globalStatementTemplateMarkdown,
+          normalizedTemplate: statementTemplate,
+          objectRefs: normalization.normalizedRefs,
+        }
+      : undefined,
+  };
 }
 
 function prepareObjectMentions(
@@ -1081,6 +1246,7 @@ export async function captureChatAssertions(
   const captureId = randomUUID();
   const prepared: PreparedAssertion[] = [];
   const rejected: string[] = [];
+  const placeholderNormalizations: string[] = [];
   const rendered = new Set<string>();
   for (const [ordinal, assertion] of extractionOutput.assertions.entries()) {
     const result = prepareAssertion(
@@ -1096,6 +1262,12 @@ export async function captureChatAssertions(
       rejected.push(`${ordinal + 1}. ${assertion.globalStatementTemplateMarkdown}\n   - 未写入原因：${result.reason}`);
       continue;
     }
+    if (result.placeholderNormalization) {
+      const item = result.placeholderNormalization;
+      placeholderNormalizations.push(
+        `${ordinal + 1}. \`${item.objectRefs.join("`, `")}\`：${item.originalTemplate} → ${item.normalizedTemplate}`,
+      );
+    }
     if (rendered.has(result.assertion.renderedStatement)) {
       rejected.push(`${ordinal + 1}. ${result.assertion.renderedStatement}\n   - 未写入原因：本次输出重复。`);
       continue;
@@ -1109,6 +1281,11 @@ export async function captureChatAssertions(
       `- 模型提出：${extractionOutput.assertions.length} 条`,
       `- 通过确定性校验：${prepared.length} 条`,
       `- 未通过：${rejected.length} 条`,
+      `- 自动补全 Object 占位符：${placeholderNormalizations.length} 条`,
+      "",
+      placeholderNormalizations.length
+        ? `### 自动规范化的候选\n\n${placeholderNormalizations.join("\n")}`
+        : "没有自动规范化 Object 占位符。",
       "",
       rejected.length ? `### 未通过的候选\n\n${rejected.join("\n")}` : "没有被确定性校验拒绝的候选。",
     ].join("\n"),

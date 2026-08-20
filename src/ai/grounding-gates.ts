@@ -15,7 +15,7 @@ const DOCUMENT_ANALYSIS_PATTERN =
 const EVIDENCE_BOUNDARY_PATTERN =
   /(无法|不能确认|尚未|缺少|仅能|只能|部分|证据不足|未覆盖|未读取|没有读取|没有匹配|未找到|不能替代|不足以)/u;
 const ARTIFACT_METADATA_PATTERN =
-  /(路径\s*[:：]|处理状态|处理档位|发布到\s*Shared Brain|尚未发布|已发布|资料库.{0,12}(?:找到|未找到|存在|没有|匹配)|文件名\s*(?:为|是)|目录项|catalog|coarse|deep|ready|\d+\s*条\s*Assertion|\d+\s*个\s*Object)/iu;
+  /((?:文件|本地|存储|保存|输出|目录)路径\s*[:：]|处理状态|处理档位|发布到\s*Shared Brain|尚未发布|已发布|资料库.{0,12}(?:找到|未找到|存在|没有|匹配)|文件名\s*(?:为|是)|目录项|catalog|coarse|deep|ready|\d+\s*条\s*Assertion|\d+\s*个\s*Object)/iu;
 const BUSINESS_VIEW_PATTERN =
   /(业务视角|业务视图|正式视图|正式\s*View|Business\s*View|Activity\s*Operations|正式\s*Card|业务卡片)/iu;
 const SHARED_BRAIN_PATTERN =

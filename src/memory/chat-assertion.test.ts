@@ -303,6 +303,82 @@ describe("Chat Assertion capture agent", () => {
     });
   });
 
+  it("repairs one unambiguous literal Object in a correction template", async () => {
+    const { transaction } = mockDatabase();
+    const trace = mockTrace();
+    const captureInput = input();
+    const eventName = "“继往开来”乒乓球赛";
+    captureInput.semanticContext.conversation[0].text =
+      "我听说继往开来比赛可能会在2026年调整，但目前尚未确认，也没有收到正式通知。";
+    captureInput.semanticContext.conversation[2].text =
+      "刚才关于“继往开来比赛可能会在2026年调整”的信息只是系统测试样例，并非我掌握的真实组织消息。请记录这项纠正，不要再把原信息作为真实业务事实使用；保留历史来源，不要静默覆盖原记录。";
+    captureInput.retrieval.seedMap.objects[0].canonicalName = eventName;
+    captureInput.retrieval.seedMap.objects[0].surfaceForms = [
+      eventName,
+      "继往开来",
+      "继往开来比赛",
+    ];
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
+      objects: [existingAssociationBinding()],
+      assertions: [{
+        globalStatementTemplateMarkdown:
+          "据用户转述，此前关于“继往开来”乒乓球赛可能会在2026年调整的信息只是系统测试样例，并非用户掌握的真实组织消息。",
+        objectRefs: [associationRef],
+        evidence: [{
+          messageId: "user-current",
+          quotes: [
+            "刚才关于“继往开来比赛可能会在2026年调整”的信息只是系统测试样例，并非我掌握的真实组织消息。",
+          ],
+        }],
+      }],
+    }));
+    vi.mocked(embedMemoryQueries).mockResolvedValue({
+      model: "BAAI/bge-m3",
+      modelRevision: "test",
+      dimension: 1024,
+      vectors: [Array.from({ length: 1024 }, () => 0.1)],
+    });
+
+    await expect(captureChatAssertions(captureInput, trace)).resolves.toEqual(
+      expect.objectContaining({
+        publishedAssertions: 1,
+        affectedObjectIds: [objectId],
+      }),
+    );
+    expect(transaction.memoryAssertion.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({
+        statementTemplateMarkdown:
+          "据用户转述，此前关于“继往开来”乒乓球赛可能会在2026年调整的信息只是系统测试样例，并非用户掌握的真实组织消息。",
+        globalStatementTemplateMarkdown:
+          `据用户转述，此前关于{{object:${objectId}}}可能会在2026年调整的信息只是系统测试样例，并非用户掌握的真实组织消息。`,
+      })],
+    });
+    expect(trace.appendSection).toHaveBeenCalledWith(
+      "Assertion 候选校验",
+      expect.stringContaining("自动补全 Object 占位符：1 条"),
+    );
+  });
+
+  it("does not guess when an Object literal appears more than once", async () => {
+    const { database, transaction } = mockDatabase();
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
+      objects: [existingAssociationBinding()],
+      assertions: [{
+        globalStatementTemplateMarkdown:
+          "中国科学技术大学学生乒乓球协会是社团；中国科学技术大学学生乒乓球协会需要换届。",
+        objectRefs: [associationRef],
+        evidence: [{
+          messageId: "user-current",
+          quotes: ["25-26学年变成4星社团"],
+        }],
+      }],
+    }));
+
+    await expect(captureChatAssertions(input(), mockTrace())).resolves.toEqual(emptyCaptureResult);
+    expect(database.$transaction).not.toHaveBeenCalled();
+    expect(transaction.memoryAssertion.createMany).not.toHaveBeenCalled();
+  });
+
   it("rejects an assertion that omits the current user message or uses assistant text", async () => {
     const { database, transaction } = mockDatabase();
     vi.mocked(generateText).mockResolvedValue(extractionResult({

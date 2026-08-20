@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { getDatabase } from "@/db";
 import { Prisma } from "@/generated/prisma/client";
+import { isMemoryWriteStatusQuery } from "@/ai/chat-policy";
 import type {
   ChatAssertionCaptureInput,
   ChatAssertionCaptureResult,
@@ -340,42 +341,90 @@ export function buildChatAssertionReceiptInstruction(input: {
 
 export function createMemoryWriteStatusTool(input: {
   actorId: string;
-  conversationMessageIds: string[];
+  conversationMessages: Array<{
+    messageId: string;
+    text: string;
+  }>;
+  currentMessageId: string;
 }) {
-  const allowedIds = [...new Set(input.conversationMessageIds.filter(Boolean))];
+  const conversationMessages = [...new Map(
+    input.conversationMessages
+      .filter((message) => message.messageId)
+      .map((message) => [message.messageId, {
+        messageId: message.messageId,
+        text: message.text.replace(/\s+/g, " ").trim(),
+      }]),
+  ).values()];
+  const currentMessage = conversationMessages.find(
+    (message) => message.messageId === input.currentMessageId,
+  );
+  const allowedMessages = conversationMessages
+    .filter((message) =>
+      message.messageId !== input.currentMessageId &&
+      !isMemoryWriteStatusQuery(message.text)
+    )
+    .slice(-20);
+  const allowedMessagesById = new Map(
+    allowedMessages.map((message) => [message.messageId, message]),
+  );
+  const targetChoices = allowedMessages
+    .slice(-20)
+    .map((message) =>
+      `${JSON.stringify(message.messageId)}：${message.text.slice(0, 160) || "（空消息）"}`
+    )
+    .join("\n");
   return tool({
     description: [
       "读取当前对话历史中 Chat → Assertion 的真实处理回执。",
       "用户询问‘刚才的信息有没有记住、Assertion 是否写入、后台处理到哪一步’时使用；",
       "它读取操作状态，不搜索组织知识，也不会创建 Evidence、Assertion、Object 或 Higher Memory。",
       "published 才代表已写入；queued/running/skipped/failed 都不能声称已发布。",
-    ].join(""),
+      "必须根据用户所指的原话，从下列先前用户消息中选择并显式传入 messageId；",
+      "禁止省略 messageId、禁止用当前状态查询消息代替目标消息，也禁止把返回结果解释为其他消息的状态。",
+      targetChoices ? `可查询消息：\n${targetChoices}` : "当前没有可查询的先前用户消息。",
+    ].join("\n"),
     inputSchema: z.object({
-      messageId: z.string().trim().min(1).max(500).optional()
-        .describe("可选：自动回执中给出的用户消息 ID；省略则返回当前对话最近的回执"),
+      messageId: z.string().trim().min(1).max(500)
+        .describe("必填：用户实际询问的那条先前用户消息 ID，必须从工具描述列出的可查询消息中选择"),
     }),
     execute: async ({ messageId }) => {
-      const messageIds = messageId
-        ? allowedIds.includes(messageId) ? [messageId] : []
-        : allowedIds;
-      if (!messageIds.length) {
+      const targetMessage = allowedMessagesById.get(messageId);
+      if (!targetMessage) {
         return {
+          currentMessage: currentMessage
+            ? {
+                clientMessageId: currentMessage.messageId,
+                text: currentMessage.text,
+              }
+            : null,
+          targetMessage: null,
+          targetIsCurrentMessage: false,
           receipts: [],
-          message: messageId
-            ? "该消息不属于当前对话，不能读取其记忆处理状态。"
-            : "当前对话没有可查询的用户消息。",
+          message:
+            "该消息不是当前对话中可查询的先前用户消息，不能读取或推断其记忆处理状态。",
         };
       }
       const receipts = await listChatAssertionReceipts({
         actorId: input.actorId,
-        clientMessageIds: messageIds,
-        limit: messageId ? 1 : 5,
+        clientMessageIds: [targetMessage.messageId],
+        limit: 1,
       });
       return {
+        currentMessage: currentMessage
+          ? {
+              clientMessageId: currentMessage.messageId,
+              text: currentMessage.text,
+            }
+          : null,
+        targetMessage: {
+          clientMessageId: targetMessage.messageId,
+          text: targetMessage.text,
+        },
+        targetIsCurrentMessage: targetMessage.messageId === input.currentMessageId,
         receipts,
         message: receipts.length
-          ? "已返回真实持久化回执；请严格按 status 解释，回执本身不是组织事实 Evidence。"
-          : "当前对话中没有 Chat → Assertion 处理回执；这表示没有登记记录，不能推断已经写入。",
+          ? "已返回且仅返回 targetMessage 对应的真实持久化回执；只能解释为该目标原话的状态。currentMessage 是本轮用户原话，不得把目标回执套用于 currentMessage 或其他消息。"
+          : "targetMessage 没有 Chat → Assertion 处理回执；这只表示该目标消息没有登记记录，不能推断已经写入，也不能用于判断 currentMessage 或其他消息。",
       };
     },
   });

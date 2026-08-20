@@ -157,6 +157,25 @@ describe("grounding gates", () => {
     expect(result.issues).toContain("artifact_claim_without_f_ref");
   });
 
+  it("does not mistake a cited business critical path for file metadata", () => {
+    const text = [
+      "**原文证据（[S3]，时间红线与流程卡点）：**",
+      "> 关键路径：提交申请 → 挂靠单位审核 → 活动开展 → 财务报销。",
+    ].join("\n");
+    const result = auditGroundedAnswer({
+      text,
+      contract: contract(),
+      validRefs: ["S3"],
+    });
+
+    expect(result).toEqual({
+      text,
+      changed: false,
+      mode: "passed",
+      issues: [],
+    });
+  });
+
   it("classifies an explicit business-view clarification as a View target", () => {
     const state = new GroundingState(
       "我说的是业务视角的操作手册",
