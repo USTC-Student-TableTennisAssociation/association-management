@@ -16,6 +16,8 @@ const EVIDENCE_BOUNDARY_PATTERN =
   /(无法|不能确认|尚未|缺少|仅能|只能|部分|证据不足|未覆盖|未读取|没有读取|没有匹配|未找到|不能替代|不足以)/u;
 const ARTIFACT_METADATA_PATTERN =
   /((?:文件|本地|存储|保存|输出|目录)路径\s*[:：]|处理状态|处理档位|发布到\s*Shared Brain|尚未发布|已发布|资料库.{0,12}(?:找到|未找到|存在|没有|匹配)|文件名\s*(?:为|是)|目录项|catalog|coarse|deep|ready|\d+\s*条\s*Assertion|\d+\s*个\s*Object)/iu;
+const LIBRARY_ABSOLUTE_ABSENCE_PATTERN =
+  /(?:资料库|知识库|Library)(?![^。！？!?\n]{0,24}(?:标题|路径|目录|title|path)[^。！？!?\n]{0,8}(?:索引|index))[^。！？!?\n]{0,35}(?:(?:不存在|确实没有|没有).{0,20}(?:资料|内容|信息|文件)|(?:没有找到|未找到|未命中).{0,25}(?:标题或内容|正文|内容)|(?:标题或内容).{0,25}(?:没有找到|未找到|未命中))|(?:标题|路径|目录|索引|index).{0,30}(?:无匹配|未命中|没有匹配).{0,30}(?:正文|内容).{0,25}(?:不存在|没有|无从读取|无法读取)|没有.{0,12}(?:可读取的?)?(?:文件)?正文/iu;
 const BUSINESS_VIEW_PATTERN =
   /(业务视角|业务视图|正式视图|正式\s*View|Business\s*View|Activity\s*Operations|正式\s*Card|业务卡片)/iu;
 const SHARED_BRAIN_PATTERN =
@@ -466,6 +468,74 @@ function redactUnsupportedClaims(input: {
   };
 }
 
+function completeAbsentLibraryTitleSearches(contract: GroundingContract) {
+  return contract.evidenceSemantics.observations.filter((observation) =>
+    observation.layer === "library" &&
+    observation.predicate === "matching_artifact_in_library_index" &&
+    observation.status === "absent" &&
+    observation.completeness === "complete"
+  );
+}
+
+function hasCompleteAbsentTargetTitleSearch(contract: GroundingContract): boolean {
+  const targetKey = searchable(contract.targetLabel ?? "");
+  if (!targetKey) return false;
+  return completeAbsentLibraryTitleSearches(contract).some((observation) => {
+    const subjectKey = searchable(observation.subject);
+    return Boolean(
+      subjectKey &&
+      (subjectKey.includes(targetKey) || targetKey.includes(subjectKey)),
+    );
+  });
+}
+
+function libraryTitleZeroHitBoundary(
+  contract: GroundingContract,
+  validRefs: ReadonlySet<string>,
+): string | undefined {
+  const searches = completeAbsentLibraryTitleSearches(contract);
+  if (!searches.length) return undefined;
+  const subjects = unique(searches.map((observation) => observation.subject.trim()))
+    .slice(0, 4);
+  const refs = unique(searches.flatMap((observation) => observation.refs))
+    .filter((ref) => validRefs.has(ref));
+  const citation = refs.length ? ` [${refs.join("][")}]` : "";
+  const contentLayerObserved = contract.evidenceSemantics.observations.some((observation) =>
+    observation.layer === "shared_brain" || observation.layer === "source_document"
+  );
+  return [
+    `本轮能确定的是：完整的 Library 标题/路径索引查询未匹配到${subjects.length
+      ? `“${subjects.join("、")}”`
+      : "用户给出的查询词"}${citation}。`,
+    contentLayerObserved
+      ? "其他知识层的检索各自仍有范围限制，不能据此断言整个资料库、全部文件正文或 Shared Brain 不存在相关信息。"
+      : "本轮尚未读取或扫描全部文件正文，也未完成可证明全库不存在的检索；不能据此断言整个资料库、文件正文或 Shared Brain 不存在相关信息。",
+  ].join("");
+}
+
+function redactLibraryAbsenceOverclaims(input: {
+  text: string;
+  enabled: boolean;
+}): { text: string; issues: string[]; redactedCount: number } {
+  if (!input.enabled) return { text: input.text, issues: [], redactedCount: 0 };
+  let redactedCount = 0;
+  const segments = input.text.match(
+    /[^。！？!?\n]+[。！？!?](?:\s*(?:\[(?:A|F|H|S|V)\d+\]|【(?:A|F|H|S|V)\d+】))*|[^。！？!?\n]+|\n+/gu,
+  ) ?? [input.text];
+  const text = segments.map((segment) => {
+    if (!segment.trim() || !LIBRARY_ABSOLUTE_ABSENCE_PATTERN.test(segment)) {
+      return segment;
+    }
+    redactedCount += 1;
+    return "";
+  }).join("").replace(/\n{3,}/gu, "\n\n").trim();
+  return {
+    text,
+    issues: redactedCount ? ["library_absence_overclaimed_from_title_search"] : [],
+    redactedCount,
+  };
+}
+
 /**
  * Final server-side grounding audit.
  *
@@ -484,6 +554,8 @@ export function auditGroundedAnswer(input: {
   const validRefs = new Set(input.validRefs);
   const issues: string[] = [];
   const notices: string[] = [];
+  const titleZeroHitBoundary = libraryTitleZeroHitBoundary(input.contract, validRefs);
+  const completeAbsentTargetTitleSearch = hasCompleteAbsentTargetTitleSearch(input.contract);
 
   if (
     input.contract.targetKind === "business_view" &&
@@ -527,12 +599,14 @@ export function auditGroundedAnswer(input: {
 
   if (input.contract.requiresReadableTarget && !input.contract.targetReadable) {
     issues.push("target_not_readable");
-    return {
-      text: targetFallback(input.contract, validRefs),
-      changed: true,
-      mode: "safe_fallback",
-      issues,
-    };
+    if (!completeAbsentTargetTitleSearch) {
+      return {
+        text: targetFallback(input.contract, validRefs),
+        changed: true,
+        mode: "safe_fallback",
+        issues,
+      };
+    }
   }
 
   const coverage = primaryCoverage(input.contract);
@@ -555,13 +629,25 @@ export function auditGroundedAnswer(input: {
     notices.push(`${missing}；不要把未覆盖部分理解为 Echo 当前事实。`);
   }
 
-  const redaction = redactUnsupportedClaims({ text, validRefs });
-  issues.push(...redaction.issues);
+  if (titleZeroHitBoundary) {
+    issues.push("library_title_zero_hit_boundary_added");
+    notices.push(titleZeroHitBoundary);
+  }
+
+  const citationRedaction = redactUnsupportedClaims({ text, validRefs });
+  issues.push(...citationRedaction.issues);
+  const absenceRedaction = redactLibraryAbsenceOverclaims({
+    text: citationRedaction.text,
+    enabled: Boolean(titleZeroHitBoundary),
+  });
+  issues.push(...absenceRedaction.issues);
+  const redactedCount = citationRedaction.redactedCount + absenceRedaction.redactedCount;
 
   if (
     input.contract.requiresReadableTarget &&
-    !EVIDENCE_BOUNDARY_PATTERN.test(redaction.text) &&
-    !allCitedRefs(redaction.text).some((ref) =>
+    !completeAbsentTargetTitleSearch &&
+    !EVIDENCE_BOUNDARY_PATTERN.test(absenceRedaction.text) &&
+    !allCitedRefs(absenceRedaction.text).some((ref) =>
       /^(?:A|S|V)\d+$/.test(ref) && validRefs.has(ref)
     )
   ) {
@@ -573,26 +659,34 @@ export function auditGroundedAnswer(input: {
     };
   }
 
-  if (!redaction.text) {
+  if (!absenceRedaction.text) {
+    if (titleZeroHitBoundary) {
+      return {
+        text: boundaryNotice(titleZeroHitBoundary),
+        changed: true,
+        mode: "deterministic_answer",
+        issues: unique(issues),
+      };
+    }
     return {
-      text: citationFallback(redaction.issues),
+      text: citationFallback(citationRedaction.issues),
       changed: true,
       mode: "safe_fallback",
       issues: unique(issues),
     };
   }
 
-  if (redaction.redactedCount) {
-    notices.push(`已省略 ${redaction.redactedCount} 处使用无效引用或缺少正确来源引用的事实主张。`);
+  if (redactedCount) {
+    notices.push(`已省略 ${redactedCount} 处超出检索范围或缺少正确来源引用的事实主张。`);
   }
   const auditedText = notices.length
-    ? `${notices.map(boundaryNotice).join("\n\n")}\n\n${redaction.text}`
-    : redaction.text;
+    ? `${notices.map(boundaryNotice).join("\n\n")}\n\n${absenceRedaction.text}`
+    : absenceRedaction.text;
   const changed = auditedText !== text;
   return {
     text: auditedText,
     changed,
-    mode: redaction.redactedCount ? "redacted" : changed ? "annotated" : "passed",
+    mode: redactedCount ? "redacted" : changed ? "annotated" : "passed",
     issues: unique(issues),
   };
 }

@@ -61,6 +61,41 @@ describe("classifyChatStreamStatus", () => {
     });
   });
 
+  it("accepts a complete answer whose only terminal tool is metadata", () => {
+    expect(classifyChatStreamStatus({
+      streamEnded: true,
+      finishReason: "tool-calls",
+      reasoningChars: 0,
+      contentChars: 996,
+      toolCallCount: 6,
+      modelCallCount: 4,
+      retryCount: 0,
+      terminalMetadataOnlyToolCalls: true,
+    })).toMatchObject({
+      status: "completed",
+      completionKind: "answer",
+      finishReason: "tool-calls",
+      partial: false,
+    });
+  });
+
+  it("keeps an answer with unfinished substantive tool calls incomplete", () => {
+    expect(classifyChatStreamStatus({
+      streamEnded: true,
+      finishReason: "tool-calls",
+      reasoningChars: 0,
+      contentChars: 996,
+      toolCallCount: 6,
+      modelCallCount: 4,
+      retryCount: 0,
+      terminalMetadataOnlyToolCalls: false,
+    })).toMatchObject({
+      status: "incomplete",
+      completionKind: "answer",
+      partial: true,
+    });
+  });
+
   it("does not call an empty stop a completed answer", () => {
     expect(classifyChatStreamStatus({
       streamEnded: true,

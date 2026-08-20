@@ -20,6 +20,8 @@ import {
   isMemoryWriteStatusQuery,
   latestUserQuery,
   messageText,
+  requiresCrossLayerContentSearch,
+  shouldForceCrossLayerMemorySearch,
 } from "@/ai/chat-policy";
 import { citedRefs } from "@/ai/citation-refs";
 import {
@@ -757,6 +759,7 @@ export async function POST(request: Request) {
       const mainToolExecutions: ChatMainToolExecution[] = [];
       const sharedResultBudget = new ToolResultTokenBudget(exploreResultTokenBudget);
       let hasSearchedMemory = false;
+      let crossLayerMemorySearchForced = false;
       let latestLocateTrace: MemorySearchTrace | undefined;
       let finalRawText = "";
       let finalAudit: GroundingAudit | undefined;
@@ -1236,6 +1239,28 @@ export async function POST(request: Request) {
               instructions,
             };
           }
+          if (shouldForceCrossLayerMemorySearch({
+            query,
+            libraryQueryCount,
+            hasSearchedMemory,
+            alreadyForced: crossLayerMemorySearchForced,
+            resultTokenBudget: exploreResultTokenBudget,
+            stepNumber,
+            maxSteps: MAX_EXPLORE_STEPS,
+          })) {
+            crossLayerMemorySearchForced = true;
+            return {
+              ...(stepNumber > 0
+                ? { messages: compactExploreStepMessages(stepMessages) }
+                : {}),
+              activeTools: ["searchMemory"] as const,
+              toolChoice: {
+                type: "tool" as const,
+                toolName: "searchMemory",
+              },
+              instructions: `${instructions}\n\n服务端检索要求：用户明确要求同时搜索文件标题和内容。Library 标题查询已经执行，但 Shared Brain 主题检索尚未执行；本步必须调用 searchMemory，targetHints 忠实保留用户给出的主题词，query 说明要查找直接相关的组织知识、姓名和原文线索。`,
+            };
+          }
           return {
             ...(stepNumber > 0
               ? { messages: compactExploreStepMessages(stepMessages) }
@@ -1462,6 +1487,14 @@ export async function POST(request: Request) {
         },
         onFinish: async ({ text, finishReason, totalUsage, steps }) => {
           finalRawText = text;
+          const terminalStep = steps.at(-1);
+          streamObservation.terminalMetadataOnlyToolCalls = Boolean(
+            text.trim() &&
+            finishReason === "tool-calls" &&
+            terminalStep?.toolCalls.length &&
+            terminalStep.toolCalls.every((call) => call.toolName === TURN_HANDOFF_TOOL) &&
+            terminalStep.toolResults.length === terminalStep.toolCalls.length,
+          );
           streamObservation.finishReason = finishReason;
           streamObservation.streamEnded = true;
           streamObservation.contentChars = text.length;
@@ -1747,6 +1780,8 @@ export async function POST(request: Request) {
             firstAuthoritativeTool: firstAuthoritativeTool ?? null,
             libraryQueryCount,
             memoryQueryCount,
+            crossLayerContentSearchRequired: requiresCrossLayerContentSearch(query),
+            crossLayerMemorySearchForced,
             libraryQueryTruncated: libraryQueryTruncated ?? null,
             libraryMatchedCount,
             mainModelCallCount: mainModelCallNumber,

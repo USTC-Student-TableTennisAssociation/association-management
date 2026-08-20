@@ -157,6 +157,211 @@ describe("grounding gates", () => {
     expect(result.issues).toContain("artifact_claim_without_f_ref");
   });
 
+  it("blocks whole-library absence claims based only on complete title zero hits", () => {
+    const result = auditGroundedAnswer({
+      text: [
+        "检索词“历任会长”返回 0 条标题匹配。[F1]",
+        "在 Echo 资料库中，没有找到标题或内容包含“历任会长”或“乒协星火传承录”的文件。[F1][F2]",
+        "因此当前资料库中不存在这类资料。[F1]",
+        "否则目前资料库中确实没有相关内容。[F1]",
+      ].join("\n"),
+      contract: contract({
+        coverageByLayer: {
+          library: {
+            level: "complete",
+            missingAspects: [],
+            observationComplete: true,
+            contentPresence: "absent",
+          },
+        },
+        evidenceSemantics: {
+          observations: [{
+            id: "library.title_search.历任会长",
+            layer: "library",
+            scope: "title:历任会长",
+            subject: "历任会长",
+            predicate: "matching_artifact_in_library_index",
+            status: "absent",
+            completeness: "complete",
+            authority: "authoritative",
+            refs: ["F1"],
+            summary: "完整 Library 标题查询没有匹配到“历任会长”。",
+          }],
+          answerability: [],
+        },
+      }),
+      validRefs: ["F1"],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.mode).toBe("redacted");
+    expect(result.issues).toContain("library_absence_overclaimed_from_title_search");
+    expect(result.issues).toContain("library_title_zero_hit_boundary_added");
+    expect(result.text).toContain("Library 标题/路径索引查询未匹配到“历任会长” [F1]");
+    expect(result.text).toContain("尚未读取或扫描全部文件正文");
+    expect(result.text).toContain("返回 0 条标题匹配");
+    expect(result.text).not.toContain("没有找到标题或内容包含");
+    expect(result.text).not.toContain("不存在这类资料");
+    expect(result.text).not.toContain("确实没有相关内容");
+  });
+
+  it("does not let the unreadable-target fallback hide complete title zero-hit evidence", () => {
+    const result = auditGroundedAnswer({
+      text: [
+        "“历任会长”与“乒协星火传承录”均未命中标题索引。[F1][F2]",
+        "既然索引无匹配，正文层自然也不存在相关内容。[F1][F2]",
+      ].join("\n"),
+      contract: contract({
+        targetKind: "artifact",
+        requiresReadableTarget: true,
+        targetLabel: "历任会长",
+        targetLocated: false,
+        targetReadable: false,
+        targetSearchRef: "F1",
+        evidenceSemantics: {
+          observations: [
+            {
+              id: "library.title_search.历任会长",
+              layer: "library",
+              scope: "title:历任会长",
+              subject: "历任会长",
+              predicate: "matching_artifact_in_library_index",
+              status: "absent",
+              completeness: "complete",
+              authority: "authoritative",
+              refs: ["F1"],
+              summary: "完整 Library 标题查询没有匹配到“历任会长”。",
+            },
+            {
+              id: "library.title_search.乒协星火传承录",
+              layer: "library",
+              scope: "title:乒协星火传承录",
+              subject: "乒协星火传承录",
+              predicate: "matching_artifact_in_library_index",
+              status: "absent",
+              completeness: "complete",
+              authority: "authoritative",
+              refs: ["F2"],
+              summary: "完整 Library 标题查询没有匹配到“乒协星火传承录”。",
+            },
+          ],
+          answerability: [],
+        },
+      }),
+      validRefs: ["F1", "F2"],
+    });
+
+    expect(result.issues).toContain("target_not_readable");
+    expect(result.issues).toContain("library_title_zero_hit_boundary_added");
+    expect(result.text).toContain("未匹配到“历任会长、乒协星火传承录” [F1][F2]");
+    expect(result.text).toContain("尚未读取或扫描全部文件正文");
+    expect(result.text).not.toContain("请指定准确文件");
+    expect(result.text).not.toContain("正文层自然也不存在相关内容");
+  });
+
+  it("adds a content-scope boundary even when the title zero-hit wording is cautious", () => {
+    const text = "当前 Library 标题索引没有匹配到“乒协星火传承录”。[F2]";
+    const result = auditGroundedAnswer({
+      text,
+      contract: contract({
+        evidenceSemantics: {
+          observations: [{
+            id: "library.title_search.乒协星火传承录",
+            layer: "library",
+            scope: "title:乒协星火传承录",
+            subject: "乒协星火传承录",
+            predicate: "matching_artifact_in_library_index",
+            status: "absent",
+            completeness: "complete",
+            authority: "authoritative",
+            refs: ["F2"],
+            summary: "完整 Library 标题查询没有匹配到“乒协星火传承录”。",
+          }],
+          answerability: [],
+        },
+      }),
+      validRefs: ["F2"],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.mode).toBe("annotated");
+    expect(result.text).toContain("尚未读取或扫描全部文件正文");
+    expect(result.text).toContain(text);
+  });
+
+  it("preserves a correctly scoped Library title-index zero-hit statement", () => {
+    const text = "资料库标题索引没有找到匹配文件。[F1]";
+    const result = auditGroundedAnswer({
+      text,
+      contract: contract({
+        evidenceSemantics: {
+          observations: [{
+            id: "library.title_search.历任会长",
+            layer: "library",
+            scope: "title:历任会长",
+            subject: "历任会长",
+            predicate: "matching_artifact_in_library_index",
+            status: "absent",
+            completeness: "complete",
+            authority: "authoritative",
+            refs: ["F1"],
+            summary: "完整 Library 标题查询没有匹配到“历任会长”。",
+          }],
+          answerability: [],
+        },
+      }),
+      validRefs: ["F1"],
+    });
+
+    expect(result.mode).toBe("annotated");
+    expect(result.text).toContain(text);
+    expect(result.text).toContain("尚未读取或扫描全部文件正文");
+    expect(result.issues).not.toContain("library_absence_overclaimed_from_title_search");
+  });
+
+  it("keeps the zero-hit boundary when another title query matched", () => {
+    const result = auditGroundedAnswer({
+      text: "“协会章程”有标题匹配，但资料库中确实没有“历任会长”的相关内容。[F1][F2]",
+      contract: contract({
+        evidenceSemantics: {
+          observations: [
+            {
+              id: "library.title_search.协会章程",
+              layer: "library",
+              scope: "title:协会章程",
+              subject: "协会章程",
+              predicate: "matching_artifact_in_library_index",
+              status: "present",
+              completeness: "complete",
+              authority: "authoritative",
+              refs: ["F1"],
+              summary: "Library 标题索引匹配到 1 个与“协会章程”相关的文件。",
+            },
+            {
+              id: "library.title_search.历任会长",
+              layer: "library",
+              scope: "title:历任会长",
+              subject: "历任会长",
+              predicate: "matching_artifact_in_library_index",
+              status: "absent",
+              completeness: "complete",
+              authority: "authoritative",
+              refs: ["F2"],
+              summary: "完整 Library 标题查询没有匹配到“历任会长”。",
+            },
+          ],
+          answerability: [],
+        },
+      }),
+      validRefs: ["F1", "F2"],
+    });
+
+    expect(result.mode).toBe("deterministic_answer");
+    expect(result.text).toContain("未匹配到“历任会长” [F2]");
+    expect(result.text).toContain("尚未读取或扫描全部文件正文");
+    expect(result.text).not.toContain("确实没有“历任会长”的相关内容");
+  });
+
   it("does not mistake a cited business critical path for file metadata", () => {
     const text = [
       "**原文证据（[S3]，时间红线与流程卡点）：**",

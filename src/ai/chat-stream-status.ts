@@ -33,6 +33,7 @@ export type ChatStreamObservation = {
   modelCallCount: number;
   retryCount: number;
   streamEnded: boolean;
+  terminalMetadataOnlyToolCalls?: boolean;
   failureCode?: ChatStreamStatus["failureCode"];
   error?: ChatStreamStatus["error"];
 };
@@ -88,7 +89,13 @@ export function classifyChatStreamStatus(
   if (
     observation.streamEnded &&
     hasContent &&
-    observation.finishReason === "stop"
+    (
+      observation.finishReason === "stop" ||
+      (
+        observation.finishReason === "tool-calls" &&
+        observation.terminalMetadataOnlyToolCalls === true
+      )
+    )
   ) {
     return {
       status: "completed",
