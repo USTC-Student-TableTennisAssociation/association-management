@@ -71,6 +71,7 @@ import {
   viewReferenceBundleSchema,
 } from "@/agent-runtime/view-types";
 import { currentAuthUser } from "@/auth/session";
+import { getDatabase } from "@/db";
 import {
   extensionRegistry,
   viewCommandBus,
@@ -850,6 +851,18 @@ export async function POST(request: Request) {
         registry: extensionRegistry,
         readPort: viewReadPort,
         commandBus: viewCommandBus,
+        findExistingObjectsByCanonicalName: async (canonicalName) => {
+          const compilation = await getDatabase().memoryCompilation.findFirst({
+            orderBy: [{ importedAt: "desc" }, { id: "desc" }],
+            select: { id: true },
+          });
+          if (!compilation) return [];
+          return getDatabase().memoryGlobalObject.findMany({
+            where: { compilationId: compilation.id, canonicalName },
+            select: { id: true, canonicalName: true },
+            take: 2,
+          });
+        },
         onProposal: (proposal) => {
           writer.write({ type: "data-viewCommandProposal", data: proposal });
         },
@@ -964,6 +977,7 @@ export async function POST(request: Request) {
         },
         onForegroundResult: (captureResult) => {
           objectManagementToolset.registerPublishedMemory(captureResult);
+          viewToolset.registerPublishedObjects(captureResult.affectedObjects);
         },
       });
       const knownArtifactNodeIds = new Set<string>();
@@ -990,12 +1004,16 @@ export async function POST(request: Request) {
               ? pageContext?.activeCardId
               : undefined,
           });
+          const invalidatedHigherMemoryRefs = evidence.invalidateHigherMemories(
+            businessContext.higherMemoryConflicts.map((conflict) => conflict.globalObjectId),
+          );
           groundingState.observeBusinessContext({
             view: businessContext.view,
             targetHints: pageTargetHints,
             relevantCards: businessContext.relevantCards,
             coverage: businessContext.evidence.coverage,
             semantics: businessContext.semantics,
+            invalidatedEvidenceRefs: invalidatedHigherMemoryRefs,
           });
           const discovered = evidence.merge(businessContext.evidence);
           firstAuthoritativeTool ??= "openBusinessContext";
@@ -1022,9 +1040,12 @@ export async function POST(request: Request) {
             objectHigherMemories: discovered.higherMemories ?? [],
             formalCardMissing: businessContext.formalCardMissing,
             unresolvedAspects: businessContext.unresolvedAspects,
+            higherMemoryConflicts: businessContext.higherMemoryConflicts,
             coverage: businessContext.evidence.coverage,
             semantics: businessContext.semantics,
-            next: businessContext.formalCardMissing
+            next: businessContext.higherMemoryConflicts.length
+              ? "正式 View 已推翻旧 Object Higher Memory 中关于 Card 尚未收录或尚未落地的描述；本轮必须以正式 View 为准，不得引用这些旧记忆判断当前状态。"
+              : businessContext.formalCardMissing
               ? "当前正式 View 的存在性与收录状态已经可以直接回答：没有匹配 Card。只有用户还要求相关业务事实或补建依据时，才使用 expandEvidence；相关资料不得冒充正式 View。"
               : businessContext.unresolvedAspects.length
                 ? "如果缺口会影响回答，使用 expandEvidence；如果用户确认或后续可靠证据已经足以填补一个稳定、可复用的正式 View 缺口，还应使用 openActions(business_view) 生成待审批 Proposal；否则直接回答。"
@@ -1617,8 +1638,11 @@ export async function POST(request: Request) {
               }
             : undefined;
           const backgroundAssertionDecision = assertionQueueDecision ?? automaticWritebackDecision;
+          const authoritativeBusinessViewRead = sourceLayersUsed.has("business_view");
           const consolidationNeeded = Boolean(
-            foregroundAssertionResult || backgroundAssertionDecision,
+            foregroundAssertionResult ||
+            backgroundAssertionDecision ||
+            authoritativeBusinessViewRead,
           );
           const receiptKey = latestUserMessage
             ? {
@@ -1645,6 +1669,7 @@ export async function POST(request: Request) {
                 timezone: requestTimezone,
                 semanticContext,
                 retrieval: accumulatedRetrieval,
+                authoritativeBusinessViewRead,
               }
             : undefined;
           let writebackStatus = !reviewNeeded

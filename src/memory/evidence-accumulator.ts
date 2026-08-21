@@ -131,6 +131,22 @@ export class MemoryEvidenceAccumulator {
     return this.objectRefById.has(globalObjectId);
   }
 
+  invalidateHigherMemories(globalObjectIds: Iterable<string>): string[] {
+    const invalidIds = new Set(globalObjectIds);
+    if (!invalidIds.size) return [];
+    const invalidatedRefs = this.higherMemories
+      .filter((memory) => invalidIds.has(memory.globalObjectId))
+      .map((memory) => memory.ref);
+    if (!invalidatedRefs.length) return [];
+    for (let index = this.higherMemories.length - 1; index >= 0; index -= 1) {
+      const memory = this.higherMemories[index];
+      if (!invalidIds.has(memory.globalObjectId)) continue;
+      this.higherMemories.splice(index, 1);
+      this.higherMemoryRefByObjectId.delete(memory.globalObjectId);
+    }
+    return invalidatedRefs;
+  }
+
   merge(result: MemoryExploreResult): MemoryExploreResult {
     if (result.compilationId) {
       if (this.compilationId && this.compilationId !== result.compilationId) {

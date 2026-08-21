@@ -8,6 +8,16 @@ import type { EvidenceSemantics } from "@/evidence/types";
 import type { MemoryExploreResult } from "@/memory/explore";
 import type { ViewInformationReference } from "@/agent-runtime/view-types";
 
+const FORMAL_CARD_ABSENCE_MEMORY_PATTERNS = [
+  /(?:正式\s*)?(?:business\s*)?view.{0,40}(?:0|零)\s*(?:个|张)?\s*(?:card|卡片)/iu,
+  /(?:尚未|未|没有|并未).{0,30}(?:收录|写入|建立|创建|落地).{0,30}(?:card|卡片|view)/iu,
+  /(?:card|卡片|view).{0,30}(?:尚未|未|没有|并未).{0,30}(?:收录|写入|建立|创建|落地|生效)/iu,
+];
+
+export function higherMemoryContradictsFormalCardPresence(content: string): boolean {
+  return FORMAL_CARD_ABSENCE_MEMORY_PATTERNS.some((pattern) => pattern.test(content));
+}
+
 function searchable(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("zh-CN")
     .replace(/[^\p{L}\p{N}]+/gu, "");
@@ -129,6 +139,19 @@ export async function buildViewContext(input: {
         },
       })
     : [];
+  const higherMemoryConflicts = objectRows.flatMap((object, index) =>
+    object.higherMemory &&
+      higherMemoryContradictsFormalCardPresence(object.higherMemory.contentMarkdown)
+      ? [{
+          ref: `H${index + 1}`,
+          globalObjectId: object.id,
+          reason: "正式 Business View 已存在关联 Card，但旧 Object Higher Memory 仍声称 Card 未收录、未落地或 View 为 0 张卡片。",
+        }]
+      : []
+  );
+  const conflictingObjectIds = new Set(
+    higherMemoryConflicts.map((conflict) => conflict.globalObjectId),
+  );
   const requiredDimensionsByType = new Map(input.cardTypes.map((cardType) => [
     cardType.key,
     cardType.dimensions.filter((dimension) => dimension.required),
@@ -184,7 +207,8 @@ export async function buildViewContext(input: {
       lexicalMatch: true,
       semanticMatch: false,
     })),
-    higherMemories: objectRows.flatMap((object, index) => object.higherMemory
+    higherMemories: objectRows.flatMap((object, index) =>
+      object.higherMemory && !conflictingObjectIds.has(object.id)
       ? [{
           ref: `H${index + 1}`,
           id: object.higherMemory.id,
@@ -204,13 +228,14 @@ export async function buildViewContext(input: {
       contentPresence: relevantCards.length ? "present" : "absent",
     },
     semantics,
-    warnings: [],
+    warnings: higherMemoryConflicts.map((conflict) => conflict.reason),
   };
   return {
     view,
     relevantCards,
     formalCardMissing: relevantCards.length === 0,
     unresolvedAspects,
+    higherMemoryConflicts,
     semantics,
     evidence,
   };

@@ -148,7 +148,11 @@ export function createChatMemoryMaintenanceScheduler(
 
         let higherMemoryInput = input.higherMemory;
         const consolidationInput = input.consolidation;
-        if (consolidationInput && captureResult.publishedAssertions > 0) {
+        const hasVerifiedConsolidationEvidence = Boolean(
+          captureResult.publishedAssertions > 0 ||
+          consolidationInput?.authoritativeBusinessViewRead,
+        );
+        if (consolidationInput && hasVerifiedConsolidationEvidence) {
           try {
             const consolidation = await consolidateTurnKnowledge(
               consolidationInput,
@@ -204,7 +208,7 @@ export function createChatMemoryMaintenanceScheduler(
         } else if (consolidationInput) {
           await trace?.appendSection(
             "Knowledge Consolidator 跳过",
-            "Assertion Agent 没有发布经过验证的新 Assertion；不使用检索过程或 Assistant 结论维护 Higher Memory。",
+            "Assertion Agent 没有发布经过验证的新 Assertion，本轮也没有成功读取正式 Business View；不使用普通检索过程或 Assistant 结论维护 Higher Memory。",
           );
         }
 

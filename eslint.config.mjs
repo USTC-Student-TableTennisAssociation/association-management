@@ -12,7 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    "services/cold-start/.venv/**",
+    "services/**/.venv/**",
+    "**/.pytest_cache/**",
+    "**/__pycache__/**",
+    "node_modules.codex-partial-*/**",
   ]),
 ]);
 

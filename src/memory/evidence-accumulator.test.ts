@@ -203,6 +203,14 @@ describe("MemoryEvidenceAccumulator", () => {
     expect(accumulator.snapshot().compilationId).toBe("compilation-1");
   });
 
+  it("removes an invalidated Higher Memory from the request-local evidence namespace", () => {
+    const accumulator = new MemoryEvidenceAccumulator(initial());
+
+    expect(accumulator.invalidateHigherMemories(["object-1"])).toEqual(["H1"]);
+    expect(accumulator.snapshot().seedMap.higherMemories).toBeUndefined();
+    expect(accumulator.invalidateHigherMemories(["object-1"])).toEqual([]);
+  });
+
   it("rejects evidence from another compilation", () => {
     const accumulator = new MemoryEvidenceAccumulator(initial());
     const result = { ...explored(), compilationId: "compilation-2" };

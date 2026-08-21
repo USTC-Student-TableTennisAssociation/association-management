@@ -263,6 +263,26 @@ describe("post-answer memory maintenance pipeline", () => {
     expect(lifecycleState.maintain).not.toHaveBeenCalled();
   });
 
+  it("consolidates a successful Business View read without a new Assertion", async () => {
+    const scheduler = createChatMemoryMaintenanceScheduler();
+    scheduler.publish({
+      consolidation: {
+        clientMessageId: "message-view-read",
+        authoritativeBusinessViewRead: true,
+      } as never,
+    });
+
+    await lifecycleState.afterCallback?.();
+
+    expect(lifecycleState.capture).not.toHaveBeenCalled();
+    expect(lifecycleState.consolidate).toHaveBeenCalledWith(
+      expect.objectContaining({ authoritativeBusinessViewRead: true }),
+      expect.objectContaining({ publishedAssertions: 0 }),
+      undefined,
+    );
+    expect(lifecycleState.maintain).toHaveBeenCalledOnce();
+  });
+
   it("records a failed background Assertion attempt", async () => {
     lifecycleState.capture.mockRejectedValueOnce(new Error("capture failed"));
     const scheduler = createChatMemoryMaintenanceScheduler();

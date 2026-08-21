@@ -508,4 +508,54 @@ describe("grounding gates", () => {
       issues: [],
     });
   });
+
+  it("removes a stale Higher Memory claim contradicted by an authoritative present View", () => {
+    const state = new GroundingState("测试赛的时间、地点和状态是什么？");
+    state.observeBusinessContext({
+      view: {
+        ref: "V1",
+        viewKey: "activity_operations",
+        viewLabel: "Activity Operations",
+        totalCardCount: 1,
+      },
+      targetHints: ["Echo正式闭环人工测试赛-20260821"],
+      relevantCards: [{
+        dimensions: { name: "Echo正式闭环人工测试赛-20260821", status: "PLANNING" },
+      }],
+      coverage: {
+        level: "complete",
+        missingAspects: [],
+        observationComplete: true,
+        contentPresence: "present",
+      },
+      semantics: {
+        observations: [{
+          id: "view-present",
+          layer: "business_view",
+          scope: "activity_operations",
+          subject: "Echo正式闭环人工测试赛-20260821",
+          predicate: "contains_matching_card",
+          status: "present",
+          completeness: "complete",
+          authority: "authoritative",
+          refs: ["V1"],
+          summary: "正式 View 已存在匹配 Card。",
+        }],
+        answerability: [],
+      },
+      invalidatedEvidenceRefs: ["H1"],
+    });
+
+    const result = auditGroundedAnswer({
+      text: "时间是2026年9月12日，地点是东区体育馆，状态是筹备中。[V1]\n\n正式卡片尚未审批生效，仍需审批后才能落地。[H1]",
+      contract: state.contract(),
+      validRefs: ["V1", "H1"],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.issues).toContain("unknown_refs:H1");
+    expect(result.text).toContain("时间是2026年9月12日");
+    expect(result.text).not.toContain("尚未审批生效");
+    expect(result.text).not.toContain("[H1]");
+  });
 });

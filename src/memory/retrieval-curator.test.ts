@@ -88,7 +88,7 @@ describe("resolveRetrievalTargets", () => {
     });
   });
 
-  it("rejects invented ids and falls back deterministically", async () => {
+  it("rejects invented ids without guessing among multiple identity-supported candidates", async () => {
     aiState.generateText.mockResolvedValue({
       toolCalls: [{
         toolName: "submitRetrievalTarget",
@@ -105,9 +105,116 @@ describe("resolveRetrievalTargets", () => {
       context,
     });
 
-    expect(result.mode).toBe("fallback");
-    expect(result.targetObjectIds).toEqual(["association"]);
-    expect(result.warning).toContain("确定性降级");
+    expect(result.mode).toBe("none");
+    expect(result.targetObjectIds).toEqual([]);
+    expect(result.warning).toContain("未绑定任何候选 Object");
+  });
+
+  it("rejects a semantically related event when its proper name has no identity match", async () => {
+    const relatedEvent = {
+      id: "member-tournament",
+      canonicalName: "会员大赛",
+      surfaceForms: ["会员大赛"],
+      lexicalMatch: false,
+      semanticMatch: true,
+    };
+    aiState.generateText.mockResolvedValue({
+      toolCalls: [{
+        toolName: "submitRetrievalTarget",
+        input: {
+          targetObjects: [{
+            id: "member-tournament",
+            reason: "Echo人工验收赛属于赛事，因此选择最相似的会员大赛。",
+          }],
+        },
+      }],
+      reasoningText: "按赛事类别选择最相似对象。",
+    });
+
+    const result = await resolveRetrievalTargets({
+      query: "举行时间、地点、安排与状态",
+      targetHints: ["Echo人工验收赛-20260821-B4"],
+      candidates: [relatedEvent],
+      context: {
+        ...context,
+        conversation: [{
+          messageId: "u-b4",
+          role: "user",
+          text: "Echo人工验收赛-20260821-B4可能在2026年8月25日举行，地点还没有确定。",
+        }],
+        originalUserMessage: "Echo人工验收赛-20260821-B4可能在2026年8月25日举行，地点还没有确定。",
+      },
+    });
+
+    expect(result).toMatchObject({
+      mode: "none",
+      targetObjectIds: [],
+    });
+    expect(result.warning).toContain("无身份依据");
+  });
+
+  it("does not reuse an old conversation Object against a new explicit target name", async () => {
+    aiState.generateText.mockResolvedValue({
+      toolCalls: [{
+        toolName: "submitRetrievalTarget",
+        input: {
+          targetObjects: [{ id: "member-tournament", reason: "前文讨论过会员大赛。" }],
+        },
+      }],
+      reasoningText: "沿用前文活动。",
+    });
+
+    const result = await resolveRetrievalTargets({
+      query: "举行时间和地点",
+      targetHints: ["Echo人工验收赛-20260821-B5"],
+      candidates: [{
+        id: "member-tournament",
+        canonicalName: "会员大赛",
+        surfaceForms: ["会员大赛"],
+        lexicalMatch: false,
+        semanticMatch: true,
+      }],
+      context: {
+        ...context,
+        conversation: [
+          { messageId: "u-old", role: "user", text: "会员大赛去年在哪里举行？" },
+          {
+            messageId: "u-new",
+            role: "user",
+            text: "Echo人工验收赛-20260821-B5可能在明天举行。",
+          },
+        ],
+        originalUserMessage: "Echo人工验收赛-20260821-B5可能在明天举行。",
+      },
+    });
+
+    expect(result).toMatchObject({ mode: "none", targetObjectIds: [] });
+  });
+
+  it("allows the model to return no target when no candidate has the same identity", async () => {
+    aiState.generateText.mockResolvedValue({
+      toolCalls: [{
+        toolName: "submitRetrievalTarget",
+        input: { targetObjects: [] },
+      }],
+      reasoningText: "候选只是同类对象，不是同一对象。",
+    });
+
+    const result = await resolveRetrievalTargets({
+      query: "举行时间与地点",
+      targetHints: ["全新验收赛"],
+      candidates: [{
+        id: "old-event",
+        canonicalName: "旧比赛",
+        surfaceForms: ["旧比赛"],
+        lexicalMatch: false,
+        semanticMatch: true,
+      }],
+      context,
+    });
+
+    expect(result).toMatchObject({ mode: "none", targetObjectIds: [] });
+    expect(result.warning).toContain("没有能够确认身份");
   });
 });
 

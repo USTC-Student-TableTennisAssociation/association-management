@@ -115,25 +115,32 @@ export const activityOperationsCardTypes = [
       slot("resources", "支撑材料", "模板、表单或参考材料 Card。", ["ArtifactCard"]),
     ],
   ),
-  card(
-    "ActivityCard",
-    "活动",
-    "表示一次真实 Activity，并作为其 Activity Workspace 的业务根。",
-    [
-      text("name", "名称", true),
-      rich("description", "简介"),
-      activityStatus,
-      rich("progress", "进度"),
-      { key: "time", label: "活动时间", type: "date_range" },
-      text("format", "活动形式"),
-      text("scale", "活动规模"),
-      { key: "participant_count", label: "参与人数", type: "integer", constraints: { min: 0 } },
-    ],
-    [
-      slot("work_packages", "工作包", "该 Activity 中持久存在的 Runtime Work Package Cards。", ["WorkPackageCard"]),
-      slot("assignments", "负责人", "承担该 Activity 负责工作的 Assignment Cards。", ["AssignmentCard"]),
-    ],
-  ),
+  {
+    ...card(
+      "ActivityCard",
+      "活动",
+      "表示一次真实 Activity，并作为其 Activity Workspace 的业务根。",
+      [
+        text("name", "名称", true),
+        rich("description", "简介"),
+        activityStatus,
+        rich("progress", "进度"),
+        { key: "time", label: "活动时间", type: "date_range" },
+        text("format", "活动形式"),
+        text("scale", "活动规模"),
+        { key: "participant_count", label: "参与人数", type: "integer", constraints: { min: 0 } },
+      ],
+      [
+        slot("work_packages", "工作包", "该 Activity 中持久存在的 Runtime Work Package Cards。", ["WorkPackageCard"]),
+        slot("assignments", "负责人", "承担该 Activity 负责工作的 Assignment Cards。", ["AssignmentCard"]),
+      ],
+    ),
+    relatedObjects: {
+      description: "关联该真实活动对应的稳定 GlobalObject。",
+      max: 1,
+      uniqueCardPerObject: true,
+    },
+  },
   card(
     "WorkPackageCard",
     "工作包",

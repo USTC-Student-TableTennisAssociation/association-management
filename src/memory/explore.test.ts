@@ -469,6 +469,48 @@ describe("searchMemory", () => {
     ]);
     expect(result.connections).toContainEqual({ assertionRef: "A1", objectRef: "O1" });
   });
+
+  it("does not expose semantic candidates when Curator cannot confirm any target identity", async () => {
+    const retrieve = vi.fn().mockResolvedValue({
+      query: "新活动安排",
+      mode: "object-assertion",
+      compilationId: "compilation-current",
+      seedMap: locatedSeedMap(),
+      trace: { snapshot: { id: "compilation-current" }, warnings: [] },
+    });
+    vi.mocked(getMemoryRetriever).mockReturnValue({ mode: "object-assertion", retrieve });
+    vi.mocked(resolveRetrievalTargets).mockResolvedValue({
+      targetObjectIds: [],
+      mode: "none",
+      reasons: [],
+      candidateObjectIds: ["global-1", "global-4"],
+      warning: "候选中没有能够确认身份的同一 Object。",
+    });
+    vi.mocked(getDatabase).mockReturnValue({
+      memoryObjectHigherMemory: { findMany: vi.fn().mockResolvedValue([]) },
+    } as never);
+
+    const result = await searchMemory({
+      query: "举行时间与地点",
+      targetHints: ["Echo人工验收赛-20260821-B4"],
+    }, {
+      curatorContext: {
+        conversation: [],
+        originalUserMessage: "Echo人工验收赛-20260821-B4什么时候举行？",
+        currentInstant: "2026-08-21T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+      },
+    });
+
+    expect(result.objects).toEqual([]);
+    expect(result.assertions).toEqual([]);
+    expect(result.connections).toEqual([]);
+    expect(result.coverage).toMatchObject({
+      level: "insufficient",
+      contentPresence: "unknown",
+    });
+    expect(result.warnings).toContain("候选中没有能够确认身份的同一 Object。");
+  });
 });
 
 describe("followObject", () => {

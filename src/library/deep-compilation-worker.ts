@@ -122,7 +122,10 @@ export function artifactDirectoryFromProgress(line: string, marker: string): str
   const markerIndex = line.indexOf(marker);
   if (markerIndex < 0) return undefined;
   const directory = line.slice(markerIndex + marker.length).trim();
-  return directory ? path.normalize(/* turbopackIgnore: true */ directory) : undefined;
+  if (!directory) return undefined;
+  return directory.startsWith("/")
+    ? path.posix.normalize(/* turbopackIgnore: true */ directory)
+    : path.normalize(/* turbopackIgnore: true */ directory);
 }
 
 function assertArtifactWithin(directory: string, root: string, label: string): string {

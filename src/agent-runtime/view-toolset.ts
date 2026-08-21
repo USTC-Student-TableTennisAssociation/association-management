@@ -26,17 +26,58 @@ function orientation(registry: ExtensionRegistry): string {
   ).join("\n");
 }
 
+function normalizedObjectName(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("zh-CN")
+    .replace(/[\s“”"'《》〈〉【】（）()，,。.!！?？:：;；·—_\-]/g, "");
+}
+
 export function createAgentViewToolset(input: {
   actor: ActorContext;
   registry: ExtensionRegistry;
   readPort: PrismaViewReadPort;
   commandBus: ViewCommandBus;
   onProposal?: (proposal: ViewCommandProposalNotice) => void;
+  findExistingObjectsByCanonicalName?: (
+    canonicalName: string,
+  ) => Promise<readonly { id: string; canonicalName: string }[]>;
 }) {
   const { registry, readPort, commandBus } = input;
   const inspectedViews = new Set<string>();
   const snapshots = new Map<string, Promise<ViewReadSnapshot & { references: ViewInformationReference[] }>>();
   const referenceByRef = new Map<string, ViewInformationReference>();
+  const publishedObjects = new Map<string, { id: string; canonicalName: string }>();
+
+  const bindActivityObject = async (request: {
+    commandKey: string;
+    input: unknown;
+  }): Promise<unknown> => {
+    if (
+      request.commandKey !== "activity.create_activity" ||
+      !request.input || typeof request.input !== "object" || Array.isArray(request.input)
+    ) {
+      return request.input;
+    }
+    const commandInput = request.input as Record<string, unknown>;
+    if (commandInput.objectId !== undefined || typeof commandInput.name !== "string") {
+      return request.input;
+    }
+    const normalizedName = normalizedObjectName(commandInput.name);
+    const matches = [...publishedObjects.values()].filter(
+      (object) => normalizedObjectName(object.canonicalName) === normalizedName,
+    );
+    if (matches.length === 1) {
+      return { ...commandInput, objectId: matches[0].id };
+    }
+    if (matches.length > 1 || !input.findExistingObjectsByCanonicalName) {
+      return request.input;
+    }
+    const existingMatches = await input.findExistingObjectsByCanonicalName(
+      commandInput.name.trim(),
+    );
+    return existingMatches.length === 1
+      ? { ...commandInput, objectId: existingMatches[0].id }
+      : request.input;
+  };
 
   const readView = (viewKey: string) => {
     const existing = snapshots.get(viewKey);
@@ -86,7 +127,7 @@ export function createAgentViewToolset(input: {
         ...registry.listViews().map((view) => [
           `${view.manifest.key}@${view.manifest.version}`,
           ...view.commands.map((command) =>
-            `- ${command.key}@${command.version}（${command.label}）`
+            `- ${command.key}@${command.version}（${command.label}）输入 Schema：${JSON.stringify(command.inputSchema.jsonSchema)}`
           ),
         ].join("\n")),
       ].join("\n"),
@@ -101,8 +142,10 @@ export function createAgentViewToolset(input: {
         if (!inspectedViews.has(request.viewKey)) {
           throw new ViewRuntimeError(`调用 ${request.viewKey} Command 前必须先 readView`);
         }
+        const commandInput = await bindActivityObject(request);
         const result = await commandBus.dispatch({
           ...request,
+          input: commandInput,
           actor: input.actor,
           initiator: "ai",
         });
@@ -113,7 +156,7 @@ export function createAgentViewToolset(input: {
             commandKey: request.commandKey,
             commandVersion: request.commandVersion,
             stateVersion: result.stateVersion,
-            input: request.input,
+            input: commandInput,
           });
         } else {
           snapshots.delete(request.viewKey);
@@ -126,6 +169,9 @@ export function createAgentViewToolset(input: {
   return {
     tools,
     readView,
+    registerPublishedObjects(objects: readonly { id: string; canonicalName: string }[]): void {
+      for (const object of objects) publishedObjects.set(object.id, object);
+    },
     availableReferenceRefs(): string[] {
       return [...referenceByRef.keys()];
     },

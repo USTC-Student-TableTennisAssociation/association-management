@@ -28,6 +28,8 @@ const BUSINESS_VIEW_ACTION_PATTERN =
   /(?:请|帮我|需要|把|将|能否|可以).{0,20}(?:新增|添加|修改|更新|改成|写入|收录|建立|创建|删除|补建)/u;
 const BUSINESS_VIEW_ABSENCE_ACK_PATTERN =
   /(?:没有.{0,50}(?:Card|卡片|条目|收录|内容)|(?:未|尚未|暂未).{0,30}(?:收录|建立|创建)|(?:0|零)\s*个?\s*(?:Card|卡片|条目)|(?:正式\s*View|业务视角).{0,30}(?:是空的|为空|看不到)|看不到.{0,30}(?:内容|Card|卡片|条目))/iu;
+const BUSINESS_VIEW_PRESENT_CONTRADICTION_PATTERN =
+  /(?:正式\s*(?:Activity\s*)?(?:Card|卡片)|正式\s*(?:Business\s*)?View|(?:Activity\s*)?(?:Card|卡片)落地).{0,36}(?:尚未|未|仍需|还需|需要).{0,24}(?:审批|通过|生效|落地|写入|收录|建立|创建)/iu;
 
 function searchable(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("zh-CN")
@@ -84,6 +86,7 @@ export type GroundingContract = {
   coverageByLayer: EvidenceCoverageByLayer;
   evidenceSemantics: EvidenceSemantics;
   businessView?: BusinessViewGrounding;
+  invalidatedEvidenceRefs?: string[];
   businessViewActionRequested: boolean;
 };
 
@@ -114,6 +117,7 @@ type BusinessContextObservation = {
   }>;
   coverage?: EvidenceCoverage;
   semantics: EvidenceSemantics;
+  invalidatedEvidenceRefs?: string[];
 };
 
 /** Request-local evidence contract. Tool observations can only strengthen it. */
@@ -128,6 +132,7 @@ export class GroundingState {
   private targetReadable = false;
   private readonly coverageByLayer: EvidenceCoverageByLayer = {};
   private readonly evidenceLedger = new EvidenceLedger();
+  private readonly invalidatedEvidenceRefs = new Set<string>();
   private businessView?: BusinessViewGrounding;
 
   readonly targetKind: GroundingTargetKind;
@@ -264,6 +269,9 @@ export class GroundingState {
   observeBusinessContext(input: BusinessContextObservation): void {
     this.observeCoverage("business_view", input.coverage);
     this.observeSemantics(input.semantics);
+    for (const ref of input.invalidatedEvidenceRefs ?? []) {
+      this.invalidatedEvidenceRefs.add(ref);
+    }
     const membership = input.semantics.observations.find((observation) =>
       observation.layer === "business_view" &&
       observation.predicate === "contains_matching_card"
@@ -302,6 +310,7 @@ export class GroundingState {
       coverageByLayer: coverageMapCopy(this.coverageByLayer),
       evidenceSemantics: this.evidenceLedger.snapshot(),
       ...(this.businessView ? { businessView: { ...this.businessView } } : {}),
+      invalidatedEvidenceRefs: [...this.invalidatedEvidenceRefs],
       businessViewActionRequested: this.businessViewActionRequested,
     };
   }
@@ -355,6 +364,11 @@ export class GroundingState {
     ) {
       lines.push(
         "Business View 空状态是已验证的完整否定结果，不是检索失败。最终回答必须明确说明能看到正式 View、但没有匹配 Card，不得用相关 Shared Brain 内容冒充正式 View。",
+      );
+    }
+    if (contract.invalidatedEvidenceRefs?.length) {
+      lines.push(
+        `正式 Business View 已推翻旧高层记忆引用 [${contract.invalidatedEvidenceRefs.join("][")}]；这些引用本轮已失效，不得用于当前状态结论。`,
       );
     }
     return lines.join("\n");
@@ -468,6 +482,29 @@ function redactUnsupportedClaims(input: {
   };
 }
 
+function redactBusinessViewPresentContradictions(input: {
+  text: string;
+  enabled: boolean;
+}): { text: string; issues: string[]; redactedCount: number } {
+  if (!input.enabled) return { text: input.text, issues: [], redactedCount: 0 };
+  let redactedCount = 0;
+  const segments = input.text.match(
+    /[^。！？!?\n]+[。！？!?](?:\s*(?:\[(?:A|F|H|S|V)\d+\]|【(?:A|F|H|S|V)\d+】))*|[^。！？!?\n]+|\n+/gu,
+  ) ?? [input.text];
+  const kept = segments.map((segment) => {
+    if (!segment.trim() || !BUSINESS_VIEW_PRESENT_CONTRADICTION_PATTERN.test(segment)) {
+      return segment;
+    }
+    redactedCount += 1;
+    return "";
+  });
+  return {
+    text: kept.join("").replace(/\n{3,}/gu, "\n\n").trim(),
+    issues: redactedCount ? ["business_view_present_contradiction"] : [],
+    redactedCount,
+  };
+}
+
 function completeAbsentLibraryTitleSearches(contract: GroundingContract) {
   return contract.evidenceSemantics.observations.filter((observation) =>
     observation.layer === "library" &&
@@ -552,6 +589,7 @@ export function auditGroundedAnswer(input: {
 }): GroundingAudit {
   const text = input.text.trim();
   const validRefs = new Set(input.validRefs);
+  for (const ref of input.contract.invalidatedEvidenceRefs ?? []) validRefs.delete(ref);
   const issues: string[] = [];
   const notices: string[] = [];
   const titleZeroHitBoundary = libraryTitleZeroHitBoundary(input.contract, validRefs);
@@ -636,12 +674,22 @@ export function auditGroundedAnswer(input: {
 
   const citationRedaction = redactUnsupportedClaims({ text, validRefs });
   issues.push(...citationRedaction.issues);
-  const absenceRedaction = redactLibraryAbsenceOverclaims({
+  const businessViewContradictionRedaction = redactBusinessViewPresentContradictions({
     text: citationRedaction.text,
+    enabled: Boolean(
+      input.contract.businessView?.observationComplete &&
+      input.contract.businessView.contentPresence === "present"
+    ),
+  });
+  issues.push(...businessViewContradictionRedaction.issues);
+  const absenceRedaction = redactLibraryAbsenceOverclaims({
+    text: businessViewContradictionRedaction.text,
     enabled: Boolean(titleZeroHitBoundary),
   });
   issues.push(...absenceRedaction.issues);
-  const redactedCount = citationRedaction.redactedCount + absenceRedaction.redactedCount;
+  const redactedCount = citationRedaction.redactedCount +
+    businessViewContradictionRedaction.redactedCount +
+    absenceRedaction.redactedCount;
 
   if (
     input.contract.requiresReadableTarget &&

@@ -631,7 +631,9 @@ export async function searchMemory(
     !higherMemoryTargetIds.has(id) || staleHigherMemoryObjectIds.has(id)
   );
   let assertionCuration: AssertionCuration | undefined;
-  let compact: typeof higherMemoryCompact = higherMemoryCompact;
+  let compact: typeof higherMemoryCompact = useCurator && !targetIds.length
+    ? filterCompactResult(rawCompact, [], [])
+    : higherMemoryCompact;
   if (assertionTargetIds.length && useCurator) {
     const candidateAssertions = targetConstrainedCandidates(rawCompact, assertionTargetIds);
     assertionCuration = await curateRetrievalAssertions({

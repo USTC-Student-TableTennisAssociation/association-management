@@ -162,12 +162,18 @@ export class ViewCommandBus {
     actor: ActorContext;
   }): Promise<ViewCommandDispatchResult | { kind: "rejected"; proposalId: string }> {
     await this.installedViews.synchronize();
-    requirePermissions(input.actor, ["view.approve"]);
     const proposal = await this.database.viewCommandProposal.findUnique({
       where: { id: input.proposalId },
     });
     if (!proposal || proposal.status !== "pending") {
       throw new ViewRuntimeError("View Command Proposal 不存在或已处理");
+    }
+    const canApproveAny = input.actor.permissions.includes("view.approve");
+    const ownsProposal = Boolean(
+      input.actor.actorId && proposal.proposedByActorId === input.actor.actorId,
+    );
+    if (!canApproveAny && !ownsProposal) {
+      throw new ViewRuntimeError("只能处理自己创建的 View Command Proposal");
     }
     if (input.decision === "reject") {
       const updated = await this.database.viewCommandProposal.updateMany({

@@ -235,6 +235,9 @@ describe("Chat Assertion capture agent", () => {
     expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain(
       "地点还没有确定",
     );
+    expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain(
+      "当前确认句和包含完整事实的历史 user 原话",
+    );
 
     const prepareStep = vi.mocked(generateText).mock.calls[0][0].prepareStep!;
     expect(prepareStep({ stepNumber: 0 } as never)).toEqual({});
@@ -245,6 +248,40 @@ describe("Chat Assertion capture agent", () => {
         toolName: "submitChatAssertionExtraction",
       },
     });
+  });
+
+  it("deterministically rejects an interrogative Assertion template", async () => {
+    const { database } = mockDatabase();
+    const captureInput = input();
+    captureInput.semanticContext.conversation[2].text = "乒协的负责人是谁？";
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
+      objects: [existingAssociationBinding()],
+      assertions: [{
+        globalStatementTemplateMarkdown: `{{object:${associationRef}}}的负责人是谁？`,
+        objectRefs: [associationRef],
+        evidence: [{ messageId: "user-current", quotes: ["乒协的负责人是谁？"] }],
+      }],
+    }));
+
+    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
+    expect(database.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("deterministically rejects a declarative template backed only by a question", async () => {
+    const { database } = mockDatabase();
+    const captureInput = input();
+    captureInput.semanticContext.conversation[2].text = "乒协由谁负责？";
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
+      objects: [existingAssociationBinding()],
+      assertions: [{
+        globalStatementTemplateMarkdown: `{{object:${associationRef}}}由雷岳鑫负责。`,
+        objectRefs: [associationRef],
+        evidence: [{ messageId: "user-current", quotes: ["乒协由谁负责？"] }],
+      }],
+    }));
+
+    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
+    expect(database.$transaction).not.toHaveBeenCalled();
   });
 
   it("returns stable published IDs on a foreground retry without writing twice", async () => {
@@ -326,6 +363,95 @@ describe("Chat Assertion capture agent", () => {
         ordinal: 0,
       })],
     });
+  });
+
+  it("reviews and repairs a historical fact that omitted the current confirmation Evidence", async () => {
+    const { transaction } = mockDatabase();
+    const captureInput = input();
+    captureInput.semanticContext.conversation[0].text = "乒协由雷岳鑫负责。";
+    captureInput.semanticContext.conversation[2].text = "刚才说的负责人安排保持不变。";
+    vi.mocked(generateText)
+      .mockResolvedValueOnce(extractionResult({
+        objects: [existingAssociationBinding()],
+        assertions: [{
+          globalStatementTemplateMarkdown: `{{object:${associationRef}}}由雷岳鑫负责。`,
+          objectRefs: [associationRef],
+          evidence: [{ messageId: "user-context", quotes: ["乒协由雷岳鑫负责"] }],
+        }],
+      }))
+      .mockResolvedValueOnce(extractionResult({
+        objects: [existingAssociationBinding()],
+        assertions: [{
+          globalStatementTemplateMarkdown: `{{object:${associationRef}}}由雷岳鑫负责。`,
+          objectRefs: [associationRef],
+          evidence: [
+            { messageId: "user-context", quotes: ["乒协由雷岳鑫负责"] },
+            { messageId: "user-current", quotes: ["刚才说的负责人安排保持不变"] },
+          ],
+        }],
+      }));
+    vi.mocked(embedMemoryQueries).mockResolvedValue({
+      model: "BAAI/bge-m3",
+      modelRevision: "test",
+      dimension: 1024,
+      vectors: [Array.from({ length: 1024 }, () => 0.1)],
+    });
+
+    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(
+      expect.objectContaining({ publishedAssertions: 1 }),
+    );
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(generateText).mock.calls[1][0].prompt).toContain(
+      "没有把当前排队用户消息列为 Evidence",
+    );
+    expect(transaction.memoryAssertionChatEvidenceLink.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ ordinal: 0 }),
+        expect.objectContaining({ ordinal: 1 }),
+      ]),
+    });
+  });
+
+  it("reviews an empty declarative update once without forcing publication", async () => {
+    const { database } = mockDatabase();
+    const captureInput = input();
+    captureInput.semanticContext.conversation[2].text =
+      "乒协报名截止时间确定为2026年8月28日。";
+    vi.mocked(generateText).mockResolvedValue(extractionResult({ objects: [], assertions: [] }));
+
+    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(generateText).mock.calls[1][0].prompt).toContain(
+      "第一次提交为空",
+    );
+    expect(database.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("reviews an unsupported existing identity and still rejects it when unrepaired", async () => {
+    const { database } = mockDatabase();
+    const captureInput = input();
+    captureInput.semanticContext.conversation[0].text = "我说的是另一个活动。";
+    captureInput.semanticContext.conversation[2].text =
+      "Echo人工验收赛-C6确定在2026年8月31日举行。";
+    vi.mocked(generateText).mockResolvedValue(extractionResult({
+      objects: [existingAssociationBinding()],
+      assertions: [{
+        globalStatementTemplateMarkdown:
+          `{{object:${associationRef}}}确定在2026年8月31日举行。`,
+        objectRefs: [associationRef],
+        evidence: [{
+          messageId: "user-current",
+          quotes: ["Echo人工验收赛-C6确定在2026年8月31日举行"],
+        }],
+      }],
+    }));
+
+    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(generateText).mock.calls[1][0].prompt).toContain(
+      "名称或可信 Surface 没有出现在任何 user 原话中",
+    );
+    expect(database.$transaction).not.toHaveBeenCalled();
   });
 
   it("repairs one unambiguous literal Object in a correction template", async () => {

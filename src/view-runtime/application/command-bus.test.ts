@@ -7,6 +7,7 @@ import { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import { ViewCommandBus } from "@/view-runtime/application/command-bus";
 
 function runtimeFixture(policy: "approval_required" | "auto_execute") {
+  const proposalActorId = "00000000-0000-4000-8000-000000000001";
   const execute = vi.fn(async () => ({ summary: { accepted: true } }));
   const viewModule: ViewModule = {
     manifest: {
@@ -51,7 +52,10 @@ function runtimeFixture(policy: "approval_required" | "auto_execute") {
       findUnique: vi.fn().mockResolvedValue(installed),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
-    viewCommandProposal: { findFirst: vi.fn() },
+    viewCommandProposal: {
+      findFirst: vi.fn().mockResolvedValue({ id: "proposal-1" }),
+      update: vi.fn(),
+    },
     viewCommandExecution: {
       create: vi.fn().mockResolvedValue({ id: "execution-1" }),
     },
@@ -63,6 +67,18 @@ function runtimeFixture(policy: "approval_required" | "auto_execute") {
     },
     viewCommandProposal: {
       create: vi.fn().mockResolvedValue({ id: "proposal-1" }),
+      findUnique: vi.fn().mockResolvedValue({
+        id: "proposal-1",
+        viewKey: "test_view",
+        commandKey: "test.accept",
+        commandVersion: "1",
+        inputJson: { value: "hello" },
+        expectedStateVersion: BigInt(3),
+        proposedByActorId: proposalActorId,
+        skillId: null,
+        status: "pending",
+      }),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
     $transaction: vi.fn(async (callback: (tx: typeof transaction) => Promise<unknown>) =>
       callback(transaction)),
@@ -73,6 +89,7 @@ function runtimeFixture(policy: "approval_required" | "auto_execute") {
     database,
     execute,
     installedViews,
+    proposalActorId,
     transaction,
   };
 }
@@ -126,5 +143,57 @@ describe("ViewCommandBus", () => {
       data: { stateVersion: BigInt(4) },
     });
     expect(fixture.transaction.viewCommandExecution.create).toHaveBeenCalledOnce();
+  });
+
+  it("allows a member to approve their own AI Proposal", async () => {
+    const fixture = runtimeFixture("approval_required");
+
+    await expect(fixture.bus.decideProposal({
+      proposalId: "proposal-1",
+      decision: "approve",
+      actor: { actorId: fixture.proposalActorId, permissions: ["view.write"] },
+    })).resolves.toEqual({
+      kind: "executed",
+      executionId: "execution-1",
+      viewKey: "test_view",
+      stateVersion: "4",
+      summary: { accepted: true },
+    });
+
+    expect(fixture.execute).toHaveBeenCalledOnce();
+    expect(fixture.transaction.viewCommandProposal.update).toHaveBeenCalledWith({
+      where: { id: "proposal-1" },
+      data: { status: "applied", decidedAt: expect.any(Date), appliedAt: expect.any(Date) },
+    });
+  });
+
+  it("does not allow a member to decide another actor's Proposal", async () => {
+    const fixture = runtimeFixture("approval_required");
+
+    await expect(fixture.bus.decideProposal({
+      proposalId: "proposal-1",
+      decision: "approve",
+      actor: {
+        actorId: "00000000-0000-4000-8000-000000000002",
+        permissions: ["view.write"],
+      },
+    })).rejects.toThrow("只能处理自己创建的 View Command Proposal");
+
+    expect(fixture.execute).not.toHaveBeenCalled();
+  });
+
+  it("allows an approver to decide another actor's Proposal", async () => {
+    const fixture = runtimeFixture("approval_required");
+
+    await expect(fixture.bus.decideProposal({
+      proposalId: "proposal-1",
+      decision: "reject",
+      actor: {
+        actorId: "00000000-0000-4000-8000-000000000002",
+        permissions: ["view.approve"],
+      },
+    })).resolves.toEqual({ kind: "rejected", proposalId: "proposal-1" });
+
+    expect(fixture.database.viewCommandProposal.updateMany).toHaveBeenCalledOnce();
   });
 });

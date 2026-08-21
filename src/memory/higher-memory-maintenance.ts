@@ -23,6 +23,43 @@ export type HigherMemoryMaintenanceResult = {
   ambientMemories: number;
 };
 
+function isTimeoutFailure(error: unknown, seen = new Set<unknown>()): boolean {
+  if (!error || seen.has(error)) return false;
+  seen.add(error);
+  if (typeof error === "object") {
+    const candidate = error as {
+      name?: unknown;
+      message?: unknown;
+      cause?: unknown;
+      errors?: unknown;
+    };
+    const detail = `${String(candidate.name ?? "")} ${String(candidate.message ?? "")}`;
+    if (/(?:timeout|timed out)/iu.test(detail)) return true;
+    if (isTimeoutFailure(candidate.cause, seen)) return true;
+    if (Array.isArray(candidate.errors) && candidate.errors.some((item) =>
+      isTimeoutFailure(item, seen)
+    )) return true;
+  }
+  return false;
+}
+
+async function runWithOneTimeoutRetry<T>(
+  label: string,
+  operation: () => Promise<T>,
+  trace?: EchoDebugTrace,
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (!isTimeoutFailure(error)) throw error;
+    await trace?.appendSection(
+      `${label} 超时重试`,
+      "第一次模型调用超时；旧 Higher Memory 尚未改变，正在进行唯一一次完整重试。",
+    );
+    return operation();
+  }
+}
+
 export async function maintainHigherMemories(
   input: HigherMemoryMaintenanceInput,
   trace?: EchoDebugTrace,
@@ -33,21 +70,29 @@ export async function maintainHigherMemories(
   let ambientMemories = 0;
 
   if (objectDecision) {
-    objectMemories = await maintainObjectHigherMemories({
-      ...input,
-      queueDecision: objectDecision,
-    }, trace);
+    objectMemories = await runWithOneTimeoutRetry(
+      "Object Higher Memory",
+      () => maintainObjectHigherMemories({
+        ...input,
+        queueDecision: objectDecision,
+      }, trace),
+      trace,
+    );
   }
   if (ambientScopes.length) {
-    ambientMemories = await maintainAmbientHigherMemories({
-      clientMessageId: input.clientMessageId,
-      submittedAt: input.submittedAt,
-      timezone: input.timezone,
-      semanticContext: input.semanticContext,
-      retrieval: input.retrieval,
-      scopes: ambientScopes,
-      reason: input.queueDecision.reason,
-    }, trace);
+    ambientMemories = await runWithOneTimeoutRetry(
+      "Ambient Higher Memory",
+      () => maintainAmbientHigherMemories({
+        clientMessageId: input.clientMessageId,
+        submittedAt: input.submittedAt,
+        timezone: input.timezone,
+        semanticContext: input.semanticContext,
+        retrieval: input.retrieval,
+        scopes: ambientScopes,
+        reason: input.queueDecision.reason,
+      }, trace),
+      trace,
+    );
   }
   return { objectMemories, ambientMemories };
 }

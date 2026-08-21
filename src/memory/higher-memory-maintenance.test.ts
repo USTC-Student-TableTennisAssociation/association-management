@@ -99,4 +99,72 @@ describe("maintainHigherMemories", () => {
     expect(maintenanceState.object).not.toHaveBeenCalled();
     expect(maintenanceState.ambient).toHaveBeenCalledOnce();
   });
+
+  it("retries an Object Higher Memory timeout exactly once", async () => {
+    maintenanceState.object
+      .mockRejectedValueOnce(Object.assign(new Error("Step timeout of 180000ms exceeded"), {
+        name: "TimeoutError",
+      }))
+      .mockResolvedValueOnce(1);
+    const trace = { appendSection: vi.fn().mockResolvedValue(undefined) };
+
+    await expect(maintainHigherMemories({
+      clientMessageId: "message-timeout",
+      submittedAt: "2026-08-15T00:00:00.000Z",
+      timezone: "Asia/Shanghai",
+      semanticContext: {
+        conversation: [],
+        systemInstruction: "",
+        modelCalls: [],
+        toolExecutions: [],
+        finalAnswer: "answer",
+      },
+      retrieval: {
+        query: "test",
+        mode: "fixture",
+        seedMap: { facets: [], objects: [], assertions: [], connections: [] },
+      },
+      queueDecision: {
+        targets: [{
+          scope: "object",
+          globalObjectId: "00000000-0000-4000-8000-000000000001",
+        }],
+        reason: "正式状态发生变化",
+      },
+    }, trace as never)).resolves.toEqual({ objectMemories: 1, ambientMemories: 0 });
+
+    expect(maintenanceState.object).toHaveBeenCalledTimes(2);
+    expect(trace.appendSection).toHaveBeenCalledWith(
+      "Object Higher Memory 超时重试",
+      expect.stringContaining("唯一一次完整重试"),
+    );
+  });
+
+  it("does not retry a non-timeout maintenance failure", async () => {
+    maintenanceState.ambient.mockRejectedValueOnce(new Error("schema validation failed"));
+
+    await expect(maintainHigherMemories({
+      clientMessageId: "message-invalid",
+      submittedAt: "2026-08-15T00:00:00.000Z",
+      timezone: "Asia/Shanghai",
+      semanticContext: {
+        conversation: [],
+        systemInstruction: "",
+        modelCalls: [],
+        toolExecutions: [],
+        finalAnswer: "answer",
+      },
+      retrieval: {
+        query: "test",
+        mode: "fixture",
+        seedMap: { facets: [], objects: [], assertions: [], connections: [] },
+      },
+      queueDecision: {
+        targets: [{ scope: "recent" }],
+        reason: "近期状态发生变化",
+      },
+    })).rejects.toThrow("schema validation failed");
+
+    expect(maintenanceState.ambient).toHaveBeenCalledOnce();
+  });
 });

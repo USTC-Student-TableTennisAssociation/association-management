@@ -11,9 +11,6 @@ export async function PATCH(
 ) {
   const user = await currentAuthUser();
   if (!user) return Response.json({ error: "未登录" }, { status: 401 });
-  if (user.role !== "ADMIN") {
-    return Response.json({ error: "需要 View 审批权限" }, { status: 403 });
-  }
   try {
     const { proposalId } = await context.params;
     const { decision } = decisionSchema.parse(await request.json());
@@ -22,7 +19,11 @@ export async function PATCH(
       decision,
       actor: {
         actorId: user.actor.id,
-        permissions: ["view.read", "view.write", "view.approve"],
+        permissions: [
+          "view.read",
+          "view.write",
+          ...(user.role === "ADMIN" ? ["view.approve"] : []),
+        ],
       },
     });
     return Response.json(result);
