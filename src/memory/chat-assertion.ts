@@ -33,7 +33,9 @@ const DEFAULT_TIMEZONE = "Asia/Shanghai";
 const MAX_ASSERTIONS = 12;
 const MAX_EVIDENCE_MESSAGES_PER_ASSERTION = 8;
 const MAX_EVIDENCE_QUOTES_PER_MESSAGE = 8;
-const MAX_EXTRACTION_STEPS = 6;
+// Assertion extraction gets one bounded identity lookup, then must submit.
+// This prevents a new user-named Object from drifting through repeated semantic searches.
+const MAX_EXTRACTION_STEPS = 2;
 const EXTRACTION_SEARCH_RESULT_TOKENS = 32_000;
 const MAX_OBJECT_BINDINGS = 12;
 
@@ -473,15 +475,16 @@ function extractionPrompt(input: ChatAssertionCaptureInput): string {
     "完整 conversation 可以用于解开省略主语、“它/这个社团”等指代，并确认用户原话中出现过哪个 Object；这类上下文不需要伪装成事实 Evidence。existing Object 的名称或 surface form 必须在某一条 user conversation 原话中真实出现，不能只依赖 Assistant、搜索结果或 reasoning 补出主语。",
     "优先检查 initialRetrieval，它是主对话已经积累的 Shared Brain 检索结果。若其中没有足以确认身份的 Object，由你根据完整上下文自行决定 searchMemory 查询；必要时可以改写查询或 followObject。",
     "搜索只用于定位数据库中真实存在的 Object 和理解背景。搜索到的旧 Assertion 不是本轮用户 Evidence，也不要因为旧知识与用户新陈述冲突就悄悄改写用户陈述。",
-    "先搜索、后决定 Object：只要库中可能已有同一 Object，就必须继续搜索并使用 resolution=existing；只有搜索后仍没有准确对象，且用户 Evidence 逐字给出了稳定专名时，才可提出 resolution=create。查重有歧义时不要猜、不要合并，也不要创建该 Object 或相关 Assertion。",
+    "先搜索、后决定 Object：最多进行一次身份检索。只有精确同名或明确 Surface 能证明是同一 Object 时才使用 resolution=existing；语义相似但专名不同的旧活动、比赛或组织不能视为同一 Object。一次检索未找到准确对象，且用户 Evidence 逐字给出了稳定专名时，应提交 resolution=create；不要继续扩大查询寻找最相似对象，也不要因语义相似而猜测、合并或放弃提交。",
     "如果搜索候选与待创建 Object 发生名称重叠，先调用 inspectObjectIdentity 查看旧 Object 的逐项 Surface 来源。你可以在 surfaceCorrections 中要求同轮移除明显错误的泛称 Surface，但权限非常窄：只允许“负责人、会长、老师、学校、协会、部门、该校、这个社团”等不能独立识别身份的上下文称呼；必须填写 inspect 返回的精确 surfaceId 和原文 surfaceForm；该泛称必须是本轮新 Object 专名的一部分；只有新 Object 与至少一条 Assertion 同时成功发布时才会原子纠正。surfaceCorrections 每一项必须是扁平对象，精确格式为 {\"objectId\":\"旧 Object UUID\",\"surfaceId\":\"inspect 返回的 Surface id\",\"surfaceForm\":\"原文 Surface\",\"reason\":\"为何不能独立指向旧 Object\"}；不要创建 removedSurfaces、surfaces、changes 等嵌套字段。这里的 Surface 来源只证明旧 Resolver 曾经这样归属，不证明该词能脱离来源语境独立识别 Object；上述职务/类别泛称即使来自文档或聊天，也按系统定义视为 context-only，不得因为“有来源”就保留为具体 Object 的合法别名。真实别名、专名、合并、拆分或有歧义的归属不要处理，留给主对话 Object Change Proposal。",
     "objects 是本轮局部绑定表。每项 ref 是简短局部标识（如 association、new-president），并且必须显式填写 resolution。existing 项精确格式为 {\"ref\":\"局部标识\",\"resolution\":\"existing\",\"globalObjectId\":\"工具返回的 UUID\"}；create 项精确格式为 {\"ref\":\"局部标识\",\"resolution\":\"create\",\"canonicalName\":\"完整专名\",\"surfaceForms\":[\"完整专名或真实别名\"]}。不要仅凭是否存在 globalObjectId 猜省 resolution。create 的 canonicalName 与每个 surface form 都必须逐字出现在引用它的成功 Assertion 的用户 Evidence quote 中，不能润色、补全、翻译或从 Assistant/搜索结果生成。必须选择用户原话中最具体、可脱离当前句子独立识别该 Object 的完整名称；不得为了简短而从完整专名中截取“协会、负责人、部门”等通用后缀或较宽泛的局部片段。代词、职务、时间、“某人/这个社团”等泛称不能创建 Object。",
     "每个 create Object 必须至少被一条最终 Assertion 使用；没有成功 Assertion 就不得提出或保留孤立 Object。",
     "globalStatementTemplateMarkdown 必须自足，并把每次 Object 出现只写成 {{object:局部ref}}；不要在占位符前后再写该 Object 的全名、简称、别名或括号注释。例如只能写“{{object:association}}在……”，不能写“乒协（{{object:association}}）在……”。objectRefs 是模板中使用的去重局部 ref。",
     "严格遵循用户原话，采用最小规范化，不要为了正式、顺畅或好看而润色事实。只允许：(1) 用经用户原话支撑的 Object 占位符补全省略主语；(2) 展开明确的年份/学年缩写；(3) 删除“其实、确实、呢”等不改变事实的会话语气；(4) 做不改变含义的必要语法拼接。不得改变动作、事实强度、因果、范围、确定程度或状态类型。例如用户说“是四星社团”，就写“是四星社团”，不能改成“获评四星级社团”；用户说“准备举办”，不能改成“将举办”或“已确定举办”。不确定是否忠实时，宁可不输出。",
     "转述来源属于事实强度，必须保留。若用户说“我问了魏汉东，他说 X”，应忠实写成“魏汉东说 X”或“据用户转述，魏汉东称 X”，不能把它提升成无来源限定的确定事实 X。",
-    "保留计划、预计、建议、观察、可能等确定程度。",
-    "不要提取问题、假设、头脑风暴、操作指令、纯闲聊；不要把 25-26 学年等历史限定状态改写成现在仍有效。相对时间以给定服务器时间解释，但 submittedAt 只是审计时间，不是命题有效期。",
+    "保留计划、预计、建议、观察、可能等确定程度。用户用陈述句说某件事‘可能’发生、时间‘大概’如此、地点‘尚未确定/待定’，是在陈述带有认识不确定性或未决状态的事实，可以安全发布，但 Assertion 必须逐字保留这些限定；不能因为存在‘可能’就提交空结果。只有‘如果/假设/要是……’等条件推演、提问或头脑风暴才属于不可发布的假设。",
+    "同型示例：用户说‘测试赛可能在2026年8月24日举行，地点还没有确定。’，并且‘测试赛’是逐字出现的稳定专名、一次检索没有精确同名 Object 时，应创建该 Object，并提交类似‘{{object:event}}可能在2026年8月24日举行，地点还没有确定。’的 Assertion；Evidence quote 必须逐字引用用户整句，higherMemoryObjectRefs 对一次性测试活动通常为 []。",
+    "不要提取问题、条件假设、头脑风暴、操作指令、纯闲聊；不要把 25-26 学年等历史限定状态改写成现在仍有效。相对时间以给定服务器时间解释，但 submittedAt 只是审计时间，不是命题有效期。",
     "higherMemoryObjectRefs 由你独立判断：只选择本轮新 Assertion 涉及、且值得长期维护高层认知的少数核心 Object，例如长期活动品牌、核心组织或持续关注的重要人物。一次性日期、任务、材料和普通顺带提及不选。只能引用 objects 中的 ref；不值得时提交 []。",
     "完成搜索和判断后必须单独调用 submitChatAssertionExtraction，不要在普通文本中输出 JSON，也不要把提交与搜索工具放在同一次响应中。提交参数顶层只能是 objects、higherMemoryObjectRefs、surfaceCorrections、assertions；没有安全纠正时 surfaceCorrections=[]。Assertion 每项字段严格为 globalStatementTemplateMarkdown、objectRefs、evidence；evidence 每项严格为 messageId、quotes。",
     JSON.stringify({

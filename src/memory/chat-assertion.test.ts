@@ -220,6 +220,31 @@ describe("Chat Assertion capture agent", () => {
     expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain(
       "这类上下文不需要伪装成事实 Evidence",
     );
+    expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain(
+      "最多进行一次身份检索",
+    );
+    expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain(
+      "语义相似但专名不同的旧活动、比赛或组织不能视为同一 Object",
+    );
+    expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain(
+      "不能因为存在‘可能’就提交空结果",
+    );
+    expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain(
+      "只有‘如果/假设/要是……’等条件推演",
+    );
+    expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain(
+      "地点还没有确定",
+    );
+
+    const prepareStep = vi.mocked(generateText).mock.calls[0][0].prepareStep!;
+    expect(prepareStep({ stepNumber: 0 } as never)).toEqual({});
+    expect(prepareStep({ stepNumber: 1 } as never)).toEqual({
+      activeTools: ["submitChatAssertionExtraction"],
+      toolChoice: {
+        type: "tool",
+        toolName: "submitChatAssertionExtraction",
+      },
+    });
   });
 
   it("returns stable published IDs on a foreground retry without writing twice", async () => {

@@ -57,6 +57,7 @@ import {
   type ChatStreamObservation,
 } from "@/ai/chat-stream-status";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
+import { resolveTurnHandoff } from "@/ai/turn-handoff";
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import { modelHistoryMessageText } from "@/ai/ui-message-text";
 import { buildViewContext } from "@/agent-runtime/view-context";
@@ -1582,24 +1583,23 @@ export async function POST(request: Request) {
             .findLast((call) => call.toolName === TURN_HANDOFF_TOOL);
           const parsedHandoff = turnHandoffSchema.safeParse(handoffCall?.input);
           const handoff = parsedHandoff.success ? parsedHandoff.data : undefined;
-          const handoffIsValid = Boolean(
-            handoff &&
-              handoff.candidateQuotes.every((quote) => query.includes(quote)) &&
-              (handoff.reviewNeeded
-                ? handoff.candidateQuotes.length > 0
-                : handoff.candidateQuotes.length === 0),
-          );
-          const reviewNeeded = handoffIsValid && Boolean(handoff?.reviewNeeded);
-          const candidateQuotes = handoffIsValid
-            ? handoff!.candidateQuotes
-            : [];
+          const {
+            handoffIsValid,
+            reviewNeeded,
+            candidateQuotes,
+            reviewSource,
+          } = resolveTurnHandoff({
+            handoff,
+            currentUserText: query,
+          });
           await debugTrace.appendJsonSection("Turn Handoff", {
             valid: handoffIsValid,
             reviewNeeded,
             candidateQuotes,
-            fallbackReason: handoffIsValid
-              ? null
-              : "未提交有效 Handoff；本轮跳过自动知识审查，避免未验证内容回灌。",
+            reviewSource,
+            fallbackReason: reviewSource === "fallback"
+              ? "未提交有效 Handoff；本轮转交受限 Assertion Agent 审查当前用户原话，仍需通过逐字 Evidence 与确定性校验后才能发布。"
+              : null,
           });
           const semanticContext = {
             conversation: semanticConversation.slice(-8),
