@@ -115,7 +115,7 @@ def _add_pdf_arguments(command: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cold-start",
-        description="解析单份协会手册 PDF 并建立连续原文区域树",
+        description="解析单份来源 PDF 并建立连续原文区域树",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     explore = subparsers.add_parser("explore", help="运行单 PDF 全局勘探")

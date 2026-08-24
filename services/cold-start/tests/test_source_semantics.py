@@ -675,6 +675,32 @@ def test_atomic_naming_hint_must_be_grouped_in_one_fragment() -> None:
         )
 
 
+def test_explicit_source_equivalence_allows_a_short_name_without_a_domain_lexicon() -> None:
+    draft = _same_referent_draft("远航计划", "远航")
+    claim = _source_claim("claim-1", "远航计划已启动。")
+    submission = ObjectFragmentSubmission(
+        fragments=[
+            ObjectFragmentDraft(
+                fragment_key="F1",
+                surface_forms=["远航计划", "远航"],
+            )
+        ],
+        assertions=[
+            FragmentAssertionTemplateDraft(
+                claim_id="claim-1",
+                statement_template_markdown="{{fragment:F1}}已启动。",
+            )
+        ],
+    )
+
+    _validate_fragment_submission(
+        submission,
+        [claim],
+        same_referent_drafts=[draft],
+        source_blocks=_blocks("远航计划（以下简称远航）已启动。"),
+    )
+
+
 def test_fragment_can_extend_atomic_hint_with_source_local_reusable_name() -> None:
     draft = _same_referent_draft(
         "中国科学技术大学学生乒乓球协会",
@@ -753,7 +779,7 @@ def test_fragment_rejects_generic_context_name_as_specific_object_alias() -> Non
         ],
     )
 
-    with pytest.raises(ValueError, match="泛称"):
+    with pytest.raises(ValueError, match="宽泛子串"):
         _validate_fragment_submission(
             submission,
             [claim],
@@ -866,7 +892,7 @@ def test_atomic_prompt_requires_json_safe_quotes() -> None:
     assert "中文弯引号“”" in CLAIM_EXTRACTION_SYSTEM_PROMPT
     assert "ASCII 双引号" in CLAIM_EXTRACTION_SYSTEM_PROMPT
     assert '\\"' in CLAIM_EXTRACTION_SYSTEM_PROMPT
-    assert "协会呈现“两极化”结构" in CLAIM_EXTRACTION_SYSTEM_PROMPT
+    assert "项目呈现“两极化”结构" in CLAIM_EXTRACTION_SYSTEM_PROMPT
     assert set(AtomicClaimSubmission.model_fields) == {
         "claims",
         "same_referent_drafts",
@@ -880,8 +906,8 @@ def test_atomic_prompt_requires_json_safe_quotes() -> None:
         "occurrence_index",
     }
     assert "不得因为名称相似、常识" in CLAIM_EXTRACTION_SYSTEM_PROMPT
-    assert "不得把“乒协”加入该草稿" in CLAIM_EXTRACTION_SYSTEM_PROMPT
-    assert "25-26届会长深感有责任改变这一现状" in CLAIM_EXTRACTION_SYSTEM_PROMPT
+    assert "不得把“该计划”加入该草稿" in CLAIM_EXTRACTION_SYSTEM_PROMPT
+    assert "当前负责人认为有必要改变这一现状" in CLAIM_EXTRACTION_SYSTEM_PROMPT
     assert "不要默认按句、每个谓词、列表项或表格单元格切分" in CLAIM_EXTRACTION_SYSTEM_PROMPT
     assert "生命周期不同，应分开" in CLAIM_EXTRACTION_SYSTEM_PROMPT
     assert "Reference Assertion" in CLAIM_EXTRACTION_SYSTEM_PROMPT
@@ -890,7 +916,7 @@ def test_atomic_prompt_requires_json_safe_quotes() -> None:
         {
             "claims": [
                 {
-                    "statement_markdown": "25-26届会长深感有责任改变这一现状。",
+                    "statement_markdown": "当前负责人认为有必要改变这一现状。",
                     "supporting_block_ids": ["p0001-b0001"],
                     "context_dependent": True,
                 }
@@ -922,8 +948,8 @@ def test_fragment_prompt_defines_leaf_ir_without_global_identity() -> None:
     assert "reviewed/frozen claims" in OBJECT_FRAGMENT_SYSTEM_PROMPT
     assert "中文弯引号“”" in OBJECT_FRAGMENT_SYSTEM_PROMPT
     assert "未转义的 ASCII 双引号" in OBJECT_FRAGMENT_SYSTEM_PROMPT
-    assert "不包括仅作为归属背景的组织" in OBJECT_FRAGMENT_SYSTEM_PROMPT
-    assert "不要再加入“乒协”" in OBJECT_FRAGMENT_SYSTEM_PROMPT
+    assert "不包括仅作为归属背景的 Object" in OBJECT_FRAGMENT_SYSTEM_PROMPT
+    assert "不要再加入宿主组织" in OBJECT_FRAGMENT_SYSTEM_PROMPT
     for removed in ("start", "end", "occurrence_index"):
         assert removed not in ObjectFragmentSubmission.model_json_schema()["properties"]
 
