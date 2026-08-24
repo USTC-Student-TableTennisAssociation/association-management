@@ -229,10 +229,10 @@ def test_person_identity_prompt_requires_direct_evidence() -> None:
     assert "仍依赖“可能”“很可能”“符合背景”等合理性推测，必须 create" in (
         GLOBAL_IDENTITY_SYSTEM_PROMPT
     )
-    assert "脚注明确写明“钟轹弘，24-25级乒协会长”时，可以与“钟轹弘” attach" in (
+    assert "脚注明确写明“林岚，2025—2026 年度项目主管”时，可以与“林岚” attach" in (
         GLOBAL_IDENTITY_SYSTEM_PROMPT
     )
-    assert "仅有\n“刘畅”和“刘畅学长”" in GLOBAL_IDENTITY_SYSTEM_PROMPT
+    assert "仅有\n“陈晨”和“陈晨老师”" in GLOBAL_IDENTITY_SYSTEM_PROMPT
 
 
 def test_one_region_plan_can_create_and_attach_together() -> None:

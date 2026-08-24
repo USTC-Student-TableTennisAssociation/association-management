@@ -6,17 +6,33 @@ import type {
 import { getDatabase } from "@/db";
 import type { EvidenceSemantics } from "@/evidence/types";
 import type { MemoryExploreResult } from "@/memory/explore";
+import {
+  parseCognitiveMemory,
+  parseOperationalMemoryIndex,
+  renderCognitiveMemory,
+} from "@/memory/higher-memory-document";
 import type { ViewInformationReference } from "@/agent-runtime/view-types";
+
+const FORMAL_CARD_ABSENCE_MEMORY_PATTERNS = [
+  /(?:正式\s*)?(?:business\s*)?view.{0,40}(?:0|零)\s*(?:个|张)?\s*(?:card|卡片)/iu,
+  /(?:尚未|未|没有|并未).{0,30}(?:收录|写入|建立|创建|落地).{0,30}(?:card|卡片|view)/iu,
+  /(?:card|卡片|view).{0,30}(?:尚未|未|没有|并未).{0,30}(?:收录|写入|建立|创建|落地|生效)/iu,
+];
+
+export function higherMemoryContradictsFormalCardPresence(content: string): boolean {
+  return FORMAL_CARD_ABSENCE_MEMORY_PATTERNS.some((pattern) => pattern.test(content));
+}
 
 function searchable(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("zh-CN")
     .replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
-function cardSearchText(card: ViewCardState): string {
+function cardSearchText(card: ViewCardState, relatedObjectNames: readonly string[] = []): string {
   return searchable([
     card.cardTypeKey,
     JSON.stringify(card.dimensions),
+    ...relatedObjectNames,
   ].join(" "));
 }
 
@@ -109,26 +125,56 @@ export async function buildViewContext(input: {
   activeCardId?: string;
 }) {
   const hints = input.targetHints.map(searchable).filter(Boolean);
-  const relevantCards = input.snapshot.cards.filter((card) => {
-    if (input.activeCardId && card.id === input.activeCardId) return true;
-    if (!hints.length) return true;
-    const text = cardSearchText(card);
-    return hints.some((hint) => text.includes(hint));
-  });
-  const objectIds = [...new Set(relevantCards.flatMap((card) => card.relatedObjectIds))];
-  const objectRows = objectIds.length
+  // Resolve every Card relationship before target filtering. A Card can be
+  // intentionally sparse and identify its subject only through relatedObjectIds.
+  const allObjectIds = [...new Set(input.snapshot.cards.flatMap((card) => card.relatedObjectIds))];
+  const allObjectRows = allObjectIds.length
     ? await getDatabase().memoryGlobalObject.findMany({
-        where: { id: { in: objectIds } },
+        where: { id: { in: allObjectIds } },
         select: {
           id: true,
           globalObjectKey: true,
           canonicalName: true,
           higherMemory: {
-            select: { id: true, contentMarkdown: true, maintainedAt: true },
+            select: {
+              id: true,
+              cognitiveMemory: true,
+              operationalIndex: true,
+              maintainedAt: true,
+            },
           },
         },
       })
     : [];
+  const allObjectById = new Map(allObjectRows.map((object) => [object.id, object]));
+  const relevantCards = input.snapshot.cards.filter((card) => {
+    if (input.activeCardId && card.id === input.activeCardId) return true;
+    if (!hints.length) return true;
+    const relatedNames = card.relatedObjectIds.flatMap((id) => {
+      const object = allObjectById.get(id);
+      return object ? [object.canonicalName, object.globalObjectKey] : [];
+    });
+    const text = cardSearchText(card, relatedNames);
+    return hints.some((hint) => text.includes(hint));
+  });
+  const objectIds = [...new Set(relevantCards.flatMap((card) => card.relatedObjectIds))];
+  const objectIdSet = new Set(objectIds);
+  const objectRows = allObjectRows.filter((object) => objectIdSet.has(object.id));
+  const higherMemoryConflicts = objectRows.flatMap((object, index) =>
+    object.higherMemory &&
+      higherMemoryContradictsFormalCardPresence(renderCognitiveMemory(
+        parseCognitiveMemory(object.higherMemory.cognitiveMemory),
+      ))
+      ? [{
+          ref: `H${index + 1}`,
+          globalObjectId: object.id,
+          reason: "正式 Business View 已存在关联 Card，但旧 Object Higher Memory 仍声称 Card 未收录、未落地或 View 为 0 张卡片。",
+        }]
+      : []
+  );
+  const conflictingObjectIds = new Set(
+    higherMemoryConflicts.map((conflict) => conflict.globalObjectId),
+  );
   const requiredDimensionsByType = new Map(input.cardTypes.map((cardType) => [
     cardType.key,
     cardType.dimensions.filter((dimension) => dimension.required),
@@ -184,12 +230,16 @@ export async function buildViewContext(input: {
       lexicalMatch: true,
       semanticMatch: false,
     })),
-    higherMemories: objectRows.flatMap((object, index) => object.higherMemory
+    higherMemories: objectRows.flatMap((object, index) =>
+      object.higherMemory && !conflictingObjectIds.has(object.id)
       ? [{
           ref: `H${index + 1}`,
           id: object.higherMemory.id,
           globalObjectId: object.id,
-          contentMarkdown: object.higherMemory.contentMarkdown,
+          contentMarkdown: renderCognitiveMemory(
+            parseCognitiveMemory(object.higherMemory.cognitiveMemory),
+          ),
+          operationalIndex: parseOperationalMemoryIndex(object.higherMemory.operationalIndex),
           maintainedAt: object.higherMemory.maintainedAt.toISOString(),
         }]
       : []),
@@ -204,13 +254,14 @@ export async function buildViewContext(input: {
       contentPresence: relevantCards.length ? "present" : "absent",
     },
     semantics,
-    warnings: [],
+    warnings: higherMemoryConflicts.map((conflict) => conflict.reason),
   };
   return {
     view,
     relevantCards,
     formalCardMissing: relevantCards.length === 0,
     unresolvedAspects,
+    higherMemoryConflicts,
     semantics,
     evidence,
   };

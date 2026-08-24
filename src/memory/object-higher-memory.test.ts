@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const aiState = vi.hoisted(() => ({ generateText: vi.fn() }));
 const databaseState = vi.hoisted(() => ({ database: undefined as unknown }));
-const exploreState = vi.hoisted(() => ({ createToolset: vi.fn() }));
+const exploreState = vi.hoisted(() => ({ followObject: vi.fn() }));
 
 vi.mock("ai", async (importOriginal) => {
   const original = await importOriginal<typeof import("ai")>();
@@ -10,8 +10,8 @@ vi.mock("ai", async (importOriginal) => {
 });
 vi.mock("@/ai/provider", () => ({ getChatModel: () => ({}) }));
 vi.mock("@/db", () => ({ getDatabase: () => databaseState.database }));
-vi.mock("@/memory/explore-toolset", () => ({
-  createMemoryExploreToolset: exploreState.createToolset,
+vi.mock("@/memory/explore", () => ({
+  followObject: exploreState.followObject,
 }));
 
 import {
@@ -95,9 +95,17 @@ beforeEach(() => {
     ),
     __transaction: transaction,
   };
-  exploreState.createToolset.mockReturnValue({
-    searchMemory: { description: "search" },
-    followObject: { description: "follow" },
+  exploreState.followObject.mockResolvedValue({
+    kind: "follow-object",
+    mode: "object-assertion",
+    compilationId,
+    globalObjectId: objectId,
+    objects: [],
+    assertions: [],
+    connections: [],
+    counts: { objects: 0, assertions: 0, connections: 0 },
+    truncated: { objects: false, assertions: false },
+    warnings: [],
   });
   aiState.generateText.mockResolvedValue({
     toolCalls: [{
@@ -105,7 +113,27 @@ beforeEach(() => {
       input: {
       memories: [{
         globalObjectId: objectId,
-        contentMarkdown: "## 当前认知\n\n测试社团目前的状态需要结合相关 Assertion 的有效期理解。现有记录表明团队正在逐步整理工作方式，但这些记录没有证明所有状态截至当前仍然有效；后续协作应继续核对最新进展、明确仍未解决的事项，并保留记录之间可能存在的时间差异与资料缺口。",
+        cognitiveMemory: {
+          identityAndBoundaries: "测试社团是本轮讨论的长期组织对象。",
+          narrativeAndMeaning: "",
+          structuralModel: "",
+          operatingModel: "团队通过正式业务视图和共享知识持续整理协作方式。",
+          currentSituation: "当前资料仍有需要核对的时间边界和状态缺口。",
+          openQuestions: ["哪些近期状态已有正式证据确认？"],
+        },
+        operationalIndex: {
+          aspects: [{
+            key: "current-state",
+            label: "当前状态",
+            summary: "通过当前状态与近期进展检索继续核对。",
+            coverage: "partial",
+            assertionIds: [],
+            sourceNodeIds: [],
+            sourceTitles: [],
+            recommendedQueries: ["测试社团 当前状态 近期进展"],
+            unresolvedAspects: ["正式状态尚待核对"],
+          }],
+        },
       }],
       },
     }],
@@ -116,16 +144,23 @@ describe("maintainObjectHigherMemories", () => {
   it("stores only the rebuilt cognition document and maintenance metadata", async () => {
     await expect(maintainObjectHigherMemories(input())).resolves.toBe(1);
 
-    expect(exploreState.createToolset).toHaveBeenCalledWith(expect.objectContaining({
-      preferHigherMemory: false,
-      allowKnownObjectIds: [objectId],
-    }));
+    expect(exploreState.followObject).toHaveBeenCalledWith(
+      objectId,
+      "本轮围绕测试社团形成了实质理解",
+      expect.objectContaining({ preferHigherMemory: false }),
+    );
     const call = aiState.generateText.mock.calls[0][0];
     expect(call.prompt).toContain("main system");
     expect(call.prompt).toContain("这是本轮回答");
-    expect(call.prompt).toContain("不需要输出、挑选或维护 Assertion ID");
+    expect(call.prompt).toContain("Operational Memory Index");
+    expect(call.prompt).toContain("Operating Model 不是第二套 Work View");
     expect(call.tools).toHaveProperty("submitObjectHigherMemory");
-    expect(call.toolChoice).toBe("required");
+    expect(call.tools).not.toHaveProperty("searchMemory");
+    expect(call.tools).not.toHaveProperty("followObject");
+    expect(call.toolChoice).toEqual({
+      type: "tool",
+      toolName: "submitObjectHigherMemory",
+    });
 
     const transaction = (databaseState.database as {
       __transaction: { memoryObjectHigherMemory: { upsert: ReturnType<typeof vi.fn> } };
@@ -135,12 +170,18 @@ describe("maintainObjectHigherMemories", () => {
       create: expect.objectContaining({
         compilationId,
         globalObjectId: objectId,
-        contentMarkdown: expect.stringContaining("当前认知"),
+        cognitiveMemory: expect.objectContaining({
+          identityAndBoundaries: expect.stringContaining("测试社团"),
+        }),
+        operationalIndex: expect.objectContaining({
+          aspects: expect.any(Array),
+        }),
         triggerMessageId: "message-current",
         maintenanceReason: "本轮围绕测试社团形成了实质理解",
       }),
       update: expect.objectContaining({
-        contentMarkdown: expect.stringContaining("当前认知"),
+        cognitiveMemory: expect.any(Object),
+        operationalIndex: expect.any(Object),
       }),
     });
     expect(JSON.stringify(transaction.memoryObjectHigherMemory.upsert.mock.calls))
@@ -161,20 +202,28 @@ describe("maintainObjectHigherMemories", () => {
     expect(database.$transaction).not.toHaveBeenCalled();
   });
 
-  it("rejects a title-only cognition document", async () => {
+  it("rejects a structurally empty cognition document", async () => {
     aiState.generateText.mockResolvedValue({
       toolCalls: [{
         toolName: "submitObjectHigherMemory",
         input: {
           memories: [{
             globalObjectId: objectId,
-            contentMarkdown: "# 测试社团",
+            cognitiveMemory: {
+              identityAndBoundaries: "",
+              narrativeAndMeaning: "",
+              structuralModel: "",
+              operatingModel: "",
+              currentSituation: "",
+              openQuestions: [],
+            },
+            operationalIndex: { aspects: [] },
           }],
         },
       }],
     });
 
-    await expect(maintainObjectHigherMemories(input())).rejects.toThrow("正文不能只包含标题");
+    await expect(maintainObjectHigherMemories(input())).rejects.toThrow("identityAndBoundaries");
 
     const database = databaseState.database as { $transaction: ReturnType<typeof vi.fn> };
     expect(database.$transaction).not.toHaveBeenCalled();

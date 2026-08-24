@@ -28,7 +28,7 @@ export function createChatAssertionQueueTool(input: {
 
   const queueTool = tool({
     description: [
-      "当且仅当当前用户消息自身陈述了值得后续检索的新 Echo 组织事实时，",
+      "当且仅当当前用户消息自身陈述了值得后续检索的新事实时，",
       "选择普通后台提取，或在正式 Business View 建档被缺失 Object 阻塞时选择前台提取。",
       "两种模式都复用同一个 Assertion Agent，并执行 Object 搜索、逐字 Evidence、查重、Embedding 与原子事务校验；",
       "若用户 Evidence 逐字提供稳定专名，且搜索后没有重复或歧义，线路可以创建被成功 Assertion 使用的新 Object。",
@@ -37,13 +37,13 @@ export function createChatAssertionQueueTool(input: {
       "其他事实一律使用 execution=background，在回答完成后静默处理。",
       "也不会自动更新正式 Business View。不要向用户承诺稍后会自动建档或更新正式状态。",
       "纯问候、闲聊、问题、假设、头脑风暴、改写/查询/记录等操作指令本身，以及仅由 Assistant 历史提供的事实，",
-      "都不要调用。若操作指令同时包含用户明确陈述的组织事实，只针对其中的事实触发。",
+      "都不要调用。若操作指令同时包含用户明确陈述的事实，只针对其中的事实触发。",
       "不需要在这里摘录 Evidence 或挑选上下文；后台会收到主对话实际使用的完整语义上下文，并自行选择用户 Evidence、",
       "复用已有检索结果或继续搜索 Object。每轮至多调用一次，调用后继续正常回答，不要向用户宣称已经写入记忆。",
     ].join(""),
     inputSchema: z.object({
       reason: z.string().trim().min(1).max(500)
-        .describe("为什么当前用户原话包含值得后台尝试提取的新组织事实"),
+        .describe("为什么当前用户原话包含值得后台尝试提取的新事实"),
       execution: z.enum(["background", "foreground_for_view"]).default("background")
         .describe("普通事实选 background；仅当本轮 Proposal 被缺失 Object 阻塞时选 foreground_for_view"),
     }),

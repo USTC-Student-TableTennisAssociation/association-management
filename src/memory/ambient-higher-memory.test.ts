@@ -45,7 +45,7 @@ function input() {
       finalAnswer: "明白，后续可以围绕场地继续推进。",
     },
     retrieval: retrieval(),
-    scopes: ["workspace" as const, "recent" as const],
+    scopes: ["identity" as const, "working_set" as const],
     reason: "本轮形成了环境与近期工作理解",
   };
 }
@@ -58,12 +58,12 @@ beforeEach(() => {
     memoryAmbientHigherMemory: {
       findMany: vi.fn().mockResolvedValue([
         {
-          scope: "recent",
+          scope: "working_set",
           contentMarkdown: "近期重点尚不明确。",
           maintainedAt,
         },
         {
-          scope: "workspace",
+          scope: "identity",
           contentMarkdown: "Echo 正在逐步理解当前环境。",
           maintainedAt,
         },
@@ -79,10 +79,10 @@ beforeEach(() => {
       toolName: "submitAmbientHigherMemory",
       input: {
         memories: [{
-          scope: "workspace",
+          scope: "identity",
           contentMarkdown: "## 当前环境\n\nEcho 正在逐步理解这个团队、长期工作方式及自身能承担的协作职责；目前主要根据真实对话延续共同工作，仍应通过后续互动和实际业务读取继续修正这种理解，不能预设环境类型或成员身份。",
         }, {
-          scope: "recent",
+          scope: "working_set",
           contentMarkdown: "## 近期焦点\n\n近期主要在准备一场比赛，场地是当前重点；具体申请和确认状态可能继续变化，下一轮协作时应先了解最新进展，再根据仍未解决的风险决定是否需要协助准备材料、联系相关方或调整安排。",
         }],
       },
@@ -97,20 +97,20 @@ describe("ambient Higher Memory", () => {
     )).toMatch(/系统能力诊断/);
   });
 
-  it("loads singleton scopes in workspace/recent order", async () => {
+  it("loads singleton scopes in identity/narrative/working-set order", async () => {
     await expect(loadAmbientHigherMemories()).resolves.toEqual([
-      expect.objectContaining({ scope: "workspace" }),
-      expect.objectContaining({ scope: "recent" }),
+      expect.objectContaining({ scope: "identity" }),
+      expect.objectContaining({ scope: "working_set" }),
     ]);
   });
 
   it("renders ambient cognition as automatically loaded non-authoritative context", async () => {
     const context = buildAmbientHigherMemoryContext(await loadAmbientHigherMemories());
-    expect(context).toContain("Workspace Higher Memory");
-    expect(context).toContain("Recent Higher Memory");
+    expect(context).toContain("Environment Identity");
+    expect(context).toContain("Shared Working Set");
     expect(context).toContain("无需先搜索");
     expect(context).toContain("Business View");
-    expect(context).toContain("Person Object Higher Memory");
+    expect(context).toContain("Object–Assertion 图");
   });
 
   it("uses the real dialogue context without requiring another search and upserts both scopes", async () => {
@@ -125,16 +125,16 @@ describe("ambient Higher Memory", () => {
     expect(call.prompt).toContain("我们最近正在准备一场比赛");
     expect(call.prompt).toContain("不得直接把未验证的用户陈述或 Assistant 最终回答当作事实");
     expect(call.prompt).toContain("严禁写入检索是否命中");
-    expect(call.prompt).toContain("Person Object Higher Memory");
+    expect(call.prompt).toContain("Object–Assertion 图");
 
     const transaction = (databaseState.database as {
       __transaction: { memoryAmbientHigherMemory: { upsert: ReturnType<typeof vi.fn> } };
     }).__transaction;
     expect(transaction.memoryAmbientHigherMemory.upsert).toHaveBeenCalledTimes(2);
     expect(transaction.memoryAmbientHigherMemory.upsert).toHaveBeenCalledWith({
-      where: { scope: "recent" },
+      where: { scope: "working_set" },
       create: expect.objectContaining({
-        scope: "recent",
+        scope: "working_set",
         triggerMessageId: "message-current",
         maintenanceReason: "本轮形成了环境与近期工作理解",
       }),
@@ -164,7 +164,7 @@ describe("ambient Higher Memory", () => {
         toolName: "submitAmbientHigherMemory",
         input: {
           memories: [{
-            scope: "recent",
+            scope: "working_set",
             contentMarkdown: "## 近期焦点\n\n主模型缺少 searchMemory 工具，因此当前检索路径没有覆盖 Shared Brain，后续需要继续修复系统能力；这只是本轮模型对工具调用过程的判断，不是团队近期工作的真实业务状态，也不应进入下一轮自动上下文。",
           }],
         },

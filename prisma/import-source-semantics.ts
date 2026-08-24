@@ -981,28 +981,41 @@ async function importColdStart(
       surfaceFormOrdinal: item.ordinal,
       globalObjectId: item.globalObjectId,
     }));
-  const referenceResolutions: Prisma.MemoryGlobalAssertionReferenceResolutionCreateManyInput[] =
+  const resolvedObjectLinks: Prisma.MemoryAssertionObjectLinkCreateManyInput[] =
     resolution.referenceAssignments.map((item) => ({
       assertionId: assertionIds.get(localKey(item.sourceNodeId, item.sourceClaimId))!,
-      referenceOrdinal: item.ordinal,
       globalObjectId: item.globalObjectId,
     }));
-  const literalReferences: Prisma.MemoryGlobalAssertionLiteralReferenceCreateManyInput[] =
+  const objectOccurrences: Prisma.MemoryAssertionObjectOccurrenceCreateManyInput[] =
     globalAssertions.literalReferences.map((item) => ({
       atomId: item.atomId,
       assertionId: assertionIds.get(localKey(item.sourceNodeId, item.sourceClaimId))!,
-      literalOrdinal: item.literalOrdinal,
-      globalOrdinal: item.globalOrdinal,
+      ordinal: item.globalOrdinal,
       sourceStart: item.sourceStart,
       sourceEnd: item.sourceEnd,
       sourceText: item.sourceText,
       globalObjectId: item.globalObjectId,
     }));
-  const semanticObjectLinks: Prisma.MemoryAssertionSemanticObjectLinkCreateManyInput[] =
+  const semanticAssociations =
     globalAssertions.semanticLinks.map((item) => ({
       assertionId: assertionIds.get(localKey(item.sourceNodeId, item.sourceClaimId))!,
       globalObjectId: item.globalObjectId,
     }));
+  const assertionKindById = new Map(assertions.map((assertion) => [assertion.id, assertion.kind]));
+  const canonicalLinkByKey = new Map<string, Prisma.MemoryAssertionObjectLinkCreateManyInput>();
+  for (const link of [
+    ...resolvedObjectLinks,
+    ...objectOccurrences.map((occurrence) => ({
+      assertionId: occurrence.assertionId,
+      globalObjectId: occurrence.globalObjectId,
+    })),
+    ...semanticAssociations.filter((link) => assertionKindById.get(link.assertionId) === "grounded"),
+  ]) {
+    canonicalLinkByKey.set(`${link.assertionId}\u0000${link.globalObjectId}`, link);
+  }
+  const objectLinks = [...canonicalLinkByKey.values()];
+  const objectCoverage: Prisma.MemoryAssertionObjectCoverageCreateManyInput[] =
+    semanticAssociations.filter((link) => assertionKindById.get(link.assertionId) === "reference");
 
   const pool = new Pool({ connectionString });
   const prisma = new PrismaClient({ adapter: new PrismaPg(pool) });
@@ -1010,9 +1023,9 @@ async function importColdStart(
     await prisma.$transaction(async (transaction) => {
       // GlobalObject 端使用 RESTRICT，不能只依赖 Compilation/Assertion 的级联顺序。
       // 先移除当前快照的解析连接，再原子替换整个单一 Compilation。
-      await transaction.memoryAssertionSemanticObjectLink.deleteMany();
-      await transaction.memoryGlobalAssertionLiteralReference.deleteMany();
-      await transaction.memoryGlobalAssertionReferenceResolution.deleteMany();
+      await transaction.memoryAssertionObjectOccurrence.deleteMany();
+      await transaction.memoryAssertionObjectCoverage.deleteMany();
+      await transaction.memoryAssertionObjectLink.deleteMany();
       await transaction.memoryGlobalObjectSurfaceMembership.deleteMany();
       await transaction.memoryCompilation.deleteMany();
       await transaction.memoryCompilation.create({ data: {
@@ -1035,9 +1048,9 @@ async function importColdStart(
       if (assertionBlocks.length) await transaction.memoryAssertionSourceBlock.createMany({ data: assertionBlocks });
       if (globalObjects.length) await transaction.memoryGlobalObject.createMany({ data: globalObjects });
       if (surfaceMemberships.length) await transaction.memoryGlobalObjectSurfaceMembership.createMany({ data: surfaceMemberships });
-      if (referenceResolutions.length) await transaction.memoryGlobalAssertionReferenceResolution.createMany({ data: referenceResolutions });
-      if (literalReferences.length) await transaction.memoryGlobalAssertionLiteralReference.createMany({ data: literalReferences });
-      if (semanticObjectLinks.length) await transaction.memoryAssertionSemanticObjectLink.createMany({ data: semanticObjectLinks });
+      if (objectLinks.length) await transaction.memoryAssertionObjectLink.createMany({ data: objectLinks });
+      if (objectOccurrences.length) await transaction.memoryAssertionObjectOccurrence.createMany({ data: objectOccurrences });
+      if (objectCoverage.length) await transaction.memoryAssertionObjectCoverage.createMany({ data: objectCoverage });
     }, { maxWait: 30_000, timeout: 300_000 });
   } finally {
     await prisma.$disconnect();
@@ -1053,9 +1066,9 @@ async function importColdStart(
       assertions: assertions.length, fragment_references: fragmentReferences.length,
       assertion_source_block_links: assertionBlocks.length,
       global_objects: globalObjects.length, global_surface_memberships: surfaceMemberships.length,
-      global_reference_resolutions: referenceResolutions.length,
-      global_literal_references: literalReferences.length,
-      semantic_object_links: semanticObjectLinks.length },
+      assertion_object_links: objectLinks.length,
+      assertion_object_occurrences: objectOccurrences.length,
+      assertion_object_coverage: objectCoverage.length },
     source_region_ids: [...regionIds].map(([source_node_id, database_id]) => ({ source_node_id, database_id })),
     object_fragment_ids: snapshot.sources.flatMap((region) => region.object_fragments.map((item) => ({ source_node_id: region.region_node_id,
       source_fragment_id: item.fragment_id, database_id: fragmentIds.get(localKey(region.region_node_id, item.fragment_id))! }))),

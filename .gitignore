@@ -66,3 +66,6 @@ next-env.d.ts
 .stignore
 .syncignore
 .stfolder
+
+.agents
+output

@@ -11,6 +11,7 @@ import {
   searchMemory,
   type MemoryExploreResult,
 } from "@/memory/explore";
+import { parseCognitiveMemory, renderCognitiveMemory } from "@/memory/higher-memory-document";
 import { maintainObjectHigherMemories } from "@/memory/object-higher-memory";
 import type {
   MemoryRetrievalResult,
@@ -224,8 +225,11 @@ describe.runIf(runLive)("real memory closed loop", () => {
       const firstHigherMemory = await database.memoryObjectHigherMemory.findUniqueOrThrow({
         where: { globalObjectId: eventObject.id },
       });
-      expect(firstHigherMemory.contentMarkdown).toMatch(/南楼\s*302/);
-      expect(firstHigherMemory.contentMarkdown).toMatch(/2026|8月18/);
+      const firstCognitiveMemory = renderCognitiveMemory(
+        parseCognitiveMemory(firstHigherMemory.cognitiveMemory),
+      );
+      expect(firstCognitiveMemory).toMatch(/南楼\s*302/);
+      expect(firstCognitiveMemory).toMatch(/2026|8月18/);
 
       const updateText =
         `进展更新：${eventName}的地点已经从南楼302改为北楼505，举行时间仍是2026年8月18日14:00，其他安排不变。`;
@@ -277,9 +281,12 @@ describe.runIf(runLive)("real memory closed loop", () => {
       const currentHigherMemory = await database.memoryObjectHigherMemory.findUniqueOrThrow({
         where: { globalObjectId: eventObject.id },
       });
-      expect(currentHigherMemory.contentMarkdown).toMatch(/北楼\s*505/);
-      if (/南楼\s*302/.test(currentHigherMemory.contentMarkdown)) {
-        expect(currentHigherMemory.contentMarkdown).toMatch(/改|原|此前|曾/);
+      const currentCognitiveMemory = renderCognitiveMemory(
+        parseCognitiveMemory(currentHigherMemory.cognitiveMemory),
+      );
+      expect(currentCognitiveMemory).toMatch(/北楼\s*505/);
+      if (/南楼\s*302/.test(currentCognitiveMemory)) {
+        expect(currentCognitiveMemory).toMatch(/改|原|此前|曾/);
       }
 
       const afterRefresh = await locate({
@@ -291,9 +298,9 @@ describe.runIf(runLive)("real memory closed loop", () => {
         memory.globalObjectId === eventObject.id
       );
       expect(refreshedMemory?.contentMarkdown).toMatch(/北楼\s*505/);
-      expect(afterRefresh.result.assertions).toHaveLength(0);
+      expect(afterRefresh.result.assertions.length).toBeGreaterThan(0);
       expect(afterRefresh.result.warnings.some((warning) =>
-        warning.includes("已优先返回完整 Higher Memory")
+        warning.includes("当前 query 仍独立检索/筛选 Assertions")
       )).toBe(true);
 
       expect(traceTitles).toContain("后台 Assertion Agent · Schema 校验后的输出");

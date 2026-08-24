@@ -105,6 +105,16 @@ export class MemoryEvidenceAccumulator {
     }));
     this.higherMemories = (initial.seedMap.higherMemories ?? []).map((item) => ({
       ...item,
+      operationalIndex: {
+        aspects: item.operationalIndex.aspects.map((aspect) => ({
+          ...aspect,
+          assertionIds: [...aspect.assertionIds],
+          sourceNodeIds: [...aspect.sourceNodeIds],
+          sourceTitles: [...aspect.sourceTitles],
+          recommendedQueries: [...aspect.recommendedQueries],
+          unresolvedAspects: [...aspect.unresolvedAspects],
+        })),
+      },
     }));
     this.connections = initial.seedMap.connections.map((item) => ({ ...item }));
     this.objectRefById = new Map(this.objects.map((item) => [item.id, item.ref]));
@@ -230,6 +240,16 @@ export class MemoryEvidenceAccumulator {
       } else if (existing) {
         existing.id = item.id;
         existing.contentMarkdown = item.contentMarkdown;
+        existing.operationalIndex = {
+          aspects: item.operationalIndex.aspects.map((aspect) => ({
+            ...aspect,
+            assertionIds: [...aspect.assertionIds],
+            sourceNodeIds: [...aspect.sourceNodeIds],
+            sourceTitles: [...aspect.sourceTitles],
+            recommendedQueries: [...aspect.recommendedQueries],
+            unresolvedAspects: [...aspect.unresolvedAspects],
+          })),
+        };
         existing.maintainedAt = item.maintainedAt;
       }
       return { ...item, ref };
@@ -287,7 +307,21 @@ export class MemoryEvidenceAccumulator {
           supportingAssertions: [...item.supportingAssertions],
         })),
         ...(this.higherMemories.length
-          ? { higherMemories: this.higherMemories.map((item) => ({ ...item })) }
+          ? {
+              higherMemories: this.higherMemories.map((item) => ({
+                ...item,
+                operationalIndex: {
+                  aspects: item.operationalIndex.aspects.map((aspect) => ({
+                    ...aspect,
+                    assertionIds: [...aspect.assertionIds],
+                    sourceNodeIds: [...aspect.sourceNodeIds],
+                    sourceTitles: [...aspect.sourceTitles],
+                    recommendedQueries: [...aspect.recommendedQueries],
+                    unresolvedAspects: [...aspect.unresolvedAspects],
+                  })),
+                },
+              })),
+            }
           : {}),
         assertions: this.assertions.map((item) => ({
           ...item,

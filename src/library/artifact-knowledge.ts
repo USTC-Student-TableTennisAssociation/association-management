@@ -1,5 +1,10 @@
 import { getDatabase } from "@/db";
 import type { MemoryExploreResult } from "@/memory/explore";
+import {
+  parseCognitiveMemory,
+  parseOperationalMemoryIndex,
+  renderCognitiveMemory,
+} from "@/memory/higher-memory-document";
 import { renderResolvedAssertion } from "@/memory/resolved-assertion";
 
 function searchable(value: string): string {
@@ -187,7 +192,10 @@ export async function getArtifactPublishedKnowledge(input: {
               },
             },
           },
-          semanticObjectLinks: {
+          objectLinks: {
+            select: { globalObjectId: true },
+          },
+          objectCoverage: {
             select: { globalObjectId: true },
           },
         },
@@ -197,14 +205,10 @@ export async function getArtifactPublishedKnowledge(input: {
   const allAssertions = regions.flatMap((region) =>
     region.assertions.map((assertion) => ({ region, assertion }))
   );
-  const allPlaceholderObjectIds = allAssertions.flatMap(({ assertion }) =>
-    [...assertion.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g)]
-      .map((match) => match[1].trim())
-  );
   const allObjectIds = [...new Set([
-    ...allPlaceholderObjectIds,
     ...allAssertions.flatMap(({ assertion }) =>
-      assertion.semanticObjectLinks.map((link) => link.globalObjectId)
+      [...assertion.objectLinks, ...assertion.objectCoverage]
+        .map((link) => link.globalObjectId)
     ),
   ])];
   const allObjectRows = allObjectIds.length
@@ -215,7 +219,12 @@ export async function getArtifactPublishedKnowledge(input: {
           globalObjectKey: true,
           canonicalName: true,
           higherMemory: {
-            select: { id: true, contentMarkdown: true, maintainedAt: true },
+            select: {
+              id: true,
+              cognitiveMemory: true,
+              operationalIndex: true,
+              maintainedAt: true,
+            },
           },
         },
     })
@@ -227,9 +236,8 @@ export async function getArtifactPublishedKnowledge(input: {
     .map(searchable)
     .filter(Boolean);
   const rankedAssertions = allAssertions.map((item, index) => {
-    const objectNames = [
-      ...item.assertion.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g),
-    ].map((match) => objectById.get(match[1].trim())?.canonicalName ?? "");
+    const objectNames = [...item.assertion.objectLinks, ...item.assertion.objectCoverage]
+      .map((link) => objectById.get(link.globalObjectId)?.canonicalName ?? "");
     const haystack = searchable([
       item.assertion.globalStatementTemplateMarkdown,
       item.assertion.sourceClaimId,
@@ -252,9 +260,8 @@ export async function getArtifactPublishedKnowledge(input: {
   const cursor = Math.min(Math.max(input.cursor ?? 0, 0), matchedAssertions.length);
   const selectedAssertions = matchedAssertions.slice(cursor, cursor + limit);
   const selectedObjectIds = [...new Set(selectedAssertions.flatMap(({ assertion }) => [
-    ...[...assertion.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g)]
-      .map((match) => match[1].trim()),
-    ...assertion.semanticObjectLinks.map((link) => link.globalObjectId),
+    ...assertion.objectLinks.map((link) => link.globalObjectId),
+    ...assertion.objectCoverage.map((link) => link.globalObjectId),
   ]))];
   const objectRows = selectedObjectIds.flatMap((id) => {
     const object = objectById.get(id);
@@ -265,10 +272,8 @@ export async function getArtifactPublishedKnowledge(input: {
     selectedAssertions.map(({ assertion }, index) => [assertion.id, `A${index + 1}`]),
   );
   const assertions = selectedAssertions.map(({ region, assertion }) => {
-    const references = [
-      ...assertion.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g),
-    ].map((match) => {
-      const globalObjectId = match[1].trim();
+    const references = assertion.objectLinks.map((link) => {
+      const globalObjectId = link.globalObjectId;
       const object = objectById.get(globalObjectId);
       if (!object) throw new Error(`Assertion ${assertion.id} 引用的 Object 不存在`);
       return { globalObjectId, canonicalName: object.canonicalName };
@@ -300,11 +305,7 @@ export async function getArtifactPublishedKnowledge(input: {
   const assertionsByObjectId = new Map<string, string[]>();
   for (const { assertion } of selectedAssertions) {
     const assertionRef = assertionRefById.get(assertion.id)!;
-    const ids = new Set([
-      ...[...assertion.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g)]
-        .map((match) => match[1].trim()),
-      ...assertion.semanticObjectLinks.map((link) => link.globalObjectId),
-    ]);
+    const ids = new Set(assertion.objectLinks.map((link) => link.globalObjectId));
     for (const id of ids) {
       const refs = assertionsByObjectId.get(id) ?? [];
       refs.push(assertionRef);
@@ -334,7 +335,10 @@ export async function getArtifactPublishedKnowledge(input: {
           ref: `H${index + 1}`,
           id: object.higherMemory.id,
           globalObjectId: object.id,
-          contentMarkdown: object.higherMemory.contentMarkdown,
+          contentMarkdown: renderCognitiveMemory(
+            parseCognitiveMemory(object.higherMemory.cognitiveMemory),
+          ),
+          operationalIndex: parseOperationalMemoryIndex(object.higherMemory.operationalIndex),
           maintainedAt: object.higherMemory.maintainedAt.toISOString(),
         }]
       : []

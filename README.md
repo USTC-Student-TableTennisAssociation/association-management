@@ -200,7 +200,7 @@ AI_API_KEY=
 AI_API_BASE_URL=https://api.openai.com/v1
 AI_MODEL=
 
-ORGANIZATION_TIMEZONE=Asia/Shanghai
+ENVIRONMENT_TIMEZONE=Asia/Shanghai
 ```
 
 首次运行通过 `/setup` 创建管理员。
@@ -214,4 +214,3 @@ pnpm exec tsc --noEmit
 pnpm prisma validate
 pnpm build
 ```
-

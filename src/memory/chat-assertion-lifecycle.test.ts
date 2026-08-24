@@ -47,7 +47,6 @@ beforeEach(() => {
       publishedAssertions: 2,
       publishedAssertionIds: ["assertion-1", "assertion-2"],
       affectedObjectIds: ["object-1"],
-      higherMemoryObjectIds: [],
       affectedObjects: [{
         id: "object-1",
         canonicalName: "测试对象",
@@ -63,7 +62,6 @@ beforeEach(() => {
     objectUpdates: [{
       globalObjectId: "object-1",
       canonicalName: "测试对象",
-      updateAreas: ["current_state"],
       focus: "已发布的新 Assertion 改变了当前状态。",
     }],
     ambientUpdates: [],
@@ -155,7 +153,6 @@ describe("post-answer memory maintenance pipeline", () => {
           publishedAssertions: 1,
           publishedAssertionIds: ["assertion-foreground"],
           affectedObjectIds: ["object-1"],
-          higherMemoryObjectIds: ["object-1"],
           affectedObjects: [{
             id: "object-1",
             canonicalName: "测试对象",
@@ -217,6 +214,67 @@ describe("post-answer memory maintenance pipeline", () => {
     ]);
   });
 
+  it("replaces early model Object targets with graph-derived consolidation targets", async () => {
+    lifecycleState.consolidate.mockResolvedValueOnce({
+      objectUpdates: [{
+        globalObjectId: "linked-object-a",
+        canonicalName: "对象 A",
+        focus: "该 Object 与新 Assertion 直接连接。",
+      }, {
+        globalObjectId: "linked-object-b",
+        canonicalName: "对象 B",
+        focus: "该 Object 与新 Assertion 直接连接。",
+      }],
+      ambientUpdates: [],
+    });
+    const scheduler = createChatMemoryMaintenanceScheduler();
+    scheduler.publish({
+      assertion: {
+        clientMessageId: "message-graph-scope",
+        submittedAt: "2026-08-14T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+        semanticContext: {},
+        retrieval: { compilationId: "compilation-1" },
+      } as never,
+      consolidation: {
+        clientMessageId: "message-graph-scope",
+        submittedAt: "2026-08-14T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+        semanticContext: {},
+        retrieval: { compilationId: "compilation-1" },
+      } as never,
+      higherMemory: {
+        clientMessageId: "message-graph-scope",
+        submittedAt: "2026-08-14T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+        semanticContext: {},
+        retrieval: { compilationId: "compilation-1" },
+        queueDecision: {
+          targets: [
+            { scope: "object", globalObjectId: "early-model-target" },
+            { scope: "working_set" },
+          ],
+          reason: "主回答阶段的早期维护意图",
+        },
+      } as never,
+    });
+
+    await lifecycleState.afterCallback?.();
+
+    expect(lifecycleState.maintain).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueDecision: expect.objectContaining({
+          targets: [
+            { scope: "working_set" },
+            { scope: "object", globalObjectId: "linked-object-a" },
+            { scope: "object", globalObjectId: "linked-object-b" },
+          ],
+        }),
+      }),
+      undefined,
+    );
+  });
+
   it("does not maintain Higher Memory when consolidation selects no target", async () => {
     lifecycleState.consolidate.mockResolvedValueOnce({
       objectUpdates: [],
@@ -248,7 +306,6 @@ describe("post-answer memory maintenance pipeline", () => {
       publishedAssertions: 0,
       publishedAssertionIds: [],
       affectedObjectIds: [],
-      higherMemoryObjectIds: [],
       affectedObjects: [],
     });
     const scheduler = createChatMemoryMaintenanceScheduler();
@@ -261,6 +318,59 @@ describe("post-answer memory maintenance pipeline", () => {
 
     expect(lifecycleState.consolidate).not.toHaveBeenCalled();
     expect(lifecycleState.maintain).not.toHaveBeenCalled();
+  });
+
+  it("consolidates a successful Business View read without a new Assertion", async () => {
+    const scheduler = createChatMemoryMaintenanceScheduler();
+    scheduler.publish({
+      consolidation: {
+        clientMessageId: "message-view-read",
+        authoritativeBusinessViewRead: true,
+      } as never,
+    });
+
+    await lifecycleState.afterCallback?.();
+
+    expect(lifecycleState.capture).not.toHaveBeenCalled();
+    expect(lifecycleState.consolidate).toHaveBeenCalledWith(
+      expect.objectContaining({ authoritativeBusinessViewRead: true }),
+      expect.objectContaining({ publishedAssertions: 0 }),
+      undefined,
+    );
+    expect(lifecycleState.maintain).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a cold-search Object target when Business View consolidation adds nothing", async () => {
+    lifecycleState.consolidate.mockResolvedValueOnce({
+      objectUpdates: [],
+      ambientUpdates: [],
+    });
+    const scheduler = createChatMemoryMaintenanceScheduler();
+    scheduler.publish({
+      consolidation: {
+        clientMessageId: "message-cold-search",
+        authoritativeBusinessViewRead: true,
+      } as never,
+      higherMemory: {
+        clientMessageId: "message-cold-search",
+        queueDecision: {
+          targets: [{ scope: "object", globalObjectId: "cold-object" }],
+          reason: "首次实质性检索冷 Object",
+        },
+      } as never,
+    });
+
+    await lifecycleState.afterCallback?.();
+
+    expect(lifecycleState.consolidate).toHaveBeenCalledOnce();
+    expect(lifecycleState.maintain).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueDecision: expect.objectContaining({
+          targets: [{ scope: "object", globalObjectId: "cold-object" }],
+        }),
+      }),
+      undefined,
+    );
   });
 
   it("records a failed background Assertion attempt", async () => {

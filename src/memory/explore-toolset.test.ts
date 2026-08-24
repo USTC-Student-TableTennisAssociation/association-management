@@ -62,7 +62,7 @@ describe("createMemoryExploreToolset", () => {
     });
 
     await expect(tools.searchMemory.execute!(
-      { query: "test" },
+      { query: "test", taskShape: "fact" },
       executionOptions,
     )).rejects.toBeInstanceOf(MemoryExploreContextBudgetError);
     expect(evidence.snapshot().seedMap.assertions).toHaveLength(0);
@@ -79,6 +79,23 @@ describe("createMemoryExploreToolset", () => {
       executionOptions,
     )).rejects.toBeInstanceOf(UnknownExploreObjectError);
     expect(exploreMocks.followObject).not.toHaveBeenCalled();
+  });
+
+  it("allows searchMemory to discover an explicit target id without a request-local race", async () => {
+    const tools = createMemoryExploreToolset({
+      evidence: new MemoryEvidenceAccumulator(initial()),
+      resultTokenBudget: 1_000,
+    });
+
+    await expect(tools.searchMemory.execute!({
+      query: "目标组织的指导老师",
+      targetObjectIds: ["not-yet-merged-object"],
+      taskShape: "fact",
+    }, executionOptions)).resolves.toEqual(expect.objectContaining({ kind: "search-memory" }));
+    expect(exploreMocks.searchMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ targetObjectIds: ["not-yet-merged-object"] }),
+      expect.any(Object),
+    );
   });
 
   it("allows a Higher Memory maintainer to follow an explicitly selected Object", async () => {
@@ -113,7 +130,7 @@ describe("createMemoryExploreToolset", () => {
       preferHigherMemory: false,
     });
 
-    await tools.searchMemory.execute!({ query: "test" }, executionOptions);
+    await tools.searchMemory.execute!({ query: "test", taskShape: "fact" }, executionOptions);
     expect(exploreMocks.searchMemory).toHaveBeenCalledWith(
       expect.objectContaining({ query: "test", targetHints: [] }),
       expect.objectContaining({ preferHigherMemory: false }),

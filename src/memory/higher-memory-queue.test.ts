@@ -35,9 +35,9 @@ describe("queueHigherMemoryMaintenance", () => {
 
     await expect(toolset.tool.execute!({
       targets: [
-        { scope: "workspace" },
-        { scope: "recent" },
-        { scope: "recent" },
+        { scope: "identity" },
+        { scope: "working_set" },
+        { scope: "working_set" },
         { scope: "object", globalObjectId: knownId },
         { scope: "object", globalObjectId: knownId },
       ],
@@ -47,13 +47,13 @@ describe("queueHigherMemoryMaintenance", () => {
     const decision = toolset.decision();
     expect(decision).toEqual({
       targets: [
-        { scope: "workspace" },
-        { scope: "recent" },
+        { scope: "identity" },
+        { scope: "working_set" },
         { scope: "object", globalObjectId: knownId },
       ],
       reason: "本轮同时形成了环境、近期焦点和重要对象理解",
     });
-    expect(ambientScopesFromQueueDecision(decision)).toEqual(["workspace", "recent"]);
+    expect(ambientScopesFromQueueDecision(decision)).toEqual(["identity", "working_set"]);
     expect(objectHigherMemoryQueueDecision(decision)).toEqual({
       objectIds: [knownId],
       reason: "本轮同时形成了环境、近期焦点和重要对象理解",
@@ -64,10 +64,10 @@ describe("queueHigherMemoryMaintenance", () => {
     );
   });
 
-  it("can queue workspace/recent before any GlobalObject has been inspected", async () => {
+  it("can queue ambient scopes before any GlobalObject has been inspected", async () => {
     const toolset = createHigherMemoryQueueTool({ hasObject: () => false });
     await expect(toolset.tool.execute!({
-      targets: [{ scope: "workspace" }, { scope: "recent" }],
+      targets: [{ scope: "identity" }, { scope: "working_set" }],
       reason: "首次实质性对话形成了环境理解",
     }, executionOptions)).resolves.toEqual(expect.objectContaining({ queued: true }));
   });

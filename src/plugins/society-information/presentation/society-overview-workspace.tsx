@@ -336,12 +336,12 @@ export function SocietyOverviewWorkspace({
     (item): item is string => Boolean(item),
   );
   const promptToFill = (topic: string) => onAskAI(
-    `请先读取 ${viewKey} 当前状态，帮我补充${topic}。先向我确认正式 Object 和必要字段，再只使用已声明的 society Commands 提交。`,
+    `请先读取 ${viewKey} 当前状态，帮我补充${topic}。先从 Shared Brain 与高价值原文中整理已有资料，只向我确认仍无法确定的正式 Object、当前性或必要字段，再只使用已声明的 society Commands 提交。`,
   );
   const askToImprove = () => onAskAI(
     society
-      ? `请帮我完善社团概览。先读取 ${viewKey} 当前状态，再询问我要修改哪些社团资料、指导老师、干事队伍、长期活动或平台入口；确认后只使用已声明的 society Commands 提交。`
-      : `请帮我建立社团概览。先在知识中定位“中国科学技术大学学生乒乓球协会”的稳定 Object；如果不能唯一确认就询问我，确认后使用 society.initialize_overview 建立正式概览。`,
+      ? `请帮我完善社团概览。先读取 ${viewKey} 当前状态，再以 synthesis 方式从 Shared Brain 与高价值原文中整理社团资料、指导老师、干事队伍、长期活动和平台入口；只向我询问经过检索后仍无法确认的当前性、冲突或必要字段，确认后只使用已声明的 society Commands 提交。`
+      : `请帮我建立社团概览。先在知识中定位“中国科学技术大学学生乒乓球协会”的稳定 Object；唯一确认后以 synthesis 方式整理 Shared Brain 与高价值原文中的已有资料，无法唯一确认时才询问我，再使用 society.initialize_overview 建立正式概览。`,
   );
 
   return (

@@ -70,7 +70,6 @@ export function createChatMemoryMaintenanceScheduler(
           publishedAssertions: 0,
           publishedAssertionIds: [],
           affectedObjectIds: [],
-          higherMemoryObjectIds: [],
           affectedObjects: [],
         };
         let assertionInput = input.assertion;
@@ -162,23 +161,29 @@ export function createChatMemoryMaintenanceScheduler(
               })),
               ...consolidation.ambientUpdates.map((update) => ({ scope: update.scope })),
             ];
-            if (selectedTargets.length) {
-              const existingTargets = higherMemoryInput?.queueDecision.targets ?? [];
-              const uniqueTargets = [...existingTargets, ...selectedTargets].filter(
-                (target, index, all) => {
-                  const key = target.scope === "object"
-                    ? `object:${target.globalObjectId}`
-                    : target.scope;
-                  return all.findIndex((candidate) =>
-                    (candidate.scope === "object"
-                      ? `object:${candidate.globalObjectId}`
-                      : candidate.scope) === key
-                  ) === index;
-                },
+            // The main answer can register early intent. Once Assertions have
+            // been published, replace early Object choices with targets derived
+            // from their actual Object–Assertion graph; ambient intent remains.
+            const existingTargets = (higherMemoryInput?.queueDecision.targets ?? [])
+              .filter((target) =>
+                target.scope !== "object" || captureResult.publishedAssertions === 0
               );
+            const uniqueTargets = [...existingTargets, ...selectedTargets].filter(
+              (target, index, all) => {
+                const key = target.scope === "object"
+                  ? `object:${target.globalObjectId}`
+                  : target.scope;
+                return all.findIndex((candidate) =>
+                  (candidate.scope === "object"
+                    ? `object:${candidate.globalObjectId}`
+                    : candidate.scope) === key
+                ) === index;
+              },
+            );
+            if (uniqueTargets.length) {
               const focus = [
                 ...consolidation.objectUpdates.map((update) =>
-                  `${update.canonicalName}（${update.updateAreas.join("+")}）：${update.focus}`
+                  `${update.canonicalName}：${update.focus}`
                 ),
                 ...consolidation.ambientUpdates.map((update) =>
                   `${update.scope}：${update.focus}`
@@ -196,6 +201,8 @@ export function createChatMemoryMaintenanceScheduler(
                     .filter(Boolean).join("；"),
                 },
               };
+            } else {
+              higherMemoryInput = undefined;
             }
           } catch (error) {
             console.error("[chat.knowledge-consolidation]", error);
@@ -229,7 +236,7 @@ export function createChatMemoryMaintenanceScheduler(
         } else {
           await trace?.appendSection(
             "后台 Higher Memory 跳过",
-            "Knowledge Consolidator 没有选择需要维护的 Object、workspace 或 recent。",
+            "Knowledge Consolidator 没有选择需要维护的 Object、identity、narrative 或 working_set。",
           );
         }
 

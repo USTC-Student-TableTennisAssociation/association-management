@@ -16,7 +16,13 @@ import {
 } from "ai";
 import { z } from "zod";
 
-import { latestUserQuery, messageText } from "@/ai/chat-policy";
+import {
+  isMemoryWriteStatusQuery,
+  latestUserQuery,
+  messageText,
+  requiresCrossLayerContentSearch,
+  shouldForceCrossLayerMemorySearch,
+} from "@/ai/chat-policy";
 import { citedRefs } from "@/ai/citation-refs";
 import {
   auditGroundedAnswer,
@@ -44,7 +50,14 @@ import {
 } from "@/ai/debug-trace";
 import { createModelProfile } from "@/ai/model-profile";
 import { getChatModel } from "@/ai/provider";
+import {
+  chatStreamStatusSchema,
+  classifyChatStreamStatus,
+  createModelCallAttemptTracker,
+  type ChatStreamObservation,
+} from "@/ai/chat-stream-status";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
+import { resolveTurnHandoff } from "@/ai/turn-handoff";
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import { modelHistoryMessageText } from "@/ai/ui-message-text";
 import { buildViewContext } from "@/agent-runtime/view-context";
@@ -58,12 +71,13 @@ import {
   viewReferenceBundleSchema,
 } from "@/agent-runtime/view-types";
 import { currentAuthUser } from "@/auth/session";
+import { getDatabase } from "@/db";
 import {
   extensionRegistry,
   viewCommandBus,
   viewReadPort,
 } from "@/shell/composition-root";
-import { saveChatMessage } from "@/chat/persistence";
+import { hasPersistableChatContent, saveChatMessage } from "@/chat/persistence";
 import {
   artifactSearchEvidenceSemantics,
   retrievalEvidenceSemantics,
@@ -83,7 +97,7 @@ import {
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import {
   captureChatAssertions,
-  organizationTimezone,
+  environmentTimezone,
   type ChatMainModelCall,
   type ChatMainToolExecution,
   type ChatSemanticMessage,
@@ -102,6 +116,7 @@ import {
   type AmbientHigherMemorySnapshot,
 } from "@/memory/ambient-higher-memory";
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
+import { operationalMemoryIndexSchema } from "@/memory/higher-memory-document";
 import { getMemoryRetriever } from "@/memory/retriever";
 import { createObjectManagementToolset } from "@/memory/object-management-toolset";
 import { objectChangeProposalPresentationSchema } from "@/memory/object-management-types";
@@ -168,7 +183,7 @@ function pageContextInstruction(context?: ChatPageContext): string {
   if (context.activePresentation === "library") {
     return [
       `页面 soft context：用户当前正在查看资料库${context.activeFolderId ? `，当前文件夹 id 为 ${context.activeFolderId}` : ""}。`,
-      "这只用于理解当前工作位置；文件索引不是组织事实证据。",
+      "这只用于理解当前工作位置；文件索引不是事实证据。",
     ].join("\n");
   }
   return [
@@ -191,9 +206,9 @@ function authenticatedUserInstruction(user: Awaited<ReturnType<typeof currentAut
   if (!user) return "";
   return [
     `当前登录用户：${user.actor.displayName}。`,
-    user.personObject
-      ? `用户说“我”时，对应已认证人物“${user.personObject.canonicalName}”；内部 ID 由服务端处理。`
-      : "当前账号尚未关联人物对象，不要猜测“我”对应谁。",
+    user.actorObject
+      ? `用户对自身的指称对应已认证 Actor Object“${user.actorObject.canonicalName}”；内部 ID 由服务端处理。`
+      : "当前账号尚未关联 Actor Object，不要猜测用户对自身的指称对应哪个 Object。",
   ].join("\n");
 }
 
@@ -265,6 +280,7 @@ const seedMapSchema = z.object({
     id: z.string(),
     globalObjectId: z.string(),
     contentMarkdown: z.string(),
+    operationalIndex: operationalMemoryIndexSchema,
     maintainedAt: z.string(),
   })).optional(),
   assertions: z.array(z.object({
@@ -387,6 +403,22 @@ function safeStreamErrorSummary(error: unknown) {
       : {}),
   };
 }
+
+function classifyStreamFailureCode(
+  error: unknown,
+): ChatStreamObservation["failureCode"] {
+  const summary = safeStreamErrorSummary(error);
+  const name = summary.name.toLowerCase();
+  const message = summary.message.toLowerCase();
+  if (name.includes("abort") || message.includes("aborted") || message.includes("abort")) {
+    return "stream_aborted";
+  }
+  if (name.includes("timeout") || message.includes("timeout") || message.includes("timed out")) {
+    return "timeout";
+  }
+  return "upstream_error";
+}
+
 function actualSeedTrace(result: MemoryRetrievalResult) {
   if (!result.trace) return undefined;
   return {
@@ -562,6 +594,7 @@ export async function POST(request: Request) {
       viewCommandProposal: zodSchema(viewCommandProposalNoticeSchema),
       objectChangeProposal: zodSchema(objectChangeProposalPresentationSchema),
       libraryProposal: zodSchema(libraryPlanPresentationSchema),
+      streamStatus: zodSchema(chatStreamStatusSchema),
     },
   });
   if (!validation.success) return jsonError("消息格式错误。", 400);
@@ -569,16 +602,18 @@ export async function POST(request: Request) {
   const messages = validation.data;
   const query = latestUserQuery(messages);
   if (!query) return jsonError("消息内容不能为空。", 400);
+  const requiresMemoryWriteStatusRefresh = isMemoryWriteStatusQuery(query);
+  const extendedSourceReadingRequested = /(全文|完整原文|通读|逐章|整篇)/iu.test(query);
   const latestUserMessageIndex = messages.findLastIndex((message) => message.role === "user");
   const latestUserMessage = messages[latestUserMessageIndex];
   const submittedAt = new Date();
   let requestTimezone: string;
   const requestActor = authenticatedUser.actor;
   try {
-    requestTimezone = organizationTimezone();
+    requestTimezone = environmentTimezone();
   } catch (error) {
     console.error("[chat.time-context.config]", error);
-    return jsonError("组织时区或 Actor 配置无效，请联系管理员。", 500);
+    return jsonError("环境时区或 Actor 配置无效，请联系管理员。", 500);
   }
   const debugTrace = createEchoDebugTrace({
     clientMessageId: latestUserMessage?.id ?? "unknown-message",
@@ -620,9 +655,12 @@ export async function POST(request: Request) {
         : {}),
     }];
   });
-  const conversationUserMessageIds = semanticConversation
+  const conversationUserMessages = semanticConversation
     .filter((message) => message.role === "user")
-    .map((message) => message.messageId);
+    .map((message) => ({
+      messageId: message.messageId,
+      text: message.text,
+    }));
   const memoryMaintenance = createChatMemoryMaintenanceScheduler(debugTrace);
   let ambientHigherMemories: AmbientHigherMemorySnapshot[] = [];
   try {
@@ -726,9 +764,38 @@ export async function POST(request: Request) {
       const mainToolExecutions: ChatMainToolExecution[] = [];
       const sharedResultBudget = new ToolResultTokenBudget(exploreResultTokenBudget);
       let hasSearchedMemory = false;
+      let crossLayerMemorySearchForced = false;
+      const coldHigherMemoryTargetIds = new Set<string>();
+      let pendingSynthesisSourceRead: {
+        assertionRef: string;
+        sourceTitle: string;
+        phase: "outline" | "content";
+      } | undefined;
+      let synthesisSourceReadSatisfied = false;
       let latestLocateTrace: MemorySearchTrace | undefined;
+      let turnHandoffSubmitted = false;
       let finalRawText = "";
       let finalAudit: GroundingAudit | undefined;
+      const streamObservation: ChatStreamObservation = {
+        reasoningChars: 0,
+        contentChars: 0,
+        toolCallCount: 0,
+        modelCallCount: 0,
+        retryCount: 0,
+        streamEnded: false,
+      };
+      const modelCallAttempts = createModelCallAttemptTracker();
+      let currentStepTextChars = 0;
+      let lastCompletedStepTextChars = 0;
+      let lastStreamStatusJson: string | undefined;
+      const writeStreamStatus = () => {
+        const status = classifyChatStreamStatus(streamObservation);
+        const statusJson = JSON.stringify(status);
+        if (statusJson === lastStreamStatusJson) return;
+        lastStreamStatusJson = statusJson;
+        writer.write({ type: "data-streamStatus", data: status });
+        void debugTrace.appendJsonSection("Chat Stream Status", status);
+      };
       const memoryTools = createMemoryExploreToolset({
         evidence,
         resultTokenBudget: exploreResultTokenBudget,
@@ -758,6 +825,23 @@ export async function POST(request: Request) {
             groundingState.observeCoverage("shared_brain", discovered.coverage);
           }
           groundingState.observeSemantics(discovered.semantics);
+          if (discovered.knowledgeState?.higherMemory === "absent") {
+            coldHigherMemoryTargetIds.add(discovered.knowledgeState.targetObjectId);
+          }
+          if (
+            discovered.taskShape === "synthesis" &&
+            !pendingSynthesisSourceRead
+          ) {
+            const sourceAnchor = discovered.assertions.flatMap((assertion) =>
+              assertion.sources.flatMap((source) => source.kind === "chat"
+                ? []
+                : [{ assertionRef: assertion.ref, sourceTitle: source.sourceTitle }]
+              )
+            )[0];
+            if (sourceAnchor) {
+              pendingSynthesisSourceRead = { ...sourceAnchor, phase: "outline" };
+            }
+          }
           console.info(
             "[chat.explore]",
             JSON.stringify({
@@ -795,6 +879,18 @@ export async function POST(request: Request) {
         registry: extensionRegistry,
         readPort: viewReadPort,
         commandBus: viewCommandBus,
+        findExistingObjectsByCanonicalName: async (canonicalName) => {
+          const compilation = await getDatabase().memoryCompilation.findFirst({
+            orderBy: [{ importedAt: "desc" }, { id: "desc" }],
+            select: { id: true },
+          });
+          if (!compilation) return [];
+          return getDatabase().memoryGlobalObject.findMany({
+            where: { compilationId: compilation.id, canonicalName },
+            select: { id: true, canonicalName: true },
+            take: 2,
+          });
+        },
         onProposal: (proposal) => {
           writer.write({ type: "data-viewCommandProposal", data: proposal });
         },
@@ -817,6 +913,18 @@ export async function POST(request: Request) {
         onRead: (sourceRead) => {
           groundingState.observeSourceDocument(sourceRead);
           groundingState.observeSemantics(sourceRead.semantics);
+          if (pendingSynthesisSourceRead) {
+            if (sourceRead.selection.mode === "outline") {
+              pendingSynthesisSourceRead = {
+                ...pendingSynthesisSourceRead,
+                sourceTitle: sourceRead.document.title,
+                phase: "content",
+              };
+            } else {
+              pendingSynthesisSourceRead = undefined;
+              synthesisSourceReadSatisfied = true;
+            }
+          }
         },
       });
       const validReferenceRefs = () => {
@@ -909,6 +1017,7 @@ export async function POST(request: Request) {
         },
         onForegroundResult: (captureResult) => {
           objectManagementToolset.registerPublishedMemory(captureResult);
+          viewToolset.registerPublishedObjects(captureResult.affectedObjects);
         },
       });
       const knownArtifactNodeIds = new Set<string>();
@@ -935,12 +1044,16 @@ export async function POST(request: Request) {
               ? pageContext?.activeCardId
               : undefined,
           });
+          const invalidatedHigherMemoryRefs = evidence.invalidateHigherMemories(
+            businessContext.higherMemoryConflicts.map((conflict) => conflict.globalObjectId),
+          );
           groundingState.observeBusinessContext({
             view: businessContext.view,
             targetHints: pageTargetHints,
             relevantCards: businessContext.relevantCards,
             coverage: businessContext.evidence.coverage,
             semantics: businessContext.semantics,
+            invalidatedEvidenceRefs: invalidatedHigherMemoryRefs,
           });
           const discovered = evidence.merge(businessContext.evidence);
           firstAuthoritativeTool ??= "openBusinessContext";
@@ -967,9 +1080,12 @@ export async function POST(request: Request) {
             objectHigherMemories: discovered.higherMemories ?? [],
             formalCardMissing: businessContext.formalCardMissing,
             unresolvedAspects: businessContext.unresolvedAspects,
+            higherMemoryConflicts: businessContext.higherMemoryConflicts,
             coverage: businessContext.evidence.coverage,
             semantics: businessContext.semantics,
-            next: businessContext.formalCardMissing
+            next: businessContext.higherMemoryConflicts.length
+              ? "正式 View 已推翻旧 Object Higher Memory 中关于 Card 尚未收录或尚未落地的描述；本轮必须以正式 View 为准，不得引用这些旧记忆判断当前状态。"
+              : businessContext.formalCardMissing
               ? "当前正式 View 的存在性与收录状态已经可以直接回答：没有匹配 Card。只有用户还要求相关业务事实或补建依据时，才使用 expandEvidence；相关资料不得冒充正式 View。"
               : businessContext.unresolvedAspects.length
                 ? "如果缺口会影响回答，使用 expandEvidence；如果用户确认或后续可靠证据已经足以填补一个稳定、可复用的正式 View 缺口，还应使用 openActions(business_view) 生成待审批 Proposal；否则直接回答。"
@@ -1080,7 +1196,10 @@ export async function POST(request: Request) {
         description:
           "与本轮完整最终回答在同一次响应中调用。只判断当前用户原话是否包含值得独立知识审查的新事实、纠正、决定、计划或状态变化；纯问题和检索过程不审查。",
         inputSchema: turnHandoffSchema,
-        execute: async (handoff) => ({ accepted: true, ...handoff }),
+        execute: async (handoff) => {
+          turnHandoffSubmitted = true;
+          return { accepted: true, ...handoff };
+        },
       });
       const allTools: ToolSet = {
         ...gatewayTools,
@@ -1088,7 +1207,8 @@ export async function POST(request: Request) {
         expandEvidence: memoryTools.searchMemory,
         readMemoryWriteStatus: createMemoryWriteStatusTool({
           actorId: requestActor.id,
-          conversationMessageIds: conversationUserMessageIds,
+          conversationMessages: conversationUserMessages,
+          currentMessageId: latestUserMessage.id,
         }),
         readSourceDocument: sourceDocumentToolset.tool,
         ...viewToolset.tools,
@@ -1153,11 +1273,10 @@ export async function POST(request: Request) {
           ({ steps }) => {
             const finalStep = steps.at(-1);
             if (!finalStep?.text.trim()) return false;
-            // Handoff is optional knowledge-review metadata, not a completion
-            // gate. Continue only when this step also requested real work.
-            return finalStep.toolCalls.every(
-              (call) => call.toolName === TURN_HANDOFF_TOOL,
-            );
+            // Every tool call, including the optional Handoff, gets a following
+            // tool-free answer step. This prevents a short pre-tool preamble
+            // from being mistaken for the completed answer.
+            return finalStep.toolCalls.length === 0;
           },
         ],
         prepareStep: ({ stepNumber, messages: stepMessages }) => {
@@ -1174,6 +1293,64 @@ export async function POST(request: Request) {
                 : instructions,
             };
           }
+          if (stepNumber === 0 && requiresMemoryWriteStatusRefresh) {
+            return {
+              activeTools: ["readMemoryWriteStatus"] as const,
+              toolChoice: {
+                type: "tool" as const,
+                toolName: "readMemoryWriteStatus",
+              },
+              instructions,
+            };
+          }
+          if (pendingSynthesisSourceRead && stepNumber < MAX_EXPLORE_STEPS - 1) {
+            const sourceInstruction = pendingSynthesisSourceRead.phase === "outline"
+              ? `当前是 synthesis 检索且存在高价值来源。本步必须调用 readSourceDocument，使用 assertionRef=${pendingSynthesisSourceRead.assertionRef}、mode=outline 读取“${pendingSynthesisSourceRead.sourceTitle}”目录；不要直接结束或询问用户。`
+              : `已经读取“${pendingSynthesisSourceRead.sourceTitle}”目录，但尚未读取正文。本步必须再次调用 readSourceDocument，使用 assertionRef=${pendingSynthesisSourceRead.assertionRef}、mode=section，并从刚才目录选择最能覆盖当前未解决子问题的 headingBlockId。读取后回到已收集的 Assertion 与原文完成当前任务。`;
+            return {
+              ...(stepNumber > 0
+                ? { messages: compactExploreStepMessages(stepMessages) }
+                : {}),
+              activeTools: ["readSourceDocument"] as const,
+              toolChoice: {
+                type: "tool" as const,
+                toolName: "readSourceDocument",
+              },
+              instructions: `${instructions}\n\n服务端 synthesis 原文要求：${sourceInstruction}`,
+            };
+          }
+          if (shouldForceCrossLayerMemorySearch({
+            query,
+            libraryQueryCount,
+            hasSearchedMemory,
+            alreadyForced: crossLayerMemorySearchForced,
+            resultTokenBudget: exploreResultTokenBudget,
+            stepNumber,
+            maxSteps: MAX_EXPLORE_STEPS,
+          })) {
+            crossLayerMemorySearchForced = true;
+            return {
+              ...(stepNumber > 0
+                ? { messages: compactExploreStepMessages(stepMessages) }
+                : {}),
+              activeTools: ["searchMemory"] as const,
+              toolChoice: {
+                type: "tool" as const,
+                toolName: "searchMemory",
+              },
+              instructions: `${instructions}\n\n服务端检索要求：用户明确要求同时搜索文件标题和内容。Library 标题查询已经执行，但 Shared Brain 主题检索尚未执行；本步必须调用 searchMemory，taskShape=synthesis，targetHints 忠实保留用户给出的主题词，query 说明要查找直接相关的组织知识、姓名和原文线索。`,
+            };
+          }
+          if (turnHandoffSubmitted) {
+            return {
+              ...(stepNumber > 0
+                ? { messages: compactExploreStepMessages(stepMessages) }
+                : {}),
+              activeTools: [] as const,
+              toolChoice: "none" as const,
+              instructions: `${instructions}\n\n${FINAL_ANSWER_INSTRUCTION}`,
+            };
+          }
           return {
             ...(stepNumber > 0
               ? { messages: compactExploreStepMessages(stepMessages) }
@@ -1182,16 +1359,64 @@ export async function POST(request: Request) {
               ...activeCapabilityToolNames(openedCapabilities),
               ...alwaysAvailableToolNames,
             ]
+              .filter((name) =>
+                !(
+                  synthesisSourceReadSatisfied &&
+                  !extendedSourceReadingRequested &&
+                  name === "readSourceDocument"
+                )
+              )
               .filter((name) => Boolean(allTools[name])),
             toolChoice: "auto" as const,
-            instructions,
+            instructions: synthesisSourceReadSatisfied && !extendedSourceReadingRequested
+              ? `${instructions}\n\n服务端 synthesis 原文边界：本轮已完成目录与一个最相关正文章节的读取。当前任务没有要求通读全文；readSourceDocument 后续不再可用，不得再次调用。请基于已收集的 Higher Memory、Assertions、正式 View 与原文完成任务。`
+              : instructions,
           };
         },
         temperature: 0.3,
         maxOutputTokens: profile.maxOutputTokens,
+        maxRetries: profile.maxRetries,
+        timeout: {
+          firstChunkMs: profile.modelFirstChunkTimeoutMs,
+          chunkMs: profile.modelChunkTimeoutMs,
+        },
         abortSignal: request.signal,
+        onChunk: ({ chunk }) => {
+          switch (chunk.type) {
+            case "start-step":
+              currentStepTextChars = 0;
+              break;
+            case "text-delta":
+              currentStepTextChars += chunk.text.length;
+              streamObservation.contentChars = currentStepTextChars;
+              break;
+            case "finish-step":
+              lastCompletedStepTextChars = currentStepTextChars;
+              break;
+            case "reasoning-delta":
+              streamObservation.reasoningChars += chunk.text.length;
+              break;
+            case "tool-call":
+              streamObservation.toolCallCount += 1;
+              break;
+            case "error":
+              streamObservation.error = safeStreamErrorSummary(chunk.error);
+              streamObservation.failureCode = classifyStreamFailureCode(chunk.error);
+              streamObservation.contentChars = lastCompletedStepTextChars || currentStepTextChars;
+              break;
+            case "abort":
+              streamObservation.streamEnded = false;
+              streamObservation.failureCode = chunk.reason
+                ? classifyStreamFailureCode(new Error(chunk.reason))
+                : "stream_aborted";
+              streamObservation.contentChars = lastCompletedStepTextChars || currentStepTextChars;
+              writeStreamStatus();
+              break;
+          }
+        },
         onLanguageModelCallStart: async (event) => {
           mainModelCallNumber += 1;
+          Object.assign(streamObservation, modelCallAttempts.started());
           if (mainModelCallNumber === 1) {
             exposedToolSchemaBytes = new TextEncoder().encode(
               debugJson(event.tools ?? []),
@@ -1232,6 +1457,7 @@ export async function POST(request: Request) {
           );
         },
         onLanguageModelCallEnd: async (event) => {
+          modelCallAttempts.ended();
           const transcript = mainModelCalls.find((call) => call.callId === event.callId);
           if (transcript) transcript.output = renderDebugModelOutput(event.content);
           await debugTrace.appendSection(
@@ -1360,12 +1586,45 @@ export async function POST(request: Request) {
         },
         onFinish: async ({ text, finishReason, totalUsage, steps }) => {
           finalRawText = text;
+          const terminalStep = steps.at(-1);
+          streamObservation.terminalMetadataOnlyToolCalls = Boolean(
+            text.trim() &&
+            finishReason === "tool-calls" &&
+            terminalStep?.toolCalls.length &&
+            terminalStep.toolCalls.every((call) => call.toolName === TURN_HANDOFF_TOOL) &&
+            terminalStep.toolResults.length === terminalStep.toolCalls.length,
+          );
+          streamObservation.finishReason = finishReason;
+          streamObservation.streamEnded = true;
+          streamObservation.contentChars = text.length;
+          const terminalStatus = classifyChatStreamStatus(streamObservation);
+          if (terminalStatus.status !== "completed") {
+            writeStreamStatus();
+            memoryMaintenance.cancel("主回答未完整完成，因此后台记忆线路未启动。");
+            await debugTrace.appendJsonSection("主回答未完整完成", {
+              finishReason,
+              status: terminalStatus.status,
+              completionKind: terminalStatus.completionKind,
+              failureCode: terminalStatus.failureCode,
+              reasoningChars: streamObservation.reasoningChars,
+              contentChars: streamObservation.contentChars,
+              modelCallCount: streamObservation.modelCallCount,
+              retryCount: streamObservation.retryCount,
+            });
+            return;
+          }
           finalAudit = auditGroundedAnswer({
             text,
             contract: groundingState.contract(),
             validRefs: validReferenceRefs(),
           });
           const finalAnswer = finalAudit.text;
+          streamObservation.finishReason = finishReason;
+          streamObservation.streamEnded = true;
+          streamObservation.contentChars = finalAnswer.length;
+          streamObservation.error = undefined;
+          streamObservation.failureCode = undefined;
+          writeStreamStatus();
           await debugTrace.appendSection(
             "主回答完成",
             [
@@ -1422,24 +1681,23 @@ export async function POST(request: Request) {
             .findLast((call) => call.toolName === TURN_HANDOFF_TOOL);
           const parsedHandoff = turnHandoffSchema.safeParse(handoffCall?.input);
           const handoff = parsedHandoff.success ? parsedHandoff.data : undefined;
-          const handoffIsValid = Boolean(
-            handoff &&
-              handoff.candidateQuotes.every((quote) => query.includes(quote)) &&
-              (handoff.reviewNeeded
-                ? handoff.candidateQuotes.length > 0
-                : handoff.candidateQuotes.length === 0),
-          );
-          const reviewNeeded = handoffIsValid && Boolean(handoff?.reviewNeeded);
-          const candidateQuotes = handoffIsValid
-            ? handoff!.candidateQuotes
-            : [];
+          const {
+            handoffIsValid,
+            reviewNeeded,
+            candidateQuotes,
+            reviewSource,
+          } = resolveTurnHandoff({
+            handoff,
+            currentUserText: query,
+          });
           await debugTrace.appendJsonSection("Turn Handoff", {
             valid: handoffIsValid,
             reviewNeeded,
             candidateQuotes,
-            fallbackReason: handoffIsValid
-              ? null
-              : "未提交有效 Handoff；本轮跳过自动知识审查，避免未验证内容回灌。",
+            reviewSource,
+            fallbackReason: reviewSource === "fallback"
+              ? "未提交有效 Handoff；本轮转交受限 Assertion Agent 审查当前用户原话，仍需通过逐字 Evidence 与确定性校验后才能发布。"
+              : null,
           });
           const semanticContext = {
             conversation: semanticConversation.slice(-8),
@@ -1457,8 +1715,11 @@ export async function POST(request: Request) {
               }
             : undefined;
           const backgroundAssertionDecision = assertionQueueDecision ?? automaticWritebackDecision;
+          const authoritativeBusinessViewRead = sourceLayersUsed.has("business_view");
           const consolidationNeeded = Boolean(
-            foregroundAssertionResult || backgroundAssertionDecision,
+            foregroundAssertionResult ||
+            backgroundAssertionDecision ||
+            authoritativeBusinessViewRead,
           );
           const receiptKey = latestUserMessage
             ? {
@@ -1485,6 +1746,7 @@ export async function POST(request: Request) {
                 timezone: requestTimezone,
                 semanticContext,
                 retrieval: accumulatedRetrieval,
+                authoritativeBusinessViewRead,
               }
             : undefined;
           let writebackStatus = !reviewNeeded
@@ -1542,7 +1804,27 @@ export async function POST(request: Request) {
             latestUserMessage && foregroundAssertionResult && foregroundAssertionDecision,
           );
           const hasConsolidationWork = Boolean(consolidationInput);
-          if (latestUserMessage && (hasBackgroundWork || hasForegroundWork || hasConsolidationWork)) {
+          const hasColdHigherMemoryWork = coldHigherMemoryTargetIds.size > 0;
+          const coldHigherMemoryInput = hasColdHigherMemoryWork
+            ? {
+                clientMessageId: latestUserMessage.id,
+                submittedAt: submittedAt.toISOString(),
+                timezone: requestTimezone,
+                semanticContext,
+                retrieval: accumulatedRetrieval,
+                queueDecision: {
+                  targets: [...coldHigherMemoryTargetIds].map((globalObjectId) => ({
+                    scope: "object" as const,
+                    globalObjectId,
+                  })),
+                  reason: "用户首次实质性检索了尚无 Higher Memory 的唯一目标 Object；基于本轮真实 Assertion 与来源建立第一版 Cognitive Memory 和 Operational Memory Index。",
+                },
+              }
+            : undefined;
+          if (
+            latestUserMessage &&
+            (hasBackgroundWork || hasForegroundWork || hasConsolidationWork || hasColdHigherMemoryWork)
+          ) {
             memoryMaintenance.publish({
               ...(hasBackgroundWork && receiptKey
                 ? {
@@ -1561,6 +1843,7 @@ export async function POST(request: Request) {
                   }
                 : {}),
               ...(consolidationInput ? { consolidation: consolidationInput } : {}),
+              ...(coldHigherMemoryInput ? { higherMemory: coldHigherMemoryInput } : {}),
             });
           } else {
             await debugTrace.appendSection(
@@ -1620,6 +1903,8 @@ export async function POST(request: Request) {
             firstAuthoritativeTool: firstAuthoritativeTool ?? null,
             libraryQueryCount,
             memoryQueryCount,
+            crossLayerContentSearchRequired: requiresCrossLayerContentSearch(query),
+            crossLayerMemorySearchForced,
             libraryQueryTruncated: libraryQueryTruncated ?? null,
             libraryMatchedCount,
             mainModelCallCount: mainModelCallNumber,
@@ -1700,11 +1985,16 @@ export async function POST(request: Request) {
       const modelUIStream = result.toUIMessageStream({
         sendReasoning: true,
         onError: (error) => {
+          streamObservation.error = safeStreamErrorSummary(error);
+          streamObservation.failureCode = classifyStreamFailureCode(error);
+          streamObservation.streamEnded = false;
+          streamObservation.contentChars = lastCompletedStepTextChars || currentStepTextChars;
+          writeStreamStatus();
           console.error(
             "[chat.model-stream]",
             JSON.stringify(safeStreamErrorSummary(error)),
           );
-          void debugTrace.appendError("主回答模型流失败", error);
+          void debugTrace.appendError("主回答流错误事件（可能由后续步骤恢复）", error);
           return "AI 服务响应失败，请稍后重试。";
         },
       });
@@ -1714,7 +2004,7 @@ export async function POST(request: Request) {
     },
     onEnd: async ({ messages: completedMessages, responseMessage }) => {
       const persistedResponse = withoutTurnHandoff(responseMessage);
-      if (!modelHistoryMessageText(persistedResponse).trim()) return;
+      if (!hasPersistableChatContent(persistedResponse)) return;
       const responsePosition = completedMessages.findLastIndex(
         (message) => message.id === responseMessage.id,
       );
