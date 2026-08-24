@@ -5,6 +5,7 @@ import type {
 } from "@/contracts";
 import { societyInformationCommands } from "@/plugins/society-information/view/commands";
 import { societyInformationEvents } from "@/plugins/society-information/view/events";
+import { societyInformationInvariants } from "@/plugins/society-information/view/invariants";
 
 export const SOCIETY_INFORMATION_VIEW_KEY = "society_information";
 
@@ -35,10 +36,10 @@ export const societyInformationCardTypes = [
         cardinality: "many",
       },
       {
-        key: "positions",
-        label: "职位",
-        description: "该社团在具体学年中的职位实例 Card。",
-        allowedTargetCardTypes: ["PositionCard"],
+        key: "team",
+        label: "干事队伍",
+        description: "当前干事队伍中的人员 Card。",
+        allowedTargetCardTypes: ["PersonCard"],
         cardinality: "many",
       },
       {
@@ -67,7 +68,11 @@ export const societyInformationCardTypes = [
     key: "PersonCard",
     label: "人物",
     description: "在社团信息中被稳定指认和连接的人物。",
-    dimensions: [richText("description", "简介")],
+    dimensions: [
+      { key: "department", label: "部门", type: "text" },
+      { key: "position", label: "职位", type: "text" },
+      richText("description", "简介"),
+    ],
     slots: [],
     relatedObjects: {
       description: "关联该人物的稳定 Object。",
@@ -77,45 +82,78 @@ export const societyInformationCardTypes = [
     },
   },
   {
-    key: "PositionCard",
-    label: "职位",
-    description: "职位 Object 在某个学年中的具体业务实例及其任职人员。",
-    dimensions: [
-      { key: "name", label: "职位名称", type: "text", required: true },
-      { key: "academic_year", label: "学年", type: "text", required: true },
-      richText("description", "简介 / 职责"),
-    ],
-    slots: [{
-      key: "holders",
-      label: "任职人员",
-      description: "在该学年担任这个具体职位的人员 Card。",
-      allowedTargetCardTypes: ["PersonCard"],
-      cardinality: "many",
-    }],
-    relatedObjects: {
-      description: "可关联这个职位的稳定 Object；学年仍由 Card Dimension 表达。",
-      max: 1,
-    },
-  },
-  {
     key: "ActivityCard",
     label: "活动",
     description: "对理解社团有长期意义的活动、品牌赛事或持续活动。",
-    dimensions: [richText("description", "简介"), { key: "period", label: "举办时期", type: "text" }],
+    dimensions: [
+      richText("description", "简介"),
+      {
+        key: "frequency",
+        label: "举办频率",
+        type: "enum",
+        constraints: {
+          enumOptions: [
+            { key: "ANNUAL", label: "每年" },
+            { key: "PER_SEMESTER", label: "每学期" },
+            { key: "IRREGULAR", label: "不定期" },
+          ],
+        },
+      },
+      { key: "usual_period", label: "通常举办时期", type: "text" },
+      {
+        key: "status",
+        label: "状态",
+        type: "enum",
+        required: true,
+        defaultValue: "ACTIVE",
+        constraints: {
+          enumOptions: [
+            { key: "ACTIVE", label: "持续举办" },
+            { key: "PAUSED", label: "暂停" },
+            { key: "RETIRED", label: "已停止" },
+          ],
+        },
+      },
+    ],
     slots: [],
-    relatedObjects: { description: "可关联稳定活动 Object。", max: 1 },
+    relatedObjects: {
+      description: "关联这项长期活动的稳定 Object；同一 Object 在社团概览中只对应一张 Card。",
+      min: 1,
+      max: 1,
+      uniqueCardPerObject: true,
+    },
   },
   {
     key: "PlatformCard",
     label: "平台",
     description: "协会长期使用的平台、线上入口或公开信息渠道。",
     dimensions: [
-      { key: "platform_type", label: "平台类型", type: "text" },
-      { key: "access", label: "访问方式", type: "text" },
+      { key: "platform_type", label: "平台类型", type: "text", required: true },
+      { key: "url", label: "公开链接", type: "text" },
+      richText("access_instructions", "访问说明"),
       richText("description", "简介"),
+      {
+        key: "status",
+        label: "状态",
+        type: "enum",
+        required: true,
+        defaultValue: "ACTIVE",
+        constraints: {
+          enumOptions: [
+            { key: "ACTIVE", label: "正常使用" },
+            { key: "PAUSED", label: "暂停" },
+            { key: "RETIRED", label: "已停用" },
+          ],
+        },
+      },
     ],
     slots: [],
-    relatedObjects: { description: "可关联稳定平台 Object。", max: 1 },
+    relatedObjects: {
+      description: "关联稳定平台 Object；同一 Object 在社团概览中只对应一张 Card。",
+      min: 1,
+      max: 1,
+      uniqueCardPerObject: true,
+    },
   },
 ] as const satisfies readonly CardTypeDefinition[];
 
@@ -124,22 +162,22 @@ export const societyInformationViewModule: ViewModule = {
     key: SOCIETY_INFORMATION_VIEW_KEY,
     label: "社团信息",
     specializedLabel: "社团概览",
-    version: "1.0.0",
-    schemaVersion: "1",
-    description: "组织社团身份、基本信息、指导关系、学年职位、长期活动和平台入口。",
+    version: "1.2.0",
+    schemaVersion: "3",
+    description: "组织社团身份、基本信息、当前指导关系、干事队伍、长期活动和平台入口。",
     retrievalDescription:
-      "用于社团身份、基本信息、宗旨、星级、成立时间、指导老师、稳定人物关系、学年职位、长期活动、平台与公开入口等稳定社团信息。",
+      "用于社团身份、基本信息、宗旨、星级、成立时间、当前指导老师、当前干事队伍、长期活动、平台与公开入口。干事人员需记录部门与职位。",
     aiSemanticInstructions:
       "Card 使用 View-local identity，并可通过 Related Objects 连接稳定认知 Object。业务关系只由本 View Slot 表达。",
     defaultSettings: { aiWritePolicy: "approval_required" },
   },
   schema: {
     viewKey: SOCIETY_INFORMATION_VIEW_KEY,
-    schemaVersion: "1",
+    schemaVersion: "3",
     cardTypes: societyInformationCardTypes,
   },
   commands: societyInformationCommands,
-  invariants: [],
+  invariants: societyInformationInvariants,
   events: societyInformationEvents,
   projections: [],
 };

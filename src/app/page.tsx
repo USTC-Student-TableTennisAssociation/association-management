@@ -41,8 +41,8 @@ import type {
 } from "@/memory/source-document-types";
 import { ObjectChangeProposalCard } from "@/memory/object-management-components";
 import { GenericViewInspector } from "@/view-runtime/generic-ui/generic-view-inspector";
-import { WorkViewWorkspace } from "@/view-runtime/generic-ui/work-view-workspace";
 import { ViewCommandProposalCard } from "@/view-runtime/generic-ui/view-command-proposal-card";
+import { WorkPresentationHost } from "@/view-runtime/presentation-host/work-presentation-host";
 
 const initialMessages: ClubChatMessage[] = [];
 
@@ -75,10 +75,16 @@ type InstalledViewSummary = {
   schemaVersion: string;
   stateVersion: string;
   status: "enabled" | "disabled" | "incompatible";
+  presentation?: {
+    key: string;
+    label: string;
+    loader: string;
+  };
 };
 
 type SurfaceMode = "work" | "knowledge" | "library";
 type LibraryMode = "files" | "processing";
+type LayoutMode = "focus" | "collaborate" | "conversation";
 
 function messageReasoning(message: ClubChatMessage) {
   return message.parts
@@ -944,12 +950,15 @@ export default function Home() {
   const [installedViews, setInstalledViews] = useState<InstalledViewSummary[]>([]);
   const [installedViewsLoaded, setInstalledViewsLoaded] = useState(false);
   const [workInspectorOpen, setWorkInspectorOpen] = useState(false);
-  const [surfacePaneVisible, setSurfacePaneVisible] = useState(false);
-  const [aiPaneVisible, setAiPaneVisible] = useState(true);
-  const [surfaceFirst, setSurfaceFirst] = useState(true);
-  const [surfaceShare, setSurfaceShare] = useState(50);
-  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("focus");
+  const [surfaceShare, setSurfaceShare] = useState(66);
+  const [paneDragging, setPaneDragging] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const paneDragRef = useRef<{
+    pointerId: number;
+    bounds: DOMRect;
+    samples: Array<{ x: number; time: number }>;
+  } | undefined>(undefined);
   const [sourceReference, setSourceReference] = useState<SourceDocumentReference>();
   const [currentUser, setCurrentUser] = useState<CurrentUser>();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -1095,6 +1104,9 @@ export default function Home() {
     return () => controller.abort();
   }, [currentUser]);
 
+  const surfacePaneVisible = layoutMode !== "conversation";
+  const aiPaneVisible = layoutMode !== "focus";
+
   const pageContext: ChatPageContext = !surfacePaneVisible
     ? { activePresentation: "full_chat" }
     : surfaceMode === "knowledge"
@@ -1144,7 +1156,7 @@ export default function Home() {
     }
     setConversations((current) => [body.conversation!, ...current]);
     activateConversation(body.conversation.id);
-    setAiPaneVisible(true);
+    setLayoutMode((current) => current === "conversation" ? current : "collaborate");
   }
 
   async function renameConversation(conversation: ConversationSummary) {
@@ -1185,7 +1197,7 @@ export default function Home() {
     window.localStorage.setItem("echo.activeWorkView", viewKey);
     setViewFocusCardId(undefined);
     setWorkInspectorOpen(false);
-    setSurfacePaneVisible(true);
+    setLayoutMode("focus");
   }
 
   function openViewReference(reference: ViewInformationReference) {
@@ -1193,8 +1205,7 @@ export default function Home() {
     setActiveWorkViewKey(reference.target.viewKey);
     window.localStorage.setItem("echo.activeWorkView", reference.target.viewKey);
     setWorkInspectorOpen(false);
-    setSurfacePaneVisible(true);
-    setAiPaneVisible(true);
+    setLayoutMode("collaborate");
     setViewFocusCardId(reference.target.kind === "card" ? reference.target.cardId : undefined);
   }
 
@@ -1202,36 +1213,75 @@ export default function Home() {
     setSurfaceMode(mode);
     setViewFocusCardId(undefined);
     if (mode === "work") setWorkInspectorOpen(false);
+    if (layoutMode === "conversation") setLayoutMode("focus");
   }
 
   function beginPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
-    if (!surfacePaneVisible || !aiPaneVisible) return;
+    if (layoutMode !== "collaborate") return;
     event.preventDefault();
+    const bounds = splitContainerRef.current?.getBoundingClientRect();
+    if (!bounds || !bounds.width) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    paneDragRef.current = {
+      pointerId: event.pointerId,
+      bounds,
+      samples: [{ x: event.clientX, time: event.timeStamp }],
+    };
+    setPaneDragging(true);
     const body = document.body;
-    const previousCursor = body.style.cursor;
-    const previousUserSelect = body.style.userSelect;
     body.style.cursor = "col-resize";
     body.style.userSelect = "none";
+  }
 
-    const update = (clientX: number) => {
-      const bounds = splitContainerRef.current?.getBoundingClientRect();
-      if (!bounds || !bounds.width) return;
-      const fromLeft = (clientX - bounds.left) / bounds.width * 100;
-      const next = surfaceFirst ? fromLeft : 100 - fromLeft;
-      setSurfaceShare(Math.min(80, Math.max(20, next)));
-    };
-    const move = (pointerEvent: PointerEvent) => update(pointerEvent.clientX);
-    const finish = () => {
-      body.style.cursor = previousCursor;
-      body.style.userSelect = previousUserSelect;
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", finish);
-      window.removeEventListener("pointercancel", finish);
-    };
-    update(event.clientX);
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", finish);
-    window.addEventListener("pointercancel", finish);
+  function movePaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = paneDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const share = (event.clientX - drag.bounds.left) / drag.bounds.width * 100;
+    setSurfaceShare(Math.min(96, Math.max(4, share)));
+    drag.samples.push({ x: event.clientX, time: event.timeStamp });
+    if (drag.samples.length > 5) drag.samples.shift();
+  }
+
+  function finishPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = paneDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const first = drag.samples[0];
+    const last = drag.samples.at(-1) ?? first;
+    const elapsed = Math.max(1, last.time - first.time);
+    const velocity = (last.x - first.x) / elapsed;
+    const projectedX = last.x + velocity * 180;
+    const projectedShare = (projectedX - drag.bounds.left) / drag.bounds.width * 100;
+
+    paneDragRef.current = undefined;
+    setPaneDragging(false);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+
+    if (projectedShare >= 84) {
+      setLayoutMode("focus");
+      setSurfaceShare(66);
+    } else if (projectedShare <= 16) {
+      setLayoutMode("conversation");
+      setSurfaceShare(66);
+    } else {
+      setSurfaceShare(66);
+    }
+  }
+
+  function cancelPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = paneDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    paneDragRef.current = undefined;
+    setPaneDragging(false);
+    setSurfaceShare(66);
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }
 
   function resizeWithKeyboard(event: KeyboardEvent<HTMLDivElement>) {
@@ -1239,7 +1289,7 @@ export default function Home() {
     event.preventDefault();
     const direction = event.key === "ArrowRight" ? 1 : -1;
     setSurfaceShare((current) =>
-      Math.min(80, Math.max(20, current + direction * (surfaceFirst ? 5 : -5)))
+      Math.min(80, Math.max(20, current + direction * 5))
     );
   }
 
@@ -1255,45 +1305,37 @@ export default function Home() {
     );
   }
 
-  const bothPanesVisible = surfacePaneVisible && aiPaneVisible;
-  const surfaceSidebarFirst = !bothPanesVisible || surfaceFirst;
-  const aiSidebarFirst = !bothPanesVisible || !surfaceFirst;
-  const surfaceStyle = bothPanesVisible
-    ? { flexBasis: 0, flexGrow: surfaceShare }
-    : { flexBasis: 0, flexGrow: 1 };
-  const aiStyle = bothPanesVisible
-    ? { flexBasis: 0, flexGrow: 100 - surfaceShare }
-    : { flexBasis: 0, flexGrow: 1 };
-  const surfaceSidebar = surfaceMode === "work" ? (
-    <aside className={`flex w-40 shrink-0 flex-col overflow-hidden bg-[#f8f9f7] ${
-      surfaceSidebarFirst ? "border-r" : "border-l"
-    } border-zinc-200`}>
-      <div className="flex h-12 shrink-0 items-center px-4">
-        <p className="text-[11px] font-semibold tracking-wide text-zinc-500">工作视图</p>
-      </div>
-      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2.5 pb-3">
-        {installedViews.map((view) => (
-          <button
-            key={view.viewKey}
-            type="button"
-            onClick={() => openWorkView(view.viewKey)}
-            className={`w-full rounded-lg px-2.5 py-2 text-left text-xs transition ${
-              activeWorkViewKey === view.viewKey
-                ? "bg-white font-medium text-zinc-950 shadow-sm ring-1 ring-zinc-200"
-                : "text-zinc-600 hover:bg-white hover:text-zinc-900"
-            }`}
-          >
-            {view.specializedLabel ?? view.label}
-          </button>
-        ))}
-      </div>
-    </aside>
-  ) : null;
+  const bothPanesVisible = layoutMode === "collaborate";
+  const activeWorkView = installedViews.find((view) => view.viewKey === activeWorkViewKey);
+  const surfaceStyle = {
+    flexBasis: 0,
+    flexGrow: layoutMode === "focus" ? 100 : layoutMode === "conversation" ? 0 : surfaceShare,
+  };
+  const aiStyle = {
+    flexBasis: 0,
+    flexGrow: layoutMode === "conversation" ? 100 : layoutMode === "focus" ? 0 : 100 - surfaceShare,
+  };
 
-  const surfaceMain = (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
-      <header className="flex h-12 shrink-0 items-center justify-center border-b border-zinc-200 bg-white px-3">
-        <div className="flex rounded-lg bg-zinc-100 p-1" aria-label="工作区模式">
+  const navigationRail = (
+    <aside
+      aria-label="Echo 主导航"
+      className={`group absolute inset-y-0 left-0 z-40 flex flex-col overflow-hidden border-r backdrop-blur-2xl transition-[width,padding,background-color,border-color,box-shadow] duration-500 ease-[cubic-bezier(.16,1,.3,1)] motion-reduce:transition-none hover:w-48 hover:border-zinc-200/80 hover:bg-white/94 hover:px-2 hover:shadow-[18px_0_48px_rgba(0,0,0,0.14)] focus-within:w-48 focus-within:border-zinc-200/80 focus-within:bg-white/94 focus-within:px-2 focus-within:shadow-[18px_0_48px_rgba(0,0,0,0.14)] ${
+        layoutMode === "focus"
+          ? "w-2 border-transparent bg-transparent px-0"
+          : "w-12 border-zinc-200/80 bg-white/90 px-1.5"
+      }`}
+    >
+      <div className={`flex h-full w-44 flex-col gap-2 py-2 transition-opacity duration-200 ${
+        layoutMode === "focus"
+          ? "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+          : "opacity-100"
+      }`}>
+        <div className="flex h-9 shrink-0 items-center gap-3 rounded-[10px] px-2">
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-[8px] bg-zinc-950 text-[10px] font-semibold text-white shadow-sm">E</span>
+          <span className="text-[14px] font-semibold tracking-[-0.02em] text-zinc-950 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">Echo</span>
+        </div>
+
+        <nav className="space-y-1" aria-label="工作空间">
           {([
             ["work", "工作"],
             ["knowledge", "知识"],
@@ -1303,19 +1345,86 @@ export default function Home() {
               key={mode}
               type="button"
               onClick={() => selectSurfaceMode(mode)}
-              aria-pressed={surfaceMode === mode}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+              aria-current={surfaceMode === mode ? "page" : undefined}
+              aria-label={label}
+              className={`flex h-9 w-full items-center gap-3 rounded-[10px] px-2 text-left text-[12px] font-medium transition ${
                 surfaceMode === mode
-                  ? "bg-white text-zinc-950 shadow-sm"
-                  : "text-zinc-500 hover:text-zinc-800"
+                  ? "bg-sky-50 text-sky-700"
+                  : "text-zinc-500 hover:bg-zinc-100/90 hover:text-zinc-900"
               }`}
             >
-              {label}
+              {mode === "work" ? (
+                <svg viewBox="0 0 24 24" className="size-5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                  <path d="M4 8.5h16v9A1.5 1.5 0 0 1 18.5 19h-13A1.5 1.5 0 0 1 4 17.5v-9Z" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M9 8.5V6.8A1.8 1.8 0 0 1 10.8 5h2.4A1.8 1.8 0 0 1 15 6.8v1.7M4 12h16" strokeLinecap="round" />
+                </svg>
+              ) : mode === "knowledge" ? (
+                <svg viewBox="0 0 24 24" className="size-5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                  <circle cx="6" cy="12" r="2.2" /><circle cx="18" cy="6" r="2.2" /><circle cx="18" cy="18" r="2.2" />
+                  <path d="m8 11 7.8-4M8 13l7.8 4" strokeLinecap="round" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" className="size-5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                  <path d="M3.5 7.5h6l1.7 2H20.5v8A1.5 1.5 0 0 1 19 19H5a1.5 1.5 0 0 1-1.5-1.5v-10Z" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              )}
+              <span className="opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">{label}</span>
             </button>
           ))}
-        </div>
-      </header>
+        </nav>
 
+        {surfaceMode === "work" ? (
+          <div className="min-h-0 flex-1 overflow-y-auto border-t border-zinc-200/70 pt-3 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+            <p className="px-2 text-[10px] font-semibold tracking-[0.08em] text-zinc-400">工作视图</p>
+            <div className="mt-1.5 space-y-1">
+              {installedViews.map((view) => (
+                <button
+                  key={view.viewKey}
+                  type="button"
+                  onClick={() => openWorkView(view.viewKey)}
+                  className={`w-full rounded-lg px-2 py-2 text-left text-[12px] transition ${
+                    activeWorkViewKey === view.viewKey
+                      ? "bg-zinc-100 font-medium text-zinc-950"
+                      : "text-zinc-500 hover:bg-zinc-100/80 hover:text-zinc-900"
+                  }`}
+                >
+                  {view.specializedLabel ?? view.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : <div className="flex-1" />}
+
+        <div className="space-y-1 border-t border-zinc-200/70 pt-2">
+          {currentUser.role === "ADMIN" ? (
+            <button
+              type="button"
+              onClick={() => window.location.assign("/admin/users")}
+              aria-label="账号管理"
+              className="flex h-9 w-full items-center gap-3 rounded-[10px] px-2 text-[12px] text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900"
+            >
+              <svg viewBox="0 0 24 24" className="size-5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                <circle cx="12" cy="8" r="3" /><path d="M5.5 19a6.5 6.5 0 0 1 13 0" strokeLinecap="round" />
+              </svg>
+              <span className="opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">账号管理</span>
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void logout()}
+            aria-label="退出登录"
+            className="flex h-9 w-full items-center gap-3 rounded-[10px] px-2 text-[12px] text-zinc-500 transition hover:bg-zinc-100 hover:text-zinc-900"
+          >
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-zinc-200 text-[9px] font-semibold text-zinc-700">{currentUser.actor.displayName.slice(0, 1).toUpperCase()}</span>
+            <span className="truncate opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">{currentUser.actor.displayName} · 退出</span>
+          </button>
+        </div>
+      </div>
+    </aside>
+  );
+
+  const surfaceMain = (
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
       {surfaceMode === "work" ? (
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto">
           {activeWorkViewKey ? (
@@ -1325,21 +1434,22 @@ export default function Home() {
                 viewKey={activeWorkViewKey}
                 focusCardId={viewFocusCardId}
                 onClose={() => setWorkInspectorOpen(false)}
-                onOpenAI={() => setAiPaneVisible(true)}
+                onOpenAI={() => setLayoutMode("collaborate")}
                 onAskAI={(prompt) => {
                   setInput(prompt);
-                  setAiPaneVisible(true);
+                  setLayoutMode("collaborate");
                 }}
               />
             ) : (
-              <WorkViewWorkspace
+              <WorkPresentationHost
                 key={activeWorkViewKey}
                 viewKey={activeWorkViewKey}
+                presentationLoader={activeWorkView?.presentation?.loader}
                 focusCardId={viewFocusCardId}
                 onOpenInspector={() => setWorkInspectorOpen(true)}
                 onAskAI={(prompt) => {
                   setInput(prompt);
-                  setAiPaneVisible(true);
+                  setLayoutMode("collaborate");
                 }}
               />
             )
@@ -1355,7 +1465,7 @@ export default function Home() {
               assistantOpen={aiPaneVisible}
               onAskAI={(prompt) => {
                 setInput(prompt);
-                setAiPaneVisible(true);
+                setLayoutMode("collaborate");
               }}
             />
           </div>
@@ -1366,10 +1476,10 @@ export default function Home() {
                 initialFolderId={activeLibraryFolderId}
                 onFolderChange={setActiveLibraryFolderId}
                 onOpenProcessing={() => setLibraryMode("processing")}
-                onOpenAI={() => setAiPaneVisible(true)}
+                onOpenAI={() => setLayoutMode("collaborate")}
                 onAskAI={(prompt) => {
                   setInput(prompt);
-                  setAiPaneVisible(true);
+                  setLayoutMode("collaborate");
                 }}
               />
             ) : (
@@ -1377,7 +1487,7 @@ export default function Home() {
                 onOpenLibrary={() => setLibraryMode("files")}
                 onAskAI={(prompt) => {
                   setInput(prompt);
-                  setAiPaneVisible(true);
+                  setLayoutMode("collaborate");
                 }}
               />
             )}
@@ -1386,24 +1496,24 @@ export default function Home() {
     </div>
   );
 
-  const surfacePane = surfacePaneVisible ? (
+  const surfacePane = (
     <section
       aria-label="工作区"
-      className="flex h-full min-h-0 min-w-0 overflow-hidden bg-white"
+      aria-hidden={!surfacePaneVisible}
+      inert={!surfacePaneVisible}
+      className={`flex h-full min-h-0 min-w-0 overflow-hidden bg-white motion-reduce:transition-none ${
+        paneDragging ? "" : "transition-[flex-grow] duration-500 ease-[cubic-bezier(.16,1,.3,1)]"
+      }`}
       style={surfaceStyle}
     >
-      {surfaceSidebarFirst ? surfaceSidebar : null}
       {surfaceMain}
-      {surfaceSidebarFirst ? null : surfaceSidebar}
     </section>
-  ) : null;
+  );
 
   const aiSidebar = (
     <nav
       aria-label="AI 对话"
-      className={`flex shrink-0 flex-col overflow-hidden bg-[#f9f9f9] px-2.5 pb-2.5 pt-2 ${
-        bothPanesVisible ? "w-[220px]" : "w-[244px]"
-      } ${aiSidebarFirst ? "border-r" : "border-l"} border-[#e8e8e8]`}
+      className="flex w-[236px] shrink-0 flex-col overflow-hidden border-r border-[#e8e8e8] bg-[#f7f7f8] px-2.5 pb-2.5 pt-2"
     >
       <div className="flex h-11 shrink-0 items-center justify-center">
         <p className="text-[16px] font-semibold tracking-[-0.02em] text-zinc-900">Echo</p>
@@ -1449,21 +1559,6 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="shrink-0 border-t border-zinc-200/80 pt-2">
-        <div className="flex items-center gap-2 rounded-lg px-1.5 py-1.5">
-          <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-[#d9dfdc] text-[10px] font-semibold text-zinc-700">
-            {currentUser.actor.displayName.slice(0, 1).toUpperCase()}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[12px] font-medium leading-4 text-zinc-800">{currentUser.actor.displayName}</p>
-            <p className="truncate text-[10px] leading-4 text-zinc-500">{currentUser.personObject?.canonicalName ?? currentUser.loginName}</p>
-          </div>
-        </div>
-        <div className="flex gap-0.5 px-1">
-          {currentUser.role === "ADMIN" ? <button onClick={() => window.location.assign("/admin/users")} className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-200/70 hover:text-zinc-800">账号管理</button> : null}
-          <button onClick={() => void logout()} className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-200/70 hover:text-zinc-800">退出登录</button>
-        </div>
-      </div>
     </nav>
   );
 
@@ -1473,120 +1568,130 @@ export default function Home() {
     </div>
   );
 
-  const aiPane = aiPaneVisible ? (
+  const aiPane = (
     <section
       aria-label="AI Pane"
-      className="flex h-full min-h-0 min-w-0 overflow-hidden bg-white"
+      aria-hidden={!aiPaneVisible}
+      inert={!aiPaneVisible}
+      className={`flex h-full min-h-0 min-w-0 overflow-hidden bg-white motion-reduce:transition-none ${
+        paneDragging ? "" : "transition-[flex-grow] duration-500 ease-[cubic-bezier(.16,1,.3,1)]"
+      }`}
       style={aiStyle}
     >
-      {aiSidebarFirst ? aiSidebar : null}
-      {aiChat}
-      {aiSidebarFirst ? null : aiSidebar}
+      {layoutMode === "conversation" ? aiSidebar : null}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-white">
+        <header className={layoutMode === "conversation"
+          ? "pointer-events-none absolute right-3 top-2 z-20 flex items-center"
+          : "flex h-12 shrink-0 items-center justify-between bg-white/88 px-3 backdrop-blur-xl"
+        }>
+          {layoutMode === "collaborate" ? (
+            <div className="flex items-center gap-2 text-[13px] font-semibold tracking-[-0.01em] text-zinc-900">
+              <span className="flex size-6 items-center justify-center rounded-full bg-zinc-950 text-[9px] text-white">E</span>
+              Echo
+            </div>
+          ) : null}
+          <div className={`pointer-events-auto flex items-center gap-1 ${
+            layoutMode === "conversation"
+              ? "rounded-xl border border-zinc-200/80 bg-white/88 p-1 shadow-sm backdrop-blur-xl"
+              : ""
+          }`}>
+            {layoutMode === "collaborate" ? (
+              <button
+                type="button"
+                onClick={() => setLayoutMode("conversation")}
+                aria-label="展开为对话视图"
+                title="展开为对话"
+                className="flex size-8 items-center justify-center rounded-[9px] text-zinc-500 transition active:scale-95 hover:bg-zinc-100 hover:text-zinc-900"
+              >
+                <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                  <path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setLayoutMode("collaborate")}
+                aria-label="缩回协作视图"
+                title="缩回协作"
+                className="flex size-8 items-center justify-center rounded-[9px] text-zinc-500 transition active:scale-95 hover:bg-zinc-100 hover:text-zinc-900"
+              >
+                <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                  <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+                  <path d="M14.5 4.5v15M11.5 12h-4m0 0 2-2m-2 2 2 2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setLayoutMode("focus")}
+              aria-label="关闭 Echo，进入专注视图"
+              title="关闭 Echo"
+              className="flex size-8 items-center justify-center rounded-[9px] text-zinc-500 transition active:scale-95 hover:bg-zinc-100 hover:text-zinc-900"
+            >
+              <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                <path d="m7 7 10 10M17 7 7 17" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+        </header>
+        <div className="min-h-0 flex-1">{aiChat}</div>
+      </div>
     </section>
-  ) : null;
+  );
 
   const divider = bothPanesVisible ? (
     <div
       role="separator"
       aria-label="调整工作区与 AI 宽度"
       aria-orientation="vertical"
-      aria-valuemin={20}
-      aria-valuemax={80}
+      aria-valuemin={0}
+      aria-valuemax={100}
       aria-valuenow={Math.round(surfaceShare)}
       tabIndex={0}
       onPointerDown={beginPaneResize}
+      onPointerMove={movePaneResize}
+      onPointerUp={finishPaneResize}
+      onPointerCancel={cancelPaneResize}
       onKeyDown={resizeWithKeyboard}
-      onDoubleClick={() => setSurfaceShare(50)}
-      className="group relative z-10 w-2 shrink-0 cursor-col-resize bg-zinc-100 outline-none hover:bg-emerald-100 focus:bg-emerald-100"
+      onDoubleClick={() => setSurfaceShare(66)}
+      className="group/divider relative z-20 w-2.5 shrink-0 touch-none cursor-col-resize bg-zinc-100 outline-none focus-visible:bg-sky-50"
     >
-      <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-zinc-300 group-hover:bg-emerald-500" />
+      <span className={`absolute left-1/2 top-1/2 flex h-14 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border bg-white text-zinc-400 shadow-[0_8px_24px_rgba(0,0,0,0.15)] transition-[color,transform,border-color] motion-reduce:transition-none group-hover/divider:border-sky-300 group-hover/divider:text-sky-600 ${
+        paneDragging ? "scale-105 border-sky-300 text-sky-600" : "border-zinc-200"
+      }`}>
+        <svg viewBox="0 0 16 24" className="h-5 w-3" fill="currentColor" aria-hidden="true">
+          <circle cx="6" cy="7" r="1" /><circle cx="10" cy="7" r="1" />
+          <circle cx="6" cy="12" r="1" /><circle cx="10" cy="12" r="1" />
+          <circle cx="6" cy="17" r="1" /><circle cx="10" cy="17" r="1" />
+        </svg>
+      </span>
     </div>
   ) : null;
 
   return (
     <main className="relative flex h-dvh min-h-0 overflow-hidden bg-white text-zinc-950">
-      <div className="fixed right-3 top-3 z-40 flex items-start gap-2">
-        {!surfacePaneVisible ? (
-          <button
-            type="button"
-            onClick={() => setSurfacePaneVisible(true)}
-            className="h-8 rounded-lg border border-zinc-200 bg-white/95 px-3 text-xs font-medium text-zinc-700 shadow-sm backdrop-blur hover:bg-zinc-50"
-          >
-            打开工作区
-          </button>
-        ) : null}
-        <div className="relative">
-          <button
-            type="button"
-            aria-label="布局设置"
-            aria-expanded={layoutMenuOpen}
-            title="布局设置"
-            onClick={() => setLayoutMenuOpen((open) => !open)}
-            className="flex size-8 items-center justify-center rounded-lg border border-zinc-200 bg-white/95 text-zinc-500 shadow-sm backdrop-blur hover:bg-zinc-50 hover:text-zinc-800"
-          >
-            <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
-              <rect x="3.5" y="5" width="7" height="14" rx="1.5" />
-              <rect x="13.5" y="5" width="7" height="14" rx="1.5" />
-            </svg>
-          </button>
-          {layoutMenuOpen ? (
-            <div className="absolute right-0 mt-2 w-44 rounded-xl border border-zinc-200 bg-white p-1.5 text-xs shadow-xl">
-              <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-400">布局</p>
-              <button
-                type="button"
-                disabled={!bothPanesVisible}
-                onClick={() => {
-                  setSurfaceFirst((current) => !current);
-                  setLayoutMenuOpen(false);
-                }}
-                className="w-full rounded-lg px-2 py-2 text-left text-zinc-700 hover:bg-zinc-100 disabled:opacity-35"
-              >
-                左右交换
-              </button>
-              <button
-                type="button"
-                disabled={!bothPanesVisible}
-                onClick={() => {
-                  setSurfaceShare(50);
-                  setLayoutMenuOpen(false);
-                }}
-                className="w-full rounded-lg px-2 py-2 text-left text-zinc-700 hover:bg-zinc-100 disabled:opacity-35"
-              >
-                恢复等宽
-              </button>
-              <button
-                type="button"
-                disabled={!surfacePaneVisible || !aiPaneVisible}
-                onClick={() => {
-                  setAiPaneVisible(false);
-                  setLayoutMenuOpen(false);
-                }}
-                className="w-full rounded-lg px-2 py-2 text-left text-zinc-700 hover:bg-zinc-100 disabled:opacity-35"
-              >
-                隐藏 AI
-              </button>
-              {surfacePaneVisible ? (
-                <button
-                  type="button"
-                  disabled={!aiPaneVisible}
-                  onClick={() => {
-                    setSurfacePaneVisible(false);
-                    setLayoutMenuOpen(false);
-                  }}
-                  className="w-full rounded-lg px-2 py-2 text-left text-zinc-700 hover:bg-zinc-100 disabled:opacity-35"
-                >
-                  隐藏工作区
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      </div>
-      <div ref={splitContainerRef} className="flex min-h-0 min-w-0 flex-1">
-        {surfaceFirst ? surfacePane : aiPane}
+      {navigationRail}
+      <div
+        ref={splitContainerRef}
+        className={`flex min-h-0 min-w-0 flex-1 transition-[margin-left] duration-500 ease-[cubic-bezier(.16,1,.3,1)] motion-reduce:transition-none ${
+          layoutMode === "focus" ? "ml-0" : "ml-12"
+        }`}
+      >
+        {surfacePane}
         {divider}
-        {surfaceFirst ? aiPane : surfacePane}
+        {aiPane}
       </div>
+      {layoutMode === "focus" ? (
+        <button
+          type="button"
+          onClick={() => setLayoutMode("collaborate")}
+          aria-label="打开 Echo，与当前工作区协作"
+          title="打开 Echo"
+          className="absolute bottom-5 right-5 z-30 flex size-12 items-center justify-center rounded-full border border-white/25 bg-sky-600 text-[11px] font-semibold text-white shadow-[0_14px_36px_rgba(2,82,153,0.38),inset_0_1px_0_rgba(255,255,255,0.3)] backdrop-blur-xl transition active:scale-95 hover:bg-sky-500"
+        >
+          Echo
+        </button>
+      ) : null}
       {sourceReference ? (
         <SourceDocumentDialog
           reference={sourceReference}
