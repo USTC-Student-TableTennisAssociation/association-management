@@ -21,6 +21,12 @@ export async function GET() {
   return Response.json({
     views: installed.flatMap((state) => {
       const viewModule = extensionRegistry.getView(state.viewKey, { includeDisabled: true });
+      const presentationExtension = extensionRegistry.listPresentations()
+        .find((candidate) =>
+          candidate.targetView === state.viewKey &&
+          candidate.compatibleViewVersions === state.moduleVersion
+        );
+      const presentation = presentationExtension?.presentations[0];
       return viewModule
         ? [{
             ...state,
@@ -28,6 +34,7 @@ export async function GET() {
             label: viewModule.manifest.label,
             specializedLabel: viewModule.manifest.specializedLabel,
             description: viewModule.manifest.description,
+            ...(presentation ? { presentation } : {}),
           }]
         : [];
     }),

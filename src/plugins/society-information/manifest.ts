@@ -1,8 +1,12 @@
 import type { EchoPluginManifest } from "@/contracts";
+import { societyOverviewPresentation } from "@/plugins/society-information/presentation/extension";
 import { societyInformationViewModule } from "@/plugins/society-information/view/schema";
 
 export const societyInformationPlugin: EchoPluginManifest = {
   id: "echo.society-information",
-  version: "1.0.0",
-  contributes: { views: [societyInformationViewModule] },
+  version: "1.2.0",
+  contributes: {
+    views: [societyInformationViewModule],
+    presentations: [societyOverviewPresentation],
+  },
 };
