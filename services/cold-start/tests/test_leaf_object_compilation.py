@@ -229,7 +229,7 @@ async def test_compiles_and_reviews_one_leaf(tmp_path: Path) -> None:
         assert "现实语义门" in prompt
         assert "本章将介绍" in prompt
         assert "标题、表头或列表上方" in prompt
-        assert "体育场馆申请" in prompt
+        assert "访问权限申请" in prompt
         assert "核心工作对象" in prompt
     assert "必须把标题对象补回相关 Assertion" in extraction_system
     assert "核心谓词锚点检查" in review_system

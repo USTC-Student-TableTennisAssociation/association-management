@@ -317,7 +317,7 @@ CLAIM_EXTRACTION_SYSTEM_PROMPT = """
 指向明确来源区域的 Reference Assertion，以及来源明确表达的同指称字面称呼。
 一次有限扫描完成它们，处理完最后一个 block 后立即提交。
 
-一次只做这一个核心判断：原文对现实中的组织、人物、活动、工作、制度、历史、状态、
+一次只做这一个核心判断：原文对现实中的人物、组织、产品、项目、场所、活动、工作、制度、历史、状态、
 做法、结果、目标或观点明确说了什么。目录、章节导航、承接语和“本章将介绍……”之类
 只描述文档结构的文字不形成命题。
 
@@ -326,7 +326,7 @@ CLAIM_EXTRACTION_SYSTEM_PROMPT = """
   直接理解的知识单元；可以是一句，也可以是相互依赖的数句；
 - 同一规则、机制、流程步骤链、完整表格行或共享条件/例外的内容，如果理解其中一句
   需要另一句、它们通常会一起被查询，应优先保持在一条 Assertion 中；
-- 只在主题、来源或变化边界明显不同时拆分。例如长期赛制/季节与“本届负责人”
+- 只在主题、来源或变化边界明显不同时拆分。例如长期运行规则与“本届负责人”
   生命周期不同，应分开；
 - 不要默认按句、每个谓词、列表项或表格单元格切分；不要用字数阈值作为主要标准；
 - 能用当前句子或 block 明确无歧义的信息自然补齐主语时，可整理为独立知识
@@ -334,8 +334,8 @@ CLAIM_EXTRACTION_SYSTEM_PROMPT = """
 - 如果独立化需要明显的代词消解、跨句或跨 block 身份推断、省略补全、复制大段前文或复杂
   语义重建，不要强行解决。保留合理的上下文依赖表达，并标记 context_dependent=true；该字段
   只表示阅读这条 Claim 时需要回到所属 SourceRegion，不要求输出 antecedent 或 context span；
-- 例如“25-26届会长深感有责任改变这一现状。”是可接受的 context_dependent=true Claim，
-  不要为展开“这一现状”复制前文，也不要跨 block 把“25-26届会长”解析成具体人物；
+- 例如“当前负责人认为有必要改变这一现状。”是可接受的 context_dependent=true Claim，
+  不要为展开“这一现状”复制前文，也不要跨 block 把“当前负责人”解析成具体人物；
 - 条件、否定、例外、数量、时间表达和“建议”“计划”“可能”等原文语气必须保留，
   不能擅自补足。
 
@@ -346,7 +346,7 @@ CLAIM_EXTRACTION_SYSTEM_PROMPT = """
   每个 Object 机械生成；
 - 颗粒度是“用户可能独立询问的信息主题 + 足够小、能直接继续读取的来源区域”。
   拆分后没有产生不同检索路径时，就保持一条；允许覆盖范围重叠；
-- 对一组同类 Object 的表格或名单，正文优先使用“主要品牌赛事”“本届岗位安排”等集合性
+- 对一组同类 Object 的表格或名单，正文优先使用“主要服务项目”“当前岗位安排”等集合性
   主题描述，不要为了关联成员而在 Reference 正文中逐一枚举所有 Object 名称；
 - supporting_block_ids 必须精确指向要回看的表格/列表/章节原文块；如果信息全部在表格 block，
   不要仅因标题提供主题就额外把 heading block 列为依据；
@@ -365,13 +365,13 @@ CLAIM_EXTRACTION_SYSTEM_PROMPT = """
 - 只保存当前来源明确表达的 referential equivalence。不得因为名称相似、常识、主题相近、共同
   出现或未来可能相连而推断；不得补充原文没有写出的全称、简称或标准名；
 - 即使来源使用“以下简称”明确建立文内共指，也只提交能够脱离当前句子、独立指向同一对象的
-  真实名称、简称、缩写或别名；“本会”“该校”“协会”“学校”“负责人”“会长”等临时泛称
-  不能成为 same_referent_drafts mention。明确的“中国科学技术大学”“中国科大”“中科大”
-  可以保留；“项目负责人”“负责人”和“魏汉东”“会长”不能因此组成同指称名称组；
+  真实名称、简称、缩写或别名；“该对象”“本项目”“当前负责人”等依赖语境的代称或临时角色
+  不能成为 same_referent_drafts mention。明确的“远航计划”“Project Voyager”“PV”
+  可以保留；“项目负责人”“负责人”和“林岚”“主管”不能因此组成同指称名称组；
 - “明确表达”要求同一处直接命名构式把这些字面称呼作为等价名称呈现。先出现全称，后文另句
   使用一个看似简称的词，只属于语篇指代，不足以进入 same_referent_drafts；不要跨句搜集别称；
-- 例如来源写“中国科学技术大学学生乒乓球协会（USTC TTA）”，后文另写“乒协”，只提交
-  “中国科学技术大学学生乒乓球协会”与“USTC TTA”；不得把“乒协”加入该草稿；
+- 例如来源写“远航计划（Project Voyager）”，后文另写“该计划”，只提交
+  “远航计划”与“Project Voyager”；不得把“该计划”加入该草稿；
 - 不寻找跨来源 identity，不重新讨论 Objecthood，不生成 alias、canonical label 或 Object ID；
 - 不判断全局 Object identity，不建立 Relation，不分类 record/viewpoint，不结构化时间，
   不评价长期价值；
@@ -386,13 +386,13 @@ JSON 字符串要求：
 - 输出必须是标准 JSON parser 可以直接解析的完整对象。
 
 错误：
-{"statement_markdown":"协会呈现"两极化"结构"}
+{"statement_markdown":"项目呈现"两极化"结构"}
 
 正确之一：
-{"statement_markdown":"协会呈现“两极化”结构"}
+{"statement_markdown":"项目呈现“两极化”结构"}
 
 或合法转义：
-{"statement_markdown":"协会呈现\\\"两极化\\\"结构"}
+{"statement_markdown":"项目呈现\\\"两极化\\\"结构"}
 
 只输出一个 JSON 对象，不要输出 Markdown 代码块、说明或其他正文：
 {
@@ -448,16 +448,16 @@ grounded Assertion，并对适合导航的表格、名单、分工或流程清�
 same_referent_drafts 只提交原文连续 span、按 supporting blocks 顺序计算的 occurrence_index 和
 真实 supporting_block_ids。只认同一处直接命名构式；后文另句使用的疑似简称不算显式共指。
 不得根据相似性、常识或跨来源背景猜测，不补全名称，不生成 Object ID。只保存脱离当前句子后
-仍能独立指向同一对象的名称；“本会”“该校”“协会”“学校”“负责人”“会长”等临时泛称
-即使在当前语境中共指，也不要提交。
+仍能独立指向同一对象的名称；代词、“该对象”“本项目”等语境指代，以及只在当前时期成立的
+临时角色称呼，即使在当前语境中共指，也不要提交。
 
 粒度示例一：
-原文：随着社团规模的发展，长久以来存在的组织架构不合理、经验传承断层等问题日益凸显，
-制约了协会进一步服务同学的能力，也消耗了骨干成员的热情。
+原文：随着业务规模的发展，长期存在的组织架构不合理、经验传承断层等问题日益凸显，
+制约了团队进一步服务客户的能力，也消耗了核心成员的热情。
 可以输出：
-- 随着社团规模的发展，长久以来存在的组织架构不合理、经验传承断层等问题日益凸显。
-- 这些问题制约了协会进一步服务同学的能力。
-- 这些问题消耗了骨干成员的热情。
+- 随着业务规模的发展，长期存在的组织架构不合理、经验传承断层等问题日益凸显。
+- 这些问题制约了团队进一步服务客户的能力。
+- 这些问题消耗了核心成员的热情。
 不要为了理论原子性，把组织架构不合理和经验传承断层拆成两套带重复条件的命题。
 
 粒度示例二：
@@ -549,7 +549,7 @@ Fragment 构造规则：
 - 只保留脱离当前句子后，在其他材料、记录或查询中仍可能再次用于识别同一对象的名称表达；
 - 人物、组织、角色、具名活动、活动类别、流程、工作事项、制度、档案、历史事件、平台、
   稳定群体等都可以形成 Fragment；明显只是数量、时间、属性、结果、程度、评价或修辞不形成；
-- “它”“该协会”“本会”“这个组织”“上述活动”“该赛事”等临时代词通常不是 reusable name，
+- “它”“该对象”“本项目”“这个组织”“上述活动”“该系统”等临时代词通常不是 reusable name，
   不要求成为 surface form；
 - 同一 SourceRegion 中明确称呼同一个对象的 reusable names 放入同一 Fragment；surface forms
   必须能够脱离当前句子后，仍作为同一实体的名称或别名独立指向它。一个 span 即使在当前句子中
@@ -558,19 +558,19 @@ Fragment 构造规则：
   只要相比实体名称还包含角色、任期、时间、关系、状态、数量、范围或描述性限定，就不是 alias，
   不得与实体名称合并；只做局部名称同指整合，不因语义相似、主题相关、业务关系或可能连接而
   合并不同对象；
-- 真实全称、稳定简称、缩写和明确别名可以共同保留，例如“中国科学技术大学”“中国科大”
-  “中科大”可以属于同一 Fragment；但“项目负责人”在后文被省略为“负责人”时，“负责人”
-  不能独立识别该角色，不得加入 surface_forms；“魏汉东”在当前语境中被称为“会长”时，
-  “会长”也不是人物别名；“中国科学技术大学”被称为“学校”“该校”时同理；
-- “负责人”“协会”“学校”“会长”等泛称只有在它本身就是当前命题讨论的独立角色或类别 Object
+- 真实全称、稳定简称、缩写和明确别名可以共同保留，例如“远航计划”“Project Voyager”
+  “PV”可以属于同一 Fragment；但“项目负责人”在后文被省略为“负责人”时，“负责人”
+  不能独立识别该角色，不得加入 surface_forms；“林岚”在当前语境中被称为“主管”时，
+  “主管”也不是人物别名；“远航计划”被称为“本项目”“该计划”时同理；
+- “负责人”“主管”“项目”“系统”等泛称只有在它本身就是当前命题讨论的独立角色或类别 Object
   时，才可以单独形成只包含自身的 Fragment；不得作为更具体 Object 的附加别名；
 - 输入中的 source naming hints 是 hard grouping hint：同一 hint 内所有名称必须完整进入同一个
   Fragment，不得遗漏或拆开；不需要重新判断这些名称是否同指；
-- 在 hard hint 之外，可以根据当前 SourceRegion 整体语境，把“乒协”等后续 reusable name 加入
+- 在 hard hint 之外，可以根据当前 SourceRegion 整体语境，把“PV”等后续 reusable name 加入
   已有 Fragment；
 - surface_forms 必须有当前编译上下文依据：逐字出现在当前 SourceRegion、reviewed/frozen claims
   或 source naming hint 中。不得发明新别名、纠错名称或输出 canonical/preferred label；
-- 每个 surface form 只能属于一个 Fragment；会长与副会长等相关但不同的角色必须分开；
+- 每个 surface form 只能属于一个 Fragment；发布者与审阅者等相关但不同的角色必须分开；
 - fragment_key 只使用本次输出内临时键 F1、F2、F3……，不得输出 Global Object ID。
 
 Assertion template 与 Object link 规则：
@@ -591,11 +591,11 @@ Assertion template 与 Object link 规则：
   不得逐一枚举成员名称来替代 semantic links；
 - Reference Assertion 的 semantic_fragment_keys 必须列出该来源区域语义覆盖的所有相关
   Fragment key，至少一个；“相关”指表格/名单直接编目且用户会通过其反查该来源的对象，
-  不包括仅作为归属背景的组织，也不包括某一单元格中的属性对象；这些名称必须由当前来源
+  不包括仅作为归属背景的 Object，也不包括某一单元格中的属性对象；这些名称必须由当前来源
   支持，但无需出现在 Reference 正文中；
-- 例如一张表有五个品牌赛事，可以保留五个赛事 Fragment，但只产生一条说明
-  “主要品牌赛事的名称、形式和定位记录于该表”的 Reference，并将五个 key 放入
-  semantic_fragment_keys；不要再加入“乒协”或某行历史定位中出现的群体 Fragment；
+- 例如一张表有五个服务项目，可以保留五个服务 Fragment，但只产生一条说明
+  “主要服务的名称、形式和定位记录于该表”的 Reference，并将五个 key 放入
+  semantic_fragment_keys；不要再加入宿主组织或某行历史定位中出现的背景群体 Fragment；
 - 名称只存在于 SourceRegion、frozen claim 或 naming hint，没有出现在其他 factual claim 中，
   也仍可合法进入 Fragment；不得为它制造 fake claim；
 - 不输出 supporting blocks、时间、Relation、Object type、business role、alias evidence
@@ -608,11 +608,11 @@ JSON 字符串要求：
 - 输出必须是标准 JSON parser 可以直接解析的完整对象。
 
 示例：
-输入命题“副会长协助会长工作。”，两个角色不是同一对象：
+输入命题“审阅者协助发布者工作。”，两个角色不是同一对象：
 {
   "fragments":[
-    {"fragment_key":"F1","surface_forms":["副会长"]},
-    {"fragment_key":"F2","surface_forms":["会长"]}
+    {"fragment_key":"F1","surface_forms":["审阅者"]},
+    {"fragment_key":"F2","surface_forms":["发布者"]}
   ],
   "assertions":[
     {"claim_id":"claim-1","kind":"grounded","statement_template_markdown":"{{fragment:F1}}协助{{fragment:F2}}工作。","semantic_fragment_keys":[]}
@@ -1748,7 +1748,10 @@ def _validate_same_referent_drafts(
         distinct_span_texts = {item.span_text for item in draft.mentions}
         if len(distinct_span_texts) < 2:
             raise ValueError(f"{draft_label} 至少需要两个不同字面称呼")
-        _validate_independent_surface_forms(list(distinct_span_texts))
+        _validate_independent_surface_forms(
+            list(distinct_span_texts),
+            declared_equivalence_pairs=_declared_equivalence_pairs([draft]),
+        )
         mention_keys = [(item.span_text, item.occurrence_index) for item in draft.mentions]
         if len(set(mention_keys)) != len(mention_keys):
             raise ValueError(f"{draft_label} 重复提交了同一字面 mention")
@@ -1839,109 +1842,67 @@ _CONTEXT_ONLY_SURFACE_FORMS = {
     "该对象",
     "这个对象",
     "那个对象",
-    "该协会",
-    "本会",
-    "这个协会",
-    "该组织",
-    "这个组织",
-    "上述组织",
-    "该校",
-    "本校",
-    "这所学校",
-    "该活动",
-    "这个活动",
-    "上述活动",
-    "该赛事",
-    "这个赛事",
-    "上述赛事",
-    "该同学",
-    "这位同学",
-    "该老师",
-    "这位老师",
-    "相关负责人",
-    "该负责人",
-    "这位负责人",
-}
-
-_GENERIC_ADDITIONAL_SURFACE_FORMS = {
-    "负责人",
-    "会长",
-    "主席",
-    "指导老师",
-    "老师",
-    "同学",
-    "成员",
-    "干事",
-    "社团",
-    "协会",
-    "组织",
-    "学校",
-    "学院",
-    "部门",
-    "活动",
-    "比赛",
-    "赛事",
-    "平台",
-    "文档",
-    "手册",
-    "系统",
 }
 
 _CONTEXTUAL_REFERENCE_PREFIXES = (
     "该",
-    "本",
     "这个",
     "那个",
     "这位",
     "上述",
     "前述",
-    "相关",
 )
 
-_CONTEXTUAL_REFERENCE_NOUNS = _GENERIC_ADDITIONAL_SURFACE_FORMS | {
-    "对象",
-    "单位",
-    "个人",
-    "人员",
-    "人选",
-    "事项",
-    "制度",
-    "工作",
-    "情况",
-    "内容",
-}
-
-_RELATIVE_ROLE_PREFIXES = ("现任", "前任", "时任", "本届", "上届", "下届")
-_RELATIVE_ROLE_SUFFIXES = ("负责人", "会长", "主席", "老师", "成员", "干事", "部长", "主任")
+_TEMPORAL_ROLE_PREFIXES = ("当前", "现任", "前任", "时任", "本届", "上届", "下届")
 
 
-def _validate_independent_surface_forms(surface_forms: Sequence[str]) -> None:
-    """拒绝只能依赖当前句子完成指代的名称；不替代模型的完整语义判断。"""
+def _declared_equivalence_pairs(
+    drafts: Sequence[SameReferentDraft | SourceSameReferentDraft],
+) -> set[frozenset[str]]:
+    """把来源明确的同指称转成可校验的名称对，不引入领域词表。"""
+
+    pairs: set[frozenset[str]] = set()
+    for draft in drafts:
+        names = list(dict.fromkeys(mention.span_text for mention in draft.mentions))
+        for index, left in enumerate(names):
+            for right in names[index + 1 :]:
+                pairs.add(frozenset((left, right)))
+    return pairs
+
+
+def _validate_independent_surface_forms(
+    surface_forms: Sequence[str],
+    *,
+    declared_equivalence_pairs: set[frozenset[str]] | None = None,
+) -> None:
+    """拒绝语境指代和无来源同指证据的宽泛缩写，不依赖领域角色词表。"""
+
+    declared_pairs = declared_equivalence_pairs or set()
 
     for surface_form in surface_forms:
-        if surface_form in _CONTEXT_ONLY_SURFACE_FORMS:
-            raise ValueError(
-                f"surface form {surface_form!r} 只能依赖当前语境指代，不能作为独立名称或别名"
-            )
-        if any(
-            surface_form == f"{prefix}{noun}"
-            for prefix in _CONTEXTUAL_REFERENCE_PREFIXES
-            for noun in _CONTEXTUAL_REFERENCE_NOUNS
-        ) or any(
-            surface_form.startswith(prefix) and surface_form.endswith(_RELATIVE_ROLE_SUFFIXES)
-            for prefix in _RELATIVE_ROLE_PREFIXES
+        if surface_form in _CONTEXT_ONLY_SURFACE_FORMS or any(
+            surface_form.startswith(prefix) and len(surface_form) > len(prefix)
+            for prefix in _CONTEXTUAL_REFERENCE_PREFIXES + _TEMPORAL_ROLE_PREFIXES
         ):
             raise ValueError(
-                f"surface form {surface_form!r} 含临时语境、任期或关系限定，不能作为独立名称或别名"
+                f"surface form {surface_form!r} 只能依赖当前语境指代，不能作为独立名称或别名"
             )
 
     if len(surface_forms) <= 1:
         return
-    for surface_form in surface_forms:
-        if surface_form in _GENERIC_ADDITIONAL_SURFACE_FORMS:
-            raise ValueError(
-                f"surface form {surface_form!r} 是泛称，不能作为更具体 Object 的附加别名"
+    for index, left in enumerate(surface_forms):
+        for right in surface_forms[index + 1 :]:
+            shorter, longer = sorted((left, right), key=len)
+            undeclared_substring = (
+                shorter != longer
+                and shorter in longer
+                and frozenset((left, right)) not in declared_pairs
             )
+            if undeclared_substring:
+                raise ValueError(
+                    f"surface form {shorter!r} 是 {longer!r} 的宽泛子串，"
+                    "没有来源明确的同指证据时不能当作该 Object 的别名"
+                )
 
 
 def _validate_fragment_submission(
@@ -1962,8 +1923,12 @@ def _validate_fragment_submission(
     allowed_keys = set(fragment_keys)
     surface_to_key: dict[str, str] = {}
     grounding_texts = _fragment_grounding_texts(source_blocks, claims, same_referent_drafts)
+    declared_pairs = _declared_equivalence_pairs(same_referent_drafts)
     for fragment in submission.fragments:
-        _validate_independent_surface_forms(fragment.surface_forms)
+        _validate_independent_surface_forms(
+            fragment.surface_forms,
+            declared_equivalence_pairs=declared_pairs,
+        )
         for surface_form in fragment.surface_forms:
             previous = surface_to_key.setdefault(surface_form, fragment.fragment_key)
             if previous != fragment.fragment_key:
@@ -2094,8 +2059,12 @@ def _validate_fragment_checkpoint(
 
     surface_to_fragment: dict[str, str] = {}
     grounding_texts = _fragment_grounding_texts(source_blocks, claims, same_referent_drafts)
+    declared_pairs = _declared_equivalence_pairs(same_referent_drafts)
     for fragment in checkpoint.fragments:
-        _validate_independent_surface_forms(fragment.surface_forms)
+        _validate_independent_surface_forms(
+            fragment.surface_forms,
+            declared_equivalence_pairs=declared_pairs,
+        )
         for surface_form in fragment.surface_forms:
             previous = surface_to_fragment.setdefault(surface_form, fragment.fragment_id)
             if previous != fragment.fragment_id:
