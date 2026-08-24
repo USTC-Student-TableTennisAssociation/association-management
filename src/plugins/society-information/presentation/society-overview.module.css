@@ -1,0 +1,1116 @@
+.workspace {
+  --night: #020813;
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --blue: #034ea2;
+  --orange: #ef6a3a;
+  --paper: #f5f5f7;
+  --display-serif: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif;
+  min-height: 100%;
+  container-type: inline-size;
+  background: var(--night);
+  color: white;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Helvetica Neue", sans-serif;
+  font-optical-sizing: auto;
+}
+
+.workspace *,
+.workspace *::before,
+.workspace *::after {
+  box-sizing: border-box;
+}
+
+.workspace button,
+.workspace a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.workspace button:focus-visible,
+.workspace a:focus-visible {
+  outline: 3px solid rgb(41 151 255 / 64%);
+  outline-offset: 4px;
+}
+
+.main {
+  min-height: 100%;
+  overflow: clip;
+  background: var(--night);
+}
+
+.statePage {
+  display: grid;
+  min-height: 100%;
+  place-content: center;
+  gap: 1rem;
+  background: var(--night);
+  padding: 2rem;
+  color: rgb(255 255 255 / 64%);
+  text-align: center;
+}
+
+.loadingMark {
+  display: grid;
+  width: 7.25rem;
+  height: 7.25rem;
+  place-items: center;
+  margin-inline: auto;
+  border: 1px solid rgb(255 255 255 / 11%);
+  border-radius: 2.35rem;
+  background: rgb(9 24 42 / 72%);
+  box-shadow: 0 1.8rem 5rem rgb(0 0 0 / 32%);
+  backdrop-filter: blur(28px) saturate(145%);
+  animation: loading-breathe 1.55s ease-in-out infinite alternate;
+}
+
+.loadingMark img {
+  width: 4.35rem;
+  height: auto;
+}
+
+.errorCard {
+  width: min(26rem, 88cqw);
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 1.8rem;
+  background: rgb(9 24 42 / 82%);
+  padding: 2.3rem;
+  box-shadow: 0 1.8rem 5rem rgb(0 0 0 / 32%);
+  backdrop-filter: blur(28px) saturate(145%);
+}
+
+.errorTitle {
+  margin: 0;
+  color: white;
+  font-size: 1.18rem;
+  font-weight: 650;
+  letter-spacing: -0.018em;
+}
+
+.errorMessage {
+  margin: 0.75rem 0 1.6rem;
+  color: rgb(255 255 255 / 58%);
+  font-size: 0.86rem;
+  line-height: 1.6;
+}
+
+.heroScroll {
+  --stage-height: 100svh;
+  --hero-height: 218svh;
+  position: relative;
+  z-index: 1;
+  height: var(--hero-height);
+  min-height: 67.5rem;
+  background: var(--night);
+}
+
+.heroStage {
+  --hero-progress: 0;
+  --surface-progress: 0;
+  --purpose-progress: 0;
+  --badge-x: 0px;
+  --badge-y: 0px;
+  --badge-scale: 1;
+  --wordmark-x: 0px;
+  --wordmark-y: 0px;
+  --wordmark-scale: 1;
+  position: sticky;
+  top: 0;
+  width: 100%;
+  height: var(--stage-height);
+  min-height: 34rem;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--night);
+}
+
+.nightLayer,
+.nightGrade,
+.whiteSurface {
+  position: absolute;
+  inset: 0;
+}
+
+.nightLayer {
+  z-index: -2;
+  overflow: hidden;
+  background: var(--night);
+}
+
+.nightImage {
+  object-fit: cover;
+  object-position: 50% 50%;
+  opacity: 0;
+  filter: saturate(0.94) contrast(1.04);
+  transform: scale(calc(1.02 + var(--hero-progress) * 0.06));
+  transition: opacity 850ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform;
+}
+
+.heroStage[data-ready="true"] .nightImage {
+  opacity: 1;
+}
+
+.nightGrade {
+  background:
+    linear-gradient(180deg, rgb(1 5 12 / 26%) 0%, rgb(1 6 14 / 7%) 42%, rgb(1 5 12 / 74%) 100%),
+    radial-gradient(circle at 50% 42%, transparent 26%, rgb(1 6 14 / 58%) 100%);
+}
+
+.whiteSurface {
+  z-index: 0;
+  background: white;
+  opacity: var(--surface-progress);
+  pointer-events: none;
+  will-change: opacity;
+}
+
+.heroBadge,
+.heroWordmark {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  opacity: 0;
+  will-change: transform;
+}
+
+.heroBadge {
+  top: 37%;
+  width: clamp(15rem, 25cqw, 21rem);
+  filter: blur(8px) drop-shadow(0 1.8rem 3.2rem rgb(0 0 0 / 32%));
+  transform: translate3d(calc(-50% + var(--badge-x)), calc(-50% + var(--badge-y)), 0) scale(var(--badge-scale));
+  transform-origin: center;
+  transition: opacity 650ms 80ms cubic-bezier(0.16, 1, 0.3, 1), filter 650ms 80ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.heroWordmark {
+  top: 72%;
+  width: min(55rem, 74cqw);
+  aspect-ratio: 889.91 / 83.66;
+  filter: blur(7px);
+  transform: translate3d(calc(-50% + var(--wordmark-x)), calc(-50% + var(--wordmark-y)), 0) scale(var(--wordmark-scale));
+  transform-origin: center;
+  transition: opacity 650ms 160ms cubic-bezier(0.16, 1, 0.3, 1), filter 650ms 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.heroStage[data-ready="true"] .heroBadge,
+.heroStage[data-ready="true"] .heroWordmark {
+  opacity: 1;
+  filter: blur(0) drop-shadow(0 1.4rem 2.8rem rgb(0 0 0 / 24%));
+}
+
+.heroBadge img,
+.heroWordmark img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.heroWordmark img {
+  position: absolute;
+  inset: 0;
+}
+
+.lightWordmark {
+  filter: brightness(0) invert(1);
+  opacity: clamp(0, calc(1 - var(--surface-progress) * 1.45), 1);
+}
+
+.blueWordmark {
+  opacity: clamp(0, calc(var(--surface-progress) * 1.45 - 0.25), 1);
+}
+
+.purposeScene {
+  position: absolute;
+  z-index: 3;
+  top: 20%;
+  right: clamp(1.5rem, 8cqw, 8.5rem);
+  left: clamp(1.5rem, 8cqw, 8.5rem);
+  color: var(--ink);
+  opacity: var(--purpose-progress);
+  pointer-events: none;
+  transform: translate3d(0, calc((1 - var(--purpose-progress)) * 3.25rem), 0);
+  will-change: opacity, transform;
+}
+
+.purposeScene > p:first-child {
+  margin: 0 0 clamp(2rem, 5cqh, 3.5rem);
+  color: var(--orange);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.purposeScene h2 {
+  max-width: 10.5em;
+  margin: 0;
+  color: var(--blue);
+  font-family: var(--display-serif);
+  font-size: clamp(3.4rem, 8.2cqw, 8.6rem);
+  font-weight: 600;
+  line-height: 1.04;
+  letter-spacing: -0.06em;
+  text-wrap: balance;
+}
+
+.purposeDescription {
+  max-width: 38rem;
+  margin: clamp(2rem, 4cqh, 3rem) 0 0 auto;
+  color: #515154;
+  font-size: clamp(0.95rem, 1.4cqw, 1.18rem);
+  line-height: 1.8;
+  opacity: clamp(0, calc(var(--purpose-progress) * 1.7 - 0.7), 1);
+  white-space: pre-wrap;
+}
+
+.purposeFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem 1.6rem;
+  justify-content: flex-end;
+  margin: 1.5rem 0 0 auto;
+  color: #8e8e93;
+  font-size: 0.69rem;
+  font-weight: 560;
+  opacity: clamp(0, calc(var(--purpose-progress) * 1.8 - 0.8), 1);
+}
+
+.scrollCue {
+  position: absolute;
+  z-index: 5;
+  bottom: clamp(1.2rem, 3.5cqh, 2.4rem);
+  left: 50%;
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  place-items: center;
+  color: rgb(255 255 255 / 62%);
+  opacity: clamp(0, calc(1 - var(--hero-progress) * 4), 1);
+  transform: translateX(-50%);
+}
+
+.scrollCue svg,
+.galleryControls svg,
+.activityCardBottom button svg,
+.personCard button svg,
+.platformCard > svg,
+.primaryButton svg,
+.emptySlotAction svg {
+  width: 1.1rem;
+  height: 1.1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.55;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.lightStory {
+  position: relative;
+  z-index: 4;
+  background: white;
+  color: var(--ink);
+}
+
+.brandRail {
+  position: sticky;
+  z-index: 30;
+  top: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.contentBrand {
+  position: absolute;
+  top: clamp(0.8rem, 3cqh, 1.6rem);
+  left: clamp(1.2rem, 4.8cqw, 3.5rem);
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.contentBrand img:first-child {
+  width: clamp(2.6rem, 4.4cqw, 3.25rem);
+  height: auto;
+}
+
+.contentBrand img:last-child {
+  width: clamp(11.5rem, 20cqw, 16.9rem);
+  height: auto;
+}
+
+.activitiesSection,
+.teamSection {
+  position: relative;
+  padding: clamp(8rem, 17svh, 13rem) 0 clamp(7rem, 14svh, 10rem);
+}
+
+.activitiesSection {
+  min-height: 100svh;
+  background: white;
+}
+
+.sectionHeading {
+  display: flex;
+  width: min(76rem, calc(100% - clamp(3rem, 10cqw, 10rem)));
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 3rem;
+  margin-inline: auto;
+}
+
+.sectionHeading p {
+  margin: 0 0 1.15rem;
+  color: var(--orange);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.sectionHeading h2 {
+  max-width: 10em;
+  margin: 0;
+  font-family: var(--display-serif);
+  font-size: clamp(3.2rem, 6.8cqw, 7rem);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -0.06em;
+  text-wrap: balance;
+}
+
+.galleryControls {
+  display: flex;
+  gap: 0.55rem;
+  padding-bottom: 0.35rem;
+}
+
+.galleryControls button {
+  display: grid;
+  width: 2.9rem;
+  height: 2.9rem;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #e8e8ed;
+  color: #424247;
+  cursor: pointer;
+  transition: background-color 180ms ease, transform 100ms ease-out;
+}
+
+.galleryControls button:hover:not(:disabled) {
+  background: #dcdce1;
+}
+
+.galleryControls button:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.galleryControls button:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.horizontalGallery {
+  display: flex;
+  gap: clamp(1rem, 2.2cqw, 1.7rem);
+  margin-top: clamp(4rem, 9svh, 7rem);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding: 0 clamp(1.5rem, 7cqw, 7rem) 3rem;
+  scroll-padding-inline: clamp(1.5rem, 7cqw, 7rem);
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.horizontalGallery::-webkit-scrollbar {
+  display: none;
+}
+
+.activityCard,
+.horizontalGallery > .emptySlot {
+  flex: 0 0 min(72cqw, 50rem);
+  min-height: min(64svh, 38rem);
+  scroll-snap-align: start;
+}
+
+.activityCard {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid rgb(0 0 0 / 6%);
+  border-radius: clamp(2rem, 3.6cqw, 3rem);
+  background: var(--paper);
+  padding: clamp(2rem, 4.5cqw, 4rem);
+  box-shadow: 0 1.5rem 4rem rgb(32 38 50 / 8%);
+}
+
+.activityTopline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  color: #8e8e93;
+  font-size: 0.68rem;
+  font-weight: 590;
+  letter-spacing: 0.025em;
+}
+
+.activityTopline span:first-child {
+  color: var(--orange);
+  font-variant-numeric: tabular-nums;
+}
+
+.activityCard h3 {
+  max-width: 8em;
+  margin: clamp(2.5rem, 7svh, 5rem) 0;
+  color: var(--blue);
+  font-family: var(--display-serif);
+  font-size: clamp(4.2rem, 9.2cqw, 9rem);
+  font-weight: 600;
+  line-height: 0.92;
+  letter-spacing: -0.07em;
+  text-wrap: balance;
+}
+
+.activityCardBottom {
+  display: grid;
+  grid-template-columns: minmax(0, 34rem) auto;
+  align-items: end;
+  gap: 2rem;
+}
+
+.activityCardBottom > p {
+  margin: 0;
+  color: #515154;
+  font-size: 0.92rem;
+  line-height: 1.72;
+  white-space: pre-wrap;
+}
+
+.activityCardBottom button,
+.personCard button {
+  display: grid;
+  width: 2.9rem;
+  height: 2.9rem;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #dfdfe5;
+  color: #3f4146;
+  cursor: pointer;
+  transition: background-color 180ms ease, transform 100ms ease-out;
+}
+
+.activityCardBottom button:hover,
+.personCard button:hover {
+  background: #d2d2d7;
+}
+
+.activityCardBottom button:active,
+.personCard button:active {
+  transform: scale(0.94);
+}
+
+.galleryEnd {
+  flex: 0 0 clamp(0.25rem, 3cqw, 2rem);
+}
+
+.teamSection {
+  background: #ececef;
+}
+
+.peopleBlock {
+  width: min(76rem, calc(100% - clamp(3rem, 10cqw, 10rem)));
+  margin: clamp(5rem, 11svh, 8rem) auto 0;
+  border-top: 1px solid rgb(0 0 0 / 9%);
+  padding-top: 1.5rem;
+}
+
+.peopleBlock + .peopleBlock {
+  margin-top: clamp(6rem, 13svh, 10rem);
+}
+
+.peopleBlockHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.peopleBlockHeading h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.peopleBlockHeading span {
+  color: #8e8e93;
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.peopleGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  gap: clamp(1rem, 2cqw, 1.4rem);
+  margin-top: 2rem;
+}
+
+.personCard {
+  display: flex;
+  min-height: 16rem;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid rgb(0 0 0 / 5%);
+  border-radius: 2rem;
+  background: white;
+  padding: clamp(1.5rem, 2.8cqw, 2.25rem);
+  box-shadow: 0 1rem 3rem rgb(32 38 50 / 6%);
+}
+
+.personCard > p {
+  margin: 0;
+  color: var(--blue);
+  font-size: 0.69rem;
+  font-weight: 620;
+  letter-spacing: 0.025em;
+}
+
+.personCard h4 {
+  margin: 2rem 0;
+  font-family: var(--display-serif);
+  font-size: clamp(2.3rem, 4cqw, 4rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.055em;
+}
+
+.personCard > button {
+  align-self: flex-end;
+}
+
+.memberCard > p {
+  color: var(--orange);
+}
+
+.memberPosition {
+  color: #6e6e73;
+  font-size: 0.78rem;
+  font-weight: 570;
+}
+
+.emptySlot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  border: 1px dashed rgb(3 78 162 / 28%);
+  border-radius: clamp(2rem, 3.6cqw, 3rem);
+  background: rgb(3 78 162 / 3%);
+  padding: clamp(2rem, 4.5cqw, 4rem);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 180ms ease, background-color 180ms ease, transform 100ms ease-out;
+}
+
+.emptySlot:hover {
+  border-color: rgb(3 78 162 / 52%);
+  background: rgb(3 78 162 / 5%);
+}
+
+.emptySlot:active {
+  transform: scale(0.988);
+}
+
+.emptySlot > span:first-child {
+  color: var(--blue);
+  font-size: 0.69rem;
+  font-weight: 620;
+  letter-spacing: 0.035em;
+}
+
+.emptySlot strong {
+  margin-block: 2rem;
+  font-family: var(--display-serif);
+  font-size: clamp(2.4rem, 5cqw, 5rem);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -0.055em;
+}
+
+.emptySlotAction {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #6e6e73;
+  font-size: 0.72rem;
+  font-weight: 570;
+}
+
+.compactEmptySlot {
+  min-height: 16rem;
+  padding: clamp(1.5rem, 2.8cqw, 2.25rem);
+}
+
+.compactEmptySlot strong {
+  font-size: clamp(2rem, 3.5cqw, 3.2rem);
+}
+
+.focusedCard {
+  outline: 4px solid rgb(41 151 255 / 66%);
+  outline-offset: 6px;
+}
+
+.joinSection {
+  position: relative;
+  z-index: 5;
+  min-height: 100svh;
+  background: #07162e;
+  padding: clamp(7rem, 16svh, 12rem) clamp(1.5rem, 7cqw, 7rem) clamp(2rem, 5svh, 4rem);
+  color: white;
+}
+
+.joinHeading {
+  width: min(76rem, 100%);
+  margin-inline: auto;
+}
+
+.joinHeading > img {
+  width: clamp(3.5rem, 5.5cqw, 5rem);
+  height: auto;
+  margin-bottom: clamp(2rem, 5svh, 3.5rem);
+}
+
+.joinHeading > p:first-of-type {
+  margin: 0 0 1.2rem;
+  color: #ff9a65;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+
+.joinHeading h2 {
+  max-width: 9em;
+  margin: 0;
+  font-family: var(--display-serif);
+  font-size: clamp(3.8rem, 8.2cqw, 8.5rem);
+  font-weight: 600;
+  line-height: 0.98;
+  letter-spacing: -0.065em;
+  text-wrap: balance;
+}
+
+.joinHeading > p:last-of-type {
+  max-width: 38rem;
+  margin: clamp(2rem, 4svh, 3rem) 0 0;
+  color: rgb(255 255 255 / 62%);
+  font-size: 0.95rem;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+
+.platformGrid {
+  display: grid;
+  width: min(76rem, 100%);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+  gap: clamp(1rem, 2cqw, 1.4rem);
+  margin: clamp(5rem, 11svh, 8rem) auto 0;
+}
+
+.platformCard {
+  position: relative;
+  display: flex;
+  min-height: 18rem;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 2rem;
+  background: rgb(255 255 255 / 7%);
+  padding: clamp(1.6rem, 3cqw, 2.5rem);
+  color: white;
+  text-decoration: none;
+  transition: background-color 180ms ease, transform 260ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.platformCard:hover {
+  background: rgb(255 255 255 / 11%);
+  transform: translateY(-0.25rem);
+}
+
+.platformCard > p {
+  margin: 0;
+  color: #ff9a65;
+  font-size: 0.69rem;
+  font-weight: 620;
+}
+
+.platformCard h3 {
+  margin: 2rem 0;
+  font-family: var(--display-serif);
+  font-size: clamp(2.2rem, 4cqw, 4rem);
+  font-weight: 600;
+  line-height: 1.04;
+  letter-spacing: -0.055em;
+}
+
+.platformCard > span {
+  max-width: 24rem;
+  color: rgb(255 255 255 / 52%);
+  font-size: 0.76rem;
+  line-height: 1.6;
+}
+
+.platformCard > svg {
+  position: absolute;
+  right: 2rem;
+  bottom: 2rem;
+  color: rgb(255 255 255 / 72%);
+}
+
+.joinSection .emptySlot {
+  min-height: 18rem;
+  border-color: rgb(255 255 255 / 22%);
+  background: rgb(255 255 255 / 4%);
+  color: white;
+}
+
+.joinSection .emptySlot:hover {
+  border-color: rgb(255 255 255 / 42%);
+  background: rgb(255 255 255 / 7%);
+}
+
+.joinSection .emptySlot > span:first-child {
+  color: #ff9a65;
+}
+
+.joinSection .emptySlotAction {
+  color: rgb(255 255 255 / 54%);
+}
+
+.joinActions {
+  display: flex;
+  width: min(76rem, 100%);
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin: clamp(3rem, 7svh, 5rem) auto 0;
+}
+
+.primaryButton,
+.secondaryButton {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.76rem 1.22rem;
+  font-size: 0.8rem;
+  font-weight: 610;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 100ms ease-out, background-color 180ms ease;
+}
+
+.primaryButton {
+  background: white;
+  color: #0a3166;
+}
+
+.primaryButton:hover {
+  background: #f0f0f3;
+}
+
+.secondaryButton {
+  background: rgb(255 255 255 / 10%);
+  color: white;
+}
+
+.secondaryButton:hover {
+  background: rgb(255 255 255 / 16%);
+}
+
+.primaryButton:active,
+.secondaryButton:active {
+  transform: scale(0.96);
+  transition-duration: 70ms;
+}
+
+.footer {
+  display: flex;
+  width: min(76rem, 100%);
+  justify-content: space-between;
+  gap: 2rem;
+  margin: clamp(7rem, 16svh, 12rem) auto 0;
+  border-top: 1px solid rgb(255 255 255 / 10%);
+  padding-top: 1.5rem;
+  color: rgb(255 255 255 / 34%);
+  font-size: 0.63rem;
+  font-weight: 530;
+  letter-spacing: 0.015em;
+}
+
+@keyframes loading-breathe {
+  from {
+    opacity: 0.66;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@container (max-width: 48rem) {
+  .nightImage {
+    object-position: 59% 50%;
+  }
+
+  .heroBadge {
+    width: clamp(13rem, 45cqw, 17rem);
+  }
+
+  .heroWordmark {
+    top: 69%;
+    width: 84cqw;
+  }
+
+  .purposeScene {
+    top: 18%;
+    right: 7cqw;
+    left: 7cqw;
+  }
+
+  .purposeScene h2 {
+    font-size: clamp(3rem, 11.5cqw, 5.8rem);
+  }
+
+  .purposeDescription,
+  .purposeFacts {
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+
+  .contentBrand img:first-child {
+    width: 2.6rem;
+  }
+
+  .contentBrand img:last-child {
+    width: clamp(10.5rem, 34cqw, 13.5rem);
+  }
+
+  .sectionHeading {
+    width: calc(100% - 3rem);
+  }
+
+  .sectionHeading h2 {
+    font-size: clamp(3rem, 10.5cqw, 5.2rem);
+  }
+
+  .activityCard,
+  .horizontalGallery > .emptySlot {
+    flex-basis: 82cqw;
+    min-height: min(60svh, 34rem);
+  }
+
+  .activityCard h3 {
+    font-size: clamp(3.8rem, 13cqw, 6.5rem);
+  }
+
+  .peopleBlock {
+    width: calc(100% - 3rem);
+  }
+}
+
+@container (max-width: 34rem) {
+  .heroScroll {
+    min-height: 64rem;
+  }
+
+  .purposeScene h2 {
+    font-size: clamp(2.75rem, 12.5cqw, 4.5rem);
+  }
+
+  .purposeDescription {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+  }
+
+  .contentBrand {
+    left: 1rem;
+    gap: 0.55rem;
+  }
+
+  .contentBrand img:first-child {
+    width: 2.3rem;
+  }
+
+  .contentBrand img:last-child {
+    width: 9.6rem;
+  }
+
+  .activitiesSection,
+  .teamSection {
+    padding-top: 8rem;
+  }
+
+  .sectionHeading {
+    width: calc(100% - 2rem);
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .sectionHeading h2 {
+    font-size: clamp(2.7rem, 12cqw, 4.2rem);
+  }
+
+  .galleryControls {
+    padding-top: 2.1rem;
+  }
+
+  .galleryControls button {
+    width: 2.55rem;
+    height: 2.55rem;
+  }
+
+  .horizontalGallery {
+    padding-inline: 1rem;
+    scroll-padding-inline: 1rem;
+  }
+
+  .activityCard,
+  .horizontalGallery > .emptySlot {
+    flex-basis: 87cqw;
+    min-height: 31rem;
+    border-radius: 2rem;
+    padding: 2rem;
+  }
+
+  .activityCardBottom {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1rem;
+  }
+
+  .activityCardBottom > p {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+  }
+
+  .peopleBlock {
+    width: calc(100% - 2rem);
+  }
+
+  .peopleGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .personCard,
+  .compactEmptySlot {
+    min-height: 14rem;
+  }
+
+  .joinSection {
+    padding-inline: 1rem;
+  }
+
+  .platformGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .footer span:last-child {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heroScroll {
+    height: auto;
+    min-height: 0;
+  }
+
+  .heroStage {
+    position: relative;
+    height: auto;
+    min-height: 88svh;
+    background: white;
+  }
+
+  .nightLayer,
+  .heroBadge,
+  .heroWordmark,
+  .scrollCue {
+    display: none;
+  }
+
+  .whiteSurface {
+    opacity: 1;
+  }
+
+  .purposeScene {
+    position: relative;
+    top: auto;
+    right: auto;
+    left: auto;
+    display: flex;
+    min-height: 88svh;
+    flex-direction: column;
+    justify-content: center;
+    padding: 7rem 7cqw;
+    opacity: 1;
+    transform: none;
+  }
+
+  .purposeDescription,
+  .purposeFacts {
+    opacity: 1;
+  }
+
+  .loadingMark {
+    animation: none;
+  }
+
+  .nightImage,
+  .heroBadge,
+  .heroWordmark,
+  .galleryControls button,
+  .activityCardBottom button,
+  .personCard button,
+  .emptySlot,
+  .platformCard,
+  .primaryButton,
+  .secondaryButton {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .loadingMark,
+  .errorCard {
+    backdrop-filter: none;
+    background: #0b1a2c;
+  }
+
+  .platformCard {
+    background: #10284a;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .nightGrade {
+    background: rgb(0 0 0 / 70%);
+  }
+
+  .loadingMark,
+  .errorCard,
+  .activityCard,
+  .personCard,
+  .platformCard,
+  .emptySlot {
+    border-color: currentColor;
+  }
+}
