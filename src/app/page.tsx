@@ -52,7 +52,7 @@ type CurrentUser = {
   loginName: string;
   role: "ADMIN" | "MEMBER";
   actor: { id: string; displayName: string };
-  personObject: {
+  actorObject: {
     id: string;
     canonicalName: string;
   } | null;

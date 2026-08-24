@@ -332,7 +332,7 @@ export function buildChatAssertionReceiptInstruction(input: {
   });
   return [
     "【此前对话的 Chat → Assertion 处理回执】",
-    "以下是系统持久化的操作状态，只用于回答‘刚才是否进入记忆/处理到哪一步’；它不是组织事实、不是 Evidence，也不能替代搜索。",
+    "以下是系统持久化的操作状态，只用于回答‘刚才是否进入记忆/处理到哪一步’；它不是业务事实、不是 Evidence，也不能替代搜索。",
     "published 才表示 Assertion 已实际存在；queued/running 尚未完成；skipped 表示处理完成但未写入；failed 表示失败。",
     ...lines,
     "如需精确 Assertion ID、Object ID 或最新轮询结果，调用 readMemoryWriteStatus；不要把‘已排队’表述成‘已经写入’。",

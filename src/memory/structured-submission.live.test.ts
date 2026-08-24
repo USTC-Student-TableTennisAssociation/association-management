@@ -7,6 +7,10 @@ import {
   currentMemoryActor,
   type ChatAssertionCaptureResult,
 } from "@/memory/chat-assertion";
+import {
+  parseCognitiveMemory,
+  parseOperationalMemoryIndex,
+} from "@/memory/higher-memory-document";
 import { maintainObjectHigherMemories } from "@/memory/object-higher-memory";
 import {
   curateRetrievalAssertions,
@@ -354,7 +358,6 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
       publishedAssertions: 0,
       publishedAssertionIds: [],
       affectedObjectIds: [staleObject.id],
-      higherMemoryObjectIds: [],
       affectedObjects: [{ ...staleObject, resolution: "created" }],
     } : undefined);
     const captureInput = {
@@ -464,7 +467,6 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
       publishedAssertions: 0,
       publishedAssertionIds: [],
       affectedObjectIds: staleObjects.map((object) => object.id),
-      higherMemoryObjectIds: [],
       affectedObjects: staleObjects.map((object) => ({ ...object, resolution: "created" })),
     } : undefined);
 
@@ -557,7 +559,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
     const target = await database.memoryGlobalObject.findFirstOrThrow({
       where: {
         compilationId: compilation.id,
-        literalReferences: { some: {} },
+        assertionLinks: { some: {} },
       },
       orderBy: { canonicalName: "asc" },
       select: {
@@ -618,7 +620,8 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
         await database.memoryObjectHigherMemory.update({
           where: { globalObjectId: target.id },
           data: {
-            contentMarkdown: target.higherMemory.contentMarkdown,
+            cognitiveMemory: parseCognitiveMemory(target.higherMemory.cognitiveMemory),
+            operationalIndex: parseOperationalMemoryIndex(target.higherMemory.operationalIndex),
             maintainedAt: target.higherMemory.maintainedAt,
             triggerMessageId: target.higherMemory.triggerMessageId,
             maintenanceReason: target.higherMemory.maintenanceReason,

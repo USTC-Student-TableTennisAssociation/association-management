@@ -2249,7 +2249,7 @@ class ActivityPerspectiveRunner:
             "否则",
             "只有",
         )
-        staffing_terms = ("担任", "负责", "参与", "协助", "人员", "干事", "负责人")
+        staffing_terms = ("担任", "负责", "参与", "协助", "人员", "成员", "负责人")
         context_terms = (
             "当前",
             "当时",

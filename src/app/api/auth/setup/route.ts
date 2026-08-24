@@ -7,7 +7,7 @@ const setupSchema = z.object({
   loginName: z.string().trim().min(1).max(100),
   displayName: z.string().trim().min(1).max(100),
   password: z.string().min(8).max(200),
-  personObjectId: z.string().uuid().optional(),
+  actorObjectId: z.string().uuid().optional(),
 });
 
 export async function POST(request: Request) {

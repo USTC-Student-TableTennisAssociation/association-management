@@ -79,8 +79,10 @@ describe("library Shared Brain publication preparation", () => {
 
     expect(publication.assertions.map((item) => item.kind))
       .toEqual(["reference", "grounded"]);
-    expect(publication.semanticLinks).toEqual([
+    expect(publication.objectCoverage).toEqual([
       { assertionId: publication.assertions[0].id, globalObjectId: DRAFT_ID },
+    ]);
+    expect(publication.objectLinks).toEqual([
       { assertionId: publication.assertions[1].id, globalObjectId: DRAFT_ID },
     ]);
     expect(publication.regions[0]).toMatchObject({
@@ -184,10 +186,11 @@ describe("library Shared Brain publication preparation", () => {
     expect(publication.fragments).toHaveLength(1);
     expect(publication.assertions[0].globalStatementTemplateMarkdown)
       .toBe("继往开来杯在10月25日举行。");
-    expect(publication.semanticLinks).toEqual([{
+    expect(publication.objectLinks).toEqual([{
       assertionId: publication.assertions[0].id,
       globalObjectId: DRAFT_ID,
     }]);
+    expect(publication.objectCoverage).toEqual([]);
     expect(publication.surfaceMemberships[0].globalObjectId).toBe(DRAFT_ID);
   });
 });

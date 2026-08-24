@@ -17,7 +17,7 @@ export type CreateAuthUserInput = {
   displayName: string;
   password: string;
   role: "ADMIN" | "MEMBER";
-  personObjectId?: string;
+  actorObjectId?: string;
 };
 
 function cleanName(value: string, label: string): string {
@@ -35,26 +35,26 @@ async function currentCompilation(database: Prisma.TransactionClient) {
   });
   if (!compilation) {
     throw new AuthUserValidationError(
-      "当前尚无 Shared Brain Compilation，无法为登录人员建立 Person Object。",
+      "当前尚无 Shared Brain Compilation，无法为登录账号建立 Actor Object。",
       "NO_COMPILATION",
     );
   }
   return compilation;
 }
 
-async function resolvePersonObject(input: {
+async function resolveActorObject(input: {
   database: Prisma.TransactionClient;
   compilationId: string;
   displayName: string;
-  personObjectId?: string;
+  actorObjectId?: string;
 }) {
-  if (input.personObjectId) {
+  if (input.actorObjectId) {
     const selected = await input.database.memoryGlobalObject.findFirst({
-      where: { id: input.personObjectId, compilationId: input.compilationId },
+      where: { id: input.actorObjectId, compilationId: input.compilationId },
       select: { id: true, canonicalName: true },
     });
     if (!selected) {
-      throw new AuthUserValidationError("选择的 Person Object 不存在于当前 Compilation。");
+      throw new AuthUserValidationError("选择的 Actor Object 不存在于当前 Compilation。");
     }
     return selected;
   }
@@ -70,10 +70,10 @@ async function resolvePersonObject(input: {
   if (candidates.length > 1) {
     throw new AuthUserValidationError(
       [
-        `当前存在 ${candidates.length} 个同名 Object，请确认后填写对应 Person Object ID：`,
+        `当前存在 ${candidates.length} 个同名 Object，请确认后填写对应 Actor Object ID：`,
         ...candidates.map((candidate) => `${candidate.canonicalName}（${candidate.id}）`),
       ].join("；"),
-      "PERSON_AMBIGUOUS",
+      "ACTOR_OBJECT_AMBIGUOUS",
     );
   }
   if (candidates[0]) return candidates[0];
@@ -83,7 +83,7 @@ async function resolvePersonObject(input: {
     data: {
       id,
       compilationId: input.compilationId,
-      globalObjectKey: `account-person:${id}`,
+      globalObjectKey: `account-actor:${id}`,
       canonicalName: input.displayName,
     },
     select: { id: true, canonicalName: true },
@@ -100,20 +100,20 @@ async function createUserInTransaction(
   const normalizedLoginName = normalizeLoginName(loginName);
   const compilation = await currentCompilation(database);
   await database.$queryRaw(transactionAdvisoryLockQuery(
-    `auth-person-provision:${compilation.id}:${displayName.normalize("NFKC").toLocaleLowerCase("zh-CN")}`,
+    `auth-actor-object-provision:${compilation.id}:${displayName.normalize("NFKC").toLocaleLowerCase("zh-CN")}`,
   ));
-  const personObject = await resolvePersonObject({
+  const actorObject = await resolveActorObject({
     database,
     compilationId: compilation.id,
     displayName,
-    personObjectId: input.personObjectId,
+    actorObjectId: input.actorObjectId,
   });
   const alreadyLinked = await database.authUser.findUnique({
-    where: { personObjectId: personObject.id },
+    where: { actorObjectId: actorObject.id },
     select: { id: true },
   });
   if (alreadyLinked) {
-    throw new AuthUserValidationError("该 Person Object 已关联其他登录账号。");
+    throw new AuthUserValidationError("该 Actor Object 已关联其他登录账号。");
   }
 
   const actorId = randomUUID();
@@ -127,7 +127,7 @@ async function createUserInTransaction(
       passwordHash,
       role: input.role,
       actorId,
-      personObjectId: personObject.id,
+      actorObjectId: actorObject.id,
     },
     select: {
       id: true,
@@ -135,7 +135,7 @@ async function createUserInTransaction(
       role: true,
       status: true,
       actor: { select: { id: true, displayName: true } },
-      personObject: { select: { id: true, canonicalName: true } },
+      actorObject: { select: { id: true, canonicalName: true } },
     },
   });
   return user;
@@ -191,7 +191,7 @@ const authUserListSelect = {
   lastLoginAt: true,
   createdAt: true,
   actor: { select: { id: true, displayName: true } },
-  personObject: { select: { id: true, canonicalName: true } },
+  actorObject: { select: { id: true, canonicalName: true } },
 } as const;
 
 export async function listAuthUsers(database: PrismaClient = getDatabase()) {

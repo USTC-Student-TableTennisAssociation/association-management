@@ -97,7 +97,7 @@ import {
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import {
   captureChatAssertions,
-  organizationTimezone,
+  environmentTimezone,
   type ChatMainModelCall,
   type ChatMainToolExecution,
   type ChatSemanticMessage,
@@ -116,6 +116,7 @@ import {
   type AmbientHigherMemorySnapshot,
 } from "@/memory/ambient-higher-memory";
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
+import { operationalMemoryIndexSchema } from "@/memory/higher-memory-document";
 import { getMemoryRetriever } from "@/memory/retriever";
 import { createObjectManagementToolset } from "@/memory/object-management-toolset";
 import { objectChangeProposalPresentationSchema } from "@/memory/object-management-types";
@@ -182,7 +183,7 @@ function pageContextInstruction(context?: ChatPageContext): string {
   if (context.activePresentation === "library") {
     return [
       `页面 soft context：用户当前正在查看资料库${context.activeFolderId ? `，当前文件夹 id 为 ${context.activeFolderId}` : ""}。`,
-      "这只用于理解当前工作位置；文件索引不是组织事实证据。",
+      "这只用于理解当前工作位置；文件索引不是事实证据。",
     ].join("\n");
   }
   return [
@@ -205,9 +206,9 @@ function authenticatedUserInstruction(user: Awaited<ReturnType<typeof currentAut
   if (!user) return "";
   return [
     `当前登录用户：${user.actor.displayName}。`,
-    user.personObject
-      ? `用户说“我”时，对应已认证人物“${user.personObject.canonicalName}”；内部 ID 由服务端处理。`
-      : "当前账号尚未关联人物对象，不要猜测“我”对应谁。",
+    user.actorObject
+      ? `用户对自身的指称对应已认证 Actor Object“${user.actorObject.canonicalName}”；内部 ID 由服务端处理。`
+      : "当前账号尚未关联 Actor Object，不要猜测用户对自身的指称对应哪个 Object。",
   ].join("\n");
 }
 
@@ -279,6 +280,7 @@ const seedMapSchema = z.object({
     id: z.string(),
     globalObjectId: z.string(),
     contentMarkdown: z.string(),
+    operationalIndex: operationalMemoryIndexSchema,
     maintainedAt: z.string(),
   })).optional(),
   assertions: z.array(z.object({
@@ -601,16 +603,17 @@ export async function POST(request: Request) {
   const query = latestUserQuery(messages);
   if (!query) return jsonError("消息内容不能为空。", 400);
   const requiresMemoryWriteStatusRefresh = isMemoryWriteStatusQuery(query);
+  const extendedSourceReadingRequested = /(全文|完整原文|通读|逐章|整篇)/iu.test(query);
   const latestUserMessageIndex = messages.findLastIndex((message) => message.role === "user");
   const latestUserMessage = messages[latestUserMessageIndex];
   const submittedAt = new Date();
   let requestTimezone: string;
   const requestActor = authenticatedUser.actor;
   try {
-    requestTimezone = organizationTimezone();
+    requestTimezone = environmentTimezone();
   } catch (error) {
     console.error("[chat.time-context.config]", error);
-    return jsonError("组织时区或 Actor 配置无效，请联系管理员。", 500);
+    return jsonError("环境时区或 Actor 配置无效，请联系管理员。", 500);
   }
   const debugTrace = createEchoDebugTrace({
     clientMessageId: latestUserMessage?.id ?? "unknown-message",
@@ -762,7 +765,15 @@ export async function POST(request: Request) {
       const sharedResultBudget = new ToolResultTokenBudget(exploreResultTokenBudget);
       let hasSearchedMemory = false;
       let crossLayerMemorySearchForced = false;
+      const coldHigherMemoryTargetIds = new Set<string>();
+      let pendingSynthesisSourceRead: {
+        assertionRef: string;
+        sourceTitle: string;
+        phase: "outline" | "content";
+      } | undefined;
+      let synthesisSourceReadSatisfied = false;
       let latestLocateTrace: MemorySearchTrace | undefined;
+      let turnHandoffSubmitted = false;
       let finalRawText = "";
       let finalAudit: GroundingAudit | undefined;
       const streamObservation: ChatStreamObservation = {
@@ -814,6 +825,23 @@ export async function POST(request: Request) {
             groundingState.observeCoverage("shared_brain", discovered.coverage);
           }
           groundingState.observeSemantics(discovered.semantics);
+          if (discovered.knowledgeState?.higherMemory === "absent") {
+            coldHigherMemoryTargetIds.add(discovered.knowledgeState.targetObjectId);
+          }
+          if (
+            discovered.taskShape === "synthesis" &&
+            !pendingSynthesisSourceRead
+          ) {
+            const sourceAnchor = discovered.assertions.flatMap((assertion) =>
+              assertion.sources.flatMap((source) => source.kind === "chat"
+                ? []
+                : [{ assertionRef: assertion.ref, sourceTitle: source.sourceTitle }]
+              )
+            )[0];
+            if (sourceAnchor) {
+              pendingSynthesisSourceRead = { ...sourceAnchor, phase: "outline" };
+            }
+          }
           console.info(
             "[chat.explore]",
             JSON.stringify({
@@ -885,6 +913,18 @@ export async function POST(request: Request) {
         onRead: (sourceRead) => {
           groundingState.observeSourceDocument(sourceRead);
           groundingState.observeSemantics(sourceRead.semantics);
+          if (pendingSynthesisSourceRead) {
+            if (sourceRead.selection.mode === "outline") {
+              pendingSynthesisSourceRead = {
+                ...pendingSynthesisSourceRead,
+                sourceTitle: sourceRead.document.title,
+                phase: "content",
+              };
+            } else {
+              pendingSynthesisSourceRead = undefined;
+              synthesisSourceReadSatisfied = true;
+            }
+          }
         },
       });
       const validReferenceRefs = () => {
@@ -1156,7 +1196,10 @@ export async function POST(request: Request) {
         description:
           "与本轮完整最终回答在同一次响应中调用。只判断当前用户原话是否包含值得独立知识审查的新事实、纠正、决定、计划或状态变化；纯问题和检索过程不审查。",
         inputSchema: turnHandoffSchema,
-        execute: async (handoff) => ({ accepted: true, ...handoff }),
+        execute: async (handoff) => {
+          turnHandoffSubmitted = true;
+          return { accepted: true, ...handoff };
+        },
       });
       const allTools: ToolSet = {
         ...gatewayTools,
@@ -1230,11 +1273,10 @@ export async function POST(request: Request) {
           ({ steps }) => {
             const finalStep = steps.at(-1);
             if (!finalStep?.text.trim()) return false;
-            // Handoff is optional knowledge-review metadata, not a completion
-            // gate. Continue only when this step also requested real work.
-            return finalStep.toolCalls.every(
-              (call) => call.toolName === TURN_HANDOFF_TOOL,
-            );
+            // Every tool call, including the optional Handoff, gets a following
+            // tool-free answer step. This prevents a short pre-tool preamble
+            // from being mistaken for the completed answer.
+            return finalStep.toolCalls.length === 0;
           },
         ],
         prepareStep: ({ stepNumber, messages: stepMessages }) => {
@@ -1261,6 +1303,22 @@ export async function POST(request: Request) {
               instructions,
             };
           }
+          if (pendingSynthesisSourceRead && stepNumber < MAX_EXPLORE_STEPS - 1) {
+            const sourceInstruction = pendingSynthesisSourceRead.phase === "outline"
+              ? `当前是 synthesis 检索且存在高价值来源。本步必须调用 readSourceDocument，使用 assertionRef=${pendingSynthesisSourceRead.assertionRef}、mode=outline 读取“${pendingSynthesisSourceRead.sourceTitle}”目录；不要直接结束或询问用户。`
+              : `已经读取“${pendingSynthesisSourceRead.sourceTitle}”目录，但尚未读取正文。本步必须再次调用 readSourceDocument，使用 assertionRef=${pendingSynthesisSourceRead.assertionRef}、mode=section，并从刚才目录选择最能覆盖当前未解决子问题的 headingBlockId。读取后回到已收集的 Assertion 与原文完成当前任务。`;
+            return {
+              ...(stepNumber > 0
+                ? { messages: compactExploreStepMessages(stepMessages) }
+                : {}),
+              activeTools: ["readSourceDocument"] as const,
+              toolChoice: {
+                type: "tool" as const,
+                toolName: "readSourceDocument",
+              },
+              instructions: `${instructions}\n\n服务端 synthesis 原文要求：${sourceInstruction}`,
+            };
+          }
           if (shouldForceCrossLayerMemorySearch({
             query,
             libraryQueryCount,
@@ -1280,7 +1338,17 @@ export async function POST(request: Request) {
                 type: "tool" as const,
                 toolName: "searchMemory",
               },
-              instructions: `${instructions}\n\n服务端检索要求：用户明确要求同时搜索文件标题和内容。Library 标题查询已经执行，但 Shared Brain 主题检索尚未执行；本步必须调用 searchMemory，targetHints 忠实保留用户给出的主题词，query 说明要查找直接相关的组织知识、姓名和原文线索。`,
+              instructions: `${instructions}\n\n服务端检索要求：用户明确要求同时搜索文件标题和内容。Library 标题查询已经执行，但 Shared Brain 主题检索尚未执行；本步必须调用 searchMemory，taskShape=synthesis，targetHints 忠实保留用户给出的主题词，query 说明要查找直接相关的组织知识、姓名和原文线索。`,
+            };
+          }
+          if (turnHandoffSubmitted) {
+            return {
+              ...(stepNumber > 0
+                ? { messages: compactExploreStepMessages(stepMessages) }
+                : {}),
+              activeTools: [] as const,
+              toolChoice: "none" as const,
+              instructions: `${instructions}\n\n${FINAL_ANSWER_INSTRUCTION}`,
             };
           }
           return {
@@ -1291,9 +1359,18 @@ export async function POST(request: Request) {
               ...activeCapabilityToolNames(openedCapabilities),
               ...alwaysAvailableToolNames,
             ]
+              .filter((name) =>
+                !(
+                  synthesisSourceReadSatisfied &&
+                  !extendedSourceReadingRequested &&
+                  name === "readSourceDocument"
+                )
+              )
               .filter((name) => Boolean(allTools[name])),
             toolChoice: "auto" as const,
-            instructions,
+            instructions: synthesisSourceReadSatisfied && !extendedSourceReadingRequested
+              ? `${instructions}\n\n服务端 synthesis 原文边界：本轮已完成目录与一个最相关正文章节的读取。当前任务没有要求通读全文；readSourceDocument 后续不再可用，不得再次调用。请基于已收集的 Higher Memory、Assertions、正式 View 与原文完成任务。`
+              : instructions,
           };
         },
         temperature: 0.3,
@@ -1727,7 +1804,27 @@ export async function POST(request: Request) {
             latestUserMessage && foregroundAssertionResult && foregroundAssertionDecision,
           );
           const hasConsolidationWork = Boolean(consolidationInput);
-          if (latestUserMessage && (hasBackgroundWork || hasForegroundWork || hasConsolidationWork)) {
+          const hasColdHigherMemoryWork = coldHigherMemoryTargetIds.size > 0;
+          const coldHigherMemoryInput = hasColdHigherMemoryWork
+            ? {
+                clientMessageId: latestUserMessage.id,
+                submittedAt: submittedAt.toISOString(),
+                timezone: requestTimezone,
+                semanticContext,
+                retrieval: accumulatedRetrieval,
+                queueDecision: {
+                  targets: [...coldHigherMemoryTargetIds].map((globalObjectId) => ({
+                    scope: "object" as const,
+                    globalObjectId,
+                  })),
+                  reason: "用户首次实质性检索了尚无 Higher Memory 的唯一目标 Object；基于本轮真实 Assertion 与来源建立第一版 Cognitive Memory 和 Operational Memory Index。",
+                },
+              }
+            : undefined;
+          if (
+            latestUserMessage &&
+            (hasBackgroundWork || hasForegroundWork || hasConsolidationWork || hasColdHigherMemoryWork)
+          ) {
             memoryMaintenance.publish({
               ...(hasBackgroundWork && receiptKey
                 ? {
@@ -1746,6 +1843,7 @@ export async function POST(request: Request) {
                   }
                 : {}),
               ...(consolidationInput ? { consolidation: consolidationInput } : {}),
+              ...(coldHigherMemoryInput ? { higherMemory: coldHigherMemoryInput } : {}),
             });
           } else {
             await debugTrace.appendSection(

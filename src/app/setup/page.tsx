@@ -8,7 +8,7 @@ export default function SetupPage() {
   const [displayName, setDisplayName] = useState("");
   const [loginName, setLoginName] = useState("");
   const [password, setPassword] = useState("");
-  const [personObjectId, setPersonObjectId] = useState("");
+  const [actorObjectId, setActorObjectId] = useState("");
   const [error, setError] = useState<string>();
   const [submitting, setSubmitting] = useState(false);
 
@@ -40,7 +40,7 @@ export default function SetupPage() {
           displayName,
           loginName,
           password,
-          ...(personObjectId.trim() ? { personObjectId: personObjectId.trim() } : {}),
+          ...(actorObjectId.trim() ? { actorObjectId: actorObjectId.trim() } : {}),
         }),
       });
       const body = await response.json() as { error?: string };
@@ -59,7 +59,7 @@ export default function SetupPage() {
       <section className="w-full max-w-lg rounded-2xl border border-emerald-950/10 bg-white p-8 shadow-xl shadow-emerald-950/10">
         <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">Echo 首次配置</p>
         <h1 className="mt-3 text-3xl font-semibold">创建第一个管理员</h1>
-        <p className="mt-2 text-sm leading-6 text-zinc-600">该账号会同时建立 Actor 身份，并关联同名 Person Object。后续可以由此账号创建其他成员。</p>
+        <p className="mt-2 text-sm leading-6 text-zinc-600">该账号会同时建立 Actor 身份，并关联同名 Actor Object。后续可以由此账号创建其他成员。</p>
         <form className="mt-7 grid gap-5" onSubmit={submit}>
           <label className="text-sm font-medium text-zinc-800">
             真实姓名
@@ -74,8 +74,8 @@ export default function SetupPage() {
             <input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} className="mt-2 h-11 w-full rounded-lg border border-zinc-300 px-3 outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
           </label>
           <label className="text-xs text-zinc-500">
-            可选：如果系统提示存在多个同名人物，填写确认后的 Person Object ID
-            <input aria-label="Person Object ID" placeholder="UUID" value={personObjectId} onChange={(event) => setPersonObjectId(event.target.value)} className="mt-2 h-10 w-full rounded-lg border border-zinc-300 px-3 text-sm text-zinc-800" />
+            可选：如果系统提示存在多个同名 Object，填写确认后的 Actor Object ID
+            <input aria-label="Actor Object ID" placeholder="UUID" value={actorObjectId} onChange={(event) => setActorObjectId(event.target.value)} className="mt-2 h-10 w-full rounded-lg border border-zinc-300 px-3 text-sm text-zinc-800" />
           </label>
           {error ? <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
           <button type="submit" disabled={submitting || !displayName.trim() || !loginName.trim() || password.length < 8} className="h-11 rounded-lg bg-emerald-800 font-medium text-white hover:bg-emerald-700 disabled:bg-zinc-300">

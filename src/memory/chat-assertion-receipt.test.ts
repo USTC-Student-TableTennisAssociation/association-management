@@ -184,7 +184,6 @@ describe("Chat Assertion processing receipts", () => {
       publishedAssertions: 1,
       publishedAssertionIds: ["assertion-1"],
       affectedObjectIds: ["object-1"],
-      higherMemoryObjectIds: ["object-1"],
       affectedObjects: [{
         id: "object-1",
         canonicalName: "雷岳鑫",
@@ -224,7 +223,7 @@ describe("Chat Assertion processing receipts", () => {
 
     expect(instruction).toContain("状态：已发布");
     expect(instruction).toContain("关联 Object：雷岳鑫");
-    expect(instruction).toContain("不是组织事实、不是 Evidence");
+    expect(instruction).toContain("不是业务事实、不是 Evidence");
     expect(instruction).toContain("published 才表示 Assertion 已实际存在");
   });
 

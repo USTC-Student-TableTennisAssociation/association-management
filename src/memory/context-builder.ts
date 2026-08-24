@@ -1,3 +1,4 @@
+import { renderOperationalMemoryIndex } from "@/memory/higher-memory-document";
 import type {
   MemoryAssertionSeed,
   MemoryHigherMemorySeed,
@@ -77,7 +78,11 @@ function renderHigherMemory(seed: MemoryHigherMemorySeed, seedMap: StructuredSee
     `[${seed.ref}] Higher Memory：${object?.canonicalName ?? seed.globalObjectId}`,
     `  维护时间：${seed.maintainedAt}`,
     "",
+    "  Cognitive Memory：",
     seed.contentMarkdown,
+    "",
+    "  Operational Memory Index（只用于定位下一步证据）：",
+    renderOperationalMemoryIndex(seed.operationalIndex),
   ].join("\n");
 }
 
@@ -101,16 +106,17 @@ export function buildEvidenceContext(result: MemoryRetrievalResult): string {
 
   return [
     "以下是程序 Locate 得到的只读 Object / Higher Memory / Assertion 结果。",
-    "Higher Memory 是少数重要 Object 经对话维护的高优先级完整认知。出现 [H#] 时默认先直接使用，不要求同时读取或引用其底层 Assertion。",
-    "只有 Higher Memory 未覆盖问题、用户要求细节/原话/来源、出现冲突或明确需要核查时，才继续下钻 Assertions。",
+    "Higher Memory 是少数重要 Object 的高层认知与任务导航，不是面向当前 query 的完整证据包。出现 [H#] 时先用它理解对象、拆分问题并寻找入口，但不能仅凭它宣布检索完成。",
+    "Cognitive Memory 可以支撑高层定向描述；Operational Memory Index 只提供可能相关的 Assertion/Source/检索词。回答具体事实、名单、当前状态、精确流程或来源问题时，必须继续按当前 query 读取 Assertions 或正式 Business View。",
+    "Operational Memory Index 的 substantial 只表示该主题有较好的导航基础，不等于当前问题的 evidence coverage=complete。",
     "其中只包含 Assertion 知识与最小来源标识，不包含 SourceBlock 原文，也不包含聊天 Evidence 原文。",
     "来源标题、页码、block、sourceNode、Actor 和提交时间只用于引用追溯，不作为额外事实内容。",
     "Object 的 canonical identity 和 surface forms 只用于识别“指向哪个对象”，不是事实证据。",
     "回答中的事实必须依据 kind=grounded 的 Assertion。Object 名称命中或 Object–Assertion Connection 本身不证明 Assertion 之外的任何事实。",
     "kind=reference 只说明应去哪个 SourceRegion/SourceBlock 继续读取；在目标原文未被 dereference 前，不得将它当成最终事实证据。",
-    "类似活动或其他 Object 的事实只能作为类比，不得改写成用户所问 Object 自身的事实。",
-    "组织知识不足时必须明确说明，不得用知识库外常识补齐组织事实。",
-    "重要结论请在句末引用对应 Assertion，例如 [A1]；只能引用下列真实存在的 Assertion ref。",
+    "其他 Object 的事实只能作为关系或类比背景，不得改写成用户所问 Object 自身的事实。",
+    "当前环境的知识不足时必须明确说明，不得用知识库外常识补齐事实。",
+    "重要的具体事实请在句末引用对应 Assertion，例如 [A1]；只能引用下列真实存在的 Assertion ref。高层认知若只来自 [H#]，应明确保持概括层级，不伪造底层引用。",
     "",
     "## Query Facets",
     facets || "无。",

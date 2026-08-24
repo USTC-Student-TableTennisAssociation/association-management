@@ -107,7 +107,9 @@ export function createMemoryExploreToolset(input: {
       description:
         "在 Echo 的 GlobalObject–Assertion 记忆中执行一次聚焦 Locate。" +
         "把要找的实体原话放进 targetHints，把围绕该实体想了解的信息放进 query；不要把两者润色成一段。" +
-        "当回答需要 Echo 的协会、人物、活动、历史、时间、状态、制度或来源等组织事实时使用；" +
+        "必须按任务形状选择 taskShape：单一明确事实使用 fact；完整理解、名单/表格、多字段 View 填充或资料梳理使用 synthesis。" +
+        "synthesis 遇到无 Higher Memory 的唯一目标时会自动补充 Object 关联证据与来源入口；即使 Assertion coverage 已完整，宽综合仍应读取高价值原文的目录与相关章节。" +
+        "当回答需要当前环境中的 Object、历史、时间、状态、规则或来源等事实时使用；" +
         "问候、闲聊、改写、翻译和不依赖组织资料的任务不应调用。" +
         "获得证据后，如问题仍包含未覆盖的子问题，可以换一种聚焦表述再次检索。" +
         "结果中只有 GlobalObject identity、Assertion 与最小 provenance；" +
@@ -115,28 +117,26 @@ export function createMemoryExploreToolset(input: {
       inputSchema: z.object({
         query: z.string().trim().min(1).max(memoryExploreLimits.queryChars)
           .describe("围绕目标 Object 想了解的信息需求；不要重复堆叠目标名称"),
-        targetHints: z.array(z.string().trim().min(1).max(200)).min(1).max(3)
+        targetHints: z.array(z.string().trim().min(1).max(200)).min(1).max(8)
           .optional()
           .describe("主对话应提供：用户所指目标实体的名称、别名或忠实原话；不要扩写成相关文档或概念"),
         targetObjectIds: z.array(z.string().trim().min(1).max(200)).max(3)
           .optional()
           .describe("可选：本轮先前工具结果已确认的目标 GlobalObject database id"),
+        taskShape: z.enum(["fact", "synthesis"])
+          .describe("fact=单一事实；synthesis=完整理解、名单/表格、资料梳理或多字段 View 填充"),
       }),
-      execute: async ({ query, targetHints, targetObjectIds }) => {
+      execute: async ({ query, targetHints, targetObjectIds, taskShape }) => {
+        // searchMemory is the discovery primitive. Do not require the request-
+        // local accumulator to have observed an explicit id first: parallel
+        // tool calls can otherwise race even though the id belongs to the
+        // current Compilation. The database-backed target resolver validates it.
         reserveCall();
-        if (targetObjectIds?.some((id) =>
-          !input.evidence.hasObject(id) && !additionalKnownObjectIds.has(id)
-        )) {
-          throw new UnknownExploreObjectError(
-            targetObjectIds.find((id) =>
-              !input.evidence.hasObject(id) && !additionalKnownObjectIds.has(id)
-            )!,
-          );
-        }
         return merge(await searchMemoryIndex({
           query,
           targetHints: targetHints ?? [],
           targetObjectIds,
+          taskShape,
         }, {
           signal: input.signal,
           preferHigherMemory: input.preferHigherMemory,
@@ -163,10 +163,10 @@ export function createMemoryExploreToolset(input: {
           .describe("可选的关系或子问题焦点"),
       }),
       execute: async ({ globalObjectId, focus }) => {
-        reserveCall();
         if (!input.evidence.hasObject(globalObjectId) && !additionalKnownObjectIds.has(globalObjectId)) {
           throw new UnknownExploreObjectError(globalObjectId);
         }
+        reserveCall();
         return merge(
           await followMemoryObject(globalObjectId, focus, {
             signal: input.signal,

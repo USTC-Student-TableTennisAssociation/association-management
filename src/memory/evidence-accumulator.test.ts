@@ -30,6 +30,7 @@ function initial(): MemoryRetrievalResult {
         id: "memory-1",
         globalObjectId: "object-1",
         contentMarkdown: "这是对继往开来的高层认知。",
+        operationalIndex: { aspects: [] },
         maintainedAt: "2026-08-14T00:00:00.000Z",
       }],
       assertions: [{

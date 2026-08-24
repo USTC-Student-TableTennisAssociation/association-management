@@ -89,16 +89,12 @@ function globalObject(
   };
 }
 
-function resolution(
-  ordinal: number,
-  sourceFragmentId: string,
+function objectLink(
   id: string,
   canonicalName: string,
 ) {
   return {
-    ordinal,
-    objectFragment: { sourceFragmentId },
-    globalResolutions: [{ globalObject: { id, canonicalName } }],
+    globalObject: { id, canonicalName },
   };
 }
 
@@ -108,7 +104,7 @@ function followAssertionRows(includeSemanticReference = false) {
     contextDependent: false,
     compilation: { sourceTitle: "Follow test source", sourceSha256: "follow-sha" },
     sourceRegion: { sourceNodeId: "region-1", label: "Follow region" },
-    semanticObjectLinks: [],
+    objectCoverage: [],
     sourceBlockLinks: [
       {
         ordinal: 0,
@@ -127,11 +123,7 @@ function followAssertionRows(includeSemanticReference = false) {
       sourceClaimId: "claim-definition",
       globalStatementTemplateMarkdown:
         "{{object:global-event}}与{{object:global-event}}都是同一项活动。",
-      fragmentReferences: [
-        resolution(0, "event-1", "global-event", "继往开来"),
-        resolution(1, "event-1", "global-event", "继往开来"),
-      ],
-      literalGlobalReferences: [],
+      objectLinks: [objectLink("global-event", "继往开来")],
     },
     {
       ...common,
@@ -139,9 +131,9 @@ function followAssertionRows(includeSemanticReference = false) {
       sourceClaimId: "claim-organizer",
       globalStatementTemplateMarkdown:
         "{{object:global-event}}由{{object:global-student-union}}举办。",
-      fragmentReferences: [resolution(0, "event-2", "global-event", "继往开来")],
-      literalGlobalReferences: [
-        { globalObject: { id: "global-student-union", canonicalName: "学生会" } },
+      objectLinks: [
+        objectLink("global-event", "继往开来"),
+        objectLink("global-student-union", "学生会"),
       ],
     },
   ];
@@ -153,10 +145,9 @@ function followAssertionRows(includeSemanticReference = false) {
       kind: "reference",
       globalStatementTemplateMarkdown:
         "乒协主要品牌赛事的名称、比赛形式和基本定位集中记录于“品牌活动”表格。",
-      fragmentReferences: [],
-      literalGlobalReferences: [],
-      semanticObjectLinks: [
-        { globalObject: { id: "global-event", canonicalName: "继往开来" } },
+      objectLinks: [],
+      objectCoverage: [
+        objectLink("global-event", "继往开来"),
       ],
     }];
   }
@@ -215,7 +206,7 @@ describe("searchMemory", () => {
       query: "继往开来",
       counts: { objects: 16, assertions: 12, connections: 12 },
       truncated: { objects: true, assertions: true },
-      warnings: ["vector degraded for test"],
+      warnings: expect.arrayContaining(["vector degraded for test"]),
     });
     expect(result.objects.every(
       (object) => object.surfaceForms.length === memoryExploreLimits.surfaceFormsPerObject,
@@ -284,7 +275,7 @@ describe("searchMemory", () => {
     expect(retrieve).not.toHaveBeenCalled();
   });
 
-  it("returns complete Higher Memory and hides its ordinary Assertions by default", async () => {
+  it("uses Higher Memory for orientation without hiding query-specific Assertions", async () => {
     const retrieve = vi.fn().mockResolvedValue({
       query: "Global Object 1",
       mode: "object-assertion",
@@ -301,24 +292,147 @@ describe("searchMemory", () => {
         findMany: vi.fn().mockResolvedValue([{
           id: "higher-memory-1",
           globalObjectId: "global-1",
-          contentMarkdown: "这是完整的高层认知，不应同时返回底层 Assertion。",
+          cognitiveMemory: {
+            identityAndBoundaries: "这是目标对象的高层身份认知。",
+            narrativeAndMeaning: "",
+            structuralModel: "",
+            operatingModel: "",
+            currentSituation: "",
+            openQuestions: [],
+          },
+          operationalIndex: { aspects: [] },
           maintainedAt: new Date("2026-08-14T00:00:00.000Z"),
         }]),
       },
       memoryAssertion: { findMany: vi.fn().mockResolvedValue([]) },
     } as never);
 
-    const result = await searchMemory("Global Object 1");
+    const result = await searchMemory("Global Object 1", {
+      curatorContext: {
+        conversation: [],
+        originalUserMessage: "Global Object 1 的具体事实是什么？",
+        currentInstant: "2026-08-14T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+      },
+    });
 
     expect(result.higherMemories).toEqual([expect.objectContaining({
       ref: "H1",
       globalObjectId: "global-1",
-      contentMarkdown: expect.stringContaining("完整的高层认知"),
+      contentMarkdown: expect.stringContaining("高层身份认知"),
     })]);
-    expect(result.assertions.some((assertion) => assertion.ref === "A1")).toBe(false);
-    expect(result.assertions).toEqual([]);
-    expect(result.connections).toEqual([]);
-    expect(result.warnings).toContainEqual(expect.stringContaining("优先返回完整 Higher Memory"));
+    expect(result.assertions.some((assertion) => assertion.ref === "A1")).toBe(true);
+    expect(result.connections.length).toBeGreaterThan(0);
+    expect(curateRetrievalAssertions).toHaveBeenCalled();
+    expect(result.coverage?.level).not.toBe("complete");
+    expect(result.warnings).toContainEqual(expect.stringContaining(
+      "当前 query 仍独立检索/筛选 Assertions",
+    ));
+  });
+
+  it("bootstraps Object-linked evidence for a cold synthesis target", async () => {
+    const retrieve = vi.fn().mockResolvedValue({
+      query: "完整概览、活动和平台",
+      mode: "object-assertion",
+      compilationId: "compilation-current",
+      seedMap: locatedSeedMap(),
+      trace: { snapshot: { id: "compilation-current" }, warnings: [] },
+    });
+    vi.mocked(getMemoryRetriever).mockReturnValue({ mode: "object-assertion", retrieve });
+    const bootstrapRows = [
+      {
+        id: "bootstrap-profile",
+        sourceClaimId: "claim-profile",
+        kind: "grounded" as const,
+        globalStatementTemplateMarkdown: "{{object:global-1}}具有完整的社团身份资料。",
+        contextDependent: false,
+        compilation: { sourceTitle: "生存手册", sourceSha256: "sha" },
+        sourceRegion: {
+          sourceNodeId: "manual-profile",
+          label: "身份与历史",
+          sourceTitle: "生存手册",
+          sourceSha256: "sha",
+        },
+        chatEvidenceLinks: [],
+        objectLinks: [objectLink("global-1", "Global Object 1")],
+        objectCoverage: [],
+        sourceBlockLinks: [{
+          ordinal: 0,
+          sourceBlock: { sourceBlockId: "manual-block-profile", sourcePages: [2] },
+        }],
+      },
+      {
+        id: "bootstrap-reference",
+        sourceClaimId: "claim-reference",
+        kind: "reference" as const,
+        globalStatementTemplateMarkdown: "活动和平台的完整清单记录在生存手册的表格与章节中。",
+        contextDependent: true,
+        compilation: { sourceTitle: "生存手册", sourceSha256: "sha" },
+        sourceRegion: {
+          sourceNodeId: "manual-catalog",
+          label: "活动与平台",
+          sourceTitle: "生存手册",
+          sourceSha256: "sha",
+        },
+        chatEvidenceLinks: [],
+        objectLinks: [],
+        objectCoverage: [objectLink("global-1", "Global Object 1")],
+        sourceBlockLinks: [{
+          ordinal: 0,
+          sourceBlock: { sourceBlockId: "manual-block-catalog", sourcePages: [3] },
+        }],
+      },
+    ];
+    const memoryAssertionFindMany = vi.fn().mockResolvedValue(bootstrapRows);
+    const coreFindMany = vi.fn().mockResolvedValue([{ assertionId: "bootstrap-profile" }]);
+    const coverageFindMany = vi.fn().mockResolvedValue([{ assertionId: "bootstrap-reference" }]);
+    vi.mocked(getDatabase).mockReturnValue({
+      memoryObjectHigherMemory: { findMany: vi.fn().mockResolvedValue([]) },
+      memoryAssertionObjectLink: { findMany: coreFindMany },
+      memoryAssertionObjectCoverage: { findMany: coverageFindMany },
+      memoryAssertion: { findMany: memoryAssertionFindMany },
+    } as never);
+    vi.mocked(curateRetrievalAssertions).mockResolvedValue({
+      selectedAssertionIds: ["bootstrap-profile", "bootstrap-reference"],
+      mode: "model",
+      coverage: "partial",
+      missingAspects: ["当前状态"],
+      reasons: [
+        { id: "bootstrap-profile", reason: "profile" },
+        { id: "bootstrap-reference", reason: "source route" },
+      ],
+      candidateAssertionIds: ["bootstrap-profile", "bootstrap-reference"],
+    });
+
+    const result = await searchMemory({
+      query: "完整概览、活动和平台",
+      targetHints: ["Global Object 1"],
+      taskShape: "synthesis",
+    }, {
+      curatorContext: {
+        conversation: [],
+        originalUserMessage: "请整理完整概览、活动和平台",
+        currentInstant: "2026-08-24T00:00:00.000Z",
+        timezone: "Asia/Shanghai",
+      },
+    });
+
+    expect(coreFindMany).toHaveBeenCalled();
+    expect(coverageFindMany).toHaveBeenCalled();
+    expect(result.taskShape).toBe("synthesis");
+    expect(result.knowledgeState).toEqual({
+      targetObjectId: "global-1",
+      higherMemory: "absent",
+      coldBootstrapApplied: true,
+    });
+    expect(result.assertions.map((assertion) => assertion.id).sort()).toEqual([
+      "bootstrap-profile",
+      "bootstrap-reference",
+    ].sort());
+    expect(result.warnings).toContainEqual(expect.stringContaining("尚无 Higher Memory"));
+    expect(curateRetrievalAssertions).toHaveBeenCalledWith(expect.objectContaining({
+      taskShape: "synthesis",
+    }));
   });
 
   it("returns matching Assertions alongside a stale Higher Memory", async () => {
@@ -335,7 +449,15 @@ describe("searchMemory", () => {
         findMany: vi.fn().mockResolvedValue([{
           id: "higher-memory-1",
           globalObjectId: "global-1",
-          contentMarkdown: "这是刷新前的旧高层认知。",
+          cognitiveMemory: {
+            identityAndBoundaries: "这是刷新前的旧高层认知。",
+            narrativeAndMeaning: "",
+            structuralModel: "",
+            operatingModel: "",
+            currentSituation: "",
+            openQuestions: [],
+          },
+          operationalIndex: { aspects: [] },
           maintainedAt: new Date("2026-08-14T00:00:00.000Z"),
         }]),
       },
@@ -343,9 +465,7 @@ describe("searchMemory", () => {
         findMany: vi.fn().mockResolvedValue([{
           id: "assertion-1",
           createdAt: new Date("2026-08-14T01:00:00.000Z"),
-          literalGlobalReferences: [{ globalObjectId: "global-1" }],
-          fragmentReferences: [],
-          semanticObjectLinks: [],
+          objectLinks: [{ globalObjectId: "global-1" }],
         }]),
       },
     } as never);
@@ -540,24 +660,21 @@ describe("followObject", () => {
       },
       memorySourceBlock: { findMany: vi.fn().mockResolvedValue([]) },
       memoryGlobalObject: { findMany: memoryGlobalObjectFindMany },
-      memoryGlobalAssertionReferenceResolution: {
+      memoryAssertionObjectLink: {
         findMany: vi.fn().mockImplementation(async (args: {
           where: { globalObjectId: string };
-        }) => args.where.globalObjectId === "global-event"
-          ? [
+        }) => {
+          if (args.where.globalObjectId === "global-event") return [
               { assertionId: "assertion-definition" },
               { assertionId: "assertion-organizer" },
-            ]
-          : []),
+            ];
+          if (args.where.globalObjectId === "global-student-union") {
+            return [{ assertionId: "assertion-organizer" }];
+          }
+          return [];
+        }),
       },
-      memoryGlobalAssertionLiteralReference: {
-        findMany: vi.fn().mockImplementation(async (args: {
-          where: { globalObjectId: string };
-        }) => args.where.globalObjectId === "global-student-union"
-          ? [{ assertionId: "assertion-organizer" }]
-          : []),
-      },
-      memoryAssertionSemanticObjectLink: {
+      memoryAssertionObjectCoverage: {
         findMany: vi.fn().mockImplementation(async (args: {
           where: { globalObjectId: string };
         }) => input.includeSemanticReference && args.where.globalObjectId === "global-event"
@@ -612,7 +729,7 @@ describe("followObject", () => {
     expect(result.assertions.flatMap((assertion) => assertion.sources)
       .every((source) => source.excerpt === undefined)).toBe(true);
 
-    expect(database.memoryGlobalAssertionReferenceResolution.findMany)
+    expect(database.memoryAssertionObjectLink.findMany)
       .toHaveBeenCalledWith(expect.objectContaining({
         where: {
           globalObjectId: "global-event",
@@ -621,7 +738,7 @@ describe("followObject", () => {
         distinct: ["assertionId"],
         take: memoryExploreLimits.followAssertionScan + 1,
       }));
-    expect(database.memoryGlobalAssertionLiteralReference.findMany)
+    expect(database.memoryAssertionObjectCoverage.findMany)
       .toHaveBeenCalledWith(expect.objectContaining({
         where: {
           globalObjectId: "global-event",
@@ -635,7 +752,7 @@ describe("followObject", () => {
     });
   });
 
-  it("follows a GlobalObject referenced by a finalized literal reference atom", async () => {
+  it("follows a GlobalObject through the canonical Assertion link", async () => {
     const database = useFollowDatabase();
 
     const result = await followObject("global-student-union");
@@ -649,15 +766,14 @@ describe("followObject", () => {
       "global-student-union",
       "global-event",
     ]);
-    expect(database.memoryGlobalAssertionReferenceResolution.findMany)
-      .toHaveBeenCalledOnce();
-    expect(database.memoryGlobalAssertionLiteralReference.findMany)
+    expect(database.memoryAssertionObjectLink.findMany)
       .toHaveBeenCalledWith(expect.objectContaining({
         where: expect.objectContaining({ globalObjectId: "global-student-union" }),
       }));
+    expect(database.memoryAssertionObjectCoverage.findMany).toHaveBeenCalledOnce();
   });
 
-  it("case E reverse-lookups a Reference through its semantic Object link", async () => {
+  it("reverse-lookups a Reference through retrieval coverage without creating a graph edge", async () => {
     const database = useFollowDatabase({ includeSemanticReference: true });
 
     const result = await followObject("global-event", "品牌活动");
@@ -675,7 +791,10 @@ describe("followObject", () => {
       sourceNodeId: "region-1",
       sourceBlockId: "block-1",
     });
-    expect(database.memoryAssertionSemanticObjectLink.findMany)
+    const referenceRef = reference?.ref;
+    expect(result.connections.some((connection) => connection.assertionRef === referenceRef))
+      .toBe(false);
+    expect(database.memoryAssertionObjectCoverage.findMany)
       .toHaveBeenCalledWith(expect.objectContaining({
         where: {
           globalObjectId: "global-event",
