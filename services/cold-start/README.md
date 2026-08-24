@@ -1,6 +1,6 @@
 # Cold-start Worker
 
-Cold-start Worker 将组织文档编译为可发布到 Echo Cognitive Runtime 的 Object–Assertion–Evidence 结构，并提供线上检索共用的 BGE-M3 embedding 服务。
+Cold-start Worker 将来源文档编译为可发布到 Echo Cognitive Runtime 的 Object–Assertion–Evidence 结构，并提供线上检索共用的 BGE-M3 embedding 服务。
 
 ## 输出边界
 
@@ -170,7 +170,8 @@ pnpm memory:import-cold-start -- \
 
 ## 5. Activity Operations 语义草稿
 
-`map-activity` 用于将完整认知编译映射为隔离的 `activity_operations` 分析草稿：
+`map-activity` 是一个显式可选的领域投影，不参与通用 Object–Assertion 编译。它用于将
+完整认知编译映射为隔离的 `activity_operations` 分析草稿：
 
 ```bash
 uv run cold-start map-activity \
