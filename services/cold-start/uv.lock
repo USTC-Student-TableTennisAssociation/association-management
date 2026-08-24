@@ -69,7 +69,7 @@ wheels = [
 ]
 
 [[package]]
-name = "association-cold-start"
+name = "echo-cold-start"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
