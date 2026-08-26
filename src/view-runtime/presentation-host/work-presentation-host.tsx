@@ -1,10 +1,9 @@
 "use client";
 
-import { SocietyOverviewWorkspace } from "@/plugins/society-information/presentation/society-overview-workspace";
-import { SOCIETY_OVERVIEW_LOADER } from "@/plugins/society-information/presentation/constants";
+import { installedPresentationComponents } from "@/generated/installed-presentations";
 import { WorkViewWorkspace } from "@/view-runtime/generic-ui/work-view-workspace";
 
-type WorkPresentationProps = {
+export type WorkPresentationProps = {
   viewKey: string;
   refreshRevision?: number;
   presentationLoader?: string;
@@ -16,8 +15,11 @@ type WorkPresentationProps = {
 };
 
 export function WorkPresentationHost(props: WorkPresentationProps) {
-  if (props.presentationLoader === SOCIETY_OVERVIEW_LOADER) {
-    return <SocietyOverviewWorkspace {...props} />;
+  const Presentation = props.presentationLoader
+    ? installedPresentationComponents[props.presentationLoader]
+    : undefined;
+  if (Presentation) {
+    return <Presentation {...props} />;
   }
 
   return (

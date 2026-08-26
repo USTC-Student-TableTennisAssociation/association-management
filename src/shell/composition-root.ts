@@ -1,6 +1,5 @@
-import { activityOperationsPlugin } from "@/plugins/activity-operations/manifest";
-import { societyInformationPlugin } from "@/plugins/society-information/manifest";
 import { getDatabase } from "@/db";
+import { installedPluginManifests } from "@/generated/installed-plugins";
 import { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
 import { builtinToolCapabilityContracts } from "@/contracts/tool/capability-contracts/builtin";
@@ -15,14 +14,13 @@ import {
   loadChatMessages,
 } from "@/chat/persistence";
 
-export function createBuiltinExtensionRegistry(): ExtensionRegistry {
+export function createInstalledExtensionRegistry(): ExtensionRegistry {
   const registry = new ExtensionRegistry();
-  registry.registerPlugin(societyInformationPlugin);
-  registry.registerPlugin(activityOperationsPlugin);
+  installedPluginManifests.forEach((plugin) => registry.registerPlugin(plugin));
   return registry;
 }
 
-export const extensionRegistry = createBuiltinExtensionRegistry();
+export const extensionRegistry = createInstalledExtensionRegistry();
 const database = getDatabase();
 export const installedViewService = new InstalledViewService(database, extensionRegistry);
 export const viewCommandBus = new ViewCommandBus(
@@ -49,11 +47,11 @@ export const viewChangeCoordinator = new ViewChangeCoordinator({
   ),
 });
 
-export function createBuiltinToolRuntime(): ToolRuntime {
+export function createToolRuntime(): ToolRuntime {
   const runtime = new ToolRuntime();
   builtinToolCapabilityContracts.forEach((contract) => runtime.registerContract(contract));
   extensionRegistry.listToolProviders().forEach((provider) => runtime.registerProvider(provider));
   return runtime;
 }
 
-export const toolRuntime = createBuiltinToolRuntime();
+export const toolRuntime = createToolRuntime();
