@@ -9,6 +9,8 @@ type WorkPresentationProps = {
   refreshRevision?: number;
   presentationLoader?: string;
   focusCardId?: string;
+  activeConversationId?: string;
+  onAIAttentionScheduled?: () => void;
   onOpenInspector: () => void;
   onAskAI: (prompt: string) => void;
 };
@@ -18,5 +20,13 @@ export function WorkPresentationHost(props: WorkPresentationProps) {
     return <SocietyOverviewWorkspace {...props} />;
   }
 
-  return <WorkViewWorkspace {...props} />;
+  return (
+    <WorkViewWorkspace
+      viewKey={props.viewKey}
+      refreshRevision={props.refreshRevision}
+      focusCardId={props.focusCardId}
+      onOpenInspector={props.onOpenInspector}
+      onAskAI={props.onAskAI}
+    />
+  );
 }

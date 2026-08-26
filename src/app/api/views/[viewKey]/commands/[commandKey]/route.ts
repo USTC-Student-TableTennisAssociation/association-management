@@ -1,5 +1,10 @@
+import { z } from "zod";
+
 import { currentAuthUser } from "@/auth/session";
-import { viewCommandBus } from "@/shell/composition-root";
+import {
+  viewAIAttentionCoordinator,
+  viewCommandBus,
+} from "@/shell/composition-root";
 
 export async function POST(
   request: Request,
@@ -13,7 +18,9 @@ export async function POST(
       input?: unknown;
       commandVersion?: string;
       expectedStateVersion?: string;
+      conversationId?: string;
     };
+    const conversationId = z.string().uuid().optional().parse(body.conversationId);
     const result = await viewCommandBus.dispatch({
       viewKey,
       commandKey,
@@ -26,7 +33,20 @@ export async function POST(
       },
       initiator: "human",
     });
-    return Response.json(result);
+    let aiAttention: "scheduled" | "next_turn" | "ignored" | undefined;
+    if (result.kind === "executed" && conversationId) {
+      try {
+        aiAttention = await viewAIAttentionCoordinator.enqueue({
+          executionId: result.executionId,
+          actor: user.actor,
+          conversationId,
+        });
+      } catch (error) {
+        console.error("[view.ai-attention.enqueue]", error);
+        aiAttention = "ignored";
+      }
+    }
+    return Response.json(aiAttention ? { ...result, aiAttention } : result);
   } catch (error) {
     return Response.json(
       { error: error instanceof Error ? error.message : String(error) },
