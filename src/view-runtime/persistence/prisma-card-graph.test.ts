@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { activityOperationsViewModule } from "@/plugins/activity-operations/view/schema";
+import { societyInformationViewModule } from "@/plugins/society-information/view/schema";
 import { PrismaCardGraphTransaction } from "@/view-runtime/persistence/prisma-card-graph";
 
 const objectId = "00000000-0000-4000-8000-000000000101";
@@ -89,5 +90,52 @@ describe("PrismaCardGraphTransaction Related Objects", () => {
     })).resolves.toBe("00000000-0000-4000-8000-000000000201");
 
     expect(database.memoryGlobalObject.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("PrismaCardGraphTransaction ordered Slots", () => {
+  it("persists the caller-provided target order as explicit positions", async () => {
+    const societyCardId = "00000000-0000-4000-8000-000000000301";
+    const activityA = "00000000-0000-4000-8000-000000000302";
+    const activityB = "00000000-0000-4000-8000-000000000303";
+    const database = {
+      viewCard: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: societyCardId,
+          cardTypeKey: "SocietyCard",
+        }),
+        findMany: vi.fn().mockResolvedValue([
+          { id: activityA, viewKey: "society_information", cardTypeKey: "ActivityCard" },
+          { id: activityB, viewKey: "society_information", cardTypeKey: "ActivityCard" },
+        ]),
+      },
+      viewSlotBinding: {
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+        createMany: vi.fn().mockResolvedValue({ count: 2 }),
+      },
+    };
+    const graph = new PrismaCardGraphTransaction(
+      database as never,
+      societyInformationViewModule,
+    );
+
+    await graph.setSlot(societyCardId, "activities", [activityB, activityA]);
+
+    expect(database.viewSlotBinding.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          sourceCardId: societyCardId,
+          slotKey: "activities",
+          targetCardId: activityB,
+          position: 0,
+        },
+        {
+          sourceCardId: societyCardId,
+          slotKey: "activities",
+          targetCardId: activityA,
+          position: 1,
+        },
+      ],
+    });
   });
 });

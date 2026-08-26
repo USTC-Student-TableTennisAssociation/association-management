@@ -55,7 +55,9 @@ export class PrismaViewReadPort implements ViewReadPort {
           orderBy: { createdAt: "asc" },
           include: {
             dimensions: { orderBy: { dimensionKey: "asc" } },
-            outgoingSlots: { orderBy: [{ slotKey: "asc" }, { createdAt: "asc" }] },
+            outgoingSlots: {
+              orderBy: [{ slotKey: "asc" }, { position: "asc" }, { createdAt: "asc" }],
+            },
             relatedObjects: { orderBy: { createdAt: "asc" } },
           },
         },

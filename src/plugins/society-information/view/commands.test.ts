@@ -13,6 +13,7 @@ const IDS = {
   advisorA: "00000000-0000-4000-8000-000000000002",
   advisorB: "00000000-0000-4000-8000-000000000003",
   activityA: "00000000-0000-4000-8000-000000000004",
+  activityB: "00000000-0000-4000-8000-000000000008",
   platformA: "00000000-0000-4000-8000-000000000005",
   platformB: "00000000-0000-4000-8000-000000000006",
   memberA: "00000000-0000-4000-8000-000000000007",
@@ -118,9 +119,11 @@ describe("society-information commands", () => {
       "society.initialize_overview",
       "society.update_profile",
       "society.set_advisors",
+      "society.update_person",
       "society.save_team_member",
       "society.remove_team_member",
       "society.save_long_term_activity",
+      "society.reorder_long_term_activities",
       "society.remove_long_term_activity",
       "society.save_platform",
       "society.remove_platform",
@@ -164,6 +167,16 @@ describe("society-information commands", () => {
     expect(transaction.cards.get(societyCardId)?.slots.advisor).toEqual([
       firstPersonCards.find((card) => card.relatedObjectIds.includes(IDS.advisorB))?.id,
     ]);
+
+    const advisorCardId = firstPersonCards.find(
+      (card) => card.relatedObjectIds.includes(IDS.advisorB),
+    )!.id;
+    await execute(transaction, "society.update_person", {
+      societyCardId,
+      personCardId: advisorCardId,
+      changes: { description: "负责社团指导工作" },
+    });
+    expect(transaction.cards.get(advisorCardId)?.dimensions.description).toBe("负责社团指导工作");
   });
 
   it("creates, updates and removes team members with department and position", async () => {
@@ -190,6 +203,13 @@ describe("society-information commands", () => {
       changes: { position: "部长" },
     });
     expect(transaction.cards.get(memberCardId)?.dimensions.position).toBe("部长");
+
+    await execute(transaction, "society.update_person", {
+      societyCardId,
+      personCardId: memberCardId,
+      changes: { department: null },
+    });
+    expect(transaction.cards.get(memberCardId)?.dimensions.department).toBeUndefined();
 
     await execute(transaction, "society.remove_team_member", {
       societyCardId,
@@ -267,6 +287,41 @@ describe("society-information commands", () => {
     });
     expect(transaction.cards.has(activityCardId)).toBe(false);
     expect(transaction.cards.get(societyCardId)?.slots.activities).toEqual([]);
+  });
+
+  it("reorders the complete long-term activity Slot and rejects partial orders", async () => {
+    const transaction = new MemoryTransaction();
+    const societyCardId = await initialize(transaction);
+    const activityA = await execute(transaction, "society.save_long_term_activity", {
+      mode: "create",
+      societyCardId,
+      activityName: "活动甲",
+      activityObjectId: IDS.activityA,
+      values: {},
+    });
+    const activityB = await execute(transaction, "society.save_long_term_activity", {
+      mode: "create",
+      societyCardId,
+      activityName: "活动乙",
+      activityObjectId: IDS.activityB,
+      values: {},
+    });
+    const activityAId = (activityA.summary as { cardId: string }).cardId;
+    const activityBId = (activityB.summary as { cardId: string }).cardId;
+
+    await execute(transaction, "society.reorder_long_term_activities", {
+      societyCardId,
+      activityCardIds: [activityBId, activityAId],
+    });
+    expect(transaction.cards.get(societyCardId)?.slots.activities).toEqual([
+      activityBId,
+      activityAId,
+    ]);
+
+    await expect(execute(transaction, "society.reorder_long_term_activities", {
+      societyCardId,
+      activityCardIds: [activityAId],
+    })).rejects.toThrow("必须完整包含当前社团的全部长期活动");
   });
 
   it("keeps uncertain platforms honest, requires access when active, and rejects duplicate URLs", async () => {

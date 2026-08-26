@@ -6,6 +6,7 @@
   --orange: #ef6a3a;
   --paper: #f5f5f7;
   --display-serif: "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", serif;
+  position: relative;
   min-height: 100%;
   container-type: inline-size;
   background: var(--night);
@@ -273,6 +274,32 @@
   opacity: clamp(0, calc(var(--purpose-progress) * 1.8 - 0.8), 1);
 }
 
+.profileEditButton {
+  display: inline-flex;
+  min-height: 2.65rem;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 1.5rem 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  background: #e8e8ed;
+  padding: 0.72rem 1.05rem;
+  color: #424247;
+  font-size: 0.76rem;
+  font-weight: 610;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background-color 180ms ease, transform 100ms ease-out;
+}
+
+.profileEditButton:hover {
+  background: #dcdce1;
+}
+
+.profileEditButton:active {
+  transform: scale(0.96);
+}
+
 .scrollCue {
   position: absolute;
   z-index: 5;
@@ -289,6 +316,9 @@
 
 .scrollCue svg,
 .galleryControls svg,
+.dragHandle svg,
+.profileEditButton svg,
+.cardActions svg,
 .activityCardBottom button svg,
 .personCard button svg,
 .platformCard > svg,
@@ -301,6 +331,11 @@
   stroke-width: 1.55;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.dragHandle svg circle {
+  fill: currentColor;
+  stroke: none;
 }
 
 .lightStory {
@@ -382,6 +417,22 @@
   padding-bottom: 0.35rem;
 }
 
+.galleryToolbar {
+  display: flex;
+  max-width: 22rem;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+  padding-bottom: 0.35rem;
+}
+
+.activityOrderStatus {
+  color: #8e8e93;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  text-align: right;
+}
+
 .galleryControls button {
   display: grid;
   width: 2.9rem;
@@ -433,6 +484,7 @@
 }
 
 .activityCard {
+  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -441,6 +493,19 @@
   background: var(--paper);
   padding: clamp(2rem, 4.5cqw, 4rem);
   box-shadow: 0 1.5rem 4rem rgb(32 38 50 / 8%);
+  transform: translate3d(0, 0, 0);
+  will-change: transform;
+}
+
+.shiftingActivity {
+  transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.draggingActivity {
+  z-index: 8;
+  cursor: grabbing;
+  box-shadow: 0 2.2rem 5.5rem rgb(32 38 50 / 18%);
+  transition: none;
 }
 
 .activityTopline {
@@ -457,6 +522,44 @@
 .activityTopline span:first-child {
   color: var(--orange);
   font-variant-numeric: tabular-nums;
+}
+
+.activityMeta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  text-align: right;
+}
+
+.dragHandle {
+  display: grid;
+  width: 2.45rem;
+  height: 2.45rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #dfdfe5;
+  color: #6e6e73;
+  cursor: grab;
+  touch-action: none;
+  transition: background-color 160ms ease, transform 100ms ease-out;
+}
+
+.dragHandle:hover:not(:disabled) {
+  background: #d2d2d7;
+}
+
+.dragHandle:active:not(:disabled) {
+  cursor: grabbing;
+  transform: scale(0.94);
+}
+
+.dragHandle:disabled {
+  cursor: default;
+  opacity: 0.32;
 }
 
 .activityCard h3 {
@@ -507,6 +610,39 @@
 
 .activityCardBottom button:active,
 .personCard button:active {
+  transform: scale(0.94);
+}
+
+.cardActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+}
+
+.cardActions > button,
+.cardActions > a {
+  display: grid;
+  width: 2.9rem;
+  height: 2.9rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #dfdfe5;
+  color: #3f4146;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color 180ms ease, transform 100ms ease-out;
+}
+
+.cardActions > button:hover,
+.cardActions > a:hover {
+  background: #d2d2d7;
+}
+
+.cardActions > button:active,
+.cardActions > a:active {
   transform: scale(0.94);
 }
 
@@ -585,7 +721,7 @@
   letter-spacing: -0.055em;
 }
 
-.personCard > button {
+.personCard > .cardActions {
   align-self: flex-end;
 }
 
@@ -761,11 +897,21 @@
   line-height: 1.6;
 }
 
-.platformCard > svg {
+.platformCard > .cardActions {
   position: absolute;
-  right: 2rem;
-  bottom: 2rem;
-  color: rgb(255 255 255 / 72%);
+  right: 1.6rem;
+  bottom: 1.6rem;
+}
+
+.platformCard .cardActions > button,
+.platformCard .cardActions > a {
+  background: rgb(255 255 255 / 10%);
+  color: rgb(255 255 255 / 78%);
+}
+
+.platformCard .cardActions > button:hover,
+.platformCard .cardActions > a:hover {
+  background: rgb(255 255 255 / 17%);
 }
 
 .joinSection .emptySlot {
@@ -849,6 +995,241 @@
   font-size: 0.63rem;
   font-weight: 530;
   letter-spacing: 0.015em;
+}
+
+.editorScrim {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  background: rgb(1 6 14 / 34%);
+  padding: clamp(0.75rem, 2cqw, 1.5rem);
+  backdrop-filter: blur(14px) saturate(120%);
+  animation: editor-scrim-in 180ms ease-out both;
+}
+
+.editorSheet {
+  display: flex;
+  width: min(32rem, 100%);
+  max-height: min(52rem, calc(100svh - 1.5rem));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 72%);
+  border-radius: 2rem;
+  background: rgb(250 250 252 / 94%);
+  box-shadow: 0 2rem 7rem rgb(0 0 0 / 28%);
+  color: var(--ink);
+  backdrop-filter: blur(32px) saturate(150%);
+  transform-origin: 88% 100%;
+  animation: editor-sheet-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.editorHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.7rem 1.7rem 1.25rem;
+}
+
+.editorHeader p {
+  margin: 0 0 0.45rem;
+  color: var(--orange);
+  font-size: 0.66rem;
+  font-weight: 680;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.editorHeader h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 680;
+  letter-spacing: -0.035em;
+}
+
+.editorHeader span {
+  display: block;
+  margin-top: 0.55rem;
+  color: #6e6e73;
+  font-size: 0.72rem;
+  line-height: 1.55;
+}
+
+.editorHeader > button {
+  display: grid;
+  width: 2.35rem;
+  height: 2.35rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #e8e8ed;
+  color: #515154;
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 100ms ease-out;
+}
+
+.editorHeader > button:hover {
+  background: #dcdce1;
+}
+
+.editorHeader > button:active {
+  transform: scale(0.94);
+}
+
+.editorHeader svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+.editorForm {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.editorFields {
+  display: grid;
+  min-height: 0;
+  gap: 1.15rem;
+  overflow-y: auto;
+  padding: 0.5rem 1.7rem 1.7rem;
+  overscroll-behavior: contain;
+}
+
+.editorField {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.editorField > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #3a3a3c;
+  font-size: 0.76rem;
+  font-weight: 640;
+}
+
+.editorField b {
+  color: #8e8e93;
+  font-size: 0.6rem;
+  font-weight: 620;
+}
+
+.editorField input,
+.editorField textarea,
+.editorField select {
+  width: 100%;
+  border: 1px solid rgb(0 0 0 / 9%);
+  border-radius: 0.95rem;
+  outline: 0;
+  background: rgb(255 255 255 / 78%);
+  padding: 0.8rem 0.9rem;
+  color: #1d1d1f;
+  font: inherit;
+  font-size: 0.84rem;
+  line-height: 1.55;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+}
+
+.editorField textarea {
+  min-height: 7.5rem;
+  resize: vertical;
+}
+
+.editorField input:focus,
+.editorField textarea:focus,
+.editorField select:focus {
+  border-color: rgb(0 113 227 / 58%);
+  background: white;
+  box-shadow: 0 0 0 3px rgb(0 113 227 / 13%);
+}
+
+.editorField small {
+  color: #8e8e93;
+  font-size: 0.66rem;
+  line-height: 1.55;
+}
+
+.editorFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  border-top: 1px solid rgb(0 0 0 / 7%);
+  background: rgb(250 250 252 / 82%);
+  padding: 1rem 1.7rem 1.25rem;
+}
+
+.editorFooter > p {
+  max-width: 17rem;
+  margin: 0;
+  color: #6e6e73;
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.editorFooter > div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.55rem;
+}
+
+.editorFooter button {
+  min-height: 2.5rem;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.68rem 1rem;
+  font-size: 0.74rem;
+  font-weight: 640;
+  cursor: pointer;
+  transition: transform 100ms ease-out, opacity 160ms ease, background-color 160ms ease;
+}
+
+.editorFooter button:first-child {
+  background: #e8e8ed;
+  color: #424247;
+}
+
+.editorFooter button:last-child {
+  background: var(--blue);
+  color: white;
+}
+
+.editorFooter button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.editorFooter button:disabled,
+.editorHeader button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+@keyframes editor-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes editor-sheet-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 1.5rem, 0) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
 }
 
 @keyframes loading-breathe {
@@ -1025,6 +1406,40 @@
   .footer span:last-child {
     display: none;
   }
+
+  .galleryToolbar {
+    align-items: flex-end;
+    flex-direction: column-reverse;
+    gap: 0.55rem;
+  }
+
+  .activityOrderStatus {
+    max-width: 8rem;
+  }
+
+  .editorScrim {
+    padding: 0;
+  }
+
+  .editorSheet {
+    width: 100%;
+    max-height: 94svh;
+    border-radius: 1.75rem 1.75rem 0 0;
+  }
+
+  .editorFooter {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .editorFooter > p {
+    max-width: none;
+  }
+
+  .editorFooter > div,
+  .editorFooter button {
+    flex: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1078,6 +1493,10 @@
   .heroBadge,
   .heroWordmark,
   .galleryControls button,
+  .dragHandle,
+  .profileEditButton,
+  .cardActions > button,
+  .cardActions > a,
   .activityCardBottom button,
   .personCard button,
   .emptySlot,
@@ -1086,14 +1505,30 @@
   .secondaryButton {
     transition: none;
   }
+
+  .editorScrim,
+  .editorSheet {
+    animation: none;
+  }
+
+  .shiftingActivity {
+    transition: none;
+  }
 }
 
 @media (prefers-reduced-transparency: reduce) {
   .loadingMark,
-  .errorCard {
+  .errorCard,
+  .editorScrim,
+  .editorSheet {
     backdrop-filter: none;
-    background: #0b1a2c;
   }
+
+  .loadingMark,
+  .errorCard { background: #0b1a2c; }
+
+  .editorScrim { background: rgb(1 6 14 / 54%); }
+  .editorSheet { background: #fafafc; }
 
   .platformCard {
     background: #10284a;
