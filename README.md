@@ -155,26 +155,35 @@ pnpm echo:plugin remove echo.activity-operations --purge
 
 ### 开发与发布 Plugin
 
-`packages/plugin-sdk` 提供可发布 Plugin 使用的稳定合同和 React hooks；
+`packages/plugin-sdk` 提供可发布 Plugin 使用的公共合同、`echo.plugin.json`
+描述文件 Schema 和 React hooks；
 `packages/example-plugin` 是包含 View、Command、Skill、专属 UI 和全局只读 Tool Provider
-的完整示例：
+的最小完整示例。现有的 `src/plugins/society-information` 也已经是可发布 workspace 包，
+它的 tarball 包含真实 Card Schema、Commands、Events、沉浸式 UI、CSS 和全部图片资源：
 
 ```bash
 pnpm plugins:build
-pnpm --filter @echo/example-plugin pack
-pnpm echo:plugin install ./echo-example-plugin-0.1.0.tgz
+pnpm plugins:pack:sdk
+pnpm --filter @sydaris/example-plugin pack
+mkdir -p artifacts
+pnpm plugins:pack:society --pack-destination ./artifacts
 ```
 
-发布到 npm 时，先把示例中的 `@echo` scope 改为自己有权限的组织 scope，并同步修改
-`peerDependencies`，然后先发布 SDK、再发布 Plugin：
+`echo-society-information-plugin` 暂时使用无 scope 名称；在正式发布前需要确认名称可用，
+或统一改成 `@sydaris` scope。它通过 `@sydaris/plugin-sdk` peer dependency 使用宿主合同，
+不包含 Echo 数据库实现或 `@/` 内部路径。
+
+发布到 npm 时先发布 SDK，再发布 Plugin。当前 SDK 为 alpha 预发布版，
+`publishConfig` 会默认发到 `next` tag：
 
 ```bash
-pnpm --filter @your-scope/plugin-sdk publish --access public
-pnpm --filter @your-scope/example-plugin publish --access public
+pnpm --filter @sydaris/plugin-sdk publish
+pnpm --filter @sydaris/example-plugin publish --tag next --access public
 ```
 
-私有包可以使用 npm token 和组织 registry；Echo 的安装命令不需要改变。实际发布需要
-对应 npm scope 的账号权限，本仓库不会保存发布凭据。
+每个 Plugin 必须通过 `engines.echo` 声明兼容的 Echo 版本，不匹配时 CLI 会拒绝安装。
+实际发布需要 `@sydaris` npm scope 权限；本仓库不会保存发布凭据。
+当前可发布的 SDK 与 Plugin 包使用 Apache-2.0 许可证。
 
 可复用 Tool Provider 应独立成 Plugin；只读 Provider 会注册成所有 AI 聊天均可使用的全局
 Tool，具有外部副作用的 Tool 在增加人工审批 UI 前不会暴露给模型。

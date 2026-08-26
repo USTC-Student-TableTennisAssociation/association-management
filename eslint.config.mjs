@@ -12,6 +12,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "packages/*/dist/**",
+    "src/plugins/*/dist/**",
     "next-env.d.ts",
     "services/cold-start/.venv/**",
   ]),

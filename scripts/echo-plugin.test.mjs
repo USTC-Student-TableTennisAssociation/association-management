@@ -26,7 +26,10 @@ async function fixtureProject() {
   const root = await mkdtemp(path.join(os.tmpdir(), "echo-plugin-test-"));
   temporaryDirectories.push(root);
   await mkdir(path.join(root, "plugins", "test", "presentation"), { recursive: true });
-  await writeFile(path.join(root, "package.json"), '{"name":"fixture","type":"module"}\n');
+  await writeFile(
+    path.join(root, "package.json"),
+    '{"name":"fixture","version":"0.1.0","type":"module"}\n',
+  );
   await writeFile(
     path.join(root, "echo.plugins.json"),
     '{"schemaVersion":1,"plugins":[]}\n',
@@ -45,6 +48,7 @@ async function fixtureProject() {
       schemaVersion: 1,
       id: "echo.test",
       version: "1.0.0",
+      engines: { echo: ">=0.1.0-alpha.1 <0.2.0-0" },
       server: { entry: "./server.ts", export: "testPlugin" },
       contributes: {
         views: ["test_view"],
@@ -68,9 +72,22 @@ describe("Echo local plugin CLI", () => {
       schemaVersion: 1,
       id: "Echo Bad",
       version: "latest",
+      engines: { echo: ">=0.1.0-alpha.1 <0.2.0-0" },
       server: { entry: "./server.ts", export: "testPlugin" },
       contributes: {},
     })).toThrow(/id|标识/u);
+  });
+
+  it("rejects a Plugin that is incompatible with the current Echo version", async () => {
+    const root = await fixtureProject();
+    const descriptorPath = path.join(root, "plugins", "test", "echo.plugin.json");
+    const descriptor = JSON.parse(await readFile(descriptorPath, "utf8"));
+    descriptor.engines.echo = ">=0.2.0 <0.3.0";
+    await writeFile(descriptorPath, JSON.stringify(descriptor));
+
+    await expect(installPlugin(root, "plugins/test")).rejects.toThrow(
+      /requires Echo|\u9700\u8981 Echo/u,
+    );
   });
 
   it("installs a local plugin and generates server and client registries", async () => {
@@ -158,6 +175,7 @@ describe("Echo local plugin CLI", () => {
       schemaVersion: 1,
       id: "echo.online",
       version: "1.2.3",
+      engines: { echo: ">=0.1.0-alpha.1 <0.2.0-0" },
       server: { entry: "./dist/server.js", export: "onlinePlugin" },
       contributes: {
         views: ["online_view"],

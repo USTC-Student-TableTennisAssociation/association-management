@@ -4,8 +4,8 @@ import type {
   CommandDefinition,
   ViewCardState,
   ViewTransaction,
-} from "@/contracts";
-import { zodContractSchema } from "@/contracts";
+} from "@sydaris/plugin-sdk";
+import { zodContractSchema } from "@sydaris/plugin-sdk";
 
 const uuid = z.string().uuid();
 const activityFrequencySchema = z.enum(["WEEKLY", "ANNUAL", "PER_SEMESTER", "IRREGULAR"]);

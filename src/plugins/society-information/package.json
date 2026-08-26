@@ -1,7 +1,7 @@
 {
-  "name": "@sydaris/example-plugin",
-  "version": "0.1.0-alpha.1",
-  "description": "Publishable example View plugin for Echo",
+  "name": "echo-society-information-plugin",
+  "version": "1.8.0",
+  "description": "Publishable Society Information View plugin for Echo",
   "type": "module",
   "files": [
     "dist",
@@ -10,28 +10,34 @@
   ],
   "exports": {
     "./server": {
-      "types": "./dist/server.d.ts",
-      "import": "./dist/server.js"
+      "types": "./dist/manifest.d.ts",
+      "import": "./dist/manifest.js"
     },
     "./presentation": {
-      "types": "./dist/presentation.d.ts",
-      "import": "./dist/presentation.js"
+      "types": "./dist/presentation/society-overview-workspace.d.ts",
+      "import": "./dist/presentation/society-overview-workspace.js"
     },
     "./echo.plugin.json": "./echo.plugin.json"
   },
   "echoPlugin": "./echo.plugin.json",
+  "sideEffects": [
+    "**/*.css"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.package.json && node scripts/copy-assets.mjs",
     "prepack": "pnpm build"
   },
   "peerDependencies": {
     "@sydaris/plugin-sdk": ">=0.1.0-alpha.1 <0.2.0-0",
+    "next": "^16.0.0",
     "react": "^19.0.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
     "@sydaris/plugin-sdk": "workspace:*",
+    "@types/node": "^20.0.0",
     "@types/react": "^19.0.0",
+    "next": "^16.0.0",
     "react": "^19.0.0",
     "typescript": "^5.0.0",
     "zod": "^4.0.0"

@@ -1,7 +1,10 @@
 {
   "schemaVersion": 1,
   "id": "echo.example-notes",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.1",
+  "engines": {
+    "echo": ">=0.1.0-alpha.1 <0.2.0-0"
+  },
   "server": {
     "entry": "./dist/server.js",
     "export": "exampleNotesPlugin"

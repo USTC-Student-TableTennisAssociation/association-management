@@ -6,13 +6,15 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import {
+  isEchoVersionCompatible,
+  parseEchoPluginPackageDescriptor,
+} from "@sydaris/plugin-sdk";
+
 const CONFIG_FILE = "echo.plugins.json";
 const SERVER_REGISTRY_FILE = "src/generated/installed-plugins.ts";
 const PRESENTATION_REGISTRY_FILE = "src/generated/installed-presentations.tsx";
 const descriptorName = "echo.plugin.json";
-const identifierPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
-const exportIdentifierPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
-const semverPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
 export class EchoPluginCliError extends Error {
   constructor(message) {
@@ -32,17 +34,6 @@ function requireString(value, label) {
   return value.trim();
 }
 
-function requireStringArray(value, label) {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim())) {
-    throw new EchoPluginCliError(`${label} 必须是字符串数组`);
-  }
-  const result = value.map((item) => item.trim());
-  if (new Set(result).size !== result.length) {
-    throw new EchoPluginCliError(`${label} 不能包含重复项`);
-  }
-  return result;
-}
-
 function parseInstalledPlugin(value, index) {
   const label = `${CONFIG_FILE}.plugins[${index}]`;
   if (typeof value === "string") {
@@ -60,70 +51,23 @@ function parseInstalledPlugin(value, index) {
   };
 }
 
-function requireIdentifier(value, label) {
-  const identifier = requireString(value, label);
-  if (!identifierPattern.test(identifier)) {
-    throw new EchoPluginCliError(`${label} 不是合法的稳定标识：${identifier}`);
-  }
-  return identifier;
-}
-
-function requireExportIdentifier(value, label) {
-  const identifier = requireString(value, label);
-  if (!exportIdentifierPattern.test(identifier)) {
-    throw new EchoPluginCliError(`${label} 不是合法的 JavaScript export：${identifier}`);
-  }
-  return identifier;
-}
-
-function parsePresentation(value, index) {
-  if (!isRecord(value)) {
-    throw new EchoPluginCliError(`contributes.presentations[${index}] 格式无效`);
-  }
-  return {
-    loader: requireString(value.loader, `contributes.presentations[${index}].loader`),
-    entry: requireString(value.entry, `contributes.presentations[${index}].entry`),
-    export: requireExportIdentifier(value.export, `contributes.presentations[${index}].export`),
-  };
-}
-
 export function parsePluginPackageDescriptor(value, source = descriptorName) {
-  if (!isRecord(value) || value.schemaVersion !== 1) {
-    throw new EchoPluginCliError(`${source} 必须使用 schemaVersion: 1`);
+  try {
+    return parseEchoPluginPackageDescriptor(value);
+  } catch (error) {
+    const issue = Array.isArray(error?.issues) ? error.issues[0] : undefined;
+    const issuePath = issue?.path?.reduce((result, segment) =>
+      typeof segment === "number"
+        ? `${result}[${segment}]`
+        : `${result}${result ? "." : ""}${String(segment)}`, "");
+    const location = issuePath ? `${source}.${issuePath}` : source;
+    throw new EchoPluginCliError(`${location} 格式无效：${issue?.message ?? String(error)}`);
   }
-  if (!isRecord(value.server)) {
-    throw new EchoPluginCliError(`${source}.server 格式无效`);
-  }
-  if (!isRecord(value.contributes)) {
-    throw new EchoPluginCliError(`${source}.contributes 格式无效`);
-  }
-  const id = requireIdentifier(value.id, `${source}.id`);
-  const version = requireString(value.version, `${source}.version`);
-  if (!semverPattern.test(version)) {
-    throw new EchoPluginCliError(`${source}.version 必须是 SemVer：${version}`);
-  }
-  const presentations = Array.isArray(value.contributes.presentations)
-    ? value.contributes.presentations.map(parsePresentation)
-    : [];
-  const loaders = presentations.map((presentation) => presentation.loader);
-  if (new Set(loaders).size !== loaders.length) {
-    throw new EchoPluginCliError(`${source} 不能声明重复的 Presentation loader`);
-  }
-  return {
-    schemaVersion: 1,
-    id,
-    version,
-    server: {
-      entry: requireString(value.server.entry, `${source}.server.entry`),
-      export: requireExportIdentifier(value.server.export, `${source}.server.export`),
-    },
-    contributes: {
-      views: requireStringArray(value.contributes.views ?? [], `${source}.contributes.views`),
-      presentations,
-      skills: requireStringArray(value.contributes.skills ?? [], `${source}.contributes.skills`),
-      tools: requireStringArray(value.contributes.tools ?? [], `${source}.contributes.tools`),
-    },
-  };
+}
+
+async function readEchoHostVersion(projectRoot) {
+  const packageJson = await readJson(path.join(projectRoot, "package.json"), "package.json");
+  return requireString(packageJson.version, "package.json.version");
 }
 
 async function exists(file) {
@@ -179,6 +123,12 @@ export async function resolveDescriptor(projectRoot, input) {
     await readJson(descriptorPath, relativePath),
     relativePath,
   );
+  const echoVersion = await readEchoHostVersion(projectRoot);
+  if (!isEchoVersionCompatible(echoVersion, descriptor.engines.echo)) {
+    throw new EchoPluginCliError(
+      `${descriptor.id}@${descriptor.version} 需要 Echo ${descriptor.engines.echo}，当前为 ${echoVersion}`,
+    );
+  }
   const descriptorDirectory = path.dirname(descriptorPath);
   const entries = [
     [descriptor.server.entry, "server.entry"],

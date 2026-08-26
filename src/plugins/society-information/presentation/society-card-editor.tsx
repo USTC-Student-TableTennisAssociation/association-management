@@ -6,7 +6,7 @@ import type {
   CardTypeDefinition,
   DimensionDefinition,
   ViewCardState,
-} from "@/contracts";
+} from "@sydaris/plugin-sdk";
 
 import styles from "./society-overview.module.css";
 

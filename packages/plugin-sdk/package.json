@@ -1,8 +1,15 @@
 {
-  "name": "@echo/plugin-sdk",
-  "version": "0.1.0",
+  "name": "@sydaris/plugin-sdk",
+  "version": "0.1.0-alpha.1",
   "description": "Public contracts and React helpers for Echo plugins",
+  "keywords": [
+    "echo",
+    "plugin",
+    "sdk",
+    "view"
+  ],
   "type": "module",
+  "sideEffects": false,
   "files": [
     "dist"
   ],
@@ -20,6 +27,25 @@
     "build": "tsc -p tsconfig.json",
     "prepack": "pnpm build"
   },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/USTC-Student-TableTennisAssociation/association-management.git",
+    "directory": "packages/plugin-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/USTC-Student-TableTennisAssociation/association-management/issues"
+  },
+  "homepage": "https://github.com/USTC-Student-TableTennisAssociation/association-management#readme",
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  },
+  "dependencies": {
+    "semver": "^7.8.5"
+  },
   "peerDependencies": {
     "react": "^19.0.0",
     "zod": "^4.0.0"
@@ -30,5 +56,5 @@
     "typescript": "^5.0.0",
     "zod": "^4.0.0"
   },
-  "license": "UNLICENSED"
+  "license": "Apache-2.0"
 }

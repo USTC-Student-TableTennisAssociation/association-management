@@ -8,6 +8,22 @@ function source(path: string): string {
 }
 
 describe("Echo plugin architecture boundaries", () => {
+  it("uses the published SDK as the single source of public Plugin contracts", () => {
+    const publicContractWrappers = [
+      "src/contracts/schema.ts",
+      "src/contracts/view.ts",
+      "src/contracts/extension.ts",
+      "src/contracts/presentation.ts",
+      "src/contracts/skill.ts",
+      "src/contracts/tool.ts",
+    ];
+    for (const file of publicContractWrappers) {
+      expect(source(file), file).toContain('from "@sydaris/plugin-sdk"');
+    }
+    expect(source("src/contracts/view.ts")).not.toContain("interface ViewModule");
+    expect(source("src/contracts/extension.ts")).not.toContain("interface EchoPluginManifest");
+  });
+
   it("keeps concrete business identifiers out of Contracts and View Runtime", () => {
     const files = [
       "src/contracts/view.ts",

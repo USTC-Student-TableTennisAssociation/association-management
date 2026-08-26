@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 
-import type { EchoPresentationProps } from "@echo/plugin-sdk";
-import { useEchoCommand, useEchoView } from "@echo/plugin-sdk/react";
+import type { EchoPresentationProps } from "@sydaris/plugin-sdk";
+import { useEchoCommand, useEchoView } from "@sydaris/plugin-sdk/react";
 
 export function ExampleNotesWorkspace(props: EchoPresentationProps) {
   const { snapshot, loading, error, refresh } = useEchoView(

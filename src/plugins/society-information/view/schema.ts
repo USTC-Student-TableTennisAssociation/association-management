@@ -2,10 +2,11 @@ import type {
   CardTypeDefinition,
   DimensionDefinition,
   ViewModule,
-} from "@/contracts";
-import { societyInformationCommands } from "@/plugins/society-information/view/commands";
-import { societyInformationEvents } from "@/plugins/society-information/view/events";
-import { societyInformationInvariants } from "@/plugins/society-information/view/invariants";
+} from "@sydaris/plugin-sdk";
+
+import { societyInformationCommands } from "./commands.js";
+import { societyInformationEvents } from "./events.js";
+import { societyInformationInvariants } from "./invariants.js";
 
 export const SOCIETY_INFORMATION_VIEW_KEY = "society_information";
 
