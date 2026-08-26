@@ -948,8 +948,9 @@ def test_fragment_prompt_defines_leaf_ir_without_global_identity() -> None:
     assert "reviewed/frozen claims" in OBJECT_FRAGMENT_SYSTEM_PROMPT
     assert "中文弯引号“”" in OBJECT_FRAGMENT_SYSTEM_PROMPT
     assert "未转义的 ASCII 双引号" in OBJECT_FRAGMENT_SYSTEM_PROMPT
-    assert "也应包含该主体 Fragment" in OBJECT_FRAGMENT_SYSTEM_PROMPT
-    assert "五个项目和来源明确命名的宿主" in OBJECT_FRAGMENT_SYSTEM_PROMPT
+    assert "包含该主体 Fragment" in OBJECT_FRAGMENT_SYSTEM_PROMPT
+    assert "不得加入仅作为归属背景" in OBJECT_FRAGMENT_SYSTEM_PROMPT
+    assert "被明确呈现为集合主体" in OBJECT_FRAGMENT_SYSTEM_PROMPT
     for removed in ("start", "end", "occurrence_index"):
         assert removed not in ObjectFragmentSubmission.model_json_schema()["properties"]
 
