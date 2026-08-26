@@ -282,7 +282,7 @@ export function createEchoDebugTrace(
     `- 提交人：${input.actorDisplayName}（\`${input.actorId}\`）`,
     `- 服务端时刻：\`${input.submittedAt.toISOString()}\``,
     `- 组织本地时间：\`${local.readable}\``,
-    `- 组织时区：\`${input.timezone}\``,
+    `- 环境时区：\`${input.timezone}\``,
     `- 页面上下文：${input.pageContext === undefined ? "未提供" : "见下方 JSON"}`,
     ...(input.pageContext === undefined
       ? []

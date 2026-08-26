@@ -16,7 +16,7 @@ export type AuthPrincipal = {
     id: string;
     displayName: string;
   };
-  personObject: {
+  actorObject: {
     id: string;
     canonicalName: string;
   } | null;
@@ -32,7 +32,7 @@ function principalFromSession(session: {
     loginName: string;
     role: "ADMIN" | "MEMBER";
     actor: { id: string; displayName: string };
-    personObject: {
+    actorObject: {
       id: string;
       canonicalName: string;
     } | null;
@@ -43,10 +43,10 @@ function principalFromSession(session: {
     loginName: session.user.loginName,
     role: session.user.role,
     actor: session.user.actor,
-    personObject: session.user.personObject
+    actorObject: session.user.actorObject
       ? {
-          id: session.user.personObject.id,
-          canonicalName: session.user.personObject.canonicalName,
+          id: session.user.actorObject.id,
+          canonicalName: session.user.actorObject.canonicalName,
         }
       : null,
   };
@@ -70,7 +70,7 @@ export async function currentAuthUser(): Promise<AuthPrincipal | null> {
           role: true,
           status: true,
           actor: { select: { id: true, displayName: true } },
-          personObject: {
+          actorObject: {
             select: {
               id: true,
               canonicalName: true,

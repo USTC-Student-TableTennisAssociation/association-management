@@ -12,17 +12,19 @@ function displayValue(value: unknown): string {
 
 export function WorkViewWorkspace({
   viewKey,
+  refreshRevision = 0,
   focusCardId,
   onOpenInspector,
   onAskAI,
 }: {
   viewKey: string;
+  refreshRevision?: number;
   focusCardId?: string;
   onOpenInspector: () => void;
   onAskAI: (prompt: string) => void;
 }) {
   const [reloadSequence, setReloadSequence] = useState(0);
-  const requestKey = `${viewKey}:${reloadSequence}`;
+  const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
   const [result, setResult] = useState<{
     requestKey: string;
     snapshot?: ViewInspectorSnapshot;
@@ -40,17 +42,18 @@ export function WorkViewWorkspace({
       setResult({ requestKey, snapshot: body });
     }).catch((cause: unknown) => {
       if (controller.signal.aborted) return;
-      setResult({
+      setResult((current) => ({
         requestKey,
+        snapshot: current?.snapshot,
         error: cause instanceof Error ? cause.message : String(cause),
-      });
+      }));
     });
     return () => controller.abort();
   }, [requestKey, viewKey]);
 
-  const loading = result?.requestKey !== requestKey;
-  const snapshot = loading ? undefined : result.snapshot;
-  const error = loading ? undefined : result.error;
+  const loading = !result?.snapshot && result?.requestKey !== requestKey;
+  const snapshot = result?.snapshot;
+  const error = result?.requestKey === requestKey ? result.error : undefined;
   const cardTypes = useMemo(() => new Map(
     snapshot?.schema.cardTypes.map((cardType) => [cardType.key, cardType]) ?? [],
   ), [snapshot]);
@@ -62,7 +65,7 @@ export function WorkViewWorkspace({
   if (loading) {
     return <div className="flex h-full items-center justify-center p-8 text-sm text-zinc-500">正在恢复 Work View…</div>;
   }
-  if (error || !snapshot) {
+  if (!snapshot) {
     return (
       <div className="p-8">
         <p className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error ?? "Work View 不可用"}</p>

@@ -25,15 +25,7 @@ export function renderResolvedAssertion(input: {
     ...input.globalStatementTemplateMarkdown.matchAll(/\{\{object:([^{}]+)\}\}/g),
   ];
 
-  if (placeholders.length !== input.references.length) {
-    throw new ResolvedAssertionIntegrityError(
-      `${assertionLabel} 的 Global Object token 数 ${placeholders.length} ` +
-        `与 reference atom 数 ${input.references.length} 不一致`,
-    );
-  }
-
   const namesByObjectId = new Map<string, string>();
-  const expectedCounts = new Map<string, number>();
   for (const reference of input.references) {
     if (!reference.globalObjectId || !reference.canonicalName.trim()) {
       throw new ResolvedAssertionIntegrityError(
@@ -47,22 +39,13 @@ export function renderResolvedAssertion(input: {
       );
     }
     namesByObjectId.set(reference.globalObjectId, reference.canonicalName);
-    expectedCounts.set(
-      reference.globalObjectId,
-      (expectedCounts.get(reference.globalObjectId) ?? 0) + 1,
-    );
   }
 
-  const actualCounts = new Map<string, number>();
   for (const placeholder of placeholders) {
     const objectId = placeholder[1].trim();
-    actualCounts.set(objectId, (actualCounts.get(objectId) ?? 0) + 1);
-  }
-  const allObjectIds = new Set([...expectedCounts.keys(), ...actualCounts.keys()]);
-  for (const objectId of allObjectIds) {
-    if (expectedCounts.get(objectId) !== actualCounts.get(objectId)) {
+    if (!namesByObjectId.has(objectId)) {
       throw new ResolvedAssertionIntegrityError(
-        `${assertionLabel} 的 GlobalObject ${objectId} token/reference atom 数量不一致`,
+        `${assertionLabel} 的 GlobalObject token ${objectId} 没有规范 AssertionObjectLink`,
       );
     }
   }

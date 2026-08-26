@@ -62,7 +62,7 @@ export type ObjectIdentitySurface = {
 
 export type ObjectIdentityReference = {
   id: string;
-  kind: "fragment" | "literal" | "semantic";
+  kind: "assertion" | "coverage";
   assertionId: string;
   statement: string;
 };

@@ -41,7 +41,7 @@ export class InstalledViewService {
             data: {
               viewKey: view.manifest.key,
               moduleId: owner.pluginId,
-              moduleVersion: view.manifest.version,
+              pluginVersion: owner.pluginVersion,
               schemaVersion: view.manifest.schemaVersion,
               status: enabled ? "enabled" : "disabled",
               settingsJson: json(view.manifest.defaultSettings),
@@ -53,7 +53,7 @@ export class InstalledViewService {
           where: { viewKey: view.manifest.key },
           data: {
             moduleId: owner.pluginId,
-            moduleVersion: view.manifest.version,
+            pluginVersion: owner.pluginVersion,
             status: !enabled
               ? "disabled"
               : existing.schemaVersion === view.manifest.schemaVersion

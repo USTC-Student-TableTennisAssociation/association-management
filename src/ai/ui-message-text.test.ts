@@ -54,7 +54,9 @@ describe("finalStepMessageText", () => {
     };
 
     expect(modelHistoryMessageText(message)).toContain("society.update_profile@1");
-    expect(modelHistoryMessageText(message)).toContain("View Command Proposal");
+    expect(modelHistoryMessageText(message)).toContain("历史消息曾展示 View Proposal");
+    expect(modelHistoryMessageText(message)).toContain("当前审批状态未知");
+    expect(modelHistoryMessageText(message)).not.toContain("00000000-0000-4000-8000-000000000099");
   });
 
   it("keeps an Object Change Proposal in later negotiation context", () => {

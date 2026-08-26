@@ -56,27 +56,14 @@ export type KnowledgeGraphPayload = {
 type AssertionRow = Awaited<ReturnType<typeof loadAssertionRows>>[number];
 
 function directReferences(row: AssertionRow): ResolvedAssertionReference[] {
-  const fragments = row.fragmentReferences.flatMap((reference) => {
-    if (reference.globalResolutions.length !== 1) return [];
-    const object = reference.globalResolutions[0].globalObject;
-    return [{ globalObjectId: object.id, canonicalName: object.canonicalName }];
-  });
-  const literals = row.literalGlobalReferences.map(({ globalObject }) => ({
+  return row.objectLinks.map(({ globalObject }) => ({
     globalObjectId: globalObject.id,
     canonicalName: globalObject.canonicalName,
   }));
-  return [...fragments, ...literals];
 }
 
 function associatedObjects(row: AssertionRow) {
-  const objects = [
-    ...directReferences(row),
-    ...row.semanticObjectLinks.map(({ globalObject }) => ({
-      globalObjectId: globalObject.id,
-      canonicalName: globalObject.canonicalName,
-    })),
-  ];
-  return [...new Map(objects.map((object) => [object.globalObjectId, object])).values()];
+  return directReferences(row);
 }
 
 function renderStatement(row: AssertionRow) {
@@ -104,23 +91,7 @@ function loadAssertionRows(compilationId: string) {
       sourceRegion: {
         select: { label: true, sourceTitle: true },
       },
-      fragmentReferences: {
-        orderBy: { ordinal: "asc" },
-        select: {
-          globalResolutions: {
-            select: {
-              globalObject: { select: { id: true, canonicalName: true } },
-            },
-          },
-        },
-      },
-      literalGlobalReferences: {
-        orderBy: { globalOrdinal: "asc" },
-        select: {
-          globalObject: { select: { id: true, canonicalName: true } },
-        },
-      },
-      semanticObjectLinks: {
+      objectLinks: {
         orderBy: { globalObjectId: "asc" },
         select: {
           globalObject: { select: { id: true, canonicalName: true } },

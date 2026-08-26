@@ -11,6 +11,7 @@ import {
   searchMemory,
   type MemoryExploreResult,
 } from "@/memory/explore";
+import { parseCognitiveMemory, renderCognitiveMemory } from "@/memory/higher-memory-document";
 import { maintainObjectHigherMemories } from "@/memory/object-higher-memory";
 import type {
   MemoryRetrievalResult,
@@ -63,22 +64,8 @@ function emptyRetrieval(compilationId: string, query: string): MemoryRetrievalRe
   };
 }
 
-function curatorContext(message: string) {
-  return {
-    conversation: [{
-      messageId: "live-memory-search-user",
-      role: "user" as const,
-      text: message,
-    }],
-    originalUserMessage: message,
-    currentInstant: "2026-08-15T02:00:00.000Z",
-    timezone: "Asia/Shanghai",
-  };
-}
-
 async function locate(input: {
   query: string;
-  message: string;
   targetObjectId?: string;
 }): Promise<{ result: MemoryExploreResult; retrieval: MemoryRetrievalResult }> {
   let retrieval: MemoryRetrievalResult | undefined;
@@ -86,10 +73,7 @@ async function locate(input: {
     query: input.query,
     targetHints: [eventName],
     ...(input.targetObjectId ? { targetObjectIds: [input.targetObjectId] } : {}),
-  }, {
-    curatorContext: curatorContext(input.message),
-    onLocate: (value) => { retrieval = value; },
-  });
+  }, { onLocate: (value) => { retrieval = value; } });
   if (!retrieval) throw new Error("Locate 没有返回底层 MemoryRetrievalResult");
   return { result, retrieval };
 }
@@ -198,7 +182,6 @@ describe.runIf(runLive)("real memory closed loop", () => {
 
       const afterFirst = await locate({
         query: "活动什么时候、在哪里举行，当前准备重点是什么",
-        message: `请告诉我${eventName}的时间、地点和准备重点。`,
         targetObjectId: eventObject.id,
       });
       expect(afterFirst.result.objects.some((object) => object.id === eventObject.id)).toBe(true);
@@ -224,8 +207,11 @@ describe.runIf(runLive)("real memory closed loop", () => {
       const firstHigherMemory = await database.memoryObjectHigherMemory.findUniqueOrThrow({
         where: { globalObjectId: eventObject.id },
       });
-      expect(firstHigherMemory.contentMarkdown).toMatch(/南楼\s*302/);
-      expect(firstHigherMemory.contentMarkdown).toMatch(/2026|8月18/);
+      const firstCognitiveMemory = renderCognitiveMemory(
+        parseCognitiveMemory(firstHigherMemory.cognitiveMemory),
+      );
+      expect(firstCognitiveMemory).toMatch(/南楼\s*302/);
+      expect(firstCognitiveMemory).toMatch(/2026|8月18/);
 
       const updateText =
         `进展更新：${eventName}的地点已经从南楼302改为北楼505，举行时间仍是2026年8月18日14:00，其他安排不变。`;
@@ -248,7 +234,6 @@ describe.runIf(runLive)("real memory closed loop", () => {
 
       const whileStale = await locate({
         query: "活动当前地点和时间",
-        message: `${eventName}现在在哪里举行，时间变了吗？`,
         targetObjectId: eventObject.id,
       });
       expect(whileStale.result.higherMemories?.some((memory) =>
@@ -277,23 +262,25 @@ describe.runIf(runLive)("real memory closed loop", () => {
       const currentHigherMemory = await database.memoryObjectHigherMemory.findUniqueOrThrow({
         where: { globalObjectId: eventObject.id },
       });
-      expect(currentHigherMemory.contentMarkdown).toMatch(/北楼\s*505/);
-      if (/南楼\s*302/.test(currentHigherMemory.contentMarkdown)) {
-        expect(currentHigherMemory.contentMarkdown).toMatch(/改|原|此前|曾/);
+      const currentCognitiveMemory = renderCognitiveMemory(
+        parseCognitiveMemory(currentHigherMemory.cognitiveMemory),
+      );
+      expect(currentCognitiveMemory).toMatch(/北楼\s*505/);
+      if (/南楼\s*302/.test(currentCognitiveMemory)) {
+        expect(currentCognitiveMemory).toMatch(/改|原|此前|曾/);
       }
 
       const afterRefresh = await locate({
         query: "活动当前地点和时间",
-        message: `${eventName}现在在哪里举行，时间是什么？`,
         targetObjectId: eventObject.id,
       });
       const refreshedMemory = afterRefresh.result.higherMemories?.find((memory) =>
         memory.globalObjectId === eventObject.id
       );
       expect(refreshedMemory?.contentMarkdown).toMatch(/北楼\s*505/);
-      expect(afterRefresh.result.assertions).toHaveLength(0);
+      expect(afterRefresh.result.assertions.length).toBeGreaterThan(0);
       expect(afterRefresh.result.warnings.some((warning) =>
-        warning.includes("已优先返回完整 Higher Memory")
+        warning.includes("当前 query 仍独立检索/筛选 Assertions")
       )).toBe(true);
 
       expect(traceTitles).toContain("后台 Assertion Agent · Schema 校验后的输出");

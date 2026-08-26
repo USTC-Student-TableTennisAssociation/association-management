@@ -92,19 +92,7 @@ function globalObjects() {
   ];
 }
 
-function resolution(
-  ordinal: number,
-  sourceFragmentId: string,
-  object: { id: string; globalObjectKey: string; canonicalName: string },
-) {
-  return {
-    ordinal,
-    objectFragment: { sourceFragmentId },
-    globalResolutions: [{ globalObject: object }],
-  };
-}
-
-function literalReference(object: {
+function objectLink(object: {
   id: string;
   globalObjectKey: string;
   canonicalName: string;
@@ -136,9 +124,8 @@ function assertions() {
       globalStatementTemplateMarkdown: "{{object:global-event}}是校园文化活动。",
       contextDependent: true,
       sourceRegion: { sourceNodeId: "region-1", label: "活动定义" },
-      fragmentReferences: [resolution(0, "fragment-event-1", event)],
-      literalGlobalReferences: [],
-      semanticObjectLinks: [],
+      objectLinks: [objectLink(event)],
+      objectCoverage: [],
     },
     {
       id: "assertion-2",
@@ -148,12 +135,12 @@ function assertions() {
         "{{object:global-event}}由{{object:global-student-union}}与{{object:global-club}}联合举办。",
       contextDependent: false,
       sourceRegion: { sourceNodeId: "region-1", label: "活动组织" },
-      fragmentReferences: [resolution(0, "fragment-event-2", event)],
-      literalGlobalReferences: [
-        literalReference(studentUnion),
-        literalReference(club),
+      objectLinks: [
+        objectLink(event),
+        objectLink(studentUnion),
+        objectLink(club),
       ],
-      semanticObjectLinks: [],
+      objectCoverage: [],
     },
     {
       id: "assertion-3",
@@ -163,12 +150,8 @@ function assertions() {
         "{{object:global-event}}与{{object:global-event}}都强调传承。",
       contextDependent: false,
       sourceRegion: { sourceNodeId: "region-1", label: "活动理念" },
-      fragmentReferences: [
-        resolution(0, "fragment-event-1", event),
-        resolution(1, "fragment-event-1", event),
-      ],
-      literalGlobalReferences: [],
-      semanticObjectLinks: [],
+      objectLinks: [objectLink(event)],
+      objectCoverage: [],
     },
   ];
 }
@@ -351,9 +334,8 @@ describe("GlobalObject-backed Locate", () => {
         "负责人、裁判、宣传、签到和器材岗位安排记录于“人员分工”部分。",
       contextDependent: false,
       sourceRegion: { sourceNodeId: "region-reference", label: "人员分工" },
-      fragmentReferences: [],
-      literalGlobalReferences: [],
-      semanticObjectLinks: [{
+      objectLinks: [],
+      objectCoverage: [{
         globalObject: { id: "global-event", canonicalName: "继往开来" },
       }],
     };
@@ -407,7 +389,8 @@ describe("GlobalObject-backed Locate", () => {
     ]);
     const referenceRef = result.seedMap.assertions[0].ref;
     const eventRef = result.seedMap.objects.find((item) => item.id === "global-event")?.ref;
-    expect(result.seedMap.connections).toContainEqual({
+    expect(eventRef).toBeDefined();
+    expect(result.seedMap.connections).not.toContainEqual({
       assertionRef: referenceRef,
       objectRef: eventRef,
     });
@@ -417,27 +400,18 @@ describe("GlobalObject-backed Locate", () => {
   });
 
   it.each([
-    { name: "missing", resolutions: [] },
+    { name: "missing", objectCoverage: [] },
     {
-      name: "multiple",
-      resolutions: [
-        {
-          globalObject: {
-            id: "global-event",
-            globalObjectKey: "global-object-event",
-            canonicalName: "继往开来",
-          },
+      name: "coverage-only",
+      objectCoverage: [{
+        globalObject: {
+          id: "global-event",
+          globalObjectKey: "global-object-event",
+          canonicalName: "继往开来",
         },
-        {
-          globalObject: {
-            id: "global-other",
-            globalObjectKey: "global-object-other",
-            canonicalName: "另一个对象",
-          },
-        },
-      ],
+      }],
     },
-  ])("fails fast for $name GlobalObject resolution", async ({ resolutions }) => {
+  ])("fails fast for $name canonical Object link", async ({ objectCoverage }) => {
     useMockDatabase({
       objects: globalObjects(),
       assertions: [
@@ -448,15 +422,8 @@ describe("GlobalObject-backed Locate", () => {
           globalStatementTemplateMarkdown: "{{object:global-event}}是活动。",
           contextDependent: false,
           sourceRegion: { sourceNodeId: "region-1", label: "测试区域" },
-          fragmentReferences: [
-            {
-              ordinal: 0,
-              objectFragment: { sourceFragmentId: "fragment-event-1" },
-              globalResolutions: resolutions,
-            },
-          ],
-          literalGlobalReferences: [],
-          semanticObjectLinks: [],
+          objectLinks: [],
+          objectCoverage,
         },
       ],
     });

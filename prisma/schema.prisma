@@ -58,8 +58,9 @@ enum AuthUserStatus {
 }
 
 enum MemoryAmbientHigherMemoryScope {
-  workspace
-  recent
+  identity
+  narrative
+  working_set
 }
 
 enum LibraryNodeKind {
@@ -442,8 +443,8 @@ model MemoryAssertion {
   chatCapture             MemoryChatAssertionCapture?             @relation(fields: [chatCaptureId], references: [id], onDelete: Cascade)
   chatEvidenceLinks       MemoryAssertionChatEvidenceLink[]
   fragmentReferences      MemoryAssertionFragmentReference[]
-  literalGlobalReferences MemoryGlobalAssertionLiteralReference[]
-  semanticObjectLinks     MemoryAssertionSemanticObjectLink[]
+  objectLinks             MemoryAssertionObjectLink[]
+  objectCoverage          MemoryAssertionObjectCoverage[]
   sourceBlockLinks        MemoryAssertionSourceBlock[]
   embedding               MemoryAssertionEmbedding?
 
@@ -588,7 +589,7 @@ model ChatConversation {
   @@map("chat_conversations")
 }
 
-/// 登录凭据与权限主体。Actor 保留长期行为来源，Person Object 表示现实中的人。
+/// 登录凭据与权限主体。Actor 保留长期行为来源，Actor Object 绑定当前说话者在知识图中的 Object。
 model AuthUser {
   id                  String         @id @default(uuid()) @db.Uuid
   loginName           String         @map("login_name") @db.Text
@@ -597,14 +598,14 @@ model AuthUser {
   role                AuthUserRole   @default(MEMBER)
   status              AuthUserStatus @default(ACTIVE)
   actorId             String         @unique @map("actor_id") @db.Uuid
-  personObjectId      String?        @unique @map("person_object_id") @db.Uuid
+  actorObjectId       String?        @unique @map("actor_object_id") @db.Uuid
   lastLoginAt         DateTime?      @map("last_login_at") @db.Timestamptz(3)
   createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt           DateTime       @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  actor        MemoryActor         @relation(fields: [actorId], references: [id], onDelete: Restrict)
-  personObject MemoryGlobalObject? @relation(fields: [personObjectId], references: [id], onDelete: SetNull)
-  sessions     AuthSession[]
+  actor       MemoryActor         @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  actorObject MemoryGlobalObject? @relation(fields: [actorObjectId], references: [id], onDelete: SetNull)
+  sessions    AuthSession[]
 
   @@map("auth_users")
 }
@@ -651,7 +652,6 @@ model MemoryAssertionFragmentReference {
 
   assertion         MemoryAssertion                            @relation(fields: [assertionId], references: [id], onDelete: Cascade)
   objectFragment    MemorySourceObjectFragment                 @relation(fields: [objectFragmentId], references: [id], onDelete: Cascade)
-  globalResolutions MemoryGlobalAssertionReferenceResolution[]
 
   @@id([assertionId, ordinal])
   @@index([objectFragmentId])
@@ -682,9 +682,8 @@ model MemoryGlobalObject {
   compilation            MemoryCompilation                          @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   surfaceMemberships     MemoryGlobalObjectSurfaceMembership[]
   chatMentions           MemoryChatObjectMention[]
-  referenceResolutions   MemoryGlobalAssertionReferenceResolution[]
-  literalReferences      MemoryGlobalAssertionLiteralReference[]
-  semanticAssertionLinks MemoryAssertionSemanticObjectLink[]
+  assertionLinks         MemoryAssertionObjectLink[]
+  assertionCoverage      MemoryAssertionObjectCoverage[]
   higherMemory           MemoryObjectHigherMemory?
   relatedViewCards       ViewCardRelatedObject[]
   authUsers              AuthUser[]
@@ -716,13 +715,15 @@ model MemoryChatObjectMention {
   @@map("memory_chat_object_mentions")
 }
 
-/// 只为对话中少数重要 GlobalObject 按需维护的高优先级认知文档。
-/// 它基于 Assertion 和完整对话生成，但不持久化 Assertion 索引或逐句来源绑定。
+/// 只为对话中少数重要 GlobalObject 按需维护的高优先级认知与任务导航。
+/// Cognitive Memory 描述对象的身份、叙事、结构、运行模型和当前态势；
+/// Operational Index 保存可校验的主题覆盖、来源入口和后续检索建议。
 model MemoryObjectHigherMemory {
   id                String   @id @default(uuid()) @db.Uuid
   compilationId     String   @map("compilation_id") @db.Uuid
   globalObjectId    String   @unique @map("global_object_id") @db.Uuid
-  contentMarkdown   String   @map("content_markdown") @db.Text
+  cognitiveMemory   Json     @map("cognitive_memory") @db.JsonB
+  operationalIndex  Json     @default("{\"aspects\":[]}") @map("operational_index") @db.JsonB
   maintainedAt      DateTime @map("maintained_at") @db.Timestamptz(3)
   triggerMessageId  String   @map("trigger_message_id") @db.Text
   maintenanceReason String   @map("maintenance_reason") @db.Text
@@ -736,7 +737,8 @@ model MemoryObjectHigherMemory {
   @@map("memory_object_higher_memories")
 }
 
-/// Echo 对当前工作环境与近期焦点的高层认知；每轮对话自动读取，但不是精确业务状态的权威来源。
+/// Echo 对 Workspace 身份、长期叙事与当前工作集的高层认知；每轮对话自动读取，
+/// 但不是精确业务状态的权威来源。
 /// 它不绑定 Compilation 或 GlobalObject，因此来源重编译不会使 Echo 丧失已从真实互动中形成的环境理解。
 model MemoryAmbientHigherMemory {
   id                String                         @id @default(uuid()) @db.Uuid
@@ -768,8 +770,41 @@ model ViewHigherMemory {
   @@map("view_higher_memories")
 }
 
-/// Reference Assertion 对 Global Object 的语义覆盖；不要求 Object 名称出现在 Assertion 正文中。
-model MemoryAssertionSemanticObjectLink {
+/// 核心知识图中唯一的 Assertion–Object 边。一条边只表示该 Object 实际参与该 Assertion；
+/// Assertion 内容解析、核心图连接和 Object Higher Memory 传播都只认这一张表。
+model MemoryAssertionObjectLink {
+  assertionId    String @map("assertion_id") @db.Uuid
+  globalObjectId String @map("global_object_id") @db.Uuid
+
+  assertion    MemoryAssertion    @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  globalObject MemoryGlobalObject @relation(fields: [globalObjectId], references: [id], onDelete: Restrict)
+  occurrences  MemoryAssertionObjectOccurrence[]
+
+  @@id([assertionId, globalObjectId])
+  @@index([globalObjectId])
+  @@map("memory_assertion_object_links")
+}
+
+/// Assertion 中一次可审计的 Object 原文出现。它从属于规范边，不参与决定知识图连接。
+model MemoryAssertionObjectOccurrence {
+  atomId         String @id @map("atom_id") @db.Text
+  assertionId    String @map("assertion_id") @db.Uuid
+  globalObjectId String @map("global_object_id") @db.Uuid
+  ordinal        Int
+  sourceStart    Int    @map("source_start")
+  sourceEnd      Int    @map("source_end")
+  sourceText     String @map("source_text") @db.Text
+
+  link MemoryAssertionObjectLink @relation(fields: [assertionId, globalObjectId], references: [assertionId, globalObjectId], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([assertionId, ordinal])
+  @@index([globalObjectId])
+  @@map("memory_assertion_object_occurrences")
+}
+
+/// Reference Assertion 或其他信息载体对 Object 的检索覆盖。它只用于召回，
+/// 不属于核心知识图，也不能触发 Object Higher Memory 的对象级传播。
+model MemoryAssertionObjectCoverage {
   assertionId    String @map("assertion_id") @db.Uuid
   globalObjectId String @map("global_object_id") @db.Uuid
 
@@ -778,7 +813,7 @@ model MemoryAssertionSemanticObjectLink {
 
   @@id([assertionId, globalObjectId])
   @@index([globalObjectId])
-  @@map("memory_assertion_semantic_object_links")
+  @@map("memory_assertion_object_coverage")
 }
 
 /// 一个 source-local surface form 当前归属哪个 Global Object。
@@ -793,40 +828,6 @@ model MemoryGlobalObjectSurfaceMembership {
   @@id([objectFragmentId, surfaceFormOrdinal])
   @@index([globalObjectId])
   @@map("memory_global_object_surface_memberships")
-}
-
-/// Assertion template 中一次 Fragment 引用当前解析到哪个 Global Object。
-model MemoryGlobalAssertionReferenceResolution {
-  assertionId      String @map("assertion_id") @db.Uuid
-  referenceOrdinal Int    @map("reference_ordinal")
-  globalObjectId   String @map("global_object_id") @db.Uuid
-
-  sourceReference MemoryAssertionFragmentReference @relation(fields: [assertionId, referenceOrdinal], references: [assertionId, ordinal], onDelete: Cascade)
-  globalObject    MemoryGlobalObject               @relation(fields: [globalObjectId], references: [id], onDelete: Restrict)
-
-  @@id([assertionId, referenceOrdinal])
-  @@index([globalObjectId])
-  @@map("memory_global_assertion_reference_resolutions")
-}
-
-/// Assertion 文本中一次已经绑定到 GlobalObject 的直接 reference atom；保留出现顺序与 source template span。
-model MemoryGlobalAssertionLiteralReference {
-  atomId         String @id @map("atom_id") @db.Text
-  assertionId    String @map("assertion_id") @db.Uuid
-  literalOrdinal Int    @map("literal_ordinal")
-  globalOrdinal  Int    @map("global_ordinal")
-  sourceStart    Int    @map("source_start")
-  sourceEnd      Int    @map("source_end")
-  sourceText     String @map("source_text") @db.Text
-  globalObjectId String @map("global_object_id") @db.Uuid
-
-  assertion    MemoryAssertion    @relation(fields: [assertionId], references: [id], onDelete: Cascade)
-  globalObject MemoryGlobalObject @relation(fields: [globalObjectId], references: [id], onDelete: Restrict)
-
-  @@unique([assertionId, literalOrdinal])
-  @@index([assertionId, globalOrdinal])
-  @@index([globalObjectId])
-  @@map("memory_global_assertion_literal_references")
 }
 
 /// Search 派生的 Assertion 向量索引状态；基础 cold-start importer 不负责写入。
@@ -859,7 +860,8 @@ model MemoryAssertionEmbedding {
 model InstalledView {
   viewKey       String              @id @map("view_key") @db.Text
   moduleId      String              @map("module_id") @db.Text
-  moduleVersion String              @map("module_version") @db.Text
+  /// 所属 Plugin 的发布版本，仅用于诊断；数据兼容性只由 schemaVersion 决定。
+  pluginVersion String              @map("module_version") @db.Text
   schemaVersion String              @map("schema_version") @db.Text
   stateVersion  BigInt              @default(0) @map("state_version")
   status        InstalledViewStatus @default(enabled)
@@ -944,6 +946,7 @@ model ViewCommandProposal {
   commandKey           String         @map("command_key") @db.Text
   commandVersion       String         @map("command_version") @db.Text
   inputJson            Json           @map("input_json") @db.JsonB
+  /// Proposal 创建时的并发基线；默认严格校验，只有 Command 明确声明安全时才在最新状态重放。
   expectedStateVersion BigInt         @map("expected_state_version")
   proposedByActorId    String?        @map("proposed_by_actor_id") @db.Uuid
   skillId              String?        @map("skill_id") @db.Text

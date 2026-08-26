@@ -8,9 +8,16 @@ import type {
 import { zodContractSchema } from "@/contracts";
 
 const uuid = z.string().uuid();
-const activityFrequencySchema = z.enum(["ANNUAL", "PER_SEMESTER", "IRREGULAR"]);
+const activityFrequencySchema = z.enum(["WEEKLY", "ANNUAL", "PER_SEMESTER", "IRREGULAR"]);
 const catalogStatusSchema = z.enum(["ACTIVE", "PAUSED", "RETIRED"]);
+const platformStatusSchema = z.enum(["ACTIVE", "UNKNOWN", "PAUSED", "RETIRED"]);
 const correctionReasonSchema = z.enum(["ENTERED_BY_MISTAKE", "WRONG_OBJECT"]);
+const optionalShortText = (maxLength: number) => z.preprocess(
+  (value) => value === null || (typeof value === "string" && !value.trim())
+    ? undefined
+    : value,
+  z.string().trim().min(1).max(maxLength).optional(),
+);
 
 const profileValuesSchema = z.object({
   rating: z.string().trim().max(100).optional(),
@@ -29,6 +36,7 @@ const profileChangesSchema = z.object({
 });
 
 const initializeOverviewSchema = z.object({
+  societyName: z.string().trim().min(1).max(300),
   societyObjectId: uuid,
   profile: profileValuesSchema.optional(),
 });
@@ -47,14 +55,14 @@ const setAdvisorsSchema = z.object({
 });
 
 const teamMemberValuesSchema = z.object({
-  department: z.string().trim().min(1).max(200),
-  position: z.string().trim().min(1).max(200),
+  department: optionalShortText(200),
+  position: optionalShortText(200),
   description: z.string().max(5_000).nullable().optional(),
 });
 
 const teamMemberChangesSchema = z.object({
-  department: z.string().trim().min(1).max(200).optional(),
-  position: z.string().trim().min(1).max(200).optional(),
+  department: optionalShortText(200),
+  position: optionalShortText(200),
   description: z.string().max(5_000).nullable().optional(),
 }).refine((changes) => Object.values(changes).some((value) => value !== undefined), {
   message: "至少需要一个要更新的干事字段",
@@ -64,6 +72,7 @@ const saveTeamMemberSchema = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("create"),
     societyCardId: uuid,
+    memberName: z.string().trim().min(1).max(300),
     memberObjectId: uuid,
     values: teamMemberValuesSchema,
   }),
@@ -97,6 +106,7 @@ const saveLongTermActivitySchema = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("create"),
     societyCardId: uuid,
+    activityName: z.string().trim().min(1).max(300),
     activityObjectId: uuid,
     values: activityValuesSchema.optional(),
   }),
@@ -119,7 +129,7 @@ const platformCreateValuesSchema = z.object({
   url: z.string().trim().url().nullable().optional(),
   accessInstructions: z.string().max(5_000).nullable().optional(),
   description: z.string().max(5_000).nullable().optional(),
-  status: catalogStatusSchema.default("ACTIVE"),
+  status: platformStatusSchema.default("UNKNOWN"),
 }).superRefine((values, context) => {
   if (
     values.status === "ACTIVE" &&
@@ -138,7 +148,7 @@ const platformChangesSchema = z.object({
   url: z.string().trim().url().nullable().optional(),
   accessInstructions: z.string().max(5_000).nullable().optional(),
   description: z.string().max(5_000).nullable().optional(),
-  status: catalogStatusSchema.optional(),
+  status: platformStatusSchema.optional(),
 }).refine((changes) => Object.values(changes).some((value) => value !== undefined), {
   message: "至少需要一个要更新的平台字段",
 });
@@ -147,6 +157,7 @@ const savePlatformSchema = z.discriminatedUnion("mode", [
   z.object({
     mode: z.literal("create"),
     societyCardId: uuid,
+    platformName: z.string().trim().min(1).max(300),
     platformObjectId: uuid,
     values: platformCreateValuesSchema,
   }),
@@ -303,7 +314,7 @@ function assertActivePlatformHasAccess(
   card: ViewCardState,
   changes: ReturnType<typeof platformChanges>,
 ): void {
-  const status = changes.status ?? textDimension(card, "status") ?? "ACTIVE";
+  const status = changes.status ?? textDimension(card, "status") ?? "UNKNOWN";
   const url = changes.url === null ? undefined : changes.url ?? textDimension(card, "url");
   const access = changes.access_instructions === null
     ? undefined
@@ -315,10 +326,15 @@ function assertActivePlatformHasAccess(
 
 const initializeOverview: CommandDefinition<z.infer<typeof initializeOverviewSchema>> = {
   key: "society.initialize_overview",
-  version: "1",
-  label: "建立社团概览",
+  version: "2",
+  label: "建立基础社团档案（只创建 SocietyCard，不含指导老师、干事、活动与平台）",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(initializeOverviewSchema),
+  inputReferences: [{
+    path: ["societyObjectId"],
+    kind: "object",
+    inferFromCanonicalNamePath: ["societyName"],
+  }],
   async execute(context, input) {
     const existing = await context.transaction.queryCards({ cardTypeKey: "SocietyCard" });
     if (existing.length) throw new Error("社团概览已经初始化");
@@ -344,6 +360,7 @@ const updateProfile: CommandDefinition<z.infer<typeof updateProfileSchema>> = {
   label: "更新社团资料",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(updateProfileSchema),
+  inputReferences: [{ path: ["societyCardId"], kind: "card" }],
   async execute(context, input) {
     await requireSociety(context.transaction, input.societyCardId);
     const changes = profileChanges(input.changes);
@@ -362,9 +379,13 @@ const updateProfile: CommandDefinition<z.infer<typeof updateProfileSchema>> = {
 const setAdvisors: CommandDefinition<z.infer<typeof setAdvisorsSchema>> = {
   key: "society.set_advisors",
   version: "1",
-  label: "设置当前指导老师",
+  label: "设置当前正式指导老师（自动创建或复用人物 Card，不要先加入干事队伍）",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(setAdvisorsSchema),
+  inputReferences: [
+    { path: ["societyCardId"], kind: "card" },
+    { path: ["advisorObjectIds"], kind: "object", cardinality: "many" },
+  ],
   async execute(context, input) {
     const society = await requireSociety(context.transaction, input.societyCardId);
     const advisorCardIds: string[] = [];
@@ -396,10 +417,21 @@ const setAdvisors: CommandDefinition<z.infer<typeof setAdvisorsSchema>> = {
 
 const saveTeamMember: CommandDefinition<z.infer<typeof saveTeamMemberSchema>> = {
   key: "society.save_team_member",
-  version: "1",
-  label: "保存干事成员",
+  version: "2",
+  label: "保存当前任期干事成员",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(saveTeamMemberSchema),
+  inputReferences: [
+    { path: ["societyCardId"], kind: "card" },
+    {
+      path: ["memberObjectId"],
+      kind: "object",
+      inferFromCanonicalNamePath: ["memberName"],
+    },
+    { path: ["memberCardId"], kind: "card" },
+  ],
+  proposalApprovalConflictPolicy: (input) =>
+    input.mode === "create" ? "revalidate_latest" : "exact",
   async execute(context, input) {
     const society = await requireSociety(context.transaction, input.societyCardId);
     if (input.mode === "create") {
@@ -460,6 +492,10 @@ const removeTeamMember: CommandDefinition<z.infer<typeof removeTeamMemberSchema>
   label: "移除错误的干事成员",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(removeTeamMemberSchema),
+  inputReferences: [
+    { path: ["societyCardId"], kind: "card" },
+    { path: ["memberCardId"], kind: "card" },
+  ],
   async execute(context, input) {
     const society = await requireSociety(context.transaction, input.societyCardId);
     const member = requireType(
@@ -485,10 +521,21 @@ const removeTeamMember: CommandDefinition<z.infer<typeof removeTeamMemberSchema>
 
 const saveLongTermActivity: CommandDefinition<z.infer<typeof saveLongTermActivitySchema>> = {
   key: "society.save_long_term_activity",
-  version: "1",
+  version: "2",
   label: "保存长期活动",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(saveLongTermActivitySchema),
+  inputReferences: [
+    { path: ["societyCardId"], kind: "card" },
+    {
+      path: ["activityObjectId"],
+      kind: "object",
+      inferFromCanonicalNamePath: ["activityName"],
+    },
+    { path: ["activityCardId"], kind: "card" },
+  ],
+  proposalApprovalConflictPolicy: (input) =>
+    input.mode === "create" ? "revalidate_latest" : "exact",
   async execute(context, input) {
     const society = await requireSociety(context.transaction, input.societyCardId);
     if (input.mode === "create") {
@@ -545,6 +592,10 @@ const removeLongTermActivity: CommandDefinition<z.infer<typeof removeLongTermAct
   label: "移除错误的长期活动",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(removeLongTermActivitySchema),
+  inputReferences: [
+    { path: ["societyCardId"], kind: "card" },
+    { path: ["activityCardId"], kind: "card" },
+  ],
   async execute(context, input) {
     const society = await requireSociety(context.transaction, input.societyCardId);
     const activity = requireType(
@@ -571,10 +622,21 @@ const removeLongTermActivity: CommandDefinition<z.infer<typeof removeLongTermAct
 
 const savePlatform: CommandDefinition<z.infer<typeof savePlatformSchema>> = {
   key: "society.save_platform",
-  version: "1",
+  version: "2",
   label: "保存平台入口",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(savePlatformSchema),
+  inputReferences: [
+    { path: ["societyCardId"], kind: "card" },
+    {
+      path: ["platformObjectId"],
+      kind: "object",
+      inferFromCanonicalNamePath: ["platformName"],
+    },
+    { path: ["platformCardId"], kind: "card" },
+  ],
+  proposalApprovalConflictPolicy: (input) =>
+    input.mode === "create" ? "revalidate_latest" : "exact",
   async execute(context, input) {
     const society = await requireSociety(context.transaction, input.societyCardId);
     if (input.mode === "create") {
@@ -635,6 +697,10 @@ const removePlatform: CommandDefinition<z.infer<typeof removePlatformSchema>> = 
   label: "移除错误的平台",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(removePlatformSchema),
+  inputReferences: [
+    { path: ["societyCardId"], kind: "card" },
+    { path: ["platformCardId"], kind: "card" },
+  ],
   async execute(context, input) {
     const society = await requireSociety(context.transaction, input.societyCardId);
     const platform = requireType(

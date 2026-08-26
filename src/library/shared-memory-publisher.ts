@@ -89,7 +89,8 @@ type PreparedPublication = {
     surfaceFormOrdinal: number;
     globalObjectId: string;
   }>;
-  semanticLinks: Array<{ assertionId: string; globalObjectId: string }>;
+  objectLinks: Array<{ assertionId: string; globalObjectId: string }>;
+  objectCoverage: Array<{ assertionId: string; globalObjectId: string }>;
 };
 
 export type SharedMemoryPublicationResult = {
@@ -394,7 +395,7 @@ export function prepareSemanticPublication(
       contextDependent: candidate.contextDependent,
     })),
   ];
-  const semanticLinks = [
+  const associations = [
     ...references.map((candidate, index) => ({ candidate, assertion: preparedAssertions[index] })),
     ...assertions.map((candidate, index) => ({
       candidate,
@@ -404,6 +405,9 @@ export function prepareSemanticPublication(
     const draft = draftByNormalizedLabel.get(normalizedLabel(label));
     return draft ? [objectId(draft)] : [];
   })).map((globalObjectId) => ({ assertionId: assertion.id, globalObjectId })));
+  const assertionKindById = new Map(preparedAssertions.map((assertion) => [assertion.id, assertion.kind]));
+  const objectLinks = associations.filter((link) => assertionKindById.get(link.assertionId) === "grounded");
+  const objectCoverage = associations.filter((link) => assertionKindById.get(link.assertionId) === "reference");
 
   const fragments: PreparedFragment[] = [];
   const surfaceMemberships: PreparedPublication["surfaceMemberships"] = [];
@@ -464,7 +468,8 @@ export function prepareSemanticPublication(
       ordinal: 0,
     })),
     surfaceMemberships,
-    semanticLinks,
+    objectLinks,
+    objectCoverage,
   };
 }
 
@@ -491,7 +496,8 @@ export async function prepareDeepPublication(
       assertions: [],
       assertionBlocks: [],
       surfaceMemberships: [],
-      semanticLinks: [],
+      objectLinks: [],
+      objectCoverage: [],
     };
   }
   if (!run.artifactLocation) throw new Error("深度冷启动运行缺少产物位置");
@@ -566,7 +572,8 @@ export async function prepareDeepPublication(
   const preparedAssertions: PreparedAssertion[] = [];
   const assertionBlocks: PreparedPublication["assertionBlocks"] = [];
   const surfaceMemberships: PreparedPublication["surfaceMemberships"] = [];
-  const semanticLinks: PreparedPublication["semanticLinks"] = [];
+  const objectLinks: PreparedPublication["objectLinks"] = [];
+  const objectCoverage: PreparedPublication["objectCoverage"] = [];
 
   for (const source of snapshot.sources) {
     const sourceRegionId = randomUUID();
@@ -649,7 +656,8 @@ export async function prepareDeepPublication(
         ...global.linked_global_object_ids,
         ...global.reference_atoms.map((atom) => atom.global_object_id),
       ]);
-      semanticLinks.push(...associatedOldObjectIds.map((oldObjectId) => {
+      const targetAssociations = assertion.kind === "grounded" ? objectLinks : objectCoverage;
+      targetAssociations.push(...associatedOldObjectIds.map((oldObjectId) => {
         const shared = sharedObjectByOldId.get(oldObjectId);
         if (!shared) throw new Error(`深度冷启动 Assertion 引用未知 Object：${oldObjectId}`);
         return { assertionId: prepared.id, globalObjectId: shared.id };
@@ -670,7 +678,8 @@ export async function prepareDeepPublication(
     assertions: preparedAssertions,
     assertionBlocks,
     surfaceMemberships,
-    semanticLinks,
+    objectLinks,
+    objectCoverage,
   };
 }
 
@@ -795,7 +804,8 @@ async function commitPublications(
     const assertions = changed.flatMap((item) => item.assertions);
     const assertionBlocks = changed.flatMap((item) => item.assertionBlocks);
     const memberships = changed.flatMap((item) => item.surfaceMemberships);
-    const links = changed.flatMap((item) => item.semanticLinks);
+    const links = changed.flatMap((item) => item.objectLinks);
+    const coverage = changed.flatMap((item) => item.objectCoverage);
     const maximumOrder = await transaction.memorySourceBlock.aggregate({
       where: { compilationId },
       _max: { order: true },
@@ -834,8 +844,14 @@ async function commitPublications(
     if (memberships.length) await transaction.memoryGlobalObjectSurfaceMembership.createMany({
       data: memberships,
     });
-    if (links.length) await transaction.memoryAssertionSemanticObjectLink.createMany({
+    if (links.length) await transaction.memoryAssertionObjectLink.createMany({
       data: unique(links.map((link) => `${link.assertionId}\u0000${link.globalObjectId}`)).map((key) => {
+        const [assertionId, globalObjectId] = key.split("\u0000");
+        return { assertionId, globalObjectId };
+      }),
+    });
+    if (coverage.length) await transaction.memoryAssertionObjectCoverage.createMany({
+      data: unique(coverage.map((link) => `${link.assertionId}\u0000${link.globalObjectId}`)).map((key) => {
         const [assertionId, globalObjectId] = key.split("\u0000");
         return { assertionId, globalObjectId };
       }),
@@ -852,9 +868,8 @@ async function commitPublications(
         compilationId,
         surfaceMemberships: { none: {} },
         chatMentions: { none: {} },
-        referenceResolutions: { none: {} },
-        literalReferences: { none: {} },
-        semanticAssertionLinks: { none: {} },
+        assertionLinks: { none: {} },
+        assertionCoverage: { none: {} },
         higherMemory: { is: null },
         relatedViewCards: { none: {} },
       },
@@ -910,7 +925,8 @@ async function commitPublications(
     for (const publication of publications) {
       const sourceObjectCount = new Set([
         ...publication.surfaceMemberships.map((item) => item.globalObjectId),
-        ...publication.semanticLinks.map((item) => item.globalObjectId),
+        ...publication.objectLinks.map((item) => item.globalObjectId),
+        ...publication.objectCoverage.map((item) => item.globalObjectId),
       ]).size || publication.objects.length;
       await transaction.librarySourceProcessingRun.update({
         where: { id: publication.runId },

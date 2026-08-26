@@ -18,3 +18,11 @@ export class ViewConflictError extends ViewRuntimeError {
     this.name = "ViewConflictError";
   }
 }
+
+/** A syntactically valid Command that cannot be applied to the current graph. */
+export class ViewCommandValidationError extends ViewRuntimeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ViewCommandValidationError";
+  }
+}

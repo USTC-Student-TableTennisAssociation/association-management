@@ -12,19 +12,21 @@ function displayValue(value: unknown): string {
 
 export function GenericViewInspector({
   viewKey,
+  refreshRevision = 0,
   focusCardId,
   onClose,
   onOpenAI,
   onAskAI,
 }: {
   viewKey: string;
+  refreshRevision?: number;
   focusCardId?: string;
   onClose?: () => void;
   onOpenAI?: () => void;
   onAskAI?: (prompt: string) => void;
 }) {
   const [reloadSequence, setReloadSequence] = useState(0);
-  const requestKey = `${viewKey}:${reloadSequence}`;
+  const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
   const [result, setResult] = useState<{
     requestKey: string;
     snapshot?: ViewInspectorSnapshot;
@@ -42,24 +44,25 @@ export function GenericViewInspector({
       setResult({ requestKey, snapshot: body });
     }).catch((cause: unknown) => {
       if (controller.signal.aborted) return;
-      setResult({
+      setResult((current) => ({
         requestKey,
+        snapshot: current?.snapshot,
         error: cause instanceof Error ? cause.message : String(cause),
-      });
+      }));
     });
     return () => controller.abort();
   }, [requestKey, viewKey]);
 
-  const loading = result?.requestKey !== requestKey;
-  const snapshot = loading ? undefined : result.snapshot;
-  const error = loading ? undefined : result.error;
+  const loading = !result?.snapshot && result?.requestKey !== requestKey;
+  const snapshot = result?.snapshot;
+  const error = result?.requestKey === requestKey ? result.error : undefined;
 
   const schemaByType = useMemo(() => new Map(
     snapshot?.schema.cardTypes.map((cardType) => [cardType.key, cardType]) ?? [],
   ), [snapshot]);
 
   if (loading) return <div className="p-8 text-sm text-zinc-500">正在读取 View Inspector…</div>;
-  if (error || !snapshot) return (
+  if (!snapshot) return (
     <div className="p-8">
       <p className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error ?? "View 不可用"}</p>
     </div>
@@ -73,7 +76,7 @@ export function GenericViewInspector({
           <h1 className="mt-2 text-3xl font-semibold text-zinc-950">{snapshot.manifest.label}</h1>
           <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-600">{snapshot.manifest.description}</p>
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-zinc-500">
-            <span className="rounded-full bg-zinc-100 px-2.5 py-1">Module {snapshot.moduleVersion}</span>
+            <span className="rounded-full bg-zinc-100 px-2.5 py-1">Plugin {snapshot.pluginVersion}</span>
             <span className="rounded-full bg-zinc-100 px-2.5 py-1">Schema {snapshot.schemaVersion}</span>
             <span className="rounded-full bg-zinc-100 px-2.5 py-1">State {snapshot.stateVersion}</span>
             <span className="rounded-full bg-zinc-100 px-2.5 py-1">{snapshot.cards.length} Cards</span>

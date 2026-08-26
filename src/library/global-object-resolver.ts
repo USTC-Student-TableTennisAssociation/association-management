@@ -547,7 +547,16 @@ async function deepCandidates(input: {
                   },
                 },
                 {
-                  semanticAssertionLinks: {
+                  assertionLinks: {
+                    some: {
+                      assertion: {
+                        sourceRegion: { sourceSha256: input.sourceSha256 },
+                      },
+                    },
+                  },
+                },
+                {
+                  assertionCoverage: {
                     some: {
                       assertion: {
                         sourceRegion: { sourceSha256: input.sourceSha256 },

@@ -86,7 +86,6 @@ export interface ViewSchema {
 export interface ViewManifest {
   key: ViewKey;
   label: string;
-  version: SemVer;
   schemaVersion: string;
   description: string;
   retrievalDescription?: string;
@@ -132,12 +131,30 @@ export interface CommandOutcome {
   events?: readonly { type: string; version: string; payload: unknown }[];
 }
 
+export interface CommandInputReferenceDefinition {
+  /** Property path inside the Command input. */
+  path: readonly string[];
+  kind: "card" | "object";
+  cardinality?: "one" | "many";
+  /** Optional string property whose unique canonical name can bind this Object ref. */
+  inferFromCanonicalNamePath?: readonly string[];
+}
+
+export type ProposalApprovalConflictPolicy = "exact" | "revalidate_latest";
+
 export interface CommandDefinition<Input = unknown> {
   key: CommandKey;
   version: string;
   label: string;
   requiredPermissions?: readonly string[];
   inputSchema: ContractSchema<Input>;
+  /** Model-facing logical references; storage IDs remain a Runtime concern. */
+  inputReferences?: readonly CommandInputReferenceDefinition[];
+  /**
+   * Pending Proposals are exact by default. Commands may opt into replaying on
+   * the latest View state only when the concrete input is safe to revalidate.
+   */
+  proposalApprovalConflictPolicy?(input: Input): ProposalApprovalConflictPolicy;
   execute(context: ViewCommandContext, input: Input): Promise<CommandOutcome>;
 }
 
@@ -178,7 +195,7 @@ export interface ViewCardState {
 
 export interface ViewReadSnapshot {
   viewKey: ViewKey;
-  moduleVersion: SemVer;
+  pluginVersion: SemVer;
   schemaVersion: string;
   stateVersion: string;
   observedAt: string;

@@ -10,7 +10,7 @@ type UserRow = {
   status: "ACTIVE" | "DISABLED";
   lastLoginAt: string | null;
   actor: { displayName: string };
-  personObject: { id: string; canonicalName: string } | null;
+  actorObject: { id: string; canonicalName: string } | null;
 };
 
 export default function UserAdminPage() {
@@ -19,7 +19,7 @@ export default function UserAdminPage() {
   const [displayName, setDisplayName] = useState("");
   const [loginName, setLoginName] = useState("");
   const [password, setPassword] = useState("");
-  const [personObjectId, setPersonObjectId] = useState("");
+  const [actorObjectId, setActorObjectId] = useState("");
   const [role, setRole] = useState<"ADMIN" | "MEMBER">("MEMBER");
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -68,7 +68,7 @@ export default function UserAdminPage() {
           loginName,
           password,
           role,
-          ...(personObjectId.trim() ? { personObjectId: personObjectId.trim() } : {}),
+          ...(actorObjectId.trim() ? { actorObjectId: actorObjectId.trim() } : {}),
         }),
       });
       const body = await response.json() as { error?: string };
@@ -76,7 +76,7 @@ export default function UserAdminPage() {
       setDisplayName("");
       setLoginName("");
       setPassword("");
-      setPersonObjectId("");
+      setActorObjectId("");
       setRole("MEMBER");
       await loadUsers();
     } catch (submitError) {
@@ -117,7 +117,7 @@ export default function UserAdminPage() {
           <div>
             <p className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-700">Echo 管理</p>
             <h1 className="mt-2 text-3xl font-semibold">登录人员</h1>
-            <p className="mt-2 text-sm text-zinc-600">账号与 Actor 、Person Object 一对一关联。密码只能重置，不能查看。</p>
+            <p className="mt-2 text-sm text-zinc-600">账号与 Actor、Actor Object 一对一关联。密码只能重置，不能查看。</p>
           </div>
           <button onClick={() => router.push("/")} className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm hover:bg-zinc-50">返回 Echo</button>
         </header>
@@ -136,8 +136,8 @@ export default function UserAdminPage() {
             </select>
             <button disabled={busy || !displayName.trim() || !loginName.trim() || password.length < 8} className="h-10 rounded-lg bg-emerald-800 px-4 text-sm font-medium text-white disabled:bg-zinc-300">创建</button>
             <label className="md:col-span-5 text-xs text-zinc-500">
-              可选：同名人物存在歧义时，填写系统提示的 Person Object ID
-              <input aria-label="Person Object ID" placeholder="UUID" value={personObjectId} onChange={(event) => setPersonObjectId(event.target.value)} className="mt-2 h-9 w-full rounded-lg border border-zinc-300 px-3 text-sm text-zinc-800" />
+              可选：同名 Object 存在歧义时，填写系统提示的 Actor Object ID
+              <input aria-label="Actor Object ID" placeholder="UUID" value={actorObjectId} onChange={(event) => setActorObjectId(event.target.value)} className="mt-2 h-9 w-full rounded-lg border border-zinc-300 px-3 text-sm text-zinc-800" />
             </label>
           </form>
         </section>
@@ -148,7 +148,7 @@ export default function UserAdminPage() {
           </div>
           {users.map((user) => (
             <div key={user.id} className="grid grid-cols-[1.1fr_1fr_0.7fr_0.8fr_1.4fr] items-center gap-3 border-b border-zinc-100 px-5 py-4 text-sm last:border-b-0">
-              <div><p className="font-medium">{user.actor.displayName}</p><p className="mt-1 truncate text-xs text-zinc-500">{user.personObject?.canonicalName ?? "未关联 Person Object"}</p></div>
+              <div><p className="font-medium">{user.actor.displayName}</p><p className="mt-1 truncate text-xs text-zinc-500">{user.actorObject?.canonicalName ?? "未关联 Actor Object"}</p></div>
               <span>{user.loginName}</span>
               <span>{user.role === "ADMIN" ? "管理员" : "成员"}</span>
               <span className={user.status === "ACTIVE" ? "text-emerald-700" : "text-zinc-400"}>{user.status === "ACTIVE" ? "已启用" : "已停用"}</span>

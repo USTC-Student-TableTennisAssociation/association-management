@@ -64,7 +64,7 @@ class FixtureMemoryRetriever implements MemoryRetriever {
                 sourceNodeId: "fixture-region",
                 sourceClaimId: "fixture-claim",
                 renderedStatement:
-                  "测试记忆说明：这是一条用于验证检索、引用和流式传输链路的临时内容，不代表真实组织事实。",
+                  "测试记忆说明：这是一条用于验证检索、引用和流式传输链路的临时内容，不代表真实事实。",
                 contextDependent: false,
                 matchedBy: [
                   {
