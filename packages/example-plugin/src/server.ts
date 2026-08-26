@@ -8,7 +8,7 @@ import {
   type PresentationExtension,
   type SkillExtension,
   type ToolProviderExtension,
-} from "@echo/plugin-sdk";
+} from "@sydaris/plugin-sdk";
 
 const VIEW_KEY = "example_notes";
 const createNoteInput = z.object({
@@ -118,7 +118,7 @@ const exampleToolProvider: ToolProviderExtension = {
 
 export const exampleNotesPlugin = defineEchoPlugin({
   id: "echo.example-notes",
-  version: "0.1.0",
+  version: "0.1.0-alpha.1",
   contributes: {
     views: [exampleNotesView],
     presentations: [examplePresentation],

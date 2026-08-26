@@ -3,7 +3,7 @@
 
 import type { ComponentType } from "react";
 import type { WorkPresentationProps } from "@/view-runtime/presentation-host/work-presentation-host";
-import { SocietyOverviewWorkspace as installedPresentation0 } from "@/plugins/society-information/presentation/society-overview-workspace";
+import { SocietyOverviewWorkspace as installedPresentation0 } from "@/plugins/society-information/dist/presentation/society-overview-workspace";
 
 export const installedPresentationComponents: Readonly<
   Record<string, ComponentType<WorkPresentationProps>>

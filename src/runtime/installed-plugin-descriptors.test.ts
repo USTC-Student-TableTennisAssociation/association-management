@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import activityDescriptor from "@/plugins/activity-operations/echo.plugin.json";
 import { activityOperationsPlugin } from "@/plugins/activity-operations/manifest";
 import societyDescriptor from "@/plugins/society-information/echo.plugin.json";
-import { societyInformationPlugin } from "@/plugins/society-information/manifest";
+import { societyInformationPlugin } from "@/plugins/society-information/dist/manifest";
 
 describe.each([
   [activityDescriptor, activityOperationsPlugin],
