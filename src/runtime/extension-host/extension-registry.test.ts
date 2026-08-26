@@ -13,7 +13,6 @@ function view(key = "test_view"): ViewModule {
     manifest: {
       key,
       label: "Test",
-      version: "1.0.0",
       schemaVersion: "1",
       description: "Test View",
       defaultSettings: { aiWritePolicy: "approval_required" },
@@ -48,13 +47,13 @@ describe("ExtensionRegistry", () => {
           id: "echo.test.board",
           version: "1.0.0",
           targetView: viewModule.manifest.key,
-          compatibleViewVersions: "^1.0.0",
+          schemaVersion: "1",
           presentations: [{ key: "board", label: "Board", loader: "test/board" }],
         }],
         skills: [{
           id: "echo.test.plan",
           version: "1.0.0",
-          targetView: { viewKey: viewModule.manifest.key, moduleVersions: "^1.0.0" },
+          targetView: { viewKey: viewModule.manifest.key, schemaVersion: "1" },
           requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
           inputSchema: zodContractSchema(z.object({ focus: z.string() })),
         }],

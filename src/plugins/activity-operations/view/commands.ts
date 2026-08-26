@@ -83,6 +83,12 @@ const createActivity: CommandDefinition<z.infer<typeof createActivitySchema>> = 
   label: "创建活动",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(createActivitySchema),
+  inputReferences: [{
+    path: ["objectId"],
+    kind: "object",
+    inferFromCanonicalNamePath: ["name"],
+  }],
+  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const cardId = await context.transaction.createCard({
       cardTypeKey: "ActivityCard",
@@ -110,6 +116,8 @@ const addWorkPackage: CommandDefinition<z.infer<typeof addWorkPackageSchema>> = 
   label: "添加工作包",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(addWorkPackageSchema),
+  inputReferences: [{ path: ["activityId"], kind: "card" }],
+  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const activity = requireType(await context.transaction.getCard(input.activityId), "ActivityCard");
     const cardId = await context.transaction.createCard({
@@ -144,6 +152,8 @@ const addTask: CommandDefinition<z.infer<typeof addTaskSchema>> = {
   label: "添加任务",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(addTaskSchema),
+  inputReferences: [{ path: ["workPackageId"], kind: "card" }],
+  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const workPackage = requireType(
       await context.transaction.getCard(input.workPackageId),
@@ -175,6 +185,11 @@ const assignOwner: CommandDefinition<z.infer<typeof assignOwnerSchema>> = {
   label: "分配负责人",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(assignOwnerSchema),
+  inputReferences: [
+    { path: ["targetCardId"], kind: "card" },
+    { path: ["objectId"], kind: "object" },
+  ],
+  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const target = await context.transaction.getCard(input.targetCardId);
     if (!target || !["ActivityCard", "WorkPackageCard"].includes(target.cardTypeKey)) {
@@ -206,6 +221,7 @@ const updateActivity: CommandDefinition<z.infer<typeof updateActivitySchema>> = 
   label: "更新活动",
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(updateActivitySchema),
+  inputReferences: [{ path: ["activityId"], kind: "card" }],
   async execute(context, input) {
     const activity = requireType(
       await context.transaction.getCard(input.activityId),

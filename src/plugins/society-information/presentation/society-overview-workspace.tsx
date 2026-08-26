@@ -20,6 +20,7 @@ type SocietyOverviewSnapshot = ViewInspectorSnapshot & {
 
 type WorkspaceProps = {
   viewKey: string;
+  refreshRevision?: number;
   focusCardId?: string;
   onOpenInspector: () => void;
   onAskAI: (prompt: string) => void;
@@ -35,6 +36,7 @@ type EmptySlotProps = {
 const OFFICIAL_PURPOSE = "服务科大乒乓球爱好者，促进科大乒乓球运动发展。";
 
 const frequencyLabels: Record<string, string> = {
+  WEEKLY: "每周",
   ANNUAL: "每年",
   PER_SEMESTER: "每学期",
   IRREGULAR: "不定期",
@@ -44,6 +46,13 @@ const statusLabels: Record<string, string> = {
   ACTIVE: "持续举办",
   PAUSED: "暂时暂停",
   RETIRED: "历史活动",
+};
+
+const platformStatusLabels: Record<string, string> = {
+  ACTIVE: "正常使用",
+  UNKNOWN: "状态待确认",
+  PAUSED: "暂时停用",
+  RETIRED: "已停用",
 };
 
 function text(card: ViewCardState | undefined, key: string): string | undefined {
@@ -142,18 +151,20 @@ function EmptySlot({ eyebrow, title, onActivate, compact = false }: EmptySlotPro
 
 export function SocietyOverviewWorkspace({
   viewKey,
+  refreshRevision = 0,
   focusCardId,
   onOpenInspector,
   onAskAI,
 }: WorkspaceProps) {
   const [reloadSequence, setReloadSequence] = useState(0);
   const [heroReady, setHeroReady] = useState(false);
-  const requestKey = `${viewKey}:${reloadSequence}`;
+  const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
   const heroScrollRef = useRef<HTMLElement>(null);
   const heroStageRef = useRef<HTMLDivElement>(null);
   const heroBadgeRef = useRef<HTMLDivElement>(null);
   const heroWordmarkRef = useRef<HTMLDivElement>(null);
   const activityGalleryRef = useRef<HTMLDivElement>(null);
+  const lastFocusedCardIdRef = useRef<string | undefined>(undefined);
   const [result, setResult] = useState<{
     requestKey: string;
     snapshot?: SocietyOverviewSnapshot;
@@ -171,17 +182,18 @@ export function SocietyOverviewWorkspace({
       setResult({ requestKey, snapshot: body });
     }).catch((cause: unknown) => {
       if (controller.signal.aborted) return;
-      setResult({
+      setResult((current) => ({
         requestKey,
+        snapshot: current?.snapshot,
         error: cause instanceof Error ? cause.message : String(cause),
-      });
+      }));
     });
     return () => controller.abort();
   }, [requestKey, viewKey]);
 
-  const loading = result?.requestKey !== requestKey;
-  const snapshot = loading ? undefined : result?.snapshot;
-  const error = loading ? undefined : result?.error;
+  const loading = !result?.snapshot && result?.requestKey !== requestKey;
+  const snapshot = result?.snapshot;
+  const error = result?.requestKey === requestKey ? result.error : undefined;
   const objectNames = useMemo(() => new Map(
     snapshot?.objects?.map((object) => [object.id, object.canonicalName]) ?? [],
   ), [snapshot]);
@@ -280,10 +292,15 @@ export function SocietyOverviewWorkspace({
   }, [snapshot]);
 
   useEffect(() => {
-    if (!focusCardId || !snapshot) return;
+    if (!focusCardId) {
+      lastFocusedCardIdRef.current = undefined;
+      return;
+    }
+    if (!snapshot || lastFocusedCardIdRef.current === focusCardId) return;
     window.requestAnimationFrame(() => {
-      const target = document.getElementById(`society-card-${focusCardId}`)
-        ?? document.getElementById("society-purpose-anchor");
+      const focusedCard = document.getElementById(`society-card-${focusCardId}`);
+      const target = focusedCard ?? document.getElementById("society-purpose-anchor");
+      if (focusedCard) lastFocusedCardIdRef.current = focusCardId;
       target?.scrollIntoView({
         behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
         block: "center",
@@ -311,7 +328,7 @@ export function SocietyOverviewWorkspace({
     );
   }
 
-  if (error || !snapshot) {
+  if (!snapshot) {
     return (
       <div className={styles.statePage}>
         <div className={styles.errorCard}>
@@ -336,11 +353,11 @@ export function SocietyOverviewWorkspace({
     (item): item is string => Boolean(item),
   );
   const promptToFill = (topic: string) => onAskAI(
-    `请先读取 ${viewKey} 当前状态，帮我补充${topic}。先从 Shared Brain 与高价值原文中整理已有资料，只向我确认仍无法确定的正式 Object、当前性或必要字段，再只使用已声明的 society Commands 提交。`,
+    `请先读取 ${viewKey} 当前状态，帮我补充${topic}。以 synthesis 方式从 Shared Brain 与高价值原文中整理已有资料，先完整提交一版待审批草稿；可选细节不确定可以留空或明确标注推断，只有正式 Object 有歧义、当前状态冲突或必要字段无法确定时才询问，再只使用已声明的 society Commands 提交。`,
   );
   const askToImprove = () => onAskAI(
     society
-      ? `请帮我完善社团概览。先读取 ${viewKey} 当前状态，再以 synthesis 方式从 Shared Brain 与高价值原文中整理社团资料、指导老师、干事队伍、长期活动和平台入口；只向我询问经过检索后仍无法确认的当前性、冲突或必要字段，确认后只使用已声明的 society Commands 提交。`
+      ? `请帮我完善社团概览。先读取 ${viewKey} 当前状态，再以 synthesis 方式从 Shared Brain 与高价值原文中整理社团资料、指导老师、干事队伍、长期活动和平台入口，并完整提交一版待审批草稿；可选细节不确定可以留空或明确标注推断，只有正式 Object 有歧义、当前状态冲突或必要字段无法确定时才询问，再只使用已声明的 society Commands 提交。`
       : `请帮我建立社团概览。先在知识中定位“中国科学技术大学学生乒乓球协会”的稳定 Object；唯一确认后以 synthesis 方式整理 Shared Brain 与高价值原文中的已有资料，无法唯一确认时才询问我，再使用 society.initialize_overview 建立正式概览。`,
   );
 
@@ -520,12 +537,17 @@ export function SocietyOverviewWorkspace({
             {platforms.length ? platforms.map((platform) => {
               const href = safePublicUrl(text(platform, "url"));
               const label = objectName(platform, text(platform, "platform_type") ?? "平台入口");
+              const platformStatus = text(platform, "status") ?? "UNKNOWN";
+              const accessInstructions = text(platform, "access_instructions");
               const className = `${styles.platformCard} ${focusCardId === platform.id ? styles.focusedCard : ""}`;
               const body = (
                 <>
-                  <p>{text(platform, "platform_type") ?? "平台入口"}</p>
+                  <p>
+                    {text(platform, "platform_type") ?? "平台入口"}
+                    {platformStatus === "ACTIVE" ? "" : ` · ${platformStatusLabels[platformStatus] ?? platformStatus}`}
+                  </p>
                   <h3>{label}</h3>
-                  <span>{text(platform, "access_instructions") ?? text(platform, "description") ?? "查看平台信息"}</span>
+                  <span>{accessInstructions ?? text(platform, "description") ?? (platformStatus === "UNKNOWN" ? "访问或加入方式待确认" : "查看平台信息")}</span>
                   <ArrowUpRightIcon />
                 </>
               );

@@ -10,8 +10,6 @@ import {
   searchMemory as searchMemoryIndex,
   type MemoryExploreResult,
 } from "@/memory/explore";
-import type { EchoDebugTrace } from "@/ai/debug-trace";
-import type { RetrievalCuratorContext } from "@/memory/retrieval-curator";
 import type { MemoryRetrievalResult, MemorySearchTrace } from "@/memory/types";
 
 const MAX_TOOL_CALLS_PER_ANSWER = 6;
@@ -24,13 +22,130 @@ export class MemoryExploreBudgetError extends Error {
 }
 
 export class UnknownExploreObjectError extends Error {
-  constructor(globalObjectId: string) {
+  constructor(objectRef: string) {
     super(
-      `GlobalObject ${globalObjectId} 尚未出现在本轮检索工具结果中，` +
+      `GlobalObject 引用 ${objectRef} 尚未出现在本轮检索工具结果中，` +
         "请先使用 searchMemory 定位对象",
     );
     this.name = "UnknownExploreObjectError";
   }
+}
+
+function presentSource(source: MemoryExploreResult["assertions"][number]["sources"][number]) {
+  if (source.kind === "chat") {
+    return {
+      kind: "chat" as const,
+      actorDisplayName: source.actorDisplayName,
+      submittedAt: source.submittedAt,
+      timezone: source.timezone,
+      ordinal: source.ordinal,
+    };
+  }
+  return {
+    kind: "document" as const,
+    sourceTitle: source.sourceTitle,
+    sourceRegionLabel: source.sourceRegionLabel,
+    ordinal: source.ordinal,
+    pages: [...source.pages],
+  };
+}
+
+/** Keep storage identities inside the Runtime; the main model works with O#/A#/H#. */
+function presentExploreResult(
+  result: MemoryExploreResult,
+  evidence: MemoryEvidenceAccumulator,
+) {
+  const {
+    compilationId: _compilationId,
+    globalObjectId,
+    knowledgeState,
+    objects,
+    higherMemories,
+    assertions,
+    connections,
+    counts: _counts,
+    sourceTime,
+    ...rest
+  } = result;
+  void _compilationId;
+  void _counts;
+  const objectRefsByAssertionRef = new Map<string, string[]>();
+  for (const connection of connections) {
+    const refs = objectRefsByAssertionRef.get(connection.assertionRef) ?? [];
+    refs.push(connection.objectRef);
+    objectRefsByAssertionRef.set(connection.assertionRef, refs);
+  }
+  const presentAssertion = (assertion: MemoryExploreResult["assertions"][number]) => ({
+    ref: assertion.ref,
+    renderedStatement: assertion.renderedStatement,
+    contextDependent: assertion.contextDependent,
+    objectRefs: objectRefsByAssertionRef.get(assertion.ref) ?? [],
+    sources: assertion.sources.map(presentSource),
+  });
+  const facts = assertions.filter((assertion) => assertion.kind === "grounded");
+  const references = assertions.filter((assertion) => assertion.kind === "reference");
+  return {
+    ...rest,
+    ...(globalObjectId
+      ? { globalObjectRef: evidence.objectRefForId(globalObjectId) }
+      : {}),
+    ...(knowledgeState
+      ? {
+          knowledgeState: {
+            targetObjectRef: evidence.objectRefForId(knowledgeState.targetObjectId),
+            higherMemory: knowledgeState.higherMemory,
+            coldBootstrapApplied: knowledgeState.coldBootstrapApplied,
+          },
+        }
+      : {}),
+    ...(sourceTime
+      ? {
+          sourceTime: {
+            sourceTitle: sourceTime.sourceTitle,
+            text: sourceTime.text,
+            supportingPages: [...new Set(sourceTime.supportingBlocks.flatMap((block) => block.pages))],
+          },
+        }
+      : {}),
+    objects: objects.map((object) => ({
+      ref: object.ref,
+      canonicalName: object.canonicalName,
+      surfaceForms: [...object.surfaceForms],
+      lexicalMatch: object.lexicalMatch,
+      semanticMatch: object.semanticMatch,
+    })),
+    ...(higherMemories?.length
+      ? {
+          higherMemories: higherMemories.map((memory) => ({
+            ref: memory.ref,
+            objectRef: evidence.objectRefForId(memory.globalObjectId),
+            contentMarkdown: memory.contentMarkdown,
+            operationalIndex: {
+              aspects: memory.operationalIndex.aspects.map((aspect) => ({
+                key: aspect.key,
+                label: aspect.label,
+                summary: aspect.summary,
+                coverage: aspect.coverage,
+                sourceTitles: [...aspect.sourceTitles],
+                recommendedQueries: [...aspect.recommendedQueries],
+                unresolvedAspects: [...aspect.unresolvedAspects],
+              })),
+            },
+            maintainedAt: memory.maintainedAt,
+          })),
+        }
+      : {}),
+    facts: facts.map(presentAssertion),
+    references: references.map((assertion) => ({
+      ...presentAssertion(assertion),
+      dereferenceRequired: true as const,
+    })),
+    counts: {
+      objects: objects.length,
+      facts: facts.length,
+      references: references.length,
+    },
+  };
 }
 
 export class MemoryExploreContextBudgetError extends Error {
@@ -49,9 +164,8 @@ export function createMemoryExploreToolset(input: {
   sharedResultBudget?: ToolResultTokenBudget;
   signal?: AbortSignal;
   preferHigherMemory?: boolean;
-  allowKnownObjectIds?: Iterable<string>;
-  curatorContext?: RetrievalCuratorContext;
-  curatorTrace?: EchoDebugTrace;
+  /** Internal fact agents may need storage identities for structured persistence. */
+  exposeDatabaseIds?: boolean;
   onLocateTrace?: (trace: MemorySearchTrace) => void;
   onEvidence?: (
     retrieval: MemoryRetrievalResult,
@@ -59,7 +173,6 @@ export function createMemoryExploreToolset(input: {
   ) => void;
 }) {
   let toolCalls = 0;
-  const additionalKnownObjectIds = new Set(input.allowKnownObjectIds ?? []);
   const resultBudget = input.sharedResultBudget ??
     new ToolResultTokenBudget(input.resultTokenBudget);
 
@@ -70,7 +183,7 @@ export function createMemoryExploreToolset(input: {
     }
   }
 
-  function merge(result: MemoryExploreResult): MemoryExploreResult {
+  function merge(result: MemoryExploreResult) {
     if (!resultBudget.reserve(result)) {
       throw new MemoryExploreContextBudgetError(input.resultTokenBudget);
     }
@@ -82,7 +195,9 @@ export function createMemoryExploreToolset(input: {
         id: `shared_brain.${discovered.kind}.${toolCalls}`,
         layer: "shared_brain",
         scope: discovered.globalObjectId
-          ? `GlobalObject:${discovered.globalObjectId}`
+          ? `GlobalObject:${input.exposeDatabaseIds
+            ? discovered.globalObjectId
+            : input.evidence.objectRefForId(discovered.globalObjectId) ?? "unresolved"}`
           : `query:${question}`,
         subject: question,
         question,
@@ -99,38 +214,42 @@ export function createMemoryExploreToolset(input: {
       }),
     };
     input.onEvidence?.(input.evidence.snapshot(), described);
-    return described;
+    return input.exposeDatabaseIds
+      ? described
+      : presentExploreResult(described, input.evidence);
   }
 
   return {
     searchMemory: tool({
       description:
         "在 Echo 的 GlobalObject–Assertion 记忆中执行一次聚焦 Locate。" +
-        "把要找的实体原话放进 targetHints，把围绕该实体想了解的信息放进 query；不要把两者润色成一段。" +
+        "把唯一主体实体的原话放进 targetHints，把成员、子项、活动、平台等想了解的相关实体和信息放进 query；不要把相关实体并列成主目标。" +
         "必须按任务形状选择 taskShape：单一明确事实使用 fact；完整理解、名单/表格、多字段 View 填充或资料梳理使用 synthesis。" +
-        "synthesis 遇到无 Higher Memory 的唯一目标时会自动补充 Object 关联证据与来源入口；即使 Assertion coverage 已完整，宽综合仍应读取高价值原文的目录与相关章节。" +
+        "一次 query 只表达一个内聚的信息需求；多字段 synthesis 对未覆盖字段分别窄查。partial/truncated、‘等’或一个完整章节都不代表完整集合已穷尽。" +
+        "模型发起查询后，目标 Object 的 Operational Memory Index 与 Object 关系会参与候选召回，但不会自动读取原文。" +
+        "宽综合应根据未覆盖方面选择必要的高价值原文目录与章节，不预设固定阅读数量。" +
         "当回答需要当前环境中的 Object、历史、时间、状态、规则或来源等事实时使用；" +
         "问候、闲聊、改写、翻译和不依赖组织资料的任务不应调用。" +
         "获得证据后，如问题仍包含未覆盖的子问题，可以换一种聚焦表述再次检索。" +
-        "结果中只有 GlobalObject identity、Assertion 与最小 provenance；" +
-        "只有 kind=grounded 的 Assertion 是事实证据，kind=reference 只是需要回读来源的导航索引。",
+        "结果把 facts 与 references 分开：facts 是可用事实证据；references 只是原文导航，需要时应使用 readSourceDocument 回读。",
       inputSchema: z.object({
         query: z.string().trim().min(1).max(memoryExploreLimits.queryChars)
           .describe("围绕目标 Object 想了解的信息需求；不要重复堆叠目标名称"),
         targetHints: z.array(z.string().trim().min(1).max(200)).min(1).max(8)
           .optional()
-          .describe("主对话应提供：用户所指目标实体的名称、别名或忠实原话；不要扩写成相关文档或概念"),
-        targetObjectIds: z.array(z.string().trim().min(1).max(200)).max(3)
+          .describe("同一个主体 Object 的名称、别名或忠实原话，主名称放第一个；不要放入其成员、子项、活动或平台"),
+        targetObjectRefs: z.array(z.string().trim().regex(/^O\d+$/)).max(3)
           .optional()
-          .describe("可选：本轮先前工具结果已确认的目标 GlobalObject database id"),
+          .describe("可选：本轮先前工具结果已确认的目标 O#；数据库 ID 由 Runtime 自动解析"),
         taskShape: z.enum(["fact", "synthesis"])
           .describe("fact=单一事实；synthesis=完整理解、名单/表格、资料梳理或多字段 View 填充"),
       }),
-      execute: async ({ query, targetHints, targetObjectIds, taskShape }) => {
-        // searchMemory is the discovery primitive. Do not require the request-
-        // local accumulator to have observed an explicit id first: parallel
-        // tool calls can otherwise race even though the id belongs to the
-        // current Compilation. The database-backed target resolver validates it.
+      execute: async ({ query, targetHints, targetObjectRefs, taskShape }) => {
+        const targetObjectIds = targetObjectRefs?.map((objectRef) => {
+          const objectId = input.evidence.objectIdForRef(objectRef);
+          if (!objectId) throw new UnknownExploreObjectError(objectRef);
+          return objectId;
+        });
         reserveCall();
         return merge(await searchMemoryIndex({
           query,
@@ -140,8 +259,6 @@ export function createMemoryExploreToolset(input: {
         }, {
           signal: input.signal,
           preferHigherMemory: input.preferHigherMemory,
-          curatorContext: input.curatorContext,
-          curatorTrace: input.curatorTrace,
           onLocate: (retrieval) => {
             if (retrieval.trace) input.onLocateTrace?.(retrieval.trace);
           },
@@ -153,25 +270,22 @@ export function createMemoryExploreToolset(input: {
       description:
         "沿一个已知 GlobalObject 的 anchored 或 semantic Assertion 连接继续查找，" +
         "并返回这些 Assertion 所连接的 GlobalObject。" +
-        "globalObjectId 必须原样取自本轮初始 Context 或之前工具结果。" +
+        "objectRef 必须使用本轮初始 Context 或之前工具结果中的 O#；数据库 ID 由 Runtime 自动解析。" +
         "focus 只用于排序，不会创造或扩张事实。",
       inputSchema: z.object({
-        globalObjectId: z.string().trim().min(1).max(200)
-          .describe("已在本轮证据中出现的 GlobalObject database id"),
+        objectRef: z.string().trim().regex(/^O\d+$/)
+          .describe("已在本轮证据中出现的 O# Object 引用"),
         focus: z.string().trim().min(1).max(memoryExploreLimits.focusChars)
           .optional()
           .describe("可选的关系或子问题焦点"),
       }),
-      execute: async ({ globalObjectId, focus }) => {
-        if (!input.evidence.hasObject(globalObjectId) && !additionalKnownObjectIds.has(globalObjectId)) {
-          throw new UnknownExploreObjectError(globalObjectId);
-        }
+      execute: async ({ objectRef, focus }) => {
+        const globalObjectId = input.evidence.objectIdForRef(objectRef);
+        if (!globalObjectId) throw new UnknownExploreObjectError(objectRef);
         reserveCall();
         return merge(
           await followMemoryObject(globalObjectId, focus, {
             signal: input.signal,
-            curatorContext: input.curatorContext,
-            curatorTrace: input.curatorTrace,
           }),
         );
       },

@@ -14,7 +14,6 @@ export type ViewInspectorSnapshot = ViewReadSnapshot & {
   manifest: {
     key: string;
     label: string;
-    version: string;
     schemaVersion: string;
     description: string;
   };
@@ -63,15 +62,14 @@ export class PrismaViewReadPort implements ViewReadPort {
       },
     });
     if (!installed || installed.status !== "enabled") throw new ViewNotFoundError(input.viewKey);
-    if (
-      installed.moduleVersion !== viewModule.manifest.version ||
-      installed.schemaVersion !== viewModule.manifest.schemaVersion
-    ) {
-      throw new ViewRuntimeError(`View ${input.viewKey} 安装版本不兼容`);
+    if (installed.schemaVersion !== viewModule.manifest.schemaVersion) {
+      throw new ViewRuntimeError(`View ${input.viewKey} Schema 不兼容`);
     }
+    const owner = this.registry.getViewOwner(input.viewKey);
+    if (!owner) throw new ViewRuntimeError(`View ${input.viewKey} 没有 Plugin owner`);
     return {
       viewKey: input.viewKey,
-      moduleVersion: viewModule.manifest.version,
+      pluginVersion: owner.pluginVersion,
       schemaVersion: viewModule.manifest.schemaVersion,
       stateVersion: installed.stateVersion.toString(),
       observedAt: new Date().toISOString(),
@@ -107,7 +105,6 @@ export class PrismaViewReadPort implements ViewReadPort {
       manifest: {
         key: viewModule.manifest.key,
         label: viewModule.manifest.label,
-        version: viewModule.manifest.version,
         schemaVersion: viewModule.manifest.schemaVersion,
         description: viewModule.manifest.description,
       },

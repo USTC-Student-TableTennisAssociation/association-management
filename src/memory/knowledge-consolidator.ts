@@ -256,7 +256,7 @@ export async function consolidateTurnKnowledge(
     prompt,
     temperature: 0.1,
     maxOutputTokens: 2_000,
-    timeout: { totalMs: 180_000, stepMs: 180_000 },
+    timeout: { totalMs: 1_800_000, stepMs: 1_800_000 },
   });
   const output = requireStructuredSubmission({
     toolCalls: result.toolCalls,

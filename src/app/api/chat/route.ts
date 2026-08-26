@@ -130,7 +130,7 @@ import type {
 } from "@/memory/types";
 import { emptySeedMap } from "@/memory/types";
 
-export const maxDuration = 600;
+export const maxDuration = 3_600;
 
 // View → Search → optional original-source reads/continuations → Proposal → final answer.
 const MAX_EXPLORE_STEPS = 12;
@@ -603,7 +603,6 @@ export async function POST(request: Request) {
   const query = latestUserQuery(messages);
   if (!query) return jsonError("消息内容不能为空。", 400);
   const requiresMemoryWriteStatusRefresh = isMemoryWriteStatusQuery(query);
-  const extendedSourceReadingRequested = /(全文|完整原文|通读|逐章|整篇)/iu.test(query);
   const latestUserMessageIndex = messages.findLastIndex((message) => message.role === "user");
   const latestUserMessage = messages[latestUserMessageIndex];
   const submittedAt = new Date();
@@ -766,14 +765,10 @@ export async function POST(request: Request) {
       let hasSearchedMemory = false;
       let crossLayerMemorySearchForced = false;
       const coldHigherMemoryTargetIds = new Set<string>();
-      let pendingSynthesisSourceRead: {
-        assertionRef: string;
-        sourceTitle: string;
-        phase: "outline" | "content";
-      } | undefined;
-      let synthesisSourceReadSatisfied = false;
       let latestLocateTrace: MemorySearchTrace | undefined;
       let turnHandoffSubmitted = false;
+      let proposalReceiptCount = 0;
+      let viewCommandAttemptCount = 0;
       let finalRawText = "";
       let finalAudit: GroundingAudit | undefined;
       const streamObservation: ChatStreamObservation = {
@@ -801,13 +796,6 @@ export async function POST(request: Request) {
         resultTokenBudget: exploreResultTokenBudget,
         sharedResultBudget,
         signal: request.signal,
-        curatorContext: {
-          conversation: semanticConversation,
-          originalUserMessage: query,
-          currentInstant: submittedAt.toISOString(),
-          timezone: requestTimezone,
-        },
-        curatorTrace: debugTrace,
         onLocateTrace: (trace) => {
           latestLocateTrace = {
             ...trace,
@@ -827,20 +815,6 @@ export async function POST(request: Request) {
           groundingState.observeSemantics(discovered.semantics);
           if (discovered.knowledgeState?.higherMemory === "absent") {
             coldHigherMemoryTargetIds.add(discovered.knowledgeState.targetObjectId);
-          }
-          if (
-            discovered.taskShape === "synthesis" &&
-            !pendingSynthesisSourceRead
-          ) {
-            const sourceAnchor = discovered.assertions.flatMap((assertion) =>
-              assertion.sources.flatMap((source) => source.kind === "chat"
-                ? []
-                : [{ assertionRef: assertion.ref, sourceTitle: source.sourceTitle }]
-              )
-            )[0];
-            if (sourceAnchor) {
-              pendingSynthesisSourceRead = { ...sourceAnchor, phase: "outline" };
-            }
           }
           console.info(
             "[chat.explore]",
@@ -886,22 +860,43 @@ export async function POST(request: Request) {
           });
           if (!compilation) return [];
           return getDatabase().memoryGlobalObject.findMany({
-            where: { compilationId: compilation.id, canonicalName },
+            where: {
+              compilationId: compilation.id,
+              OR: [
+                { canonicalName },
+                {
+                  surfaceMemberships: {
+                    some: {
+                      objectFragment: { surfaceForms: { has: canonicalName } },
+                    },
+                  },
+                },
+              ],
+            },
             select: { id: true, canonicalName: true },
             take: 2,
           });
         },
+        resolveObjectReference: (reference) => {
+          return evidence.objectForModelReference(reference);
+        },
+        onCommandAttempt: () => {
+          viewCommandAttemptCount += 1;
+        },
         onProposal: (proposal) => {
+          proposalReceiptCount += 1;
           writer.write({ type: "data-viewCommandProposal", data: proposal });
         },
       });
       const objectManagementToolset = createObjectManagementToolset({
         onProposal: (proposal) => {
+          proposalReceiptCount += 1;
           writer.write({ type: "data-objectChangeProposal", data: proposal });
         },
       });
       const libraryToolset = createLibraryToolset({
         onProposal: (proposal) => {
+          proposalReceiptCount += 1;
           writer.write({ type: "data-libraryProposal", data: proposal });
         },
         onPreview: (preview) => groundingState.observeLibraryPreview(preview),
@@ -913,18 +908,6 @@ export async function POST(request: Request) {
         onRead: (sourceRead) => {
           groundingState.observeSourceDocument(sourceRead);
           groundingState.observeSemantics(sourceRead.semantics);
-          if (pendingSynthesisSourceRead) {
-            if (sourceRead.selection.mode === "outline") {
-              pendingSynthesisSourceRead = {
-                ...pendingSynthesisSourceRead,
-                sourceTitle: sourceRead.document.title,
-                phase: "content",
-              };
-            } else {
-              pendingSynthesisSourceRead = undefined;
-              synthesisSourceReadSatisfied = true;
-            }
-          }
         },
       });
       const validReferenceRefs = () => {
@@ -1023,6 +1006,7 @@ export async function POST(request: Request) {
       const knownArtifactNodeIds = new Set<string>();
       const gatewayTools = createCapabilityGatewayTools(openedCapabilities, {
         viewKeySchema: registeredViewKeySchema(extensionRegistry),
+        describeBusinessViewActions: (viewKey) => viewToolset.describeCommands(viewKey),
         openBusinessContext: async ({ viewKey, focus, targetHints }) => {
           const viewModule = extensionRegistry.getView(viewKey)!;
           const [snapshot, viewHigherMemory] = await Promise.all([
@@ -1037,6 +1021,7 @@ export async function POST(request: Request) {
             snapshot,
             viewLabel: viewModule.manifest.label,
             viewDescription: viewModule.manifest.description,
+            aiSemanticInstructions: viewModule.manifest.aiSemanticInstructions,
             cardTypes: viewModule.schema.cardTypes,
             focus,
             targetHints: pageTargetHints,
@@ -1071,11 +1056,17 @@ export async function POST(request: Request) {
               ),
             });
           }
+          const objectRefById = new Map(
+            discovered.objects.map((object) => [object.id, object.ref] as const),
+          );
           return {
             view: businessContext.view,
             cardTypes: viewModule.schema.cardTypes,
             viewHigherMemory: viewHigherMemory ?? null,
-            relevantCards: businessContext.relevantCards,
+            relevantCards: viewToolset.presentCards(
+              businessContext.relevantCards,
+              objectRefById,
+            ),
             cardObjects: discovered.objects,
             objectHigherMemories: discovered.higherMemories ?? [],
             formalCardMissing: businessContext.formalCardMissing,
@@ -1089,7 +1080,7 @@ export async function POST(request: Request) {
               ? "当前正式 View 的存在性与收录状态已经可以直接回答：没有匹配 Card。只有用户还要求相关业务事实或补建依据时，才使用 expandEvidence；相关资料不得冒充正式 View。"
               : businessContext.unresolvedAspects.length
                 ? "如果缺口会影响回答，使用 expandEvidence；如果用户确认或后续可靠证据已经足以填补一个稳定、可复用的正式 View 缺口，还应使用 openActions(business_view) 生成待审批 Proposal；否则直接回答。"
-              : "当前 View + Object Higher Memory 已没有显式缺口，优先直接回答。",
+              : "当前 View 没有 schema-required 缺口。这只描述正式快照，不判断用户是否要求修改可选字段或空 Slot；请继续依据用户目标和 relevantCards 决定回答或打开 Actions。",
           };
         },
         findArtifacts: async ({ title }) => {
@@ -1221,6 +1212,7 @@ export async function POST(request: Request) {
       const alwaysAvailableToolNames = [
         "searchMemory",
         "readMemoryWriteStatus",
+        "queueChatAssertionCapture",
         TURN_HANDOFF_TOOL,
       ];
       const exposedToolNames = [
@@ -1273,10 +1265,14 @@ export async function POST(request: Request) {
           ({ steps }) => {
             const finalStep = steps.at(-1);
             if (!finalStep?.text.trim()) return false;
-            // Every tool call, including the optional Handoff, gets a following
-            // tool-free answer step. This prevents a short pre-tool preamble
-            // from being mistaken for the completed answer.
-            return finalStep.toolCalls.length === 0;
+            // Tool-calling steps always get a following answer step. A short
+            // pre-tool preamble is not a completed action plan.
+            if (finalStep.toolCalls.length > 0) return false;
+            if (
+              openedCapabilities.actionAreas.has("business_view") &&
+              viewCommandAttemptCount === 0
+            ) return false;
+            return true;
           },
         ],
         prepareStep: ({ stepNumber, messages: stepMessages }) => {
@@ -1289,8 +1285,28 @@ export async function POST(request: Request) {
               activeTools: [] as const,
               toolChoice: "none" as const,
               instructions: stepNumber === MAX_EXPLORE_STEPS - 1
-                ? `${instructions}\n\n${FINAL_ANSWER_INSTRUCTION}`
+                ? `${instructions}\n\n${FINAL_ANSWER_INSTRUCTION}${
+                    openedCapabilities.actionAreas.has("business_view") && viewCommandAttemptCount === 0
+                    ? "\n本轮已打开 Business View 写入能力，但没有实际调用 View Command；必须明确说明没有生成 Proposal。"
+                    : ""}`
                 : instructions,
+            };
+          }
+          if (
+            openedCapabilities.actionAreas.has("business_view") &&
+            viewCommandAttemptCount === 0
+          ) {
+            return {
+              ...(stepNumber > 0
+                ? { messages: compactExploreStepMessages(stepMessages) }
+                : {}),
+              activeTools: ["runViewCommand"] as const,
+              toolChoice: "required" as const,
+              instructions: [
+                instructions,
+                "已经打开 Business View 写入能力，但尚未实际调用 View Command。文字说明不能代替真实 Proposal。",
+                "使用 runViewCommand 的 commands 批次提交本轮全部能够提交的条目。创建关联 Card 时填写 Command 声明的自然语言实体名称，由 Runtime 绑定已有 Object；不要把 Chat Assertion Capture 当作来源资料的 Object 创建器。",
+              ].join("\n\n"),
             };
           }
           if (stepNumber === 0 && requiresMemoryWriteStatusRefresh) {
@@ -1301,22 +1317,6 @@ export async function POST(request: Request) {
                 toolName: "readMemoryWriteStatus",
               },
               instructions,
-            };
-          }
-          if (pendingSynthesisSourceRead && stepNumber < MAX_EXPLORE_STEPS - 1) {
-            const sourceInstruction = pendingSynthesisSourceRead.phase === "outline"
-              ? `当前是 synthesis 检索且存在高价值来源。本步必须调用 readSourceDocument，使用 assertionRef=${pendingSynthesisSourceRead.assertionRef}、mode=outline 读取“${pendingSynthesisSourceRead.sourceTitle}”目录；不要直接结束或询问用户。`
-              : `已经读取“${pendingSynthesisSourceRead.sourceTitle}”目录，但尚未读取正文。本步必须再次调用 readSourceDocument，使用 assertionRef=${pendingSynthesisSourceRead.assertionRef}、mode=section，并从刚才目录选择最能覆盖当前未解决子问题的 headingBlockId。读取后回到已收集的 Assertion 与原文完成当前任务。`;
-            return {
-              ...(stepNumber > 0
-                ? { messages: compactExploreStepMessages(stepMessages) }
-                : {}),
-              activeTools: ["readSourceDocument"] as const,
-              toolChoice: {
-                type: "tool" as const,
-                toolName: "readSourceDocument",
-              },
-              instructions: `${instructions}\n\n服务端 synthesis 原文要求：${sourceInstruction}`,
             };
           }
           if (shouldForceCrossLayerMemorySearch({
@@ -1359,18 +1359,9 @@ export async function POST(request: Request) {
               ...activeCapabilityToolNames(openedCapabilities),
               ...alwaysAvailableToolNames,
             ]
-              .filter((name) =>
-                !(
-                  synthesisSourceReadSatisfied &&
-                  !extendedSourceReadingRequested &&
-                  name === "readSourceDocument"
-                )
-              )
               .filter((name) => Boolean(allTools[name])),
             toolChoice: "auto" as const,
-            instructions: synthesisSourceReadSatisfied && !extendedSourceReadingRequested
-              ? `${instructions}\n\n服务端 synthesis 原文边界：本轮已完成目录与一个最相关正文章节的读取。当前任务没有要求通读全文；readSourceDocument 后续不再可用，不得再次调用。请基于已收集的 Higher Memory、Assertions、正式 View 与原文完成任务。`
-              : instructions,
+            instructions,
           };
         },
         temperature: 0.3,
@@ -1385,6 +1376,10 @@ export async function POST(request: Request) {
           switch (chunk.type) {
             case "start-step":
               currentStepTextChars = 0;
+              // A new model step after an error means the SDK recovered and
+              // supplied the tool result back to the model for repair.
+              streamObservation.error = undefined;
+              streamObservation.failureCode = undefined;
               break;
             case "text-delta":
               currentStepTextChars += chunk.text.length;
@@ -1914,6 +1909,8 @@ export async function POST(request: Request) {
             writebackEligibility: reviewNeeded ? "possible" : "none",
             handoffValid: handoffIsValid,
             handoffCandidateCount: candidateQuotes.length,
+            proposalReceiptCount,
+            viewCommandAttemptCount,
             writebackStatus,
             viewPrefetchDurationMs: 0,
             writebackPersistenceDurationMs,
@@ -1934,7 +1931,7 @@ export async function POST(request: Request) {
               accumulatedRetrieval.seedMap.objects.map((object) => object.id),
             );
             await debugTrace.appendSection(
-              "Retrieval Curator · 本轮检索利用率",
+              "Shared Brain · 本轮检索利用率",
               [
                 `- 进入主对话的去重 Object：${returnedObjectIds.size}`,
                 `- 进入主对话的去重 Assertion：${returnedAssertionIds.size}`,
@@ -1989,7 +1986,6 @@ export async function POST(request: Request) {
           streamObservation.failureCode = classifyStreamFailureCode(error);
           streamObservation.streamEnded = false;
           streamObservation.contentChars = lastCompletedStepTextChars || currentStepTextChars;
-          writeStreamStatus();
           console.error(
             "[chat.model-stream]",
             JSON.stringify(safeStreamErrorSummary(error)),

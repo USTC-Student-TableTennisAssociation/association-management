@@ -14,6 +14,9 @@ describe("createModelProfile", () => {
       historyMaxTokens: 40_000,
       memoryMaxTokens: 64_000,
       maxRequestBytes: 2_000_000,
+      maxRetries: 2,
+      modelFirstChunkTimeoutMs: 1_800_000,
+      modelChunkTimeoutMs: 1_800_000,
     });
   });
 

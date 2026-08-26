@@ -589,13 +589,14 @@ Assertion template 与 Object link 规则：
 - Reference Assertion 的 statement_template_markdown 是可检索的导航描述，不需要写入被关联
   Object 的名称，也不要为了建立关联强行加入 {{fragment:...}}；有集合性主题描述可用时，
   不得逐一枚举成员名称来替代 semantic links；
-- Reference Assertion 的 semantic_fragment_keys 必须列出该来源区域语义覆盖的所有相关
-  Fragment key，至少一个；“相关”指表格/名单直接编目且用户会通过其反查该来源的对象，
-  不包括仅作为归属背景的 Object，也不包括某一单元格中的属性对象；这些名称必须由当前来源
-  支持，但无需出现在 Reference 正文中；
-- 例如一张表有五个服务项目，可以保留五个服务 Fragment，但只产生一条说明
-  “主要服务的名称、形式和定位记录于该表”的 Reference，并将五个 key 放入
-  semantic_fragment_keys；不要再加入宿主组织或某行历史定位中出现的背景群体 Fragment；
+- Reference Assertion 的 semantic_fragment_keys 必须列出该来源区域的检索覆盖对象，至少一个；
+  它不是对象级事实关系。除表格/名单直接编目且用户会通过其反查来源的成员外，如果当前区域
+  明确属于某个命名主体或宿主的项目、成员、活动等集合，并且用户会通过该主体检索这份集合，
+  也应包含该主体 Fragment。不得加入只偶然出现的背景对象或某一单元格中的属性对象；这些名称
+  必须由当前来源支持，但无需出现在 Reference 正文中；
+- 例如某组织的一张表有五个服务项目，可以保留五个服务 Fragment，但只产生一条说明
+  “主要服务的名称、形式和定位记录于该表”的 Reference，并将五个项目和来源明确命名的宿主
+  组织 key 放入 semantic_fragment_keys；不要加入某行历史定位中偶然出现的背景群体 Fragment；
 - 名称只存在于 SourceRegion、frozen claim 或 naming hint，没有出现在其他 factual claim 中，
   也仍可合法进入 Fragment；不得为它制造 fake claim；
 - 不输出 supporting blocks、时间、Relation、Object type、business role、alias evidence

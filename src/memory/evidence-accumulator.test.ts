@@ -204,6 +204,39 @@ describe("MemoryEvidenceAccumulator", () => {
     expect(accumulator.snapshot().compilationId).toBe("compilation-1");
   });
 
+  it("resolves a unique in-turn Object by O#、canonical name or surface form", () => {
+    const accumulator = new MemoryEvidenceAccumulator(initial());
+
+    expect(accumulator.objectForModelReference("O1")).toEqual({
+      id: "object-1",
+      canonicalName: "继往开来",
+    });
+    expect(accumulator.objectForModelReference("“继往开来”")).toEqual({
+      id: "object-1",
+      canonicalName: "继往开来",
+    });
+  });
+
+  it("does not guess when an in-turn Object name is ambiguous", () => {
+    const seed = initial();
+    seed.seedMap.objects.push({
+      ...seed.seedMap.objects[0],
+      ref: "O2",
+      id: "object-2",
+    });
+    const accumulator = new MemoryEvidenceAccumulator(seed);
+
+    expect(accumulator.objectForModelReference("继往开来")).toBeUndefined();
+  });
+
+  it("removes an invalidated Higher Memory from the request-local evidence namespace", () => {
+    const accumulator = new MemoryEvidenceAccumulator(initial());
+
+    expect(accumulator.invalidateHigherMemories(["object-1"])).toEqual(["H1"]);
+    expect(accumulator.snapshot().seedMap.higherMemories).toBeUndefined();
+    expect(accumulator.invalidateHigherMemories(["object-1"])).toEqual([]);
+  });
+
   it("rejects evidence from another compilation", () => {
     const accumulator = new MemoryEvidenceAccumulator(initial());
     const result = { ...explored(), compilationId: "compilation-2" };

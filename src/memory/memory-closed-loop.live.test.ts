@@ -64,22 +64,8 @@ function emptyRetrieval(compilationId: string, query: string): MemoryRetrievalRe
   };
 }
 
-function curatorContext(message: string) {
-  return {
-    conversation: [{
-      messageId: "live-memory-search-user",
-      role: "user" as const,
-      text: message,
-    }],
-    originalUserMessage: message,
-    currentInstant: "2026-08-15T02:00:00.000Z",
-    timezone: "Asia/Shanghai",
-  };
-}
-
 async function locate(input: {
   query: string;
-  message: string;
   targetObjectId?: string;
 }): Promise<{ result: MemoryExploreResult; retrieval: MemoryRetrievalResult }> {
   let retrieval: MemoryRetrievalResult | undefined;
@@ -87,10 +73,7 @@ async function locate(input: {
     query: input.query,
     targetHints: [eventName],
     ...(input.targetObjectId ? { targetObjectIds: [input.targetObjectId] } : {}),
-  }, {
-    curatorContext: curatorContext(input.message),
-    onLocate: (value) => { retrieval = value; },
-  });
+  }, { onLocate: (value) => { retrieval = value; } });
   if (!retrieval) throw new Error("Locate 没有返回底层 MemoryRetrievalResult");
   return { result, retrieval };
 }
@@ -199,7 +182,6 @@ describe.runIf(runLive)("real memory closed loop", () => {
 
       const afterFirst = await locate({
         query: "活动什么时候、在哪里举行，当前准备重点是什么",
-        message: `请告诉我${eventName}的时间、地点和准备重点。`,
         targetObjectId: eventObject.id,
       });
       expect(afterFirst.result.objects.some((object) => object.id === eventObject.id)).toBe(true);
@@ -252,7 +234,6 @@ describe.runIf(runLive)("real memory closed loop", () => {
 
       const whileStale = await locate({
         query: "活动当前地点和时间",
-        message: `${eventName}现在在哪里举行，时间变了吗？`,
         targetObjectId: eventObject.id,
       });
       expect(whileStale.result.higherMemories?.some((memory) =>
@@ -291,7 +272,6 @@ describe.runIf(runLive)("real memory closed loop", () => {
 
       const afterRefresh = await locate({
         query: "活动当前地点和时间",
-        message: `${eventName}现在在哪里举行，时间是什么？`,
         targetObjectId: eventObject.id,
       });
       const refreshedMemory = afterRefresh.result.higherMemories?.find((memory) =>

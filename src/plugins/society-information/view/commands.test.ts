@@ -105,6 +105,7 @@ async function execute(transaction: MemoryTransaction, key: string, input: unkno
 
 async function initialize(transaction: MemoryTransaction) {
   const outcome = await execute(transaction, "society.initialize_overview", {
+    societyName: "测试社团",
     societyObjectId: IDS.societyObject,
     profile: { rating: "五星级", purpose: "推广校园乒乓球运动" },
   });
@@ -171,6 +172,7 @@ describe("society-information commands", () => {
     const created = await execute(transaction, "society.save_team_member", {
       mode: "create",
       societyCardId,
+      memberName: "成员甲",
       memberObjectId: IDS.memberA,
       values: { department: "赛事部", position: "干事" },
     });
@@ -197,12 +199,34 @@ describe("society-information commands", () => {
     expect(transaction.cards.get(societyCardId)?.slots.team).toEqual([]);
   });
 
+  it("does not require invented department or position for a known current member", async () => {
+    const transaction = new MemoryTransaction();
+    const societyCardId = await initialize(transaction);
+    const created = await execute(transaction, "society.save_team_member", {
+      mode: "create",
+      societyCardId,
+      memberName: "成员甲",
+      memberObjectId: IDS.memberA,
+      values: {
+        department: null,
+        position: "",
+        description: "当前任期成员，具体部门与职位未确认",
+      },
+    });
+    const memberCardId = (created.summary as { cardId: string }).cardId;
+
+    expect(transaction.cards.get(memberCardId)?.dimensions).toEqual({
+      description: "当前任期成员，具体部门与职位未确认",
+    });
+  });
+
   it("creates, updates, deduplicates and removes long-term activities", async () => {
     const transaction = new MemoryTransaction();
     const societyCardId = await initialize(transaction);
     const created = await execute(transaction, "society.save_long_term_activity", {
       mode: "create",
       societyCardId,
+      activityName: "活动甲",
       activityObjectId: IDS.activityA,
       values: { frequency: "ANNUAL", usualPeriod: "秋季" },
     });
@@ -221,9 +245,18 @@ describe("society-information commands", () => {
       status: "PAUSED",
     });
 
+    await execute(transaction, "society.save_long_term_activity", {
+      mode: "update",
+      societyCardId,
+      activityCardId,
+      changes: { frequency: "WEEKLY" },
+    });
+    expect(transaction.cards.get(activityCardId)?.dimensions.frequency).toBe("WEEKLY");
+
     await expect(execute(transaction, "society.save_long_term_activity", {
       mode: "create",
       societyCardId,
+      activityName: "活动甲",
       activityObjectId: IDS.activityA,
     })).rejects.toThrow("长期活动已经存在");
 
@@ -236,19 +269,40 @@ describe("society-information commands", () => {
     expect(transaction.cards.get(societyCardId)?.slots.activities).toEqual([]);
   });
 
-  it("requires access for active platforms and rejects duplicate URLs", async () => {
+  it("keeps uncertain platforms honest, requires access when active, and rejects duplicate URLs", async () => {
     const transaction = new MemoryTransaction();
     const societyCardId = await initialize(transaction);
+
+    const uncertain = await execute(transaction, "society.save_platform", {
+      mode: "create",
+      societyCardId,
+      platformName: "平台甲",
+      platformObjectId: IDS.platformA,
+      values: { platformType: "视频平台" },
+    });
+    const uncertainCardId = (uncertain.summary as { cardId: string }).cardId;
+    expect(transaction.cards.get(uncertainCardId)?.dimensions).toEqual({
+      platform_type: "视频平台",
+      status: "UNKNOWN",
+    });
+    await execute(transaction, "society.remove_platform", {
+      societyCardId,
+      platformCardId: uncertainCardId,
+      reason: "ENTERED_BY_MISTAKE",
+    });
+
     await expect(execute(transaction, "society.save_platform", {
       mode: "create",
       societyCardId,
+      platformName: "平台甲",
       platformObjectId: IDS.platformA,
-      values: { platformType: "网站" },
+      values: { platformType: "网站", status: "ACTIVE" },
     })).rejects.toThrow("至少需要 URL 或访问说明");
 
     const created = await execute(transaction, "society.save_platform", {
       mode: "create",
       societyCardId,
+      platformName: "平台甲",
       platformObjectId: IDS.platformA,
       values: { platformType: "网站", url: "https://example.com" },
     });
@@ -257,6 +311,7 @@ describe("society-information commands", () => {
     await expect(execute(transaction, "society.save_platform", {
       mode: "create",
       societyCardId,
+      platformName: "平台乙",
       platformObjectId: IDS.platformB,
       values: { platformType: "备用网站", url: "https://example.com" },
     })).rejects.toThrow("平台 URL 已存在");

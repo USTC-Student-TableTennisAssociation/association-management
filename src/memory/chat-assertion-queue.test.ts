@@ -93,4 +93,23 @@ describe("queueChatAssertionCapture", () => {
     });
     expect(toolset.foregroundResult()?.affectedObjects[0].canonicalName).toBe("雷岳鑫");
   });
+
+  it("does not invalidate Objects discovered earlier when no new chat fact is published", async () => {
+    const toolset = createChatAssertionQueueTool({
+      captureForeground: vi.fn().mockResolvedValue({
+        publishedAssertions: 0,
+        publishedAssertionIds: [],
+        affectedObjectIds: [],
+        affectedObjects: [],
+      }),
+    });
+
+    await expect(toolset.tool.execute!({
+      reason: "尝试发布缺失实体",
+      execution: "foreground_for_view",
+    }, executionOptions)).resolves.toEqual(expect.objectContaining({
+      completed: true,
+      message: expect.stringContaining("先前检索到的 O#"),
+    }));
+  });
 });

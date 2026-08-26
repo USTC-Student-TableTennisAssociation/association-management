@@ -20,6 +20,11 @@ function numberedRef(ref: string, prefix: "A" | "O" | "H"): number {
   return match ? Number(match[1]) : 0;
 }
 
+function normalizedObjectReference(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("zh-CN")
+    .replace(/[\s“”"'《》〈〉【】（）()，,。.!！?？:：;；·—_\-]/g, "");
+}
+
 function sourceKey(source: MemorySourceReference): string {
   if (source.kind === "chat") {
     return `chat\u0000${source.evidenceId}\u0000${source.ordinal}`;
@@ -139,6 +144,58 @@ export class MemoryEvidenceAccumulator {
 
   hasObject(globalObjectId: string): boolean {
     return this.objectRefById.has(globalObjectId);
+  }
+
+  objectIdForRef(objectRef: string): string | undefined {
+    for (const [objectId, ref] of this.objectRefById) {
+      if (ref === objectRef) return objectId;
+    }
+    return undefined;
+  }
+
+  /**
+   * Resolve a model-facing Object reference inside this request's evidence
+   * namespace. O# remains the exact form, while a canonical name or known
+   * surface form is accepted only when it identifies one discovered Object.
+   */
+  objectForModelReference(
+    reference: string,
+  ): { id: string; canonicalName: string } | undefined {
+    const objectId = this.objectIdForRef(reference);
+    if (objectId) {
+      const object = this.objects.find((item) => item.id === objectId);
+      return object ? { id: object.id, canonicalName: object.canonicalName } : undefined;
+    }
+    const normalized = normalizedObjectReference(reference);
+    if (!normalized) return undefined;
+    const matches = this.objects.filter((object) =>
+      [object.canonicalName, ...object.surfaceForms].some(
+        (name) => normalizedObjectReference(name) === normalized,
+      )
+    );
+    return matches.length === 1
+      ? { id: matches[0].id, canonicalName: matches[0].canonicalName }
+      : undefined;
+  }
+
+  objectRefForId(globalObjectId: string): string | undefined {
+    return this.objectRefById.get(globalObjectId);
+  }
+
+  invalidateHigherMemories(globalObjectIds: Iterable<string>): string[] {
+    const invalidIds = new Set(globalObjectIds);
+    if (!invalidIds.size) return [];
+    const invalidatedRefs = this.higherMemories
+      .filter((memory) => invalidIds.has(memory.globalObjectId))
+      .map((memory) => memory.ref);
+    if (!invalidatedRefs.length) return [];
+    for (let index = this.higherMemories.length - 1; index >= 0; index -= 1) {
+      const memory = this.higherMemories[index];
+      if (!invalidIds.has(memory.globalObjectId)) continue;
+      this.higherMemories.splice(index, 1);
+      this.higherMemoryRefByObjectId.delete(memory.globalObjectId);
+    }
+    return invalidatedRefs;
   }
 
   merge(result: MemoryExploreResult): MemoryExploreResult {
