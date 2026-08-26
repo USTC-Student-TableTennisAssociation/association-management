@@ -34,6 +34,11 @@ export const societyInformationEvents: readonly DomainEventDefinition[] = [
     })),
   },
   {
+    key: "society.person_updated",
+    version: "1",
+    payloadSchema: zodContractSchema(changedCard),
+  },
+  {
     key: "society.team_member_added",
     version: "1",
     payloadSchema: zodContractSchema(cardAndSociety.extend({ objectId: uuid })),
@@ -57,6 +62,14 @@ export const societyInformationEvents: readonly DomainEventDefinition[] = [
     key: "society.long_term_activity_updated",
     version: "1",
     payloadSchema: zodContractSchema(changedCard),
+  },
+  {
+    key: "society.long_term_activities_reordered",
+    version: "1",
+    payloadSchema: zodContractSchema(z.object({
+      cardId: uuid,
+      activityCardIds: z.array(uuid),
+    })),
   },
   {
     key: "society.long_term_activity_removed",
