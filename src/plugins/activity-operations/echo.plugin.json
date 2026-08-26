@@ -2,6 +2,9 @@
   "schemaVersion": 1,
   "id": "echo.activity-operations",
   "version": "1.0.0",
+  "engines": {
+    "echo": ">=0.1.0-alpha.1 <0.2.0-0"
+  },
   "server": {
     "entry": "./manifest.ts",
     "export": "activityOperationsPlugin"

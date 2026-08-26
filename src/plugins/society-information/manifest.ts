@@ -1,12 +1,15 @@
-import type { EchoPluginManifest } from "@/contracts";
-import { societyOverviewPresentation } from "@/plugins/society-information/presentation/extension";
-import { societyInformationViewModule } from "@/plugins/society-information/view/schema";
+import { defineEchoPlugin } from "@sydaris/plugin-sdk";
 
-export const societyInformationPlugin: EchoPluginManifest = {
+import { societyOverviewPresentation } from "./presentation/extension.js";
+import { societyInformationViewModule } from "./view/schema.js";
+
+export const societyInformationPlugin = defineEchoPlugin({
   id: "echo.society-information",
   version: "1.8.0",
   contributes: {
     views: [societyInformationViewModule],
     presentations: [societyOverviewPresentation],
+    skills: [],
+    tools: [],
   },
-};
+});

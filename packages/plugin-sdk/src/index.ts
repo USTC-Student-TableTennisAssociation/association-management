@@ -1,4 +1,8 @@
 import { z } from "zod";
+import semver from "semver";
+
+export const ECHO_PLUGIN_API_VERSION = "0.1.0-alpha.1";
+export const ECHO_PLUGIN_DESCRIPTOR_SCHEMA_VERSION = 1;
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
@@ -285,10 +289,82 @@ export interface EchoPluginManifest {
   };
 }
 
+const stableIdentifierSchema = z.string().trim().min(1).regex(
+  /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/,
+  "must be a stable lowercase identifier",
+);
+const javascriptExportSchema = z.string().trim().min(1).regex(
+  /^[A-Za-z_$][A-Za-z0-9_$]*$/,
+  "must be a JavaScript export identifier",
+);
+const semverSchema = z.string().trim().regex(
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/,
+  "must be a SemVer version",
+);
+const uniqueIdentifierArraySchema = z.array(stableIdentifierSchema).default([]).refine(
+  (values) => new Set(values).size === values.length,
+  "must not contain duplicates",
+);
+
+export const echoPluginPackageDescriptorSchema = z.object({
+  schemaVersion: z.literal(ECHO_PLUGIN_DESCRIPTOR_SCHEMA_VERSION),
+  id: stableIdentifierSchema,
+  version: semverSchema,
+  engines: z.object({
+    echo: z.string().trim().min(1).refine(
+      (range) => semver.validRange(range, { includePrerelease: true }) !== null,
+      "must be a valid SemVer range",
+    ),
+  }).strict(),
+  server: z.object({
+    entry: z.string().trim().min(1),
+    export: javascriptExportSchema,
+  }).strict(),
+  contributes: z.object({
+    views: uniqueIdentifierArraySchema,
+    presentations: z.array(z.object({
+      loader: z.string().trim().min(1),
+      entry: z.string().trim().min(1),
+      export: javascriptExportSchema,
+    }).strict()).default([]),
+    skills: uniqueIdentifierArraySchema,
+    tools: uniqueIdentifierArraySchema,
+  }).strict(),
+}).strict().superRefine((descriptor, context) => {
+  const loaders = descriptor.contributes.presentations.map(({ loader }) => loader);
+  if (new Set(loaders).size !== loaders.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["contributes", "presentations"],
+      message: "must not declare duplicate Presentation loaders",
+    });
+  }
+});
+
+/** The package-level contract stored in every published Plugin as echo.plugin.json. */
+export type EchoPluginPackageDescriptor = z.infer<typeof echoPluginPackageDescriptorSchema>;
+
+export const echoPluginPackageDescriptorContract = zodContractSchema(
+  echoPluginPackageDescriptorSchema,
+);
+
+export function parseEchoPluginPackageDescriptor(value: unknown): EchoPluginPackageDescriptor {
+  return echoPluginPackageDescriptorSchema.parse(value);
+}
+
+export function isEchoVersionCompatible(echoVersion: string, requiredRange: string): boolean {
+  return semver.valid(echoVersion) !== null
+    && semver.validRange(requiredRange, { includePrerelease: true }) !== null
+    && semver.satisfies(echoVersion, requiredRange, { includePrerelease: true });
+}
+
 export interface EchoPresentationProps {
   viewKey: string;
   refreshRevision?: number;
+  presentationLoader?: string;
   focusCardId?: string;
+  activeConversationId?: string;
+  onAIAttentionScheduled?: () => void;
   onOpenInspector: () => void;
   onAskAI: (prompt: string) => void;
 }

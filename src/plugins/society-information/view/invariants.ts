@@ -1,4 +1,4 @@
-import type { BusinessInvariant, ViewCardState } from "@/contracts";
+import type { BusinessInvariant, ViewCardState } from "@sydaris/plugin-sdk";
 
 const relatedObjectCardTypes = new Set([
   "SocietyCard",

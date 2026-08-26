@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import type { DomainEventDefinition } from "@/contracts";
-import { zodContractSchema } from "@/contracts";
+import type { DomainEventDefinition } from "@sydaris/plugin-sdk";
+import { zodContractSchema } from "@sydaris/plugin-sdk";
 
 const uuid = z.string().uuid();
 const cardAndSociety = z.object({ cardId: uuid, societyCardId: uuid });

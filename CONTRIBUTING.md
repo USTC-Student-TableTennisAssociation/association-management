@@ -86,19 +86,30 @@ View Core 必须能在没有专属 Presentation 和 Skill 的情况下通过 Gen
 
 ## 可发布 Plugin
 
-仓库外 Plugin 应依赖 `@echo/plugin-sdk`，并在 npm 包中包含编译后的 `dist/`、
+仓库外 Plugin 应依赖 `@sydaris/plugin-sdk`，并在 npm 包中包含编译后的 `dist/`、
 `echo.plugin.json` 和 `package.json#echoPlugin`。不要让 Echo 安装时再编译源码；React 专属 UI
-和服务端 Manifest 都应在 `prepack` 前构建完成。
+和服务端 Manifest 都应在 `prepack` 前构建完成。`echo.plugin.json`
+必须包含 `engines.echo` SemVer 范围。
 
 `packages/example-plugin` 是可复制的最小完整示例。发布前应改用自己拥有的 npm scope，
 先发布 SDK，再发布 Plugin，并用 tarball 做一次不依赖 registry 的发布前测试：
 
 ```bash
 pnpm plugins:build
-pnpm --filter @echo/example-plugin pack
-pnpm echo:plugin install ./echo-example-plugin-0.1.0.tgz
+pnpm plugins:pack:sdk
+pnpm --filter @sydaris/example-plugin pack
+pnpm echo:plugin install ./sydaris-example-plugin-0.1.0-alpha.1.tgz
 pnpm build
 pnpm echo:plugin remove echo.example-notes --purge
+```
+
+`src/plugins/society-information` 是真实业务 Plugin 的可发布参考：它直接依赖公共 SDK，
+以 `dist/` 作为本地和 npm 安装的共同入口，并在构建时把 CSS 与图片资源放入包内。
+可用下面的命令生成 tarball：
+
+```bash
+mkdir -p artifacts
+pnpm plugins:pack:society --pack-destination ./artifacts
 ```
 
 第一版只接受可信 Plugin，不支持升级、迁移和回滚；修改已发布行为时使用新的包版本。

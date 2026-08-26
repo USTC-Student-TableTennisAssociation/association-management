@@ -14,28 +14,20 @@ import {
   useState,
 } from "react";
 
-import type { ViewCardState } from "@/contracts";
-import type { ViewInspectorSnapshot } from "@/view-runtime/application/view-read-port";
+import type { EchoPresentationProps, ViewCardState } from "@sydaris/plugin-sdk";
+import type { EchoViewSnapshot } from "@sydaris/plugin-sdk/react";
 
 import {
   SocietyCardEditor,
   type SocietyDimensionChanges,
-} from "./society-card-editor";
+} from "./society-card-editor.js";
+import badgeImage from "./assets/ustctta-badge.svg";
+import heroImage from "./assets/hero-evening-hall.png";
+import wordmarkImage from "./assets/ustctta-wordmark.svg";
 import styles from "./society-overview.module.css";
 
-type SocietyOverviewSnapshot = ViewInspectorSnapshot & {
-  objects?: readonly { id: string; canonicalName: string }[];
-};
-
-type WorkspaceProps = {
-  viewKey: string;
-  refreshRevision?: number;
-  focusCardId?: string;
-  activeConversationId?: string;
-  onAIAttentionScheduled?: () => void;
-  onOpenInspector: () => void;
-  onAskAI: (prompt: string) => void;
-};
+type SocietyOverviewSnapshot = EchoViewSnapshot;
+type WorkspaceProps = EchoPresentationProps;
 
 type EmptySlotProps = {
   eyebrow: string;
@@ -681,7 +673,7 @@ export function SocietyOverviewWorkspace({
     return (
       <div className={styles.statePage}>
         <div className={styles.loadingMark}>
-          <Image src="/brand/ustctta-badge.svg" alt="乒协徽章" width={96} height={101} priority />
+          <Image src={badgeImage} alt="乒协徽章" width={96} height={101} priority />
         </div>
         <p>正在准备球场</p>
       </div>
@@ -728,7 +720,7 @@ export function SocietyOverviewWorkspace({
           <div ref={heroStageRef} className={styles.heroStage} data-ready={heroReady ? "true" : "false"}>
             <div className={styles.nightLayer} aria-hidden="true">
               <Image
-                src="/society-information/hero-evening-hall.png"
+                src={heroImage}
                 alt=""
                 fill
                 sizes="100vw"
@@ -742,11 +734,11 @@ export function SocietyOverviewWorkspace({
             <h1 id="society-hero-title" className="sr-only">{societyName}</h1>
 
             <div ref={heroBadgeRef} className={styles.heroBadge}>
-              <Image src="/brand/ustctta-badge.svg" alt="" width={340} height={358} priority />
+              <Image src={badgeImage} alt="" width={340} height={358} priority />
             </div>
             <div ref={heroWordmarkRef} className={styles.heroWordmark}>
-              <Image className={styles.lightWordmark} src="/brand/ustctta-wordmark.svg" alt={societyName} width={890} height={84} priority />
-              <Image className={styles.blueWordmark} src="/brand/ustctta-wordmark.svg" alt="" width={890} height={84} priority />
+              <Image className={styles.lightWordmark} src={wordmarkImage} alt={societyName} width={890} height={84} priority />
+              <Image className={styles.blueWordmark} src={wordmarkImage} alt="" width={890} height={84} priority />
             </div>
 
             <section id="society-purpose-anchor" className={styles.purposeScene} aria-labelledby="society-purpose-title">
@@ -777,8 +769,8 @@ export function SocietyOverviewWorkspace({
         <div className={styles.lightStory}>
           <div className={styles.brandRail} aria-hidden="true">
             <div className={styles.contentBrand}>
-              <Image src="/brand/ustctta-badge.svg" alt="" width={52} height={55} />
-              <Image src="/brand/ustctta-wordmark.svg" alt="" width={890} height={84} />
+              <Image src={badgeImage} alt="" width={52} height={55} />
+              <Image src={wordmarkImage} alt="" width={890} height={84} />
             </div>
           </div>
 
@@ -952,7 +944,7 @@ export function SocietyOverviewWorkspace({
 
         <section className={styles.joinSection} aria-labelledby="society-join-title">
           <header className={styles.joinHeading}>
-            <Image src="/brand/ustctta-badge.svg" alt="" width={72} height={76} />
+            <Image src={badgeImage} alt="" width={72} height={76} />
             <p>加入我们</p>
             <h2 id="society-join-title">下一场，等你上场。</h2>
             {description ? <p>{description}</p> : null}

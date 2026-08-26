@@ -1,6 +1,7 @@
-import type { PresentationExtension } from "@/contracts";
-import { SOCIETY_OVERVIEW_LOADER } from "@/plugins/society-information/presentation/constants";
-import { SOCIETY_INFORMATION_VIEW_KEY } from "@/plugins/society-information/view/schema";
+import type { PresentationExtension } from "@sydaris/plugin-sdk";
+
+import { SOCIETY_OVERVIEW_LOADER } from "./constants.js";
+import { SOCIETY_INFORMATION_VIEW_KEY } from "../view/schema.js";
 
 export const societyOverviewPresentation: PresentationExtension = {
   id: "echo.society-information.overview",
