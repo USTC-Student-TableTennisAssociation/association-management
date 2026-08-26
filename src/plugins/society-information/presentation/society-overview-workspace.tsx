@@ -31,6 +31,8 @@ type WorkspaceProps = {
   viewKey: string;
   refreshRevision?: number;
   focusCardId?: string;
+  activeConversationId?: string;
+  onAIAttentionScheduled?: () => void;
   onOpenInspector: () => void;
   onAskAI: (prompt: string) => void;
 };
@@ -228,6 +230,8 @@ export function SocietyOverviewWorkspace({
   viewKey,
   refreshRevision = 0,
   focusCardId,
+  activeConversationId,
+  onAIAttentionScheduled,
   onOpenInspector,
   onAskAI,
 }: WorkspaceProps) {
@@ -435,13 +439,21 @@ export function SocietyOverviewWorkspace({
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input, expectedStateVersion: snapshot.stateVersion }),
+        body: JSON.stringify({
+          input,
+          expectedStateVersion: snapshot.stateVersion,
+          ...(activeConversationId ? { conversationId: activeConversationId } : {}),
+        }),
       },
     );
-    const body = await response.json() as { error?: string };
+    const body = await response.json() as {
+      error?: string;
+      aiAttention?: "scheduled" | "next_turn" | "ignored";
+    };
     if (!response.ok) throw new Error(body.error ?? "无法保存 View 修改");
+    if (body.aiAttention === "scheduled") onAIAttentionScheduled?.();
     return body;
-  }, [snapshot, viewKey]);
+  }, [activeConversationId, onAIAttentionScheduled, snapshot, viewKey]);
 
   const openEditor = useCallback((card: ViewCardState, identityLabel: string) => {
     setEditorError(undefined);

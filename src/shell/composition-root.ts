@@ -7,6 +7,12 @@ import { builtinToolCapabilityContracts } from "@/contracts/tool/capability-cont
 import { InstalledViewService } from "@/view-runtime/application/installed-views";
 import { ViewCommandBus } from "@/view-runtime/application/command-bus";
 import { PrismaViewReadPort } from "@/view-runtime/application/view-read-port";
+import { ViewAIAttentionCoordinator } from "@/view-runtime/application/view-ai-attention";
+import { observeViewChanges } from "@/ai/view-change-observer";
+import {
+  appendAssistantTextMessage,
+  loadChatMessages,
+} from "@/chat/persistence";
 
 export function createBuiltinExtensionRegistry(): ExtensionRegistry {
   const registry = new ExtensionRegistry();
@@ -28,6 +34,18 @@ export const viewReadPort = new PrismaViewReadPort(
   installedViewService,
   database,
 );
+export const viewAIAttentionCoordinator = new ViewAIAttentionCoordinator({
+  database,
+  registry: extensionRegistry,
+  readPort: viewReadPort,
+  evaluate: observeViewChanges,
+  appendMessage: (input) => appendAssistantTextMessage(input, database),
+  loadConversation: (input) => loadChatMessages(
+    input.actor,
+    input.conversationId,
+    database,
+  ),
+});
 
 export function createBuiltinToolRuntime(): ToolRuntime {
   const runtime = new ToolRuntime();
