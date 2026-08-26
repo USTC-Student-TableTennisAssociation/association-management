@@ -282,40 +282,6 @@ describe("Chat Assertion capture agent", () => {
     expect(prompt).not.toContain("higherMemoryObjectRefs");
   });
 
-  it("deterministically rejects an interrogative Assertion template", async () => {
-    const { database } = mockDatabase();
-    const captureInput = input();
-    captureInput.semanticContext.conversation[2].text = "乒协的负责人是谁？";
-    vi.mocked(generateText).mockResolvedValue(extractionResult({
-      objects: [existingAssociationBinding()],
-      assertions: [{
-        globalStatementTemplateMarkdown: `{{object:${associationRef}}}的负责人是谁？`,
-        objectRefs: [associationRef],
-        evidence: [{ messageId: "user-current", quotes: ["乒协的负责人是谁？"] }],
-      }],
-    }));
-
-    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
-    expect(database.$transaction).not.toHaveBeenCalled();
-  });
-
-  it("deterministically rejects a declarative template backed only by a question", async () => {
-    const { database } = mockDatabase();
-    const captureInput = input();
-    captureInput.semanticContext.conversation[2].text = "乒协由谁负责？";
-    vi.mocked(generateText).mockResolvedValue(extractionResult({
-      objects: [existingAssociationBinding()],
-      assertions: [{
-        globalStatementTemplateMarkdown: `{{object:${associationRef}}}由雷岳鑫负责。`,
-        objectRefs: [associationRef],
-        evidence: [{ messageId: "user-current", quotes: ["乒协由谁负责？"] }],
-      }],
-    }));
-
-    await expect(captureChatAssertions(captureInput, mockTrace())).resolves.toEqual(emptyCaptureResult);
-    expect(database.$transaction).not.toHaveBeenCalled();
-  });
-
   it("returns stable published IDs on a foreground retry without writing twice", async () => {
     const { database } = mockDatabase();
     const assertionId = "00000000-0000-4000-8000-000000000060";

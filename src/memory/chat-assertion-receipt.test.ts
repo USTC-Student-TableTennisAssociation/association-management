@@ -230,7 +230,11 @@ describe("Chat Assertion processing receipts", () => {
   it("only lets the status tool inspect messages in the current conversation", async () => {
     const toolset = createMemoryWriteStatusTool({
       actorId: "00000000-0000-4000-8000-000000000001",
-      conversationMessageIds: ["message-previous"],
+      conversationMessages: [{
+        messageId: "message-previous",
+        text: "上一条组织事实",
+      }],
+      currentMessageId: "message-current",
     });
 
     await expect(toolset.execute!(
@@ -243,4 +247,116 @@ describe("Chat Assertion processing receipts", () => {
     };
     expect(database.memoryChatAssertionReceipt.findMany).not.toHaveBeenCalled();
   });
+
+  it("binds a receipt query to one explicit prior message", async () => {
+    const toolset = createMemoryWriteStatusTool({
+      actorId: "00000000-0000-4000-8000-000000000001",
+      conversationMessages: [
+        {
+          messageId: "message-previous",
+          text: "Echo 人工测试由测试成员执行。",
+        },
+        {
+          messageId: "message-current",
+          text: "刚才的事实是否已经写入 Assertion？",
+        },
+      ],
+      currentMessageId: "message-current",
+    });
+
+    await expect(toolset.execute!(
+      { messageId: "message-previous" },
+      executionOptions,
+    )).resolves.toEqual(expect.objectContaining({
+      currentMessage: {
+        clientMessageId: "message-current",
+        text: "刚才的事实是否已经写入 Assertion？",
+      },
+      targetMessage: {
+        clientMessageId: "message-previous",
+        text: "Echo 人工测试由测试成员执行。",
+      },
+      targetIsCurrentMessage: false,
+      receipts: [expect.objectContaining({ clientMessageId: "message-previous" })],
+    }));
+
+    const database = databaseState.database as {
+      memoryChatAssertionReceipt: { findMany: ReturnType<typeof vi.fn> };
+    };
+    expect(database.memoryChatAssertionReceipt.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          actorId: "00000000-0000-4000-8000-000000000001",
+          clientMessageId: { in: ["message-previous"] },
+        },
+        take: 1,
+      }),
+    );
+  });
+
+  it("does not let a status query read its own receipt as the target", async () => {
+    const toolset = createMemoryWriteStatusTool({
+      actorId: "00000000-0000-4000-8000-000000000001",
+      conversationMessages: [
+        {
+          messageId: "message-previous",
+          text: "Echo 人工测试由测试成员执行。",
+        },
+        {
+          messageId: "message-current",
+          text: "刚才的事实是否已经写入 Assertion？",
+        },
+      ],
+      currentMessageId: "message-current",
+    });
+
+    await expect(toolset.execute!(
+      { messageId: "message-current" },
+      executionOptions,
+    )).resolves.toEqual(expect.objectContaining({
+      currentMessage: {
+        clientMessageId: "message-current",
+        text: "刚才的事实是否已经写入 Assertion？",
+      },
+      targetMessage: null,
+      targetIsCurrentMessage: false,
+      receipts: [],
+    }));
+
+    const database = databaseState.database as {
+      memoryChatAssertionReceipt: { findMany: ReturnType<typeof vi.fn> };
+    };
+    expect(database.memoryChatAssertionReceipt.findMany).not.toHaveBeenCalled();
+  });
+
+  it("does not infer a recent receipt when messageId is omitted", async () => {
+    const toolset = createMemoryWriteStatusTool({
+      actorId: "00000000-0000-4000-8000-000000000001",
+      conversationMessages: [
+        {
+          messageId: "message-previous",
+          text: "Echo 人工测试由测试成员执行。",
+        },
+        {
+          messageId: "message-current",
+          text: "刚才的事实是否已经写入 Assertion？",
+        },
+      ],
+      currentMessageId: "message-current",
+    });
+
+    await expect(toolset.execute!(
+      {} as { messageId: string },
+      executionOptions,
+    )).resolves.toEqual(expect.objectContaining({
+      targetMessage: null,
+      receipts: [],
+    }));
+
+    const database = databaseState.database as {
+      memoryChatAssertionReceipt: { findMany: ReturnType<typeof vi.fn> };
+    };
+    expect(database.memoryChatAssertionReceipt.findMany).not.toHaveBeenCalled();
+  });
+
 });

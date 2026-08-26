@@ -142,7 +142,7 @@ export function buildCapabilityInstructions(input: {
 
   if (has(toolNames, "readMemoryWriteStatus")) {
     sections.push(
-      "用户追问上一条是否已记住或 Assertion 是否写入时，优先依据处理回执；需要刷新状态或精确 ID 时使用 readMemoryWriteStatus，不要为此搜索组织事实。",
+      "用户追问先前哪条消息是否已记住或 Assertion 是否写入时，优先依据处理回执；调用 readMemoryWriteStatus 时必须根据对应原话显式传入目标 messageId，不得省略、猜测最近消息或把目标回执套用于其他消息；不要为此搜索组织事实。",
     );
   }
 

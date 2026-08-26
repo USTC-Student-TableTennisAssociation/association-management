@@ -211,7 +211,7 @@ export function createChatMemoryMaintenanceScheduler(
         } else if (consolidationInput) {
           await trace?.appendSection(
             "Knowledge Consolidator 跳过",
-            "Assertion Agent 没有发布经过验证的新 Assertion；不使用检索过程或 Assistant 结论维护 Higher Memory。",
+            "Assertion Agent 没有发布经过验证的新 Assertion；不使用普通检索过程或 Assistant 结论维护 Higher Memory。",
           );
         }
 

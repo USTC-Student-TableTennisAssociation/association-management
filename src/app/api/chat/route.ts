@@ -17,11 +17,8 @@ import {
 import { z } from "zod";
 
 import {
-  isMemoryWriteStatusQuery,
   latestUserQuery,
   messageText,
-  requiresCrossLayerContentSearch,
-  shouldForceCrossLayerMemorySearch,
 } from "@/ai/chat-policy";
 import { citedRefs } from "@/ai/citation-refs";
 import {
@@ -604,7 +601,6 @@ export async function POST(request: Request) {
   const messages = validation.data;
   const query = latestUserQuery(messages);
   if (!query) return jsonError("消息内容不能为空。", 400);
-  const requiresMemoryWriteStatusRefresh = isMemoryWriteStatusQuery(query);
   const latestUserMessageIndex = messages.findLastIndex((message) => message.role === "user");
   const latestUserMessage = messages[latestUserMessageIndex];
   const submittedAt = new Date();
@@ -765,7 +761,6 @@ export async function POST(request: Request) {
       const mainToolExecutions: ChatMainToolExecution[] = [];
       const sharedResultBudget = new ToolResultTokenBudget(exploreResultTokenBudget);
       let hasSearchedMemory = false;
-      let crossLayerMemorySearchForced = false;
       const coldHigherMemoryTargetIds = new Set<string>();
       let latestLocateTrace: MemorySearchTrace | undefined;
       let turnHandoffSubmitted = false;
@@ -1040,16 +1035,12 @@ export async function POST(request: Request) {
               ? pageContext?.activeCardId
               : undefined,
           });
-          const invalidatedHigherMemoryRefs = evidence.invalidateHigherMemories(
-            businessContext.higherMemoryConflicts.map((conflict) => conflict.globalObjectId),
-          );
           groundingState.observeBusinessContext({
             view: businessContext.view,
             targetHints: pageTargetHints,
             relevantCards: businessContext.relevantCards,
             coverage: businessContext.evidence.coverage,
             semantics: businessContext.semantics,
-            invalidatedEvidenceRefs: invalidatedHigherMemoryRefs,
           });
           const discovered = evidence.merge(businessContext.evidence);
           firstAuthoritativeTool ??= "openBusinessContext";
@@ -1082,12 +1073,9 @@ export async function POST(request: Request) {
             objectHigherMemories: discovered.higherMemories ?? [],
             formalCardMissing: businessContext.formalCardMissing,
             unresolvedAspects: businessContext.unresolvedAspects,
-            higherMemoryConflicts: businessContext.higherMemoryConflicts,
             coverage: businessContext.evidence.coverage,
             semantics: businessContext.semantics,
-            next: businessContext.higherMemoryConflicts.length
-              ? "正式 View 已推翻旧 Object Higher Memory 中关于 Card 尚未收录或尚未落地的描述；本轮必须以正式 View 为准，不得引用这些旧记忆判断当前状态。"
-              : businessContext.formalCardMissing
+            next: businessContext.formalCardMissing
               ? "当前正式 View 的存在性与收录状态已经可以直接回答：没有匹配 Card。只有用户还要求相关业务事实或补建依据时，才使用 expandEvidence；相关资料不得冒充正式 View。"
               : businessContext.unresolvedAspects.length
                 ? "如果缺口会影响回答，使用 expandEvidence；如果用户确认或后续可靠证据已经足以填补一个稳定、可复用的正式 View 缺口，还应使用 openActions(business_view) 生成待审批 Proposal；否则直接回答。"
@@ -1320,38 +1308,6 @@ export async function POST(request: Request) {
                 "已经打开 Business View 写入能力，但尚未实际调用 View Command。文字说明不能代替真实 Proposal。",
                 "使用 runViewCommand 的 commands 批次提交本轮全部能够提交的条目。创建关联 Card 时填写 Command 声明的自然语言实体名称，由 Runtime 绑定已有 Object；不要把 Chat Assertion Capture 当作来源资料的 Object 创建器。",
               ].join("\n\n"),
-            };
-          }
-          if (stepNumber === 0 && requiresMemoryWriteStatusRefresh) {
-            return {
-              activeTools: ["readMemoryWriteStatus"] as const,
-              toolChoice: {
-                type: "tool" as const,
-                toolName: "readMemoryWriteStatus",
-              },
-              instructions,
-            };
-          }
-          if (shouldForceCrossLayerMemorySearch({
-            query,
-            libraryQueryCount,
-            hasSearchedMemory,
-            alreadyForced: crossLayerMemorySearchForced,
-            resultTokenBudget: exploreResultTokenBudget,
-            stepNumber,
-            maxSteps: MAX_EXPLORE_STEPS,
-          })) {
-            crossLayerMemorySearchForced = true;
-            return {
-              ...(stepNumber > 0
-                ? { messages: compactExploreStepMessages(stepMessages) }
-                : {}),
-              activeTools: ["searchMemory"] as const,
-              toolChoice: {
-                type: "tool" as const,
-                toolName: "searchMemory",
-              },
-              instructions: `${instructions}\n\n服务端检索要求：用户明确要求同时搜索文件标题和内容。Library 标题查询已经执行，但 Shared Brain 主题检索尚未执行；本步必须调用 searchMemory，taskShape=synthesis，targetHints 忠实保留用户给出的主题词，query 说明要查找直接相关的组织知识、姓名和原文线索。`,
             };
           }
           if (turnHandoffSubmitted) {
@@ -1703,8 +1659,8 @@ export async function POST(request: Request) {
             reviewNeeded,
             candidateQuotes,
             reviewSource,
-            fallbackReason: reviewSource === "fallback"
-              ? "未提交有效 Handoff；本轮转交受限 Assertion Agent 审查当前用户原话，仍需通过逐字 Evidence 与确定性校验后才能发布。"
+            rejectedReason: reviewSource === "missing_or_invalid"
+              ? "未提交有效 Handoff；本轮不会启动自动 Assertion 审查。"
               : null,
           });
           const semanticContext = {
@@ -1717,17 +1673,13 @@ export async function POST(request: Request) {
           };
           const automaticWritebackDecision = !foregroundAssertionResult && reviewNeeded
             ? {
-                reason: candidateQuotes.length
-                  ? `主模型 Handoff 建议审查用户原话：${candidateQuotes.join("；")}`
-                  : "主模型 Handoff 缺失、无效或判断本轮可能包含值得审查的组织知识。",
+                reason: `主模型 Handoff 建议审查用户原话：${candidateQuotes.join("；")}`,
               }
             : undefined;
           const backgroundAssertionDecision = assertionQueueDecision ?? automaticWritebackDecision;
-          const authoritativeBusinessViewRead = sourceLayersUsed.has("business_view");
           const consolidationNeeded = Boolean(
             foregroundAssertionResult ||
-            backgroundAssertionDecision ||
-            authoritativeBusinessViewRead,
+            backgroundAssertionDecision,
           );
           const receiptKey = latestUserMessage
             ? {
@@ -1754,7 +1706,6 @@ export async function POST(request: Request) {
                 timezone: requestTimezone,
                 semanticContext,
                 retrieval: accumulatedRetrieval,
-                authoritativeBusinessViewRead,
               }
             : undefined;
           let writebackStatus = !reviewNeeded
@@ -1911,8 +1862,6 @@ export async function POST(request: Request) {
             firstAuthoritativeTool: firstAuthoritativeTool ?? null,
             libraryQueryCount,
             memoryQueryCount,
-            crossLayerContentSearchRequired: requiresCrossLayerContentSearch(query),
-            crossLayerMemorySearchForced,
             libraryQueryTruncated: libraryQueryTruncated ?? null,
             libraryMatchedCount,
             mainModelCallCount: mainModelCallNumber,

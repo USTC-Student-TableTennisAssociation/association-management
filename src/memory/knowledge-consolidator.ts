@@ -7,22 +7,13 @@ import {
   requireStructuredSubmission,
   structuredSubmissionTool,
 } from "@/ai/structured-submission";
-import { getDatabase } from "@/db";
 import { loadAmbientHigherMemories } from "@/memory/ambient-higher-memory";
 import type {
   ChatAssertionCaptureResult,
   ChatAssertionSemanticContext,
 } from "@/memory/chat-assertion";
 import type { AmbientHigherMemoryScope } from "@/memory/higher-memory-queue";
-import {
-  parseCognitiveMemory,
-  parseOperationalMemoryIndex,
-  renderCognitiveMemory,
-  type CognitiveMemory,
-  type OperationalMemoryIndex,
-} from "@/memory/higher-memory-document";
 import type { MemoryRetrievalResult } from "@/memory/types";
-import { higherMemoryContradictsFormalCardPresence } from "@/agent-runtime/view-context";
 
 const consolidationSchema = z.object({
   ambientUpdates: z.array(z.object({
@@ -39,7 +30,6 @@ export type KnowledgeConsolidationInput = {
   timezone: string;
   semanticContext: ChatAssertionSemanticContext;
   retrieval: MemoryRetrievalResult;
-  authoritativeBusinessViewRead?: boolean;
 };
 
 export type KnowledgeConsolidationResult = {
@@ -52,19 +42,6 @@ export type KnowledgeConsolidationResult = {
     scope: AmbientHigherMemoryScope;
     focus: string;
   }>;
-};
-
-type ConsolidationObject = {
-  ref: string;
-  id: string;
-  canonicalName: string;
-};
-
-type ExistingObjectMemory = {
-  globalObjectId: string;
-  cognitiveMemory: CognitiveMemory;
-  operationalIndex: OperationalMemoryIndex;
-  maintainedAt: Date;
 };
 
 export function objectUpdatesFromAssertionGraph(
@@ -83,138 +60,11 @@ export function objectUpdatesFromAssertionGraph(
   });
 }
 
-function recordValue(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-export function authoritativeBusinessViewObjectIds(
-  semanticContext: ChatAssertionSemanticContext,
-): string[] {
-  const ids = new Set<string>();
-  for (const execution of semanticContext.toolExecutions) {
-    if (!execution.success || execution.toolName !== "openBusinessContext") continue;
-    const output = recordValue(execution.output);
-    if (!output || output.formalCardMissing !== false || !Array.isArray(output.relevantCards)) {
-      continue;
-    }
-    const semantics = recordValue(output.semantics);
-    const observations = Array.isArray(semantics?.observations) ? semantics.observations : [];
-    const authoritativePresence = observations.some((value) => {
-      const observation = recordValue(value);
-      return observation?.layer === "business_view" &&
-        observation.predicate === "contains_matching_card" &&
-        observation.status === "present" &&
-        observation.authority === "authoritative";
-    });
-    if (!authoritativePresence) continue;
-    for (const value of output.relevantCards) {
-      const card = recordValue(value);
-      if (!Array.isArray(card?.relatedObjectIds)) continue;
-      for (const id of card.relatedObjectIds) {
-        if (typeof id === "string" && id) ids.add(id);
-      }
-    }
-  }
-  return [...ids];
-}
-
-export function ensureAuthoritativeViewReconciliation(input: {
-  semanticContext: ChatAssertionSemanticContext;
-  objects: ConsolidationObject[];
-  oldObjectMemories: ExistingObjectMemory[];
-  oldAmbientMemories: Array<{
-    scope: AmbientHigherMemoryScope;
-    contentMarkdown: string;
-    maintainedAt: string;
-  }>;
-  result: KnowledgeConsolidationResult;
-}): KnowledgeConsolidationResult {
-  const authoritativeIds = new Set(authoritativeBusinessViewObjectIds(input.semanticContext));
-  if (!authoritativeIds.size) return input.result;
-  const oldMemoryIds = new Set(input.oldObjectMemories.map((memory) => memory.globalObjectId));
-  const conflictingOldMemoryIds = new Set(input.oldObjectMemories
-    .filter((memory) => higherMemoryContradictsFormalCardPresence(
-      renderCognitiveMemory(memory.cognitiveMemory),
-    ))
-    .map((memory) => memory.globalObjectId));
-  const objectUpdates = [...input.result.objectUpdates];
-  const selectedObjectIds = new Set(objectUpdates.map((update) => update.globalObjectId));
-  const reconciledObjects = input.objects.filter((object) =>
-    authoritativeIds.has(object.id) &&
-    oldMemoryIds.has(object.id) &&
-    conflictingOldMemoryIds.has(object.id)
-  );
-  for (const object of reconciledObjects) {
-    if (selectedObjectIds.has(object.id) || objectUpdates.length >= 6) continue;
-    selectedObjectIds.add(object.id);
-    objectUpdates.push({
-      globalObjectId: object.id,
-      canonicalName: object.canonicalName,
-      focus: "使用本轮成功读取的正式 Business View 对账当前状态；正式 Card 已存在时，必须删除旧 Higher Memory 中尚未收录、尚未落地或待审批生效的过时描述，同时保留未被推翻的稳定画像。",
-    });
-  }
-  const ambientUpdates = [...input.result.ambientUpdates];
-  const workingSetSelected = ambientUpdates.some((update) => update.scope === "working_set");
-  const workingSetMemory = input.oldAmbientMemories.find((memory) => memory.scope === "working_set");
-  const affectedNames = reconciledObjects
-    .map((object) => object.canonicalName)
-    .filter((name) => workingSetMemory?.contentMarkdown.includes(name));
-  if (!workingSetSelected && affectedNames.length) {
-    ambientUpdates.push({
-      scope: "working_set",
-      focus: `使用正式 Business View 对账共同工作集中 ${affectedNames.join("、")} 的当前阶段；删除仍称正式 Card 未收录、未落地或待审批的过时描述。`,
-    });
-  }
-  return { objectUpdates, ambientUpdates };
-}
-
 export async function consolidateTurnKnowledge(
   input: KnowledgeConsolidationInput,
   captureResult: ChatAssertionCaptureResult,
   trace?: EchoDebugTrace,
 ): Promise<KnowledgeConsolidationResult> {
-  const database = getDatabase();
-  const graphObjects: ConsolidationObject[] = captureResult.affectedObjects.map((object, index) => ({
-    ref: `AFFECTED_${index + 1}`,
-    id: object.id,
-    canonicalName: object.canonicalName,
-  }));
-  const knownIds = new Set(graphObjects.map((object) => object.id));
-  const authoritativeIds = authoritativeBusinessViewObjectIds(input.semanticContext);
-  const missingAuthoritativeIds = authoritativeIds.filter((id) => !knownIds.has(id));
-  const authoritativeRows = missingAuthoritativeIds.length
-    ? await database.memoryGlobalObject.findMany({
-        where: { id: { in: missingAuthoritativeIds } },
-        select: { id: true, canonicalName: true },
-      })
-    : [];
-  const objects = [
-    ...graphObjects,
-    ...authoritativeRows.map((object, index) => ({
-      ref: `VIEW_${index + 1}`,
-      id: object.id,
-      canonicalName: object.canonicalName,
-    })),
-  ];
-  const oldObjectRows = objects.length
-    ? await database.memoryObjectHigherMemory.findMany({
-        where: { globalObjectId: { in: objects.map((object) => object.id) } },
-        select: {
-          globalObjectId: true,
-          cognitiveMemory: true,
-          operationalIndex: true,
-          maintainedAt: true,
-        },
-      })
-    : [];
-  const oldObjectMemories: ExistingObjectMemory[] = oldObjectRows.map((memory) => ({
-    globalObjectId: memory.globalObjectId,
-    cognitiveMemory: parseCognitiveMemory(memory.cognitiveMemory),
-    operationalIndex: parseOperationalMemoryIndex(memory.operationalIndex),
-    maintainedAt: memory.maintainedAt,
-  }));
   const oldAmbientMemories = await loadAmbientHigherMemories();
   const graphObjectUpdates = objectUpdatesFromAssertionGraph(captureResult);
   const prompt = [
@@ -231,7 +81,6 @@ export async function consolidateTurnKnowledge(
       timezone: input.timezone,
       oldAmbientHigherMemories: oldAmbientMemories,
       assertionPublication: captureResult,
-      authoritativeBusinessViewRead: Boolean(input.authoritativeBusinessViewRead),
       semanticContext: input.semanticContext,
       retrieval: {
         query: input.retrieval.query,
@@ -266,16 +115,10 @@ export async function consolidateTurnKnowledge(
   const ambientUpdates = output.ambientUpdates.filter((update, index, all) =>
     all.findIndex((candidate) => candidate.scope === update.scope) === index
   );
-  const reconciled = ensureAuthoritativeViewReconciliation({
-    semanticContext: input.semanticContext,
-    objects,
-    oldObjectMemories,
-    oldAmbientMemories,
-    result: { objectUpdates: graphObjectUpdates, ambientUpdates },
-  });
+  const consolidated = { objectUpdates: graphObjectUpdates, ambientUpdates };
   await trace?.appendSection(
     "后台 Knowledge Consolidator · 决策",
-    debugCodeBlock(debugJson(reconciled), "json"),
+    debugCodeBlock(debugJson(consolidated), "json"),
   );
-  return reconciled;
+  return consolidated;
 }

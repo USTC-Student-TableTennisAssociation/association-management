@@ -233,6 +233,17 @@ export class PrismaCardGraphTransaction implements ViewTransaction {
     if (policy?.max !== undefined && objectIds.length > policy.max) {
       throw new ViewRuntimeError(`${cardType.key} 最多允许 ${policy.max} 个 Related Objects`);
     }
+    if (objectIds.length) {
+      const existingObjects = await this.database.memoryGlobalObject.findMany({
+        where: { id: { in: [...objectIds] } },
+        select: { id: true },
+      });
+      if (existingObjects.length !== objectIds.length) {
+        const existingIds = new Set(existingObjects.map((object) => object.id));
+        const missingIds = objectIds.filter((objectId) => !existingIds.has(objectId));
+        throw new ViewRuntimeError(`Related Objects 不存在：${missingIds.join(", ")}`);
+      }
+    }
     if (policy?.uniqueCardPerObject && objectIds.length) {
       const duplicate = await this.database.viewCard.findFirst({
         where: {

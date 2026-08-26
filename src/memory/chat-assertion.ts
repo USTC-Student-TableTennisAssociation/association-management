@@ -11,7 +11,6 @@ import {
   type EchoDebugTrace,
 } from "@/ai/debug-trace";
 import { getChatModel } from "@/ai/provider";
-import { isPureQuestion } from "@/ai/turn-handoff";
 import {
   requireStructuredSubmission,
   structuredSubmissionTool,
@@ -834,9 +833,6 @@ function prepareAssertion(
   currentMessageId: string,
   conversationActorObjectId?: string,
 ): PreparedAssertionResult {
-  if (isPureQuestion(extracted.globalStatementTemplateMarkdown)) {
-    return { success: false, reason: "疑问句不能作为 Assertion 发布。" };
-  }
   const evidenceIds = extracted.evidence.map((item) => item.messageId);
   if (!evidenceIds.includes(currentMessageId)) {
     return { success: false, reason: "命题没有把当前排队用户消息列为 Evidence。" };
@@ -851,9 +847,6 @@ function prepareAssertion(
     }
     if (evidence.quotes.some((quote) => !message.text.includes(quote))) {
       return { success: false, reason: `Evidence ${evidence.messageId} 至少有一段不是用户原话的逐字子串。` };
-    }
-    if (evidence.quotes.some((quote) => isPureQuestion(quote))) {
-      return { success: false, reason: `Evidence ${evidence.messageId} 使用了纯疑问句，不能证明事实。` };
     }
   }
   if (extracted.globalStatementTemplateMarkdown.includes("{{fragment:")) {

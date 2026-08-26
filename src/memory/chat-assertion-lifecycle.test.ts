@@ -320,59 +320,6 @@ describe("post-answer memory maintenance pipeline", () => {
     expect(lifecycleState.maintain).not.toHaveBeenCalled();
   });
 
-  it("consolidates a successful Business View read without a new Assertion", async () => {
-    const scheduler = createChatMemoryMaintenanceScheduler();
-    scheduler.publish({
-      consolidation: {
-        clientMessageId: "message-view-read",
-        authoritativeBusinessViewRead: true,
-      } as never,
-    });
-
-    await lifecycleState.afterCallback?.();
-
-    expect(lifecycleState.capture).not.toHaveBeenCalled();
-    expect(lifecycleState.consolidate).toHaveBeenCalledWith(
-      expect.objectContaining({ authoritativeBusinessViewRead: true }),
-      expect.objectContaining({ publishedAssertions: 0 }),
-      undefined,
-    );
-    expect(lifecycleState.maintain).toHaveBeenCalledOnce();
-  });
-
-  it("preserves a cold-search Object target when Business View consolidation adds nothing", async () => {
-    lifecycleState.consolidate.mockResolvedValueOnce({
-      objectUpdates: [],
-      ambientUpdates: [],
-    });
-    const scheduler = createChatMemoryMaintenanceScheduler();
-    scheduler.publish({
-      consolidation: {
-        clientMessageId: "message-cold-search",
-        authoritativeBusinessViewRead: true,
-      } as never,
-      higherMemory: {
-        clientMessageId: "message-cold-search",
-        queueDecision: {
-          targets: [{ scope: "object", globalObjectId: "cold-object" }],
-          reason: "首次实质性检索冷 Object",
-        },
-      } as never,
-    });
-
-    await lifecycleState.afterCallback?.();
-
-    expect(lifecycleState.consolidate).toHaveBeenCalledOnce();
-    expect(lifecycleState.maintain).toHaveBeenCalledWith(
-      expect.objectContaining({
-        queueDecision: expect.objectContaining({
-          targets: [{ scope: "object", globalObjectId: "cold-object" }],
-        }),
-      }),
-      undefined,
-    );
-  });
-
   it("records a failed background Assertion attempt", async () => {
     lifecycleState.capture.mockRejectedValueOnce(new Error("capture failed"));
     const scheduler = createChatMemoryMaintenanceScheduler();

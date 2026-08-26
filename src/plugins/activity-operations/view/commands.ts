@@ -22,6 +22,7 @@ const dateRangeSchema = z.object({
 });
 
 const createActivitySchema = z.object({
+  objectId: z.string().uuid().optional(),
   name: z.string().trim().min(1).max(200),
   description: z.string().max(5_000).optional(),
   status: activityStatusSchema.default("PLANNING"),
@@ -92,6 +93,7 @@ const createActivity: CommandDefinition<z.infer<typeof createActivitySchema>> = 
   async execute(context, input) {
     const cardId = await context.transaction.createCard({
       cardTypeKey: "ActivityCard",
+      relatedObjectIds: input.objectId ? [input.objectId] : [],
       dimensions: dimensions({
         name: input.name,
         description: input.description,
