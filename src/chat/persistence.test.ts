@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createUIMessageStream, readUIMessageStream } from "ai";
 
+import type { ClubChatMessage } from "@/ai/types";
 import {
+  appendAssistantTextMessage,
   ChatConversationAccessError,
+  hasPersistableChatContent,
   loadChatMessages,
   saveChatMessage,
 } from "@/chat/persistence";
@@ -25,6 +29,8 @@ function databaseFixture(rows: unknown[] = []) {
       update: vi.fn().mockResolvedValue(undefined),
     },
     chatMessage: {
+      aggregate: vi.fn().mockResolvedValue({ _max: { position: 4 } }),
+      create: vi.fn().mockResolvedValue(undefined),
       upsert: vi.fn().mockResolvedValue(undefined),
       findMany: vi.fn().mockResolvedValue(rows),
     },
@@ -41,6 +47,31 @@ beforeEach(() => {
 });
 
 describe("chat persistence", () => {
+  it("keeps reasoning-only and stream-status-only assistant diagnostics", () => {
+    expect(hasPersistableChatContent({
+      id: "assistant-reasoning",
+      role: "assistant",
+      parts: [{ type: "reasoning", text: "正在检查检索结果" }],
+    })).toBe(true);
+    expect(hasPersistableChatContent({
+      id: "assistant-status",
+      role: "assistant",
+      parts: [{
+        type: "data-streamStatus",
+        data: {
+          status: "failed",
+          completionKind: "error",
+          reasoningChars: 0,
+          contentChars: 0,
+          toolCallCount: 0,
+          modelCallCount: 1,
+          retryCount: 0,
+          partial: true,
+        },
+      }],
+    })).toBe(true);
+  });
+
   it("upserts complete UI message parts by stable client message id", async () => {
     const { database, transaction } = databaseFixture();
     const message = {
@@ -87,6 +118,97 @@ describe("chat persistence", () => {
         position: 2,
       }),
     });
+  });
+
+  it("appends proactive assistant text after the latest persisted position", async () => {
+    const { database, transaction } = databaseFixture();
+
+    const message = await appendAssistantTextMessage({
+      actor,
+      conversationId,
+      text: "需要我同步检查相关知识吗？",
+    }, database as never);
+
+    expect(message).toEqual(expect.objectContaining({
+      role: "assistant",
+      parts: [{ type: "text", text: "需要我同步检查相关知识吗？" }],
+    }));
+    expect(message.id).toMatch(/^view-attention-/);
+    expect(transaction.chatMessage.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        conversationId,
+        role: "ASSISTANT",
+        position: 5,
+      }),
+    });
+  });
+
+  it("persists partial text, reasoning, and failure status from an interrupted UI stream", async () => {
+    const stream = createUIMessageStream<ClubChatMessage>({
+      generateId: () => "assistant-interrupted",
+      execute: ({ writer }) => {
+        writer.write({ type: "reasoning-start", id: "reasoning" });
+        writer.write({
+          type: "reasoning-delta",
+          id: "reasoning",
+          delta: "正在核对证据",
+        });
+        writer.write({ type: "reasoning-end", id: "reasoning" });
+        writer.write({ type: "text-start", id: "answer" });
+        writer.write({ type: "text-delta", id: "answer", delta: "已生成的部分正文" });
+        writer.write({ type: "text-end", id: "answer" });
+        writer.write({
+          type: "data-streamStatus",
+          data: {
+            status: "failed",
+            completionKind: "error",
+            failureCode: "timeout",
+            reasoningChars: 6,
+            contentChars: 8,
+            toolCallCount: 0,
+            modelCallCount: 2,
+            retryCount: 1,
+            partial: true,
+            error: {
+              name: "TimeoutError",
+              message: "Chunk timeout of 180000ms exceeded",
+            },
+          },
+        });
+      },
+    });
+    let responseMessage: ClubChatMessage | undefined;
+    for await (const message of readUIMessageStream<ClubChatMessage>({ stream })) {
+      responseMessage = message;
+    }
+    expect(responseMessage).toBeDefined();
+
+    const { database, transaction } = databaseFixture();
+    await saveChatMessage({
+      actor,
+      conversationId,
+      message: responseMessage!,
+      position: 2,
+    }, database as never);
+
+    expect(transaction.chatMessage.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          parts: expect.arrayContaining([
+            expect.objectContaining({ type: "reasoning", text: "正在核对证据" }),
+            expect.objectContaining({ type: "text", text: "已生成的部分正文" }),
+            expect.objectContaining({
+              type: "data-streamStatus",
+              data: expect.objectContaining({
+                status: "failed",
+                failureCode: "timeout",
+                retryCount: 1,
+              }),
+            }),
+          ]),
+        }),
+      }),
+    );
   });
 
   it("filters structured-only assistant placeholders while restoring history", async () => {

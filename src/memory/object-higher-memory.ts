@@ -44,6 +44,7 @@ export type ObjectHigherMemoryMaintenanceInput = {
   semanticContext: ChatAssertionSemanticContext;
   retrieval: MemoryRetrievalResult;
   queueDecision: ObjectHigherMemoryQueueDecision;
+  existingOnly?: boolean;
 };
 
 /**
@@ -104,7 +105,7 @@ function maintenancePrompt(input: ObjectHigherMemoryMaintenanceInput, state: {
     "围绕 queueDecision.reason 工作。输入已经由服务端按目标 Object 补全了本轮可用 Assertion 与来源入口；只依据这些证据形成有限认知，不要追求对象档案全集。",
     "对于当前状态，只有 Assertion 明确说明现在有效，或有效区间覆盖维护时间，才可无保留地写成当前事实。否则写成“最新明确记录/截至某时的记录”，或者说明现在无法确认。冲突不得按上传时间静默消解。",
     "每个 Cognitive 字段应简洁；没有证据或不适用于该对象的可留空。不要写生成过程、搜索过程、维护原因或免责声明式套话。",
-    "若某个目标 Object 当前完全没有足以形成有用认知的 grounded Assertion，可以不输出该 Object；不能为了完成任务而填充空泛内容。",
+    "若某个目标 Object 当前完全没有足以形成有用认知的 grounded Assertion 或本轮实际读取的正式 View 事实，可以不输出该 Object；不能为了完成任务而填充空泛内容。",
     "完成判断后必须调用 submitObjectHigherMemory，不要在普通文本中输出 JSON。",
     JSON.stringify({
       maintenanceInstant: input.submittedAt,
@@ -196,9 +197,16 @@ export async function maintainObjectHigherMemories(
     operationalIndex: parseOperationalMemoryIndex(memory.operationalIndex),
     maintainedAt: memory.maintainedAt.toISOString(),
   }));
+  if (input.existingOnly && oldRows.length !== targetIds.length) {
+    await trace?.appendSection(
+      "Higher Memory 目标校验",
+      "本轮只允许更新已有 Object Higher Memory；至少一个目标已不存在，因此未执行写入。",
+    );
+    return 0;
+  }
 
   const searchEvidence = new MemoryEvidenceAccumulator(input.retrieval);
-  const maintenanceSignal = AbortSignal.timeout(180_000);
+  const maintenanceSignal = AbortSignal.timeout(1_800_000);
   const objectEvidence = await Promise.all(targetIds.map((globalObjectId) =>
     followObject(
       globalObjectId,
@@ -337,25 +345,29 @@ export async function maintainObjectHigherMemories(
       throw new Error("Higher Memory 目标 Object 已改变");
     }
     for (const memory of accepted) {
-      await transaction.memoryObjectHigherMemory.upsert({
-        where: { globalObjectId: memory.globalObjectId },
-        create: {
-          compilationId: compilation.id,
-          globalObjectId: memory.globalObjectId,
-          cognitiveMemory: memory.cognitiveMemory,
-          operationalIndex: memory.operationalIndex,
-          maintainedAt,
-          triggerMessageId: input.clientMessageId,
-          maintenanceReason: input.queueDecision.reason,
-        },
-        update: {
-          cognitiveMemory: memory.cognitiveMemory,
-          operationalIndex: memory.operationalIndex,
-          maintainedAt,
-          triggerMessageId: input.clientMessageId,
-          maintenanceReason: input.queueDecision.reason,
-        },
-      });
+      const data = {
+        cognitiveMemory: memory.cognitiveMemory,
+        operationalIndex: memory.operationalIndex,
+        maintainedAt,
+        triggerMessageId: input.clientMessageId,
+        maintenanceReason: input.queueDecision.reason,
+      };
+      if (input.existingOnly) {
+        await transaction.memoryObjectHigherMemory.update({
+          where: { globalObjectId: memory.globalObjectId },
+          data,
+        });
+      } else {
+        await transaction.memoryObjectHigherMemory.upsert({
+          where: { globalObjectId: memory.globalObjectId },
+          create: {
+            compilationId: compilation.id,
+            globalObjectId: memory.globalObjectId,
+            ...data,
+          },
+          update: data,
+        });
+      }
     }
   }, { maxWait: 30_000, timeout: 120_000 });
 
