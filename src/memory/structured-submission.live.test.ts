@@ -7,11 +7,11 @@ import {
   currentMemoryActor,
   type ChatAssertionCaptureResult,
 } from "@/memory/chat-assertion";
-import { maintainObjectHigherMemories } from "@/memory/object-higher-memory";
 import {
-  curateRetrievalAssertions,
-  resolveRetrievalTargets,
-} from "@/memory/retrieval-curator";
+  parseCognitiveMemory,
+  parseOperationalMemoryIndex,
+} from "@/memory/higher-memory-document";
+import { maintainObjectHigherMemories } from "@/memory/object-higher-memory";
 import type { MemoryRetrievalResult } from "@/memory/types";
 
 const runLive = process.env.ECHO_LIVE_STRUCTURED_SUBMISSION_TEST === "1";
@@ -129,63 +129,6 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
   afterAll(async () => {
     await getDatabase().$disconnect();
   });
-
-  it("uses forced tool submissions for both Retrieval Curator decisions", async () => {
-    const context = {
-      conversation: [{
-        messageId: "live-curator-user-001",
-        role: "user" as const,
-        text: "我说的是星河协会本身，不是星河协会知识库。",
-      }],
-      originalUserMessage: "那它现在最需要处理什么？",
-      currentInstant: "2026-08-15T01:00:00.000Z",
-      timezone: "Asia/Shanghai",
-    };
-    const objects = [{
-      id: "association",
-      canonicalName: "星河协会",
-      surfaceForms: ["协会"],
-      lexicalMatch: true,
-      semanticMatch: true,
-    }, {
-      id: "knowledge-base",
-      canonicalName: "星河协会知识库",
-      surfaceForms: ["知识库"],
-      lexicalMatch: true,
-      semanticMatch: true,
-    }];
-
-    const targets = await resolveRetrievalTargets({
-      query: "当前重点",
-      targetHints: ["它"],
-      candidates: objects,
-      context,
-    });
-    expect(targets.mode).toBe("model");
-    expect(targets.targetObjectIds).toEqual(["association"]);
-
-    const assertions = await curateRetrievalAssertions({
-      query: "当前重点",
-      targetHints: ["星河协会"],
-      targetObjects: [objects[0]],
-      candidates: [{
-        id: "direct",
-        renderedStatement: "星河协会当前重点是完成场地确认。",
-        kind: "grounded",
-        contextDependent: false,
-        sourceSummary: ["chat:test"],
-      }, {
-        id: "unrelated",
-        renderedStatement: "星河协会知识库收录了历史材料。",
-        kind: "grounded",
-        contextDependent: false,
-        sourceSummary: ["document:test"],
-      }],
-      context,
-    });
-    expect(assertions.mode).toBe("model");
-    expect(assertions.selectedAssertionIds).toContain("direct");
-  }, 180_000);
 
   it("lets Chat Assertion explicitly submit an empty extraction", async () => {
     const compilation = await latestCompilation();
@@ -354,7 +297,6 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
       publishedAssertions: 0,
       publishedAssertionIds: [],
       affectedObjectIds: [staleObject.id],
-      higherMemoryObjectIds: [],
       affectedObjects: [{ ...staleObject, resolution: "created" }],
     } : undefined);
     const captureInput = {
@@ -464,7 +406,6 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
       publishedAssertions: 0,
       publishedAssertionIds: [],
       affectedObjectIds: staleObjects.map((object) => object.id),
-      higherMemoryObjectIds: [],
       affectedObjects: staleObjects.map((object) => ({ ...object, resolution: "created" })),
     } : undefined);
 
@@ -557,7 +498,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
     const target = await database.memoryGlobalObject.findFirstOrThrow({
       where: {
         compilationId: compilation.id,
-        literalReferences: { some: {} },
+        assertionLinks: { some: {} },
       },
       orderBy: { canonicalName: "asc" },
       select: {
@@ -618,7 +559,8 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
         await database.memoryObjectHigherMemory.update({
           where: { globalObjectId: target.id },
           data: {
-            contentMarkdown: target.higherMemory.contentMarkdown,
+            cognitiveMemory: parseCognitiveMemory(target.higherMemory.cognitiveMemory),
+            operationalIndex: parseOperationalMemoryIndex(target.higherMemory.operationalIndex),
             maintainedAt: target.higherMemory.maintainedAt,
             triggerMessageId: target.higherMemory.triggerMessageId,
             maintenanceReason: target.higherMemory.maintenanceReason,

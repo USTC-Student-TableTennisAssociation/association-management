@@ -11,7 +11,7 @@ export async function GET() {
     orderBy: { viewKey: "asc" },
     select: {
       viewKey: true,
-      moduleVersion: true,
+      pluginVersion: true,
       schemaVersion: true,
       stateVersion: true,
       status: true,
@@ -24,7 +24,7 @@ export async function GET() {
       const presentationExtension = extensionRegistry.listPresentations()
         .find((candidate) =>
           candidate.targetView === state.viewKey &&
-          candidate.compatibleViewVersions === state.moduleVersion
+          candidate.schemaVersion === state.schemaVersion
         );
       const presentation = presentationExtension?.presentations[0];
       return viewModule

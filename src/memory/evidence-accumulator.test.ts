@@ -30,6 +30,7 @@ function initial(): MemoryRetrievalResult {
         id: "memory-1",
         globalObjectId: "object-1",
         contentMarkdown: "这是对继往开来的高层认知。",
+        operationalIndex: { aspects: [] },
         maintainedAt: "2026-08-14T00:00:00.000Z",
       }],
       assertions: [{
@@ -201,6 +202,31 @@ describe("MemoryEvidenceAccumulator", () => {
     accumulator.merge(explored());
 
     expect(accumulator.snapshot().compilationId).toBe("compilation-1");
+  });
+
+  it("resolves a unique in-turn Object by O#、canonical name or surface form", () => {
+    const accumulator = new MemoryEvidenceAccumulator(initial());
+
+    expect(accumulator.objectForModelReference("O1")).toEqual({
+      id: "object-1",
+      canonicalName: "继往开来",
+    });
+    expect(accumulator.objectForModelReference("“继往开来”")).toEqual({
+      id: "object-1",
+      canonicalName: "继往开来",
+    });
+  });
+
+  it("does not guess when an in-turn Object name is ambiguous", () => {
+    const seed = initial();
+    seed.seedMap.objects.push({
+      ...seed.seedMap.objects[0],
+      ref: "O2",
+      id: "object-2",
+    });
+    const accumulator = new MemoryEvidenceAccumulator(seed);
+
+    expect(accumulator.objectForModelReference("继往开来")).toBeUndefined();
   });
 
   it("removes an invalidated Higher Memory from the request-local evidence namespace", () => {

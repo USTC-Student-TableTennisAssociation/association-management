@@ -1,4 +1,4 @@
-import type { VersionRange, ViewKey } from "@/contracts/view";
+import type { ViewKey } from "@/contracts/view";
 
 export interface ViewPresentationDefinition {
   key: string;
@@ -11,6 +11,7 @@ export interface PresentationExtension {
   id: string;
   version: string;
   targetView: ViewKey;
-  compatibleViewVersions: VersionRange;
+  /** Exact persisted View contract understood by this renderer. */
+  schemaVersion: string;
   presentations: readonly ViewPresentationDefinition[];
 }

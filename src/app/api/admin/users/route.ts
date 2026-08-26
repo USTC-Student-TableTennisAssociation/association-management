@@ -16,7 +16,7 @@ const createSchema = z.object({
   displayName: z.string().trim().min(1).max(100),
   password: z.string().min(8).max(200),
   role: z.enum(["ADMIN", "MEMBER"]).default("MEMBER"),
-  personObjectId: z.string().uuid().optional(),
+  actorObjectId: z.string().uuid().optional(),
 });
 
 async function requireAdmin() {

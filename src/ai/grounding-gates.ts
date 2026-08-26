@@ -482,6 +482,50 @@ function redactUnsupportedClaims(input: {
   };
 }
 
+function removeEmptyMarkdownTables(text: string): { text: string; removedCount: number } {
+  const lines = text.split("\n");
+  let removedCount = 0;
+  for (let index = 0; index < lines.length - 1;) {
+    const header = lines[index];
+    const separator = lines[index + 1];
+    const isHeader = /^\s*\|.*\|\s*$/u.test(header);
+    const isSeparator = /^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$/u.test(separator);
+    if (!isHeader || !isSeparator) {
+      index += 1;
+      continue;
+    }
+
+    const nextLine = lines[index + 2] ?? "";
+    if (/^\s*\|.*\|\s*$/u.test(nextLine)) {
+      index += 2;
+      continue;
+    }
+
+    let start = index;
+    while (start > 0 && !lines[start - 1].trim()) start -= 1;
+    const previousLine = lines[start - 1] ?? "";
+    let nextContentIndex = index + 2;
+    while (nextContentIndex < lines.length && !lines[nextContentIndex].trim()) {
+      nextContentIndex += 1;
+    }
+    const nextContent = lines[nextContentIndex] ?? "";
+    if (
+      /^#{1,6}\s+\S/u.test(previousLine) &&
+      (!nextContent || /^#{1,6}\s+\S/u.test(nextContent))
+    ) {
+      start -= 1;
+    }
+
+    lines.splice(start, nextContentIndex - start);
+    removedCount += 1;
+    index = Math.max(0, start - 1);
+  }
+  return {
+    text: lines.join("\n").replace(/\n{3,}/gu, "\n\n").trim(),
+    removedCount,
+  };
+}
+
 function redactBusinessViewPresentContradictions(input: {
   text: string;
   enabled: boolean;
@@ -687,6 +731,8 @@ export function auditGroundedAnswer(input: {
     enabled: Boolean(titleZeroHitBoundary),
   });
   issues.push(...absenceRedaction.issues);
+  const presentationCleanup = removeEmptyMarkdownTables(absenceRedaction.text);
+  if (presentationCleanup.removedCount) issues.push("empty_markdown_table_removed");
   const redactedCount = citationRedaction.redactedCount +
     businessViewContradictionRedaction.redactedCount +
     absenceRedaction.redactedCount;
@@ -694,8 +740,8 @@ export function auditGroundedAnswer(input: {
   if (
     input.contract.requiresReadableTarget &&
     !completeAbsentTargetTitleSearch &&
-    !EVIDENCE_BOUNDARY_PATTERN.test(absenceRedaction.text) &&
-    !allCitedRefs(absenceRedaction.text).some((ref) =>
+    !EVIDENCE_BOUNDARY_PATTERN.test(presentationCleanup.text) &&
+    !allCitedRefs(presentationCleanup.text).some((ref) =>
       /^(?:A|S|V)\d+$/.test(ref) && validRefs.has(ref)
     )
   ) {
@@ -707,7 +753,7 @@ export function auditGroundedAnswer(input: {
     };
   }
 
-  if (!absenceRedaction.text) {
+  if (!presentationCleanup.text) {
     if (titleZeroHitBoundary) {
       return {
         text: boundaryNotice(titleZeroHitBoundary),
@@ -728,8 +774,8 @@ export function auditGroundedAnswer(input: {
     notices.push(`已省略 ${redactedCount} 处超出检索范围或缺少正确来源引用的事实主张。`);
   }
   const auditedText = notices.length
-    ? `${notices.map(boundaryNotice).join("\n\n")}\n\n${absenceRedaction.text}`
-    : absenceRedaction.text;
+    ? `${notices.map(boundaryNotice).join("\n\n")}\n\n${presentationCleanup.text}`
+    : presentationCleanup.text;
   const changed = auditedText !== text;
   return {
     text: auditedText,

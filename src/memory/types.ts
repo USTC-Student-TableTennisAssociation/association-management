@@ -1,3 +1,5 @@
+import type { OperationalMemoryIndex } from "@/memory/higher-memory-document";
+
 export type MemoryFacet = {
   id: string;
   text: string;
@@ -102,7 +104,10 @@ export type MemoryHigherMemorySeed = {
   ref: string;
   id: string;
   globalObjectId: string;
+  /** Rendered Cognitive Memory for use inside one retrieval request. */
   contentMarkdown: string;
+  /** Navigation hints only; never proof of query-level completeness. */
+  operationalIndex: OperationalMemoryIndex;
   maintainedAt: string;
 };
 

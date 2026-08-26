@@ -46,19 +46,8 @@ export async function rebuildMemoryAssertionIndex(input: {
     select: {
       id: true,
       globalStatementTemplateMarkdown: true,
-      fragmentReferences: {
-        orderBy: { ordinal: "asc" },
-        select: {
-          ordinal: true,
-          globalResolutions: {
-            select: {
-              globalObject: { select: { id: true, canonicalName: true } },
-            },
-          },
-        },
-      },
-      literalGlobalReferences: {
-        orderBy: { globalOrdinal: "asc" },
+      objectLinks: {
+        orderBy: { globalObjectId: "asc" },
         select: {
           globalObject: { select: { id: true, canonicalName: true } },
         },
@@ -78,23 +67,13 @@ export async function rebuildMemoryAssertionIndex(input: {
   }
 
   const prepared: PreparedAssertion[] = assertions.map((assertion) => {
-    const fragmentReferences = assertion.fragmentReferences.map((reference) => {
-      if (reference.globalResolutions.length !== 1) {
-        throw new Error(
-          `Assertion ${assertion.id} 的 reference ordinal ${reference.ordinal} ` +
-          `需要唯一 GlobalObject resolution`,
-        );
-      }
-      const object = reference.globalResolutions[0].globalObject;
-      return { globalObjectId: object.id, canonicalName: object.canonicalName };
-    });
-    const literalReferences = assertion.literalGlobalReferences.map(({ globalObject }) => ({
+    const references = assertion.objectLinks.map(({ globalObject }) => ({
       globalObjectId: globalObject.id,
       canonicalName: globalObject.canonicalName,
     }));
     const renderedText = renderResolvedAssertion({
       globalStatementTemplateMarkdown: assertion.globalStatementTemplateMarkdown,
-      references: [...fragmentReferences, ...literalReferences],
+      references,
       assertionKey: assertion.id,
     });
     return {

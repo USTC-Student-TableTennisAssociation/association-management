@@ -2,7 +2,6 @@ import { getDatabase } from "@/db";
 import { embedMemoryQueries } from "@/memory/embedding-client";
 import {
   renderResolvedAssertion,
-  ResolvedAssertionIntegrityError,
   type ResolvedAssertionReference,
 } from "@/memory/resolved-assertion";
 import {
@@ -222,25 +221,8 @@ async function loadAssertions(compilationId: string) {
           sourceSha256: true,
         },
       },
-      fragmentReferences: {
-        orderBy: { ordinal: "asc" },
-        select: {
-          ordinal: true,
-          objectFragment: { select: { sourceFragmentId: true } },
-          globalResolutions: {
-            select: {
-              globalObject: {
-                select: {
-                  id: true,
-                  canonicalName: true,
-                },
-              },
-            },
-          },
-        },
-      },
-      literalGlobalReferences: {
-        orderBy: { globalOrdinal: "asc" },
+      objectLinks: {
+        orderBy: { globalObjectId: "asc" },
         select: {
           globalObject: {
             select: {
@@ -250,7 +232,7 @@ async function loadAssertions(compilationId: string) {
           },
         },
       },
-      semanticObjectLinks: {
+      objectCoverage: {
         orderBy: { globalObjectId: "asc" },
         select: {
           globalObject: {
@@ -264,27 +246,13 @@ async function loadAssertions(compilationId: string) {
     },
   });
   return rows.map((row) => {
-    const assertionKey = row.id;
-    const fragmentReferences = row.fragmentReferences.map<ResolvedAssertionReference>((reference) => {
-      if (reference.globalResolutions.length !== 1) {
-        throw new ResolvedAssertionIntegrityError(
-          `Assertion ${assertionKey} 的 reference ordinal ${reference.ordinal} ` +
-            `需要唯一 GlobalObject resolution，实际为 ${reference.globalResolutions.length}`,
-        );
-      }
-      const globalObject = reference.globalResolutions[0].globalObject;
-      return {
-        globalObjectId: globalObject.id,
-        canonicalName: globalObject.canonicalName,
-      };
-    });
-    const literalReferences = row.literalGlobalReferences.map<ResolvedAssertionReference>(
+    const references = row.objectLinks.map<ResolvedAssertionReference>(
       ({ globalObject }) => ({
         globalObjectId: globalObject.id,
         canonicalName: globalObject.canonicalName,
       }),
     );
-    const semanticReferences = row.semanticObjectLinks.map<ResolvedAssertionReference>(
+    const coverageReferences = row.objectCoverage.map<ResolvedAssertionReference>(
       ({ globalObject }) => ({
         globalObjectId: globalObject.id,
         canonicalName: globalObject.canonicalName,
@@ -297,14 +265,14 @@ async function loadAssertions(compilationId: string) {
       globalStatementTemplateMarkdown: row.globalStatementTemplateMarkdown,
       contextDependent: row.contextDependent,
       sourceRegion: row.sourceRegion,
-      references: [...fragmentReferences, ...literalReferences],
-      semanticReferences,
+      references,
+      coverageReferences,
     };
   });
 }
 
-function associatedReferences(assertion: AssertionRecord): ResolvedAssertionReference[] {
-  return [...assertion.references, ...assertion.semanticReferences];
+function retrievalReferences(assertion: AssertionRecord): ResolvedAssertionReference[] {
+  return [...assertion.references, ...assertion.coverageReferences];
 }
 
 function rankObjectLexical(
@@ -662,7 +630,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
   for (const selected of selectedAssertions) {
     const assertionRef = assertionRefById.get(selected.id)!;
     const matches = matchesForAssertion(selected.hits);
-    for (const objectId of new Set(associatedReferences(selected.assertion).map((reference) => reference.globalObjectId))) {
+    for (const objectId of new Set(retrievalReferences(selected.assertion).map((reference) => reference.globalObjectId))) {
       const refs = supportingAssertionsByObject.get(objectId) ?? new Set<string>();
       refs.add(assertionRef);
       supportingAssertionsByObject.set(objectId, refs);
@@ -751,7 +719,7 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
   for (const selected of selectedAssertions) {
     const assertionRef = assertionRefById.get(selected.id)!;
     const resolvedObjectIds = new Set(
-      associatedReferences(selected.assertion).map((reference) => reference.globalObjectId),
+      selected.assertion.references.map((reference) => reference.globalObjectId),
     );
     for (const objectId of resolvedObjectIds) {
       const objectRef = objectRefById.get(objectId);

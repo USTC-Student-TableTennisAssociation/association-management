@@ -18,7 +18,10 @@ vi.mock("@/db", () => ({
   }),
 }));
 
-import { readSourceDocumentSelection } from "@/memory/source-document";
+import {
+  containingSectionHeadingBlockId,
+  readSourceDocumentSelection,
+} from "@/memory/source-document";
 
 const compilationId = "00000000-0000-4000-8000-000000000020";
 const blocks = [
@@ -102,6 +105,11 @@ beforeEach(() => {
           block.headingLevel <= where.headingLevel.lte,
       ) ?? null;
     }
+    if (where.order?.lte !== undefined) {
+      return [...blocks]
+        .filter((block) => block.order <= where.order.lte && block.headingLevel !== null)
+        .sort((left, right) => right.order - left.order)[0] ?? null;
+    }
     const ordered = [...blocks].sort((left, right) =>
       orderBy.order === "asc" ? left.order - right.order : right.order - left.order
     );
@@ -116,6 +124,11 @@ beforeEach(() => {
 });
 
 describe("readSourceDocumentSelection", () => {
+  it("resolves the nearest containing section heading for a source Block", async () => {
+    await expect(containingSectionHeadingBlockId(compilationId, "text-2"))
+      .resolves.toBe("heading-1-1");
+  });
+
   it("returns a compact outline with stable heading Block ids", async () => {
     const result = await readSourceDocumentSelection({
       compilationId,

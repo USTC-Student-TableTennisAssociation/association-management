@@ -78,20 +78,8 @@ async function main(): Promise<void> {
         sourceClaimId: true,
         globalStatementTemplateMarkdown: true,
         sourceRegion: { select: { sourceNodeId: true } },
-        fragmentReferences: {
-          orderBy: { ordinal: "asc" },
-          select: {
-            ordinal: true,
-            objectFragment: { select: { sourceFragmentId: true } },
-            globalResolutions: {
-              select: {
-                globalObject: { select: { id: true, canonicalName: true } },
-              },
-            },
-          },
-        },
-        literalGlobalReferences: {
-          orderBy: { globalOrdinal: "asc" },
+        objectLinks: {
+          orderBy: { globalObjectId: "asc" },
           select: {
             globalObject: { select: { id: true, canonicalName: true } },
           },
@@ -101,27 +89,13 @@ async function main(): Promise<void> {
     if (assertions.length === 0) throw new Error("当前 Compilation 没有 Assertion，无法建立向量索引");
 
     const prepared: PreparedAssertion[] = assertions.map((assertion) => {
-      const fragmentReferences = assertion.fragmentReferences.map((reference) => {
-        if (reference.globalResolutions.length !== 1) {
-          throw new Error(
-            `${assertion.id}/${assertion.sourceClaimId} 的 reference ordinal ` +
-              `${reference.ordinal} 应有且只有一个 Global Object resolution，实际为 ` +
-              `${reference.globalResolutions.length}`,
-          );
-        }
-        const globalObject = reference.globalResolutions[0].globalObject;
-        return {
-          globalObjectId: globalObject.id,
-          canonicalName: globalObject.canonicalName,
-        };
-      });
-      const literalReferences = assertion.literalGlobalReferences.map(({ globalObject }) => ({
+      const references = assertion.objectLinks.map(({ globalObject }) => ({
         globalObjectId: globalObject.id,
         canonicalName: globalObject.canonicalName,
       }));
       const renderedText = renderResolvedAssertion({
         globalStatementTemplateMarkdown: assertion.globalStatementTemplateMarkdown,
-        references: [...fragmentReferences, ...literalReferences],
+        references,
         assertionKey: assertion.id,
       });
       return {

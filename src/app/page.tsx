@@ -52,7 +52,7 @@ type CurrentUser = {
   loginName: string;
   role: "ADMIN" | "MEMBER";
   actor: { id: string; displayName: string };
-  personObject: {
+  actorObject: {
     id: string;
     canonicalName: string;
   } | null;
@@ -71,7 +71,7 @@ type InstalledViewSummary = {
   label: string;
   specializedLabel?: string;
   description: string;
-  moduleVersion: string;
+  pluginVersion: string;
   schemaVersion: string;
   stateVersion: string;
   status: "enabled" | "disabled" | "incompatible";
@@ -85,6 +85,13 @@ type InstalledViewSummary = {
 type SurfaceMode = "work" | "knowledge" | "library";
 type LibraryMode = "files" | "processing";
 type LayoutMode = "focus" | "collaborate" | "conversation";
+const layoutModeStorageKey = "echo.layoutMode";
+
+function storedLayoutMode(value: string | null): LayoutMode | undefined {
+  return value === "focus" || value === "collaborate" || value === "conversation"
+    ? value
+    : undefined;
+}
 
 function messageReasoning(message: ClubChatMessage) {
   return message.parts
@@ -153,7 +160,7 @@ function completedToolLabel(toolName: string, output: unknown) {
     const root = record(output);
     const cards = Array.isArray(root?.cards) ? root.cards.length : 0;
     const cardTypes = Array.isArray(root?.cardTypes) ? root.cardTypes.length : 0;
-    return `社团信息读取完成 · ${cardTypes} 种卡片 · ${cards} 张正式卡片`;
+    return `业务视图读取完成 · ${cardTypes} 种卡片 · ${cards} 张正式卡片`;
   }
   if (toolName === "readSourceDocument") {
     const root = record(output);
@@ -213,7 +220,7 @@ function toolActivities(
               : "后续内容";
     const runningLabel =
       toolName === "readView"
-        ? "正在读取社团信息…"
+        ? "正在读取业务视图…"
         : toolName === "readSourceDocument"
           ? `正在读取原文${sourceModeLabel}…`
         : toolName === "searchMemory"
@@ -236,7 +243,7 @@ function toolActivities(
         return [{
           id: part.toolCallId,
           label: toolName === "readView"
-            ? "社团信息读取失败"
+            ? "业务视图读取失败"
             : toolName === "readSourceDocument"
               ? "原文读取失败"
             : toolName === "searchMemory"
@@ -249,7 +256,7 @@ function toolActivities(
           return [{
             id: part.toolCallId,
             label: toolName === "readView"
-              ? "社团信息读取未执行"
+              ? "业务视图读取未执行"
               : toolName === "readSourceDocument"
                 ? "原文读取未执行"
               : toolName === "searchMemory"
@@ -263,7 +270,7 @@ function toolActivities(
           label: isActiveAssistant
             ? runningLabel
             : toolName === "readView"
-              ? "社团信息读取已中断"
+              ? "业务视图读取已中断"
               : toolName === "readSourceDocument"
                 ? "原文读取已中断"
               : toolName === "searchMemory"
@@ -277,7 +284,7 @@ function toolActivities(
           label: isActiveAssistant
             ? runningLabel
             : toolName === "readView"
-              ? "社团信息读取已中断"
+              ? "业务视图读取已中断"
               : toolName === "readSourceDocument"
                 ? "原文读取已中断"
               : toolName === "searchMemory"
@@ -579,6 +586,7 @@ function ChatSurface({
   onStop,
   onOpenViewReference,
   onOpenSourceReference,
+  onViewProposalApplied,
 }: {
   messages: ClubChatMessage[];
   status: ChatStatus;
@@ -593,6 +601,7 @@ function ChatSurface({
   onStop: () => void;
   onOpenViewReference: (reference: ViewInformationReference) => void;
   onOpenSourceReference: (reference: SourceDocumentReference) => void;
+  onViewProposalApplied: (viewKey: string) => void;
 }) {
   const isSending = status === "submitted" || status === "streaming";
   const canInteract = historyState === "ready";
@@ -714,7 +723,11 @@ function ChatSurface({
                   ) : null}
                   {search ? <SeedMapPanel seedMap={search.seedMap} /> : null}
                   {proposals.map((part) => (
-                    <ViewCommandProposalCard key={part.data.proposalId} proposal={part.data} />
+                    <ViewCommandProposalCard
+                      key={part.data.proposalId}
+                      proposal={part.data}
+                      onApplied={onViewProposalApplied}
+                    />
                   ))}
                   {objectChangeProposals.map((part) => (
                     <ObjectChangeProposalCard
@@ -950,8 +963,13 @@ export default function Home() {
   const [installedViews, setInstalledViews] = useState<InstalledViewSummary[]>([]);
   const [installedViewsLoaded, setInstalledViewsLoaded] = useState(false);
   const [workInspectorOpen, setWorkInspectorOpen] = useState(false);
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>("focus");
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>(() =>
+    typeof window === "undefined"
+      ? "focus"
+      : storedLayoutMode(window.localStorage.getItem(layoutModeStorageKey)) ?? "focus"
+  );
   const [surfaceShare, setSurfaceShare] = useState(66);
+  const [viewRefreshRevisions, setViewRefreshRevisions] = useState<Record<string, number>>({});
   const [paneDragging, setPaneDragging] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const paneDragRef = useRef<{
@@ -979,6 +997,17 @@ export default function Home() {
   const [historyState, setHistoryState] = useState<ChatHistoryState>("loading");
   const [historyError, setHistoryError] = useState<string>();
   const isSending = status === "submitted" || status === "streaming";
+
+  useEffect(() => {
+    window.localStorage.setItem(layoutModeStorageKey, layoutMode);
+  }, [layoutMode]);
+
+  const refreshViewAfterProposal = useCallback((viewKey: string) => {
+    setViewRefreshRevisions((current) => ({
+      ...current,
+      [viewKey]: (current[viewKey] ?? 0) + 1,
+    }));
+  }, []);
 
   const refreshConversations = useCallback(async () => {
     const response = await fetch("/api/chat/conversations", { cache: "no-store" });
@@ -1432,6 +1461,7 @@ export default function Home() {
               <GenericViewInspector
                 key={activeWorkViewKey}
                 viewKey={activeWorkViewKey}
+                refreshRevision={viewRefreshRevisions[activeWorkViewKey] ?? 0}
                 focusCardId={viewFocusCardId}
                 onClose={() => setWorkInspectorOpen(false)}
                 onOpenAI={() => setLayoutMode("collaborate")}
@@ -1444,6 +1474,7 @@ export default function Home() {
               <WorkPresentationHost
                 key={activeWorkViewKey}
                 viewKey={activeWorkViewKey}
+                refreshRevision={viewRefreshRevisions[activeWorkViewKey] ?? 0}
                 presentationLoader={activeWorkView?.presentation?.loader}
                 focusCardId={viewFocusCardId}
                 onOpenInspector={() => setWorkInspectorOpen(true)}
@@ -1564,7 +1595,7 @@ export default function Home() {
 
   const aiChat = (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-white">
-      <ChatSurface compact={bothPanesVisible} messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="ai-pane-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} />
+      <ChatSurface compact={bothPanesVisible} messages={messages} status={status} error={error} historyState={historyState} historyError={historyError} input={input} textareaId="ai-pane-input" onInputChange={setInput} onSubmit={submit} onStop={stop} onOpenViewReference={openViewReference} onOpenSourceReference={setSourceReference} onViewProposalApplied={refreshViewAfterProposal} />
     </div>
   );
 

@@ -30,15 +30,11 @@ function objectRow(options?: { withCard?: boolean }) {
       },
     }],
     chatMentions: [],
-    referenceResolutions: [{
+    assertionLinks: [{
       assertionId,
-      referenceOrdinal: 0,
-      sourceReference: {
-        assertion: { statementTemplateMarkdown: "项目负责人负责统筹。" },
-      },
+      assertion: { statementTemplateMarkdown: "项目负责人负责统筹。" },
     }],
-    literalReferences: [],
-    semanticAssertionLinks: [],
+    assertionCoverage: [],
     higherMemory: null,
     relatedViewCards: options?.withCard
       ? [{
@@ -103,7 +99,8 @@ describe("Object management service", () => {
       source: expect.stringContaining("组织架构"),
     })]);
     expect(inspection.references).toEqual([expect.objectContaining({
-      id: `fragment:${assertionId}:0`,
+      id: `assertion:${assertionId}`,
+      kind: "assertion",
       statement: "项目负责人负责统筹。",
     })]);
   });
@@ -160,7 +157,8 @@ describe("Object management service", () => {
         id: secondObjectId,
         canonicalName: "器材负责人",
         surfaceMemberships: [],
-        referenceResolutions: [],
+        assertionLinks: [],
+        assertionCoverage: [],
       });
     });
     database.memoryGlobalObject.findMany.mockResolvedValue([

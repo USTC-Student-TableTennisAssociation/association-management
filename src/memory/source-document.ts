@@ -103,6 +103,29 @@ async function blockAt(
   return block;
 }
 
+export async function containingSectionHeadingBlockId(
+  compilationId: string,
+  sourceBlockId: string,
+): Promise<string> {
+  const anchor = await blockAt(compilationId, sourceBlockId);
+  if (anchor.headingLevel !== null) return anchor.sourceBlockId;
+  const heading = await getDatabase().memorySourceBlock.findFirst({
+    where: {
+      compilationId,
+      order: { lte: anchor.order },
+      headingLevel: { not: null },
+    },
+    orderBy: { order: "desc" },
+    select: { sourceBlockId: true },
+  });
+  if (!heading) {
+    throw new SourceDocumentReadError(
+      `SourceBlock ${sourceBlockId} 之前没有可用的章节标题`,
+    );
+  }
+  return heading.sourceBlockId;
+}
+
 async function selectionBounds(
   compilationId: string,
   selection: ContentSelection,

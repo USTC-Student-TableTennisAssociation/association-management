@@ -6,6 +6,7 @@ import { WorkViewWorkspace } from "@/view-runtime/generic-ui/work-view-workspace
 
 type WorkPresentationProps = {
   viewKey: string;
+  refreshRevision?: number;
   presentationLoader?: string;
   focusCardId?: string;
   onOpenInspector: () => void;

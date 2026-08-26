@@ -18,7 +18,7 @@ describe.runIf(runLive)("ambient Higher Memory live time travel", () => {
       clientMessageId: "ambient-live-time-travel-maintenance-001",
       submittedAt: "2026-08-12T00:00:00.000Z",
       timezone: "Asia/Shanghai",
-      scopes: ["recent"],
+      scopes: ["working_set"],
       reason: "用户明确同步了三天后最重要的共同活动及尚未完成的准备工作。",
       semanticContext: {
         conversation: [{
@@ -41,13 +41,13 @@ describe.runIf(runLive)("ambient Higher Memory live time travel", () => {
 
     expect(maintained).toBe(1);
     const recent = await database.memoryAmbientHigherMemory.findUniqueOrThrow({
-      where: { scope: "recent" },
+      where: { scope: "working_set" },
     });
     expect(recent.contentMarkdown).toMatch(/Echo\s*时旅验收会/);
     expect(recent.contentMarkdown.length).toBeGreaterThanOrEqual(80);
 
     await database.memoryAmbientHigherMemory.update({
-      where: { scope: "recent" },
+      where: { scope: "working_set" },
       data: {
         maintainedAt: new Date("2026-08-12T00:00:00.000Z"),
         triggerMessageId: "ambient-live-time-travel-maintenance-001",
@@ -61,7 +61,7 @@ describe.runIf(runLive)("ambient Higher Memory live time travel", () => {
       clientMessageId: "ambient-live-time-travel-progress-001",
       submittedAt: "2026-08-15T00:05:00.000Z",
       timezone: "Asia/Shanghai",
-      scopes: ["recent"],
+      scopes: ["working_set"],
       reason: "用户更新了近期最重要活动的全部未结事项，旧 Recent Memory 需要刷新。",
       semanticContext: {
         conversation: [{
@@ -84,7 +84,7 @@ describe.runIf(runLive)("ambient Higher Memory live time travel", () => {
 
     expect(maintained).toBe(1);
     const recent = await database.memoryAmbientHigherMemory.findUniqueOrThrow({
-      where: { scope: "recent" },
+      where: { scope: "working_set" },
     });
     expect(recent.contentMarkdown).toMatch(/东区\s*201/);
     expect(recent.contentMarkdown).toMatch(/已.{0,8}(完成|通知|确认)/);

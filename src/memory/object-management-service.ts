@@ -52,16 +52,12 @@ function chatSurfaceId(chatEvidenceId: string, ordinal: number): string {
   return `chat:${chatEvidenceId}:${ordinal}`;
 }
 
-function fragmentReferenceId(assertionId: string, ordinal: number): string {
-  return `fragment:${assertionId}:${ordinal}`;
+function assertionReferenceId(assertionId: string): string {
+  return `assertion:${assertionId}`;
 }
 
-function literalReferenceId(atomId: string): string {
-  return `literal:${atomId}`;
-}
-
-function semanticReferenceId(assertionId: string): string {
-  return `semantic:${assertionId}`;
+function coverageReferenceId(assertionId: string): string {
+  return `coverage:${assertionId}`;
 }
 
 export async function inspectObjectIdentity(
@@ -87,15 +83,11 @@ export async function inspectObjectIdentity(
           },
         },
       },
-      referenceResolutions: {
-        orderBy: [{ assertionId: "asc" }, { referenceOrdinal: "asc" }],
-        include: { sourceReference: { include: { assertion: true } } },
-      },
-      literalReferences: {
-        orderBy: [{ assertionId: "asc" }, { globalOrdinal: "asc" }],
+      assertionLinks: {
+        orderBy: [{ assertionId: "asc" }],
         include: { assertion: true },
       },
-      semanticAssertionLinks: {
+      assertionCoverage: {
         orderBy: { assertionId: "asc" },
         include: { assertion: true },
       },
@@ -136,21 +128,15 @@ export async function inspectObjectIdentity(
       })),
     ],
     references: [
-      ...object.referenceResolutions.map((reference) => ({
-        id: fragmentReferenceId(reference.assertionId, reference.referenceOrdinal),
-        kind: "fragment" as const,
-        assertionId: reference.assertionId,
-        statement: reference.sourceReference.assertion.statementTemplateMarkdown,
+      ...object.assertionLinks.map((link) => ({
+        id: assertionReferenceId(link.assertionId),
+        kind: "assertion" as const,
+        assertionId: link.assertionId,
+        statement: link.assertion.statementTemplateMarkdown,
       })),
-      ...object.literalReferences.map((reference) => ({
-        id: literalReferenceId(reference.atomId),
-        kind: "literal" as const,
-        assertionId: reference.assertionId,
-        statement: reference.assertion.statementTemplateMarkdown,
-      })),
-      ...object.semanticAssertionLinks.map((link) => ({
-        id: semanticReferenceId(link.assertionId),
-        kind: "semantic" as const,
+      ...object.assertionCoverage.map((link) => ({
+        id: coverageReferenceId(link.assertionId),
+        kind: "coverage" as const,
         assertionId: link.assertionId,
         statement: link.assertion.statementTemplateMarkdown,
       })),
@@ -498,15 +484,15 @@ function parseSurfaceId(surfaceId: string):
 }
 
 function parseReferenceId(referenceId: string):
-  | { kind: "fragment"; assertionId: string; ordinal: number }
-  | { kind: "literal"; atomId: string }
-  | { kind: "semantic"; assertionId: string } {
-  if (referenceId.startsWith("literal:")) {
-    return { kind: "literal", atomId: referenceId.slice("literal:".length) };
+  | { kind: "assertion"; assertionId: string }
+  | { kind: "coverage"; assertionId: string } {
+  if (referenceId.startsWith("assertion:")) {
+    return { kind: "assertion", assertionId: referenceId.slice("assertion:".length) };
   }
-  const [kind, assertionId, ordinalText] = referenceId.split(":");
-  if (kind === "fragment") return { kind, assertionId, ordinal: Number(ordinalText) };
-  return { kind: "semantic", assertionId };
+  if (referenceId.startsWith("coverage:")) {
+    return { kind: "coverage", assertionId: referenceId.slice("coverage:".length) };
+  }
+  throw new ObjectManagementValidationError(`未知 Assertion–Object 引用 ${referenceId}`);
 }
 
 async function removeSurface(
@@ -545,17 +531,79 @@ async function mergeObjects(
     where: { globalObjectId: { in: [change.survivorObjectId, ...sourceIds] } },
   });
 
-  const duplicateLinks = await transaction.memoryAssertionSemanticObjectLink.findMany({
-    where: {
-      globalObjectId: { in: sourceIds },
-      assertion: {
-        semanticObjectLinks: { some: { globalObjectId: change.survivorObjectId } },
-      },
-    },
+  const affectedAssertions = await transaction.memoryAssertion.findMany({
+    where: { objectLinks: { some: { globalObjectId: { in: sourceIds } } } },
+    select: { id: true, globalStatementTemplateMarkdown: true },
+  });
+  for (const assertion of affectedAssertions) {
+    const rewritten = sourceIds.reduce(
+      (template, sourceId) => template.split(`{{object:${sourceId}}}`).join(
+        `{{object:${change.survivorObjectId}}}`,
+      ),
+      assertion.globalStatementTemplateMarkdown,
+    );
+    if (rewritten !== assertion.globalStatementTemplateMarkdown) {
+      await transaction.memoryAssertion.update({
+        where: { id: assertion.id },
+        data: { globalStatementTemplateMarkdown: rewritten },
+      });
+    }
+  }
+
+  const sourceLinks = await transaction.memoryAssertionObjectLink.findMany({
+    where: { globalObjectId: { in: sourceIds } },
     select: { assertionId: true, globalObjectId: true },
   });
-  for (const link of duplicateLinks) {
-    await transaction.memoryAssertionSemanticObjectLink.delete({
+  const survivorLinks = new Set((await transaction.memoryAssertionObjectLink.findMany({
+    where: { globalObjectId: change.survivorObjectId },
+    select: { assertionId: true },
+  })).map((link) => link.assertionId));
+  for (const link of sourceLinks) {
+    if (!survivorLinks.has(link.assertionId)) {
+      await transaction.memoryAssertionObjectLink.create({
+        data: {
+          assertionId: link.assertionId,
+          globalObjectId: change.survivorObjectId,
+        },
+      });
+      survivorLinks.add(link.assertionId);
+    }
+    await transaction.memoryAssertionObjectOccurrence.updateMany({
+      where: {
+        assertionId: link.assertionId,
+        globalObjectId: link.globalObjectId,
+      },
+      data: { globalObjectId: change.survivorObjectId },
+    });
+    await transaction.memoryAssertionObjectLink.delete({
+      where: {
+        assertionId_globalObjectId: {
+          assertionId: link.assertionId,
+          globalObjectId: link.globalObjectId,
+        },
+      },
+    });
+  }
+
+  const sourceCoverage = await transaction.memoryAssertionObjectCoverage.findMany({
+    where: { globalObjectId: { in: sourceIds } },
+    select: { assertionId: true, globalObjectId: true },
+  });
+  const survivorCoverage = new Set((await transaction.memoryAssertionObjectCoverage.findMany({
+    where: { globalObjectId: change.survivorObjectId },
+    select: { assertionId: true },
+  })).map((link) => link.assertionId));
+  for (const link of sourceCoverage) {
+    if (!survivorCoverage.has(link.assertionId)) {
+      await transaction.memoryAssertionObjectCoverage.create({
+        data: {
+          assertionId: link.assertionId,
+          globalObjectId: change.survivorObjectId,
+        },
+      });
+      survivorCoverage.add(link.assertionId);
+    }
+    await transaction.memoryAssertionObjectCoverage.delete({
       where: {
         assertionId_globalObjectId: {
           assertionId: link.assertionId,
@@ -590,18 +638,6 @@ async function mergeObjects(
   }
 
   await transaction.memoryGlobalObjectSurfaceMembership.updateMany({
-    where: { globalObjectId: { in: sourceIds } },
-    data: { globalObjectId: change.survivorObjectId },
-  });
-  await transaction.memoryGlobalAssertionReferenceResolution.updateMany({
-    where: { globalObjectId: { in: sourceIds } },
-    data: { globalObjectId: change.survivorObjectId },
-  });
-  await transaction.memoryGlobalAssertionLiteralReference.updateMany({
-    where: { globalObjectId: { in: sourceIds } },
-    data: { globalObjectId: change.survivorObjectId },
-  });
-  await transaction.memoryAssertionSemanticObjectLink.updateMany({
     where: { globalObjectId: { in: sourceIds } },
     data: { globalObjectId: change.survivorObjectId },
   });
@@ -663,30 +699,49 @@ async function splitObject(
   }
   for (const referenceId of change.moveReferenceIds) {
     const reference = parseReferenceId(referenceId);
-    if (reference.kind === "fragment") {
-      await transaction.memoryGlobalAssertionReferenceResolution.update({
+    if (reference.kind === "assertion") {
+      const assertion = await transaction.memoryAssertion.findUnique({
+        where: { id: reference.assertionId },
+        select: { globalStatementTemplateMarkdown: true },
+      });
+      if (!assertion) throw new ObjectManagementValidationError(`Assertion ${reference.assertionId} 不存在`);
+      await transaction.memoryAssertionObjectLink.create({
+        data: { assertionId: reference.assertionId, globalObjectId: newObjectId },
+      });
+      await transaction.memoryAssertionObjectOccurrence.updateMany({
         where: {
-          assertionId_referenceOrdinal: {
-            assertionId: reference.assertionId,
-            referenceOrdinal: reference.ordinal,
-          },
+          assertionId: reference.assertionId,
+          globalObjectId: change.sourceObjectId,
         },
         data: { globalObjectId: newObjectId },
       });
-    } else if (reference.kind === "literal") {
-      await transaction.memoryGlobalAssertionLiteralReference.update({
-        where: { atomId: reference.atomId },
-        data: { globalObjectId: newObjectId },
+      await transaction.memoryAssertion.update({
+        where: { id: reference.assertionId },
+        data: {
+          globalStatementTemplateMarkdown: assertion.globalStatementTemplateMarkdown
+            .split(`{{object:${change.sourceObjectId}}}`)
+            .join(`{{object:${newObjectId}}}`),
+        },
       });
-    } else {
-      await transaction.memoryAssertionSemanticObjectLink.update({
+      await transaction.memoryAssertionObjectLink.delete({
         where: {
           assertionId_globalObjectId: {
             assertionId: reference.assertionId,
             globalObjectId: change.sourceObjectId,
           },
         },
-        data: { globalObjectId: newObjectId },
+      });
+    } else {
+      await transaction.memoryAssertionObjectCoverage.create({
+        data: { assertionId: reference.assertionId, globalObjectId: newObjectId },
+      });
+      await transaction.memoryAssertionObjectCoverage.delete({
+        where: {
+          assertionId_globalObjectId: {
+            assertionId: reference.assertionId,
+            globalObjectId: change.sourceObjectId,
+          },
+        },
       });
     }
   }

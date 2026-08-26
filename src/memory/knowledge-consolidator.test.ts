@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   authoritativeBusinessViewObjectIds,
   ensureAuthoritativeViewReconciliation,
+  objectUpdatesFromAssertionGraph,
 } from "@/memory/knowledge-consolidator";
 
 const objectId = "00000000-0000-4000-8000-000000000001";
@@ -46,17 +47,25 @@ describe("Knowledge Consolidator authoritative View reconciliation", () => {
     })).toEqual([]);
   });
 
-  it("forces current-state and recent reconciliation when old memory says the formal Card is absent", () => {
+  it("forces current-situation and working-set reconciliation when old memory says the formal Card is absent", () => {
     const result = ensureAuthoritativeViewReconciliation({
       semanticContext: semanticContext(),
       objects: [{ ref: "O1", id: objectId, canonicalName: "Echo正式闭环人工测试赛-20260821" }],
       oldObjectMemories: [{
         globalObjectId: objectId,
-        contentMarkdown: "正式 Activity Operations View 仍为 0 个 Card，卡片尚未审批生效。",
+        cognitiveMemory: {
+          identityAndBoundaries: "这是一次测试活动。",
+          narrativeAndMeaning: "",
+          structuralModel: "",
+          operatingModel: "",
+          currentSituation: "正式 Activity Operations View 仍为 0 个 Card，卡片尚未审批生效。",
+          openQuestions: [],
+        },
+        operationalIndex: { aspects: [] },
         maintainedAt: new Date("2026-08-21T00:00:00.000Z"),
       }],
       oldAmbientMemories: [{
-        scope: "recent",
+        scope: "working_set",
         contentMarkdown: "Echo正式闭环人工测试赛-20260821 的正式卡片尚未落地。",
         maintainedAt: "2026-08-21T00:00:00.000Z",
       }],
@@ -65,9 +74,29 @@ describe("Knowledge Consolidator authoritative View reconciliation", () => {
 
     expect(result.objectUpdates).toEqual([expect.objectContaining({
       globalObjectId: objectId,
-      updateAreas: ["current_state"],
     })]);
-    expect(result.ambientUpdates).toEqual([expect.objectContaining({ scope: "recent" })]);
+    expect(result.ambientUpdates).toEqual([expect.objectContaining({ scope: "working_set" })]);
+  });
+
+  it("derives every Object maintenance candidate directly from Assertion graph links", () => {
+    const otherId = "00000000-0000-4000-8000-000000000002";
+    const updates = objectUpdatesFromAssertionGraph({
+      publishedAssertions: 1,
+      publishedAssertionIds: ["assertion-1"],
+      affectedObjectIds: [objectId, otherId],
+      affectedObjects: [{
+        id: objectId,
+        canonicalName: "对象一",
+        resolution: "existing",
+      }, {
+        id: otherId,
+        canonicalName: "对象二",
+        resolution: "existing",
+      }],
+    });
+
+    expect(updates.map((update) => update.globalObjectId)).toEqual([objectId, otherId]);
+    expect(updates.every((update) => update.focus.includes("直接图连接"))).toBe(true);
   });
 
   it("does not refresh an already reconciled memory on every ordinary read", () => {
@@ -76,7 +105,15 @@ describe("Knowledge Consolidator authoritative View reconciliation", () => {
       objects: [{ ref: "O1", id: objectId, canonicalName: "测试赛" }],
       oldObjectMemories: [{
         globalObjectId: objectId,
-        contentMarkdown: "正式活动卡片已收录，当前处于筹备阶段。",
+        cognitiveMemory: {
+          identityAndBoundaries: "这是一次测试活动。",
+          narrativeAndMeaning: "",
+          structuralModel: "",
+          operatingModel: "",
+          currentSituation: "正式活动卡片已收录，当前处于筹备阶段。",
+          openQuestions: [],
+        },
+        operationalIndex: { aspects: [] },
         maintainedAt: new Date("2026-08-21T00:00:00.000Z"),
       }],
       oldAmbientMemories: [],

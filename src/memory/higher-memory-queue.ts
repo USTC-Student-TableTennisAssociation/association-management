@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import type { EchoDebugTrace } from "@/ai/debug-trace";
 
-export const ambientHigherMemoryScopes = ["workspace", "recent"] as const;
+export const ambientHigherMemoryScopes = ["identity", "narrative", "working_set"] as const;
 
 export type AmbientHigherMemoryScope = typeof ambientHigherMemoryScopes[number];
 
@@ -22,8 +22,9 @@ export type ObjectHigherMemoryQueueDecision = {
 };
 
 const targetSchema = z.discriminatedUnion("scope", [
-  z.object({ scope: z.literal("workspace") }),
-  z.object({ scope: z.literal("recent") }),
+  z.object({ scope: z.literal("identity") }),
+  z.object({ scope: z.literal("narrative") }),
+  z.object({ scope: z.literal("working_set") }),
   z.object({
     scope: z.literal("object"),
     globalObjectId: z.string().uuid()
@@ -85,17 +86,17 @@ export function createHigherMemoryQueueTool(input: {
 
   const queueTool = tool({
     description: [
-      "仅当本轮真实互动使 Echo 对工作环境、近期焦点或少数重要 GlobalObject 形成了值得延续的高层理解时调用。",
-      "workspace 表示当前环境是什么、长期在做什么、Echo 在其中通常承担什么作用；recent 表示近期的共同工作、阶段性焦点、风险和未结方向。",
-      "与某个成员有关的经历、角色、偏好或工作认知应维护在该 Person GlobalObject 的 Object Higher Memory，不得放入 workspace 或 recent。",
+      "仅当本轮真实互动使 Echo 对环境身份、组织叙事、共同工作集或少数重要 GlobalObject 形成了值得延续的高层理解时调用。",
+      "identity 表示已被证据确认的环境类型、边界与 Echo 的长期职责；narrative 表示跨短期任务仍成立的使命、历史脉络、文化和共同意义；working_set 表示近期共同工作的阶段、重点、风险和未结方向。",
+      "具体 Object 的事实属于 Object–Assertion 图及相应 Object Higher Memory，不得仅因本轮提及就提升为 ambient scope。",
       "object 目标必须原样使用本轮工具实际返回的 GlobalObject database id。",
       "这只登记静默维护意图；后台会在 Chat Assertion 阶段完整结束后取得主对话的完整语义上下文并开始维护。",
       "普通检索命中、顺带提及、问候、一次性细节或没有形成新的高层理解时不要调用。",
-      "首次实质性讨论可以创建缺失的 workspace/recent Higher Memory。每轮至多调用一次，不要向用户宣称维护已经完成。",
+      "首次实质性讨论可以创建缺失的 identity/narrative/working_set Higher Memory。每轮至多调用一次，不要向用户宣称维护已经完成。",
     ].join(""),
     inputSchema: z.object({
       targets: z.array(targetSchema).min(1).max(8)
-        .describe("本轮值得维护的 workspace、recent 或少数 object 目标"),
+        .describe("本轮值得维护的 identity、narrative、working_set 或少数 object 目标"),
       reason: z.string().trim().min(1).max(500)
         .describe("为什么本轮形成的理解值得维护为 Higher Memory"),
     }),

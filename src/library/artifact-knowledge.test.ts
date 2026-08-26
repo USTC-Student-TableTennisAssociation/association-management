@@ -31,7 +31,8 @@ function assertion(id: string, objectId: string, statement: string) {
       ordinal: 0,
       sourceBlock: { sourceBlockId: `block-${id}`, sourcePages: [8] },
     }],
-    semanticObjectLinks: [],
+    objectLinks: [{ globalObjectId: objectId }],
+    objectCoverage: [],
   };
 }
 

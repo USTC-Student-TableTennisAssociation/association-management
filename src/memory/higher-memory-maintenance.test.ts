@@ -40,8 +40,8 @@ describe("maintainHigherMemories", () => {
       },
       queueDecision: {
         targets: [
-          { scope: "workspace" as const },
-          { scope: "recent" as const },
+          { scope: "identity" as const },
+          { scope: "working_set" as const },
           {
             scope: "object" as const,
             globalObjectId: "00000000-0000-4000-8000-000000000001",
@@ -66,7 +66,7 @@ describe("maintainHigherMemories", () => {
     );
     expect(maintenanceState.ambient).toHaveBeenCalledWith(
       expect.objectContaining({
-        scopes: ["workspace", "recent"],
+        scopes: ["identity", "working_set"],
         reason: "本轮形成了多个 scope 的高层理解",
       }),
       undefined,
@@ -91,7 +91,7 @@ describe("maintainHigherMemories", () => {
         seedMap: { facets: [], objects: [], assertions: [], connections: [] },
       },
       queueDecision: {
-        targets: [{ scope: "recent" }],
+        targets: [{ scope: "working_set" }],
         reason: "近期焦点发生变化",
       },
     });
@@ -160,7 +160,7 @@ describe("maintainHigherMemories", () => {
         seedMap: { facets: [], objects: [], assertions: [], connections: [] },
       },
       queueDecision: {
-        targets: [{ scope: "recent" }],
+        targets: [{ scope: "working_set" }],
         reason: "近期状态发生变化",
       },
     })).rejects.toThrow("schema validation failed");
