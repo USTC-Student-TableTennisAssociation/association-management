@@ -66,6 +66,7 @@ import {
   loadViewHigherMemory,
 } from "@/agent-runtime/view-orientation";
 import { createAgentViewToolset, registeredViewKeySchema } from "@/agent-runtime/view-toolset";
+import { createAgentToolProviderToolset } from "@/agent-runtime/tool-provider-toolset";
 import {
   viewCommandProposalNoticeSchema,
   viewReferenceBundleSchema,
@@ -74,6 +75,7 @@ import { currentAuthUser } from "@/auth/session";
 import { getDatabase } from "@/db";
 import {
   extensionRegistry,
+  toolRuntime,
   viewCommandBus,
   viewReadPort,
 } from "@/shell/composition-root";
@@ -910,6 +912,15 @@ export async function POST(request: Request) {
           groundingState.observeSemantics(sourceRead.semantics);
         },
       });
+      const globalToolProviderToolset = createAgentToolProviderToolset({
+        runtime: toolRuntime,
+        actor: {
+          actorId: requestActor.id,
+          permissions: toolRuntime.listContracts().flatMap((contract) =>
+            contract.sideEffect === "none" ? contract.requiredPermissions : []
+          ),
+        },
+      });
       const validReferenceRefs = () => {
         const snapshot = evidence.snapshot();
         return [
@@ -1205,6 +1216,7 @@ export async function POST(request: Request) {
         ...viewToolset.tools,
         ...objectManagementToolset.tools,
         ...libraryToolset.tools,
+        ...globalToolProviderToolset.tools,
         openArtifactKnowledge,
         queueChatAssertionCapture: assertionQueueToolset.tool,
         submitTurnHandoff,
@@ -1214,6 +1226,7 @@ export async function POST(request: Request) {
         "readMemoryWriteStatus",
         "queueChatAssertionCapture",
         TURN_HANDOFF_TOOL,
+        ...globalToolProviderToolset.toolNames,
       ];
       const exposedToolNames = [
         ...capabilityGatewayToolNames,

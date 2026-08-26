@@ -1,0 +1,40 @@
+{
+  "name": "@echo/example-plugin",
+  "version": "0.1.0",
+  "description": "Publishable example View plugin for Echo",
+  "type": "module",
+  "files": [
+    "dist",
+    "echo.plugin.json",
+    "README.md"
+  ],
+  "exports": {
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation.d.ts",
+      "import": "./dist/presentation.js"
+    },
+    "./echo.plugin.json": "./echo.plugin.json"
+  },
+  "echoPlugin": "./echo.plugin.json",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm build"
+  },
+  "peerDependencies": {
+    "@echo/plugin-sdk": "^0.1.0",
+    "react": "^19.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@echo/plugin-sdk": "workspace:*",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "^5.0.0",
+    "zod": "^4.0.0"
+  },
+  "license": "UNLICENSED"
+}
