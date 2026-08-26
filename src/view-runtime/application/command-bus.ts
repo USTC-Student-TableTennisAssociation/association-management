@@ -9,6 +9,7 @@ import { parseViewSettings } from "@/view-runtime/application/installed-views";
 import type { InstalledViewService } from "@/view-runtime/application/installed-views";
 import type { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import {
+  ViewCommandValidationError,
   ViewConflictError,
   ViewNotFoundError,
   ViewRuntimeError,
@@ -43,6 +44,13 @@ export type ViewCommandDispatchResult =
       summary?: unknown;
     };
 
+export type ViewCommandProposalDecisionResult =
+  | ViewCommandDispatchResult
+  | { kind: "rejected"; proposalId: string }
+  | { kind: "already_applied"; proposalId: string; viewKey: string };
+
+class ProposalPreflightRollback extends Error {}
+
 function json(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
@@ -70,6 +78,10 @@ function requirePermissions(actor: ActorContext, required: readonly string[]): v
   if (missing.length) throw new ViewRuntimeError(`缺少 View Command 权限：${missing.join(", ")}`);
 }
 
+function retryableStateConflict(error: unknown): error is ViewConflictError {
+  return error instanceof ViewConflictError && error.message === "View stateVersion 已变化";
+}
+
 async function runtimeView(
   database: PrismaClient,
   registry: ExtensionRegistry,
@@ -79,7 +91,7 @@ async function runtimeView(
   installed: {
     stateVersion: bigint;
     status: "enabled" | "disabled" | "incompatible";
-    moduleVersion: string;
+    pluginVersion: string;
     schemaVersion: string;
     settingsJson: Prisma.JsonValue;
   };
@@ -91,17 +103,14 @@ async function runtimeView(
     select: {
       stateVersion: true,
       status: true,
-      moduleVersion: true,
+      pluginVersion: true,
       schemaVersion: true,
       settingsJson: true,
     },
   });
   if (!installed || installed.status !== "enabled") throw new ViewNotFoundError(viewKey);
-  if (
-    installed.moduleVersion !== viewModule.manifest.version ||
-    installed.schemaVersion !== viewModule.manifest.schemaVersion
-  ) {
-    throw new ViewRuntimeError(`View ${viewKey} 安装版本与已加载 Module 不一致`);
+  if (installed.schemaVersion !== viewModule.manifest.schemaVersion) {
+    throw new ViewRuntimeError(`View ${viewKey} Schema 与已加载 View 不一致`);
   }
   return { viewModule, installed };
 }
@@ -129,6 +138,12 @@ export class ViewCommandBus {
       (input.initiator === "ai") &&
       settings.aiWritePolicy === "approval_required"
     ) {
+      await this.preflightProposal({
+        ...input,
+        input: parsedInput,
+        commandVersion: command.version,
+        expectedStateVersion: expected.toString(),
+      });
       const proposal = await this.database.viewCommandProposal.create({
         data: {
           viewKey: input.viewKey,
@@ -160,20 +175,34 @@ export class ViewCommandBus {
     proposalId: string;
     decision: "approve" | "reject";
     actor: ActorContext;
-  }): Promise<ViewCommandDispatchResult | { kind: "rejected"; proposalId: string }> {
+  }): Promise<ViewCommandProposalDecisionResult> {
     await this.installedViews.synchronize();
     const proposal = await this.database.viewCommandProposal.findUnique({
       where: { id: input.proposalId },
     });
-    if (!proposal || proposal.status !== "pending") {
-      throw new ViewRuntimeError("View Command Proposal 不存在或已处理");
-    }
+    if (!proposal) throw new ViewRuntimeError("View Command Proposal 不存在");
     const canApproveAny = input.actor.permissions.includes("view.approve");
     const ownsProposal = Boolean(
       input.actor.actorId && proposal.proposedByActorId === input.actor.actorId,
     );
     if (!canApproveAny && !ownsProposal) {
       throw new ViewRuntimeError("只能处理自己创建的 View Command Proposal");
+    }
+    if (proposal.status === "applied" && input.decision === "approve") {
+      return { kind: "already_applied", proposalId: proposal.id, viewKey: proposal.viewKey };
+    }
+    if (proposal.status === "rejected" && input.decision === "reject") {
+      return { kind: "rejected", proposalId: proposal.id };
+    }
+    if (proposal.status === "failed") {
+      throw new ViewRuntimeError(
+        proposal.failureReason
+          ? `View Command Proposal 执行失败：${proposal.failureReason}`
+          : "View Command Proposal 执行失败",
+      );
+    }
+    if (proposal.status !== "pending") {
+      throw new ViewRuntimeError("View Command Proposal 已按另一决定处理");
     }
     if (input.decision === "reject") {
       const updated = await this.database.viewCommandProposal.updateMany({
@@ -185,16 +214,38 @@ export class ViewCommandBus {
     }
 
     try {
-      return await this.executeNow({
+      const viewModule = this.registry.getView(proposal.viewKey);
+      if (!viewModule) throw new ViewNotFoundError(proposal.viewKey);
+      const command = commandFor(viewModule, proposal.commandKey, proposal.commandVersion);
+      const parsedInput = command.inputSchema.parse(proposal.inputJson);
+      const conflictPolicy = command.proposalApprovalConflictPolicy?.(parsedInput) ?? "exact";
+      const commandInput = {
         viewKey: proposal.viewKey,
         commandKey: proposal.commandKey,
         commandVersion: proposal.commandVersion,
-        input: proposal.inputJson,
+        input: parsedInput,
         actor: input.actor,
-        initiator: "ai",
+        initiator: "ai" as const,
         ...(proposal.skillId ? { skillId: proposal.skillId } : {}),
         expectedStateVersion: proposal.expectedStateVersion.toString(),
-      }, proposal.id);
+      };
+      const attempts = conflictPolicy === "revalidate_latest" ? 2 : 1;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          return await this.executeNow(commandInput, {
+            proposalId: proposal.id,
+            rebaseToLatest: conflictPolicy === "revalidate_latest",
+          });
+        } catch (error) {
+          if (
+            conflictPolicy === "revalidate_latest" &&
+            attempt === 0 &&
+            retryableStateConflict(error)
+          ) continue;
+          throw error;
+        }
+      }
+      throw new ViewConflictError();
     } catch (error) {
       await this.database.viewCommandProposal.updateMany({
         where: { id: proposal.id, status: "pending" },
@@ -208,26 +259,81 @@ export class ViewCommandBus {
     }
   }
 
+  private async preflightProposal(
+    input: DispatchViewCommandInput & { commandVersion: string },
+  ): Promise<void> {
+    const viewModule = this.registry.getView(input.viewKey);
+    if (!viewModule) throw new ViewNotFoundError(input.viewKey);
+    const command = commandFor(viewModule, input.commandKey, input.commandVersion);
+    const parsedInput = command.inputSchema.parse(input.input);
+    const expectedStateVersion = input.expectedStateVersion === undefined
+      ? undefined
+      : BigInt(input.expectedStateVersion);
+    const rollback = new ProposalPreflightRollback();
+
+    try {
+      await this.database.$transaction(async (transaction) => {
+        const installed = await transaction.installedView.findUnique({
+          where: { viewKey: input.viewKey },
+        });
+        if (!installed || installed.status !== "enabled") throw new ViewNotFoundError(input.viewKey);
+        if (
+          expectedStateVersion !== undefined &&
+          installed.stateVersion !== expectedStateVersion
+        ) {
+          throw new ViewConflictError();
+        }
+        const graph = new PrismaCardGraphTransaction(transaction, viewModule);
+        try {
+          await command.execute({
+            viewKey: input.viewKey,
+            actor: input.actor,
+            initiator: input.initiator,
+            ...(input.skillId ? { skillId: input.skillId } : {}),
+            expectedStateVersion: installed.stateVersion.toString(),
+            transaction: graph,
+          }, parsedInput);
+          for (const invariant of viewModule.invariants) await invariant.validate(graph);
+        } catch (error) {
+          if (error instanceof ViewRuntimeError) throw error;
+          throw new ViewCommandValidationError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        throw rollback;
+      });
+    } catch (error) {
+      if (!(error instanceof ProposalPreflightRollback)) throw error;
+    }
+  }
+
   private async executeNow(
-    input: DispatchViewCommandInput & { commandVersion: string; expectedStateVersion: string },
-    proposalId?: string,
+    input: DispatchViewCommandInput & { commandVersion: string },
+    options: { proposalId?: string; rebaseToLatest?: boolean } = {},
   ): Promise<ViewCommandDispatchResult> {
     const viewModule = this.registry.getView(input.viewKey);
     if (!viewModule) throw new ViewNotFoundError(input.viewKey);
     const command = commandFor(viewModule, input.commandKey, input.commandVersion);
     requirePermissions(input.actor, command.requiredPermissions ?? []);
     const parsedInput = command.inputSchema.parse(input.input);
-    const expectedStateVersion = BigInt(input.expectedStateVersion);
+    const requestedStateVersion = input.expectedStateVersion === undefined
+      ? undefined
+      : BigInt(input.expectedStateVersion);
 
     return this.database.$transaction(async (transaction) => {
       const installed = await transaction.installedView.findUnique({
         where: { viewKey: input.viewKey },
       });
       if (!installed || installed.status !== "enabled") throw new ViewNotFoundError(input.viewKey);
-      if (installed.stateVersion !== expectedStateVersion) throw new ViewConflictError();
-      if (proposalId) {
+      const stateVersionBefore = options.rebaseToLatest
+        ? installed.stateVersion
+        : requestedStateVersion ?? installed.stateVersion;
+      if (!options.rebaseToLatest && installed.stateVersion !== stateVersionBefore) {
+        throw new ViewConflictError();
+      }
+      if (options.proposalId) {
         const pending = await transaction.viewCommandProposal.findFirst({
-          where: { id: proposalId, status: "pending" },
+          where: { id: options.proposalId, status: "pending" },
           select: { id: true },
         });
         if (!pending) throw new ViewConflictError("Proposal 已被处理");
@@ -239,14 +345,14 @@ export class ViewCommandBus {
         actor: input.actor,
         initiator: input.initiator,
         ...(input.skillId ? { skillId: input.skillId } : {}),
-        expectedStateVersion: input.expectedStateVersion,
+        expectedStateVersion: stateVersionBefore.toString(),
         transaction: graph,
       }, parsedInput);
       for (const invariant of viewModule.invariants) await invariant.validate(graph);
 
-      const nextStateVersion = expectedStateVersion + BigInt(1);
+      const nextStateVersion = stateVersionBefore + BigInt(1);
       const advanced = await transaction.installedView.updateMany({
-        where: { viewKey: input.viewKey, stateVersion: expectedStateVersion },
+        where: { viewKey: input.viewKey, stateVersion: stateVersionBefore },
         data: { stateVersion: nextStateVersion },
       });
       if (advanced.count !== 1) throw new ViewConflictError();
@@ -260,7 +366,7 @@ export class ViewCommandBus {
           actorId: input.actor.actorId,
           initiator: input.initiator,
           skillId: input.skillId,
-          stateVersionBefore: expectedStateVersion,
+          stateVersionBefore,
           stateVersionAfter: nextStateVersion,
           resultSummaryJson: outcome.summary === undefined ? Prisma.JsonNull : json(outcome.summary),
         },
@@ -292,9 +398,9 @@ export class ViewCommandBus {
           },
         });
       }
-      if (proposalId) {
+      if (options.proposalId) {
         await transaction.viewCommandProposal.update({
-          where: { id: proposalId },
+          where: { id: options.proposalId },
           data: { status: "applied", decidedAt: new Date(), appliedAt: new Date() },
         });
       }

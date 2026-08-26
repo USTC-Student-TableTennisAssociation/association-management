@@ -146,6 +146,34 @@ describe("grounding gates", () => {
     expect(result.text).not.toContain("该结论来自正式视图");
   });
 
+  it("removes a Markdown table section when citation redaction removes every data row", () => {
+    const result = auditGroundedAnswer({
+      text: [
+        "已整理活动。",
+        "",
+        "## 确认后的活动清单",
+        "",
+        "| 活动 | 频率 |",
+        "|---|---|",
+        "| 积分赛 | 每周 [A2] |",
+        "| 周常训练 | 每周 [A3] |",
+        "",
+        "## 下一步",
+        "",
+        "将提交两张活动卡片。",
+      ].join("\n"),
+      contract: contract(),
+      validRefs: ["A1"],
+    });
+
+    expect(result.issues).toContain("unknown_refs:A2");
+    expect(result.issues).toContain("unknown_refs:A3");
+    expect(result.issues).toContain("empty_markdown_table_removed");
+    expect(result.text).not.toContain("确认后的活动清单");
+    expect(result.text).not.toContain("| 活动 | 频率 |");
+    expect(result.text).toContain("## 下一步");
+  });
+
   it("rejects Library metadata claims supported only by a View ref", () => {
     const result = auditGroundedAnswer({
       text: "资料库里存在当前手册，处理档位是 deep。[V1]",

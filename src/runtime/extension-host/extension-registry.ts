@@ -53,7 +53,6 @@ function assertUnique(
 
 function validateViewModule(view: ViewModule): void {
   requireIdentifier("View key", view.manifest.key);
-  requireSemver(`View ${view.manifest.key} version`, view.manifest.version);
   if (view.schema.viewKey !== view.manifest.key) {
     throw new ExtensionRegistrationError(
       `View ${view.manifest.key} 的 schema.viewKey 不一致：${view.schema.viewKey}`,
@@ -140,6 +139,11 @@ export class ExtensionRegistry {
     for (const presentation of plugin.contributes.presentations ?? []) {
       requireIdentifier("Presentation id", presentation.id);
       requireSemver(`Presentation ${presentation.id} version`, presentation.version);
+      if (!presentation.schemaVersion.trim()) {
+        throw new ExtensionRegistrationError(
+          `Presentation ${presentation.id} 必须声明目标 schemaVersion`,
+        );
+      }
       additions.push({ kind: "presentation", id: presentation.id, extension: presentation });
     }
     for (const skill of plugin.contributes.skills ?? []) {

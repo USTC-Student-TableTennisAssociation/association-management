@@ -182,7 +182,6 @@ export const activityOperationsViewModule: ViewModule = {
     key: ACTIVITY_OPERATIONS_VIEW_KEY,
     label: "Activity Operations",
     specializedLabel: "活动总览",
-    version: "1.0.0",
     schemaVersion: "1",
     description: "组织真实 Activity 的运营状态、可复用业务知识和复盘经验。",
     retrievalDescription:

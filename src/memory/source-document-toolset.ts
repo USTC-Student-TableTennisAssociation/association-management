@@ -5,6 +5,7 @@ import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
 import { retrievalEvidenceSemantics } from "@/evidence/tool-semantics";
 import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import {
+  containingSectionHeadingBlockId,
   readSourceDocumentSelection,
   sourceDocumentLimits,
   type SourceDocumentSelection,
@@ -41,7 +42,8 @@ const sourceReadVariantSchema = z.discriminatedUnion("mode", [
     mode: z.literal("section"),
     assertionRef: assertionRefSchema,
     headingBlockId: z.string().trim().min(1).max(500)
-      .describe("outline 返回的章节标题 SourceBlock id"),
+      .optional()
+      .describe("可选；省略时读取 Assertion 来源所在章节。只有改读其他章节时才传入 outline 返回的标题 SourceBlock id"),
     maxCharacters: maxCharactersSchema,
   }),
   z.object({
@@ -72,8 +74,10 @@ export const sourceReadInputSchema = z.object({
   assertionRef: assertionRefSchema.optional(),
   sourceBlockId: z.string().trim().min(1).max(500).optional()
     .describe("目标 SourceBlock；省略时使用 Assertion 的第一处来源"),
-  beforeBlocks: z.number().int().min(0).max(sourceDocumentLimits.maxContextBlocks).optional(),
-  afterBlocks: z.number().int().min(0).max(sourceDocumentLimits.maxContextBlocks).optional(),
+  beforeBlocks: z.number().int().min(0).max(sourceDocumentLimits.maxContextBlocks).default(0)
+    .describe("around 模式向前读取的 Block 数；省略时为 0"),
+  afterBlocks: z.number().int().min(0).max(sourceDocumentLimits.maxContextBlocks).default(0)
+    .describe("around 模式向后读取的 Block 数；省略时为 0"),
   headingBlockId: z.string().trim().min(1).max(500).optional()
     .describe("outline 返回的章节标题 SourceBlock id"),
   startBlockId: z.string().trim().min(1).max(500).optional(),
@@ -181,7 +185,11 @@ export function createSourceDocumentToolset(input: {
 
   async function executeRead(rawArgs: z.infer<typeof sourceReadInputSchema>) {
     reserveRead();
-    const args: SourceReadInput = sourceReadVariantSchema.parse(rawArgs);
+    const args: SourceReadInput = sourceReadVariantSchema.parse({
+      ...rawArgs,
+      beforeBlocks: rawArgs.beforeBlocks ?? 0,
+      afterBlocks: rawArgs.afterBlocks ?? 0,
+    });
 
     let continuation: Continuation | undefined;
     let assertionRef: string;
@@ -214,7 +222,14 @@ export function createSourceDocumentToolset(input: {
           };
           break;
         case "section":
-          selection = { mode: "section", headingBlockId: args.headingBlockId };
+          selection = {
+            mode: "section",
+            headingBlockId: args.headingBlockId ??
+              await containingSectionHeadingBlockId(
+                compilationId,
+                sourceAnchor.sourceBlockId,
+              ),
+          };
           break;
         case "range":
           selection = {
@@ -287,7 +302,7 @@ export function createSourceDocumentToolset(input: {
       description: [
         "按需读取当前 Shared Brain Assertion 所属的原始 Source Document。",
         "只适用于文档来源；聊天来源的 Assertion 已携带用户 Evidence，不能作为 Source Document 展开。",
-        "AI 自己判断阅读粒度：outline 看目录；around 看某个 Block 前后；section 看完整章节；",
+        "AI 自己判断阅读粒度：outline 看相关目录；around 看某个 Block 前后；section 看完整章节，省略 headingBlockId 时直接读取 A# 所在章节；",
         "range 看连续范围；full 看全文；结果未完整返回时用 continue 和 continuationCursor 续读。",
         "Assertion contextDependent=true、命题过于零散、需要拼接多条命题、缺少限定语、",
         "需要精确步骤/表格/原话、证据冲突或需要跨章节理解时，应积极考虑回看原文。",

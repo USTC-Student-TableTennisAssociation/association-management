@@ -1158,6 +1158,7 @@ export async function captureChatAssertions(
     sharedResultBudget: new ToolResultTokenBudget(EXTRACTION_SEARCH_RESULT_TOKENS),
     signal: searchSignal,
     preferHigherMemory: false,
+    exposeDatabaseIds: true,
     onEvidence: (retrieval, discovered) => {
       void trace?.appendSection(
         `后台 Assertion 搜索 · ${discovered.kind}`,
@@ -1227,7 +1228,7 @@ export async function captureChatAssertions(
     temperature: 0.1,
     maxOutputTokens: 8_000,
     abortSignal: searchSignal,
-    timeout: { totalMs: 180_000, stepMs: 120_000, toolMs: 120_000 },
+    timeout: { totalMs: 1_800_000, stepMs: 1_800_000, toolMs: 120_000 },
     onLanguageModelCallStart: async (event) => {
       extractionCallNumber += 1;
       await trace?.appendSection(
@@ -1326,7 +1327,7 @@ export async function captureChatAssertions(
         temperature: 0.1,
         maxOutputTokens: 4_000,
         abortSignal: AbortSignal.timeout(90_000),
-        timeout: { totalMs: 90_000, stepMs: 90_000, toolMs: 90_000 },
+        timeout: { totalMs: 1_800_000, stepMs: 1_800_000, toolMs: 90_000 },
         onLanguageModelCallStart: async (event) => {
           extractionCallNumber += 1;
           await trace?.appendSection(

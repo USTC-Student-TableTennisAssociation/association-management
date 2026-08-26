@@ -237,7 +237,7 @@ export async function maintainObjectHigherMemories(
     temperature: 0.15,
     maxOutputTokens: 16_000,
     abortSignal: maintenanceSignal,
-    timeout: { totalMs: 180_000, stepMs: 150_000, toolMs: 30_000 },
+    timeout: { totalMs: 1_800_000, stepMs: 1_800_000, toolMs: 30_000 },
     onLanguageModelCallStart: async (event) => {
       callNumber += 1;
       await trace?.appendSection(

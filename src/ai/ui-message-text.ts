@@ -17,14 +17,15 @@ export function finalStepMessageText(message: ClubChatMessage): string {
     .join("");
 }
 
-/** Keep prior structured proposals available for continued Chat negotiation. */
+/** Keep prior proposal intent without presenting a stale notice as live state. */
 export function modelHistoryMessageText(message: ClubChatMessage): string {
   const answer = finalStepMessageText(message);
   const viewProposals = message.parts
     .filter((part) => part.type === "data-viewCommandProposal")
     .map((part) =>
-      `此前 View Command Proposal ${part.data.proposalId}：` +
-      `${part.data.commandKey}@${part.data.commandVersion}`
+      "历史消息曾展示 View Proposal：" +
+      `${part.data.commandKey}@${part.data.commandVersion}。` +
+      "它只用于理解先前修改意图，当前审批状态未知；不得据此声称本轮已生成、仍待审批或已经生效。"
     );
   const objectProposals = message.parts
     .filter((part) => part.type === "data-objectChangeProposal")

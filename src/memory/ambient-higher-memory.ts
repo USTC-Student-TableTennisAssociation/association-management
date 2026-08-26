@@ -176,7 +176,7 @@ export async function maintainAmbientHigherMemories(
     prompt,
     temperature: 0.2,
     maxOutputTokens: 8_000,
-    timeout: { totalMs: 180_000, stepMs: 180_000 },
+    timeout: { totalMs: 1_800_000, stepMs: 1_800_000 },
     onLanguageModelCallStart: async (event) => {
       callNumber += 1;
       await trace?.appendSection(

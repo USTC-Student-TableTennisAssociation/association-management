@@ -107,14 +107,14 @@ export function createModelProfile(
     modelFirstChunkTimeoutMs: environmentInteger(
       environment,
       "AI_MODEL_FIRST_CHUNK_TIMEOUT_MS",
-      180_000,
+      1_800_000,
       1_000,
       1_800_000,
     ),
     modelChunkTimeoutMs: environmentInteger(
       environment,
       "AI_MODEL_CHUNK_TIMEOUT_MS",
-      180_000,
+      1_800_000,
       1_000,
       1_800_000,
     ),

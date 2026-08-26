@@ -860,7 +860,8 @@ model MemoryAssertionEmbedding {
 model InstalledView {
   viewKey       String              @id @map("view_key") @db.Text
   moduleId      String              @map("module_id") @db.Text
-  moduleVersion String              @map("module_version") @db.Text
+  /// 所属 Plugin 的发布版本，仅用于诊断；数据兼容性只由 schemaVersion 决定。
+  pluginVersion String              @map("module_version") @db.Text
   schemaVersion String              @map("schema_version") @db.Text
   stateVersion  BigInt              @default(0) @map("state_version")
   status        InstalledViewStatus @default(enabled)
@@ -945,6 +946,7 @@ model ViewCommandProposal {
   commandKey           String         @map("command_key") @db.Text
   commandVersion       String         @map("command_version") @db.Text
   inputJson            Json           @map("input_json") @db.JsonB
+  /// Proposal 创建时的并发基线；默认严格校验，只有 Command 明确声明安全时才在最新状态重放。
   expectedStateVersion BigInt         @map("expected_state_version")
   proposedByActorId    String?        @map("proposed_by_actor_id") @db.Uuid
   skillId              String?        @map("skill_id") @db.Text
