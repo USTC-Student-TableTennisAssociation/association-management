@@ -1,24 +1,26 @@
 import type { PrismaClient } from "@/generated/prisma/client";
 
 import type { ClubChatMessage } from "@/ai/types";
+import type { ViewChangeAttentionDecision } from "@/ai/view-change-observer";
+import type { ViewReadPort } from "@/contracts";
+import type { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import type {
-  ViewChangeAttentionDecision,
   ViewChangeEvent,
   ViewChangeExecution,
   ViewRelatedObject,
-} from "@/ai/view-change-observer";
-import type { ViewReadPort } from "@/contracts";
-import type { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
+} from "@/view-runtime/application/view-change-context";
 
 type AttentionTiming = "next_turn" | "after_settle" | "immediate";
 
-export type ViewAIAttentionSchedule = "scheduled" | "next_turn" | "ignored";
+export type ViewChangeSchedule = "scheduled" | "next_turn" | "ignored";
 
 type PendingBatch = {
   actor: { id: string; displayName: string };
-  conversationId: string;
+  conversationId?: string;
   viewKey: string;
   executionIds: Set<string>;
+  evaluateAttention: boolean;
+  reconcileHigherMemory: boolean;
   timer: ReturnType<typeof setTimeout>;
 };
 
@@ -42,6 +44,14 @@ export type ViewAttentionConversationLoader = (input: {
   conversationId: string;
 }) => Promise<ClubChatMessage[]>;
 
+export type ViewHigherMemoryReconciler = (input: {
+  viewModule: NonNullable<ReturnType<ExtensionRegistry["getView"]>>;
+  snapshot: Awaited<ReturnType<ViewReadPort["query"]>>;
+  executions: readonly ViewChangeExecution[];
+  events: readonly ViewChangeEvent[];
+  objects: readonly ViewRelatedObject[];
+}) => Promise<number>;
+
 const timingRank: Record<AttentionTiming, number> = {
   next_turn: 0,
   after_settle: 1,
@@ -63,19 +73,19 @@ function collectIds(value: unknown, target: Set<string>): void {
   Object.values(value).forEach((item) => collectIds(item, target));
 }
 
-export function configuredViewAttentionSettleMs(
+export function configuredViewChangeSettleMs(
   environment: Record<string, string | undefined> = process.env,
 ): number {
-  const raw = environment.VIEW_AI_ATTENTION_SETTLE_MS?.trim();
+  const raw = environment.VIEW_CHANGE_SETTLE_MS?.trim();
   if (!raw) return 20_000;
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 1_000 || value > 300_000) {
-    throw new Error("VIEW_AI_ATTENTION_SETTLE_MS 必须是 1000 到 300000 之间的整数");
+    throw new Error("VIEW_CHANGE_SETTLE_MS 必须是 1000 到 300000 之间的整数");
   }
   return value;
 }
 
-export class ViewAIAttentionCoordinator {
+export class ViewChangeCoordinator {
   private readonly batches = new Map<string, PendingBatch>();
 
   constructor(private readonly dependencies: {
@@ -83,6 +93,7 @@ export class ViewAIAttentionCoordinator {
     registry: ExtensionRegistry;
     readPort: ViewReadPort;
     evaluate: ViewAttentionEvaluator;
+    reconcileHigherMemory: ViewHigherMemoryReconciler;
     appendMessage: ViewAttentionMessageAppender;
     loadConversation: ViewAttentionConversationLoader;
     defaultSettleMs?: number;
@@ -91,8 +102,8 @@ export class ViewAIAttentionCoordinator {
   async enqueue(input: {
     executionId: string;
     actor: { id: string; displayName: string };
-    conversationId: string;
-  }): Promise<ViewAIAttentionSchedule> {
+    conversationId?: string;
+  }): Promise<ViewChangeSchedule> {
     const execution = await this.dependencies.database.viewCommandExecution.findFirst({
       where: {
         id: input.executionId,
@@ -115,38 +126,51 @@ export class ViewAIAttentionCoordinator {
       },
       select: { eventType: true, eventVersion: true },
     });
-    const policies = events.flatMap((event) => {
+    const definitions = events.flatMap((event) => {
       const definition = viewModule.events.find((candidate) =>
         candidate.key === event.eventType && candidate.version === event.eventVersion
       );
-      return definition?.aiAttention ? [definition.aiAttention] : [];
+      return definition ? [definition] : [];
     });
-    if (!policies.length) return "ignored";
-    const strongest = policies.reduce<{
+    const attentionPolicies = definitions.flatMap((definition) =>
+      definition.aiAttention ? [definition.aiAttention] : []
+    );
+    const reconcileHigherMemory = definitions.some((definition) =>
+      definition.higherMemory === "reconcile_related_objects"
+    );
+    if (!attentionPolicies.length && !reconcileHigherMemory) return "ignored";
+    const strongest = attentionPolicies.reduce<{
       timing: AttentionTiming;
       settleMs?: number;
     }>((current, policy) =>
       timingRank[policy.timing] > timingRank[current.timing] ? policy : current
     , { timing: "next_turn" });
-    if (strongest.timing === "next_turn") return "next_turn";
+    const evaluateAttention = Boolean(
+      input.conversationId && strongest.timing !== "next_turn",
+    );
+    if (!evaluateAttention && !reconcileHigherMemory) return "next_turn";
 
-    const key = `${input.actor.id}:${input.conversationId}:${execution.viewKey}`;
+    const key = `${input.actor.id}:${execution.viewKey}`;
     const existing = this.batches.get(key);
     if (existing) clearTimeout(existing.timer);
     const executionIds = existing?.executionIds ?? new Set<string>();
     executionIds.add(execution.id);
-    const delay = strongest.timing === "immediate"
+    const delay = evaluateAttention && strongest.timing === "immediate"
       ? 0
-      : strongest.settleMs ?? this.dependencies.defaultSettleMs ?? configuredViewAttentionSettleMs();
+      : strongest.settleMs ?? this.dependencies.defaultSettleMs ?? configuredViewChangeSettleMs();
     const batch: PendingBatch = {
       actor: input.actor,
-      conversationId: input.conversationId,
+      conversationId: evaluateAttention ? input.conversationId : existing?.conversationId,
       viewKey: execution.viewKey,
       executionIds,
+      evaluateAttention: Boolean(existing?.evaluateAttention || evaluateAttention),
+      reconcileHigherMemory: Boolean(
+        existing?.reconcileHigherMemory || reconcileHigherMemory,
+      ),
       timer: setTimeout(() => void this.flush(key), delay),
     };
     this.batches.set(key, batch);
-    return "scheduled";
+    return evaluateAttention ? "scheduled" : "ignored";
   }
 
   dispose(): void {
@@ -224,13 +248,50 @@ export class ViewAIAttentionCoordinator {
             },
           })
         : [];
-      const objects: ViewRelatedObject[] = objectRows.map((object) => ({
+      let objects: ViewRelatedObject[] = objectRows.map((object) => ({
         id: object.id,
         canonicalName: object.canonicalName,
         ...(impactedObjectIds.has(object.id) && object.higherMemory
           ? { cognitiveMemory: object.higherMemory.cognitiveMemory }
           : {}),
       }));
+      if (batch.reconcileHigherMemory) {
+        try {
+          const maintained = await this.dependencies.reconcileHigherMemory({
+            viewModule,
+            snapshot: attentionSnapshot,
+            executions,
+            events,
+            objects,
+          });
+          console.info("[view.higher-memory]", JSON.stringify({
+            viewKey: batch.viewKey,
+            executionCount: executions.length,
+            maintained,
+          }));
+          if (maintained) {
+            const refreshedRows = await this.dependencies.database.memoryGlobalObject.findMany({
+              where: { id: { in: objectIds } },
+              orderBy: { canonicalName: "asc" },
+              select: {
+                id: true,
+                canonicalName: true,
+                higherMemory: { select: { cognitiveMemory: true } },
+              },
+            });
+            objects = refreshedRows.map((object) => ({
+              id: object.id,
+              canonicalName: object.canonicalName,
+              ...(object.higherMemory
+                ? { cognitiveMemory: object.higherMemory.cognitiveMemory }
+                : {}),
+            }));
+          }
+        } catch (error) {
+          console.error("[view.higher-memory]", error);
+        }
+      }
+      if (!batch.evaluateAttention || !batch.conversationId) return;
       const conversation = await this.dependencies.loadConversation({
         actor: batch.actor,
         conversationId: batch.conversationId,

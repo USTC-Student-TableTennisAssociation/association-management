@@ -7,8 +7,9 @@ import { builtinToolCapabilityContracts } from "@/contracts/tool/capability-cont
 import { InstalledViewService } from "@/view-runtime/application/installed-views";
 import { ViewCommandBus } from "@/view-runtime/application/command-bus";
 import { PrismaViewReadPort } from "@/view-runtime/application/view-read-port";
-import { ViewAIAttentionCoordinator } from "@/view-runtime/application/view-ai-attention";
+import { ViewChangeCoordinator } from "@/view-runtime/application/view-change-coordinator";
 import { observeViewChanges } from "@/ai/view-change-observer";
+import { reconcileViewHigherMemory } from "@/memory/view-higher-memory-reconciliation";
 import {
   appendAssistantTextMessage,
   loadChatMessages,
@@ -34,11 +35,12 @@ export const viewReadPort = new PrismaViewReadPort(
   installedViewService,
   database,
 );
-export const viewAIAttentionCoordinator = new ViewAIAttentionCoordinator({
+export const viewChangeCoordinator = new ViewChangeCoordinator({
   database,
   registry: extensionRegistry,
   readPort: viewReadPort,
   evaluate: observeViewChanges,
+  reconcileHigherMemory: reconcileViewHigherMemory,
   appendMessage: (input) => appendAssistantTextMessage(input, database),
   loadConversation: (input) => loadChatMessages(
     input.actor,

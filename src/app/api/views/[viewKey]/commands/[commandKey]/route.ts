@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { currentAuthUser } from "@/auth/session";
 import {
-  viewAIAttentionCoordinator,
+  viewChangeCoordinator,
   viewCommandBus,
 } from "@/shell/composition-root";
 
@@ -34,12 +34,12 @@ export async function POST(
       initiator: "human",
     });
     let aiAttention: "scheduled" | "next_turn" | "ignored" | undefined;
-    if (result.kind === "executed" && conversationId) {
+    if (result.kind === "executed") {
       try {
-        aiAttention = await viewAIAttentionCoordinator.enqueue({
+        aiAttention = await viewChangeCoordinator.enqueue({
           executionId: result.executionId,
           actor: user.actor,
-          conversationId,
+          ...(conversationId ? { conversationId } : {}),
         });
       } catch (error) {
         console.error("[view.ai-attention.enqueue]", error);
