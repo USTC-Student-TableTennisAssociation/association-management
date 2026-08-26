@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "echo.activity-operations",
+  "version": "1.0.0",
+  "server": {
+    "entry": "./manifest.ts",
+    "export": "activityOperationsPlugin"
+  },
+  "contributes": {
+    "views": [
+      "activity_operations"
+    ],
+    "presentations": [],
+    "skills": [],
+    "tools": []
+  }
+}

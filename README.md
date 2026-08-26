@@ -123,6 +123,62 @@ Commands
 
 Presentation、Skill 和 Tool Provider 通过独立 Extension 提供。
 
+### Plugin 安装
+
+Plugin 使用静态注册和正常的 Next.js 编译，不在运行中的服务内执行刚下载的远程代码。
+根目录的 `echo.plugins.json` 是已安装清单；`src/generated/installed-plugins.ts` 和
+`src/generated/installed-presentations.tsx` 由 CLI 生成，不能手工修改。
+
+每个 Plugin 需要提供 `echo.plugin.json`，其中声明服务端 Manifest export、所拥有的
+View keys，以及可选的专属 React Presentation。CLI 支持仓库内目录、本地 `.tgz` 和 npm
+包名；npm 安装会禁用包的 install scripts。安装后重新启动 Echo 即可生效：
+
+```bash
+pnpm echo:plugin install src/plugins/activity-operations
+pnpm echo:plugin install ./my-echo-plugin-1.0.0.tgz
+pnpm echo:plugin install @your-scope/my-echo-plugin@1.0.0
+pnpm echo:plugin list
+pnpm echo:plugin generate --check
+```
+
+删除是不可恢复操作，必须显式使用 `--purge`。CLI 会先在一个数据库事务中删除该 Plugin
+所有 View 的 Cards、Dimensions、Slots、Proposal、Execution、Event、Higher Memory 和
+Installed View 状态，成功后才从安装清单移除 Plugin：
+
+```bash
+pnpm echo:plugin remove echo.activity-operations --purge
+```
+
+当前版本只面向可信包，不提供代码沙箱、签名校验、升级、迁移或回滚。在线安装实际是
+`pnpm add` 下载到 `node_modules`，随后读取包内描述文件并生成静态 Registry；专属 UI 因此
+可以使用普通 React/TypeScript，在 Echo 下次启动或构建时一起编译。
+
+### 开发与发布 Plugin
+
+`packages/plugin-sdk` 提供可发布 Plugin 使用的稳定合同和 React hooks；
+`packages/example-plugin` 是包含 View、Command、Skill、专属 UI 和全局只读 Tool Provider
+的完整示例：
+
+```bash
+pnpm plugins:build
+pnpm --filter @echo/example-plugin pack
+pnpm echo:plugin install ./echo-example-plugin-0.1.0.tgz
+```
+
+发布到 npm 时，先把示例中的 `@echo` scope 改为自己有权限的组织 scope，并同步修改
+`peerDependencies`，然后先发布 SDK、再发布 Plugin：
+
+```bash
+pnpm --filter @your-scope/plugin-sdk publish --access public
+pnpm --filter @your-scope/example-plugin publish --access public
+```
+
+私有包可以使用 npm token 和组织 registry；Echo 的安装命令不需要改变。实际发布需要
+对应 npm scope 的账号权限，本仓库不会保存发布凭据。
+
+可复用 Tool Provider 应独立成 Plugin；只读 Provider 会注册成所有 AI 聊天均可使用的全局
+Tool，具有外部副作用的 Tool 在增加人工审批 UI 前不会暴露给模型。
+
 ## Tool Capabilities
 
 外部工具通过 Capability Contract 接入 Echo。
