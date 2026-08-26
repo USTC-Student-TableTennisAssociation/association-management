@@ -1,6 +1,11 @@
 "use client";
 
 import Image from "next/image";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   useCallback,
   useEffect,
@@ -12,6 +17,10 @@ import {
 import type { ViewCardState } from "@/contracts";
 import type { ViewInspectorSnapshot } from "@/view-runtime/application/view-read-port";
 
+import {
+  SocietyCardEditor,
+  type SocietyDimensionChanges,
+} from "./society-card-editor";
 import styles from "./society-overview.module.css";
 
 type SocietyOverviewSnapshot = ViewInspectorSnapshot & {
@@ -31,6 +40,30 @@ type EmptySlotProps = {
   title: string;
   onActivate: () => void;
   compact?: boolean;
+};
+
+type EditorTarget = {
+  cardId: string;
+  identityLabel: string;
+};
+
+type ActivityDragState = {
+  cardId: string;
+  startIndex: number;
+  targetIndex: number;
+  deltaX: number;
+  span: number;
+};
+
+type ActivityDragSession = {
+  pointerId: number;
+  cardId: string;
+  startX: number;
+  startIndex: number;
+  targetIndex: number;
+  centers: number[];
+  span: number;
+  order: string[];
 };
 
 const OFFICIAL_PURPOSE = "服务科大乒乓球爱好者，促进科大乒乓球运动发展。";
@@ -135,6 +168,48 @@ function EchoIcon() {
   );
 }
 
+function PencilIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="m12.75 4.25 3 3L7.5 15.5l-3.75.75.75-3.75 8.25-8.25Z" />
+      <path d="m11.5 5.5 3 3" />
+    </svg>
+  );
+}
+
+function GripIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="7" cy="6" r=".8" />
+      <circle cx="13" cy="6" r=".8" />
+      <circle cx="7" cy="10" r=".8" />
+      <circle cx="13" cy="10" r=".8" />
+      <circle cx="7" cy="14" r=".8" />
+      <circle cx="13" cy="14" r=".8" />
+    </svg>
+  );
+}
+
+function remapChanges(
+  changes: SocietyDimensionChanges,
+  keys: Readonly<Record<string, string>>,
+): SocietyDimensionChanges {
+  return Object.fromEntries(Object.entries(changes).map(([key, value]) => [keys[key] ?? key, value]));
+}
+
+function sameOrderMembers(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const rightSet = new Set(right);
+  return left.every((id) => rightSet.has(id));
+}
+
+function movedOrder(order: readonly string[], from: number, to: number): string[] {
+  const next = [...order];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
 function EmptySlot({ eyebrow, title, onActivate, compact = false }: EmptySlotProps) {
   return (
     <button
@@ -158,12 +233,23 @@ export function SocietyOverviewWorkspace({
 }: WorkspaceProps) {
   const [reloadSequence, setReloadSequence] = useState(0);
   const [heroReady, setHeroReady] = useState(false);
+  const [editorTarget, setEditorTarget] = useState<EditorTarget>();
+  const [editorSaving, setEditorSaving] = useState(false);
+  const [editorError, setEditorError] = useState<string>();
+  const [activityOrderOverride, setActivityOrderOverride] = useState<{
+    ids: string[];
+    stateVersion: string;
+  }>();
+  const [activityDrag, setActivityDrag] = useState<ActivityDragState>();
+  const [activityOrderSaving, setActivityOrderSaving] = useState(false);
+  const [activityOrderStatus, setActivityOrderStatus] = useState<string>();
   const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
   const heroScrollRef = useRef<HTMLElement>(null);
   const heroStageRef = useRef<HTMLDivElement>(null);
   const heroBadgeRef = useRef<HTMLDivElement>(null);
   const heroWordmarkRef = useRef<HTMLDivElement>(null);
   const activityGalleryRef = useRef<HTMLDivElement>(null);
+  const activityDragSessionRef = useRef<ActivityDragSession | undefined>(undefined);
   const lastFocusedCardIdRef = useRef<string | undefined>(undefined);
   const [result, setResult] = useState<{
     requestKey: string;
@@ -208,8 +294,30 @@ export function SocietyOverviewWorkspace({
     }), [cardsById, society]);
   const advisors = cardsInSlot("advisor");
   const teamMembers = cardsInSlot("team");
-  const activities = cardsInSlot("activities");
   const platforms = cardsInSlot("platforms");
+  const slotActivityIds = useMemo(
+    () => [...(society?.slots.activities ?? [])],
+    [society],
+  );
+  const effectiveActivityIds = useMemo(() => {
+    if (
+      activityOrderOverride &&
+      activityOrderOverride.stateVersion === snapshot?.stateVersion &&
+      sameOrderMembers(activityOrderOverride.ids, slotActivityIds)
+    ) {
+      return activityOrderOverride.ids;
+    }
+    return [...slotActivityIds];
+  }, [activityOrderOverride, slotActivityIds, snapshot?.stateVersion]);
+  const activities = effectiveActivityIds.flatMap((cardId) => {
+    const card = cardsById.get(cardId);
+    return card ? [card] : [];
+  });
+  const cardTypesByKey = useMemo(() => new Map(
+    snapshot?.schema.cardTypes.map((cardType) => [cardType.key, cardType]) ?? [],
+  ), [snapshot]);
+  const editorCard = editorTarget ? cardsById.get(editorTarget.cardId) : undefined;
+  const editorCardType = editorCard ? cardTypesByKey.get(editorCard.cardTypeKey) : undefined;
   const objectName = useCallback((card: ViewCardState | undefined, fallback: string) =>
     card?.relatedObjectIds.map((id) => objectNames.get(id)).find(Boolean) ?? fallback,
   [objectNames]);
@@ -317,6 +425,246 @@ export function SocietyOverviewWorkspace({
     });
   }, []);
 
+  const executeHumanCommand = useCallback(async (
+    commandKey: string,
+    input: unknown,
+  ) => {
+    if (!snapshot) throw new Error("正式 View 尚未载入");
+    const response = await fetch(
+      `/api/views/${encodeURIComponent(viewKey)}/commands/${encodeURIComponent(commandKey)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input, expectedStateVersion: snapshot.stateVersion }),
+      },
+    );
+    const body = await response.json() as { error?: string };
+    if (!response.ok) throw new Error(body.error ?? "无法保存 View 修改");
+    return body;
+  }, [snapshot, viewKey]);
+
+  const openEditor = useCallback((card: ViewCardState, identityLabel: string) => {
+    setEditorError(undefined);
+    setEditorTarget({ cardId: card.id, identityLabel });
+  }, []);
+
+  const closeEditor = useCallback(() => {
+    setEditorTarget(undefined);
+    setEditorError(undefined);
+  }, []);
+
+  const saveEditor = useCallback(async (changes: SocietyDimensionChanges) => {
+    if (!society || !editorCard) return;
+    let commandKey: string;
+    let input: unknown;
+    switch (editorCard.cardTypeKey) {
+      case "SocietyCard":
+        commandKey = "society.update_profile";
+        input = {
+          societyCardId: society.id,
+          changes: remapChanges(changes, { founded_on: "foundedOn" }),
+        };
+        break;
+      case "PersonCard":
+        commandKey = "society.update_person";
+        input = { societyCardId: society.id, personCardId: editorCard.id, changes };
+        break;
+      case "ActivityCard":
+        commandKey = "society.save_long_term_activity";
+        input = {
+          mode: "update",
+          societyCardId: society.id,
+          activityCardId: editorCard.id,
+          changes: remapChanges(changes, { usual_period: "usualPeriod" }),
+        };
+        break;
+      case "PlatformCard":
+        commandKey = "society.save_platform";
+        input = {
+          mode: "update",
+          societyCardId: society.id,
+          platformCardId: editorCard.id,
+          changes: remapChanges(changes, {
+            platform_type: "platformType",
+            access_instructions: "accessInstructions",
+          }),
+        };
+        break;
+      default:
+        setEditorError(`暂不支持编辑 ${editorCard.cardTypeKey}`);
+        return;
+    }
+
+    setEditorSaving(true);
+    setEditorError(undefined);
+    try {
+      await executeHumanCommand(commandKey, input);
+      setEditorTarget(undefined);
+      setReloadSequence((value) => value + 1);
+    } catch (cause) {
+      setEditorError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setEditorSaving(false);
+    }
+  }, [editorCard, executeHumanCommand, society]);
+
+  const commitActivityOrder = useCallback(async (
+    nextOrder: string[],
+    announcement: string,
+  ) => {
+    if (!society || activityOrderSaving) return;
+    if (!snapshot) return;
+    setActivityOrderOverride({ ids: nextOrder, stateVersion: snapshot.stateVersion });
+    setActivityOrderSaving(true);
+    setActivityOrderStatus("正在保存活动顺序…");
+    try {
+      await executeHumanCommand("society.reorder_long_term_activities", {
+        societyCardId: society.id,
+        activityCardIds: nextOrder,
+      });
+      setActivityOrderStatus(announcement);
+      setReloadSequence((value) => value + 1);
+    } catch (cause) {
+      setActivityOrderOverride(undefined);
+      setActivityOrderStatus(
+        `顺序未保存：${cause instanceof Error ? cause.message : String(cause)}`,
+      );
+      setReloadSequence((value) => value + 1);
+    } finally {
+      setActivityOrderSaving(false);
+    }
+  }, [activityOrderSaving, executeHumanCommand, snapshot, society]);
+
+  const beginActivityDrag = useCallback((
+    event: ReactPointerEvent<HTMLButtonElement>,
+    cardId: string,
+  ) => {
+    if (activityOrderSaving || effectiveActivityIds.length < 2 || event.button !== 0) return;
+    const gallery = activityGalleryRef.current;
+    if (!gallery) return;
+    const elements = new Map(
+      [...gallery.querySelectorAll<HTMLElement>("[data-activity-card-id]")].map((element) => [
+        element.dataset.activityCardId!,
+        element,
+      ]),
+    );
+    const centers = effectiveActivityIds.map((id) => {
+      const bounds = elements.get(id)?.getBoundingClientRect();
+      return bounds ? bounds.left + bounds.width / 2 : Number.NaN;
+    });
+    if (centers.some((center) => !Number.isFinite(center))) return;
+    const startIndex = effectiveActivityIds.indexOf(cardId);
+    if (startIndex < 0) return;
+    const bounds = elements.get(cardId)!.getBoundingClientRect();
+    const span = centers.length > 1
+      ? Math.abs(centers[Math.min(startIndex + 1, centers.length - 1)] - centers[
+        startIndex === centers.length - 1 ? startIndex - 1 : startIndex
+      ])
+      : bounds.width;
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    activityDragSessionRef.current = {
+      pointerId: event.pointerId,
+      cardId,
+      startX: event.clientX,
+      startIndex,
+      targetIndex: startIndex,
+      centers,
+      span,
+      order: [...effectiveActivityIds],
+    };
+    setActivityOrderStatus("拖动后松手即可保存顺序");
+    setActivityDrag({ cardId, startIndex, targetIndex: startIndex, deltaX: 0, span });
+  }, [activityOrderSaving, effectiveActivityIds]);
+
+  const moveActivityDrag = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    const session = activityDragSessionRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const deltaX = event.clientX - session.startX;
+    const projectedCenter = session.centers[session.startIndex] + deltaX;
+    const targetIndex = session.centers.reduce((closest, center, index) =>
+      Math.abs(center - projectedCenter) < Math.abs(session.centers[closest] - projectedCenter)
+        ? index
+        : closest
+    , session.startIndex);
+    session.targetIndex = targetIndex;
+    setActivityDrag({
+      cardId: session.cardId,
+      startIndex: session.startIndex,
+      targetIndex,
+      deltaX,
+      span: session.span,
+    });
+  }, []);
+
+  const endActivityDrag = useCallback((
+    event: ReactPointerEvent<HTMLButtonElement>,
+    cancelled = false,
+  ) => {
+    const session = activityDragSessionRef.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    activityDragSessionRef.current = undefined;
+    setActivityDrag(undefined);
+    if (cancelled || session.startIndex === session.targetIndex) {
+      setActivityOrderStatus(cancelled ? "已取消活动排序" : undefined);
+      return;
+    }
+    const nextOrder = movedOrder(session.order, session.startIndex, session.targetIndex);
+    const movedCard = cardsById.get(session.cardId);
+    const movedName = objectName(movedCard, "活动");
+    void commitActivityOrder(
+      nextOrder,
+      `已将${movedName}移动到第 ${session.targetIndex + 1} 位`,
+    );
+  }, [cardsById, commitActivityOrder, objectName]);
+
+  const moveActivityByKeyboard = useCallback((
+    event: ReactKeyboardEvent<HTMLButtonElement>,
+    cardId: string,
+  ) => {
+    if (activityOrderSaving) return;
+    const from = effectiveActivityIds.indexOf(cardId);
+    if (from < 0) return;
+    let to = from;
+    if (event.key === "ArrowLeft") to = Math.max(0, from - 1);
+    else if (event.key === "ArrowRight") to = Math.min(effectiveActivityIds.length - 1, from + 1);
+    else if (event.key === "Home") to = 0;
+    else if (event.key === "End") to = effectiveActivityIds.length - 1;
+    else return;
+    event.preventDefault();
+    if (to === from) return;
+    const nextOrder = movedOrder(effectiveActivityIds, from, to);
+    const movedName = objectName(cardsById.get(cardId), "活动");
+    void commitActivityOrder(nextOrder, `已将${movedName}移动到第 ${to + 1} 位`);
+  }, [activityOrderSaving, cardsById, commitActivityOrder, effectiveActivityIds, objectName]);
+
+  const activityDragStyle = useCallback((cardId: string, index: number): CSSProperties => {
+    if (!activityDrag) return {};
+    if (cardId === activityDrag.cardId) {
+      return { transform: `translate3d(${activityDrag.deltaX}px, 0, 0)` };
+    }
+    if (
+      activityDrag.targetIndex > activityDrag.startIndex &&
+      index > activityDrag.startIndex &&
+      index <= activityDrag.targetIndex
+    ) {
+      return { transform: `translate3d(${-activityDrag.span}px, 0, 0)` };
+    }
+    if (
+      activityDrag.targetIndex < activityDrag.startIndex &&
+      index >= activityDrag.targetIndex &&
+      index < activityDrag.startIndex
+    ) {
+      return { transform: `translate3d(${activityDrag.span}px, 0, 0)` };
+    }
+    return {};
+  }, [activityDrag]);
+
   if (loading) {
     return (
       <div className={styles.statePage}>
@@ -398,6 +746,16 @@ export function SocietyOverviewWorkspace({
                   {factLabels.map((fact) => <span key={fact}>{fact}</span>)}
                 </div>
               ) : null}
+              {society ? (
+                <button
+                  type="button"
+                  className={styles.profileEditButton}
+                  onClick={() => openEditor(society, societyName)}
+                >
+                  <PencilIcon />
+                  编辑社团资料
+                </button>
+              ) : null}
             </section>
 
             <div className={styles.scrollCue} aria-hidden="true"><DownArrowIcon /></div>
@@ -418,13 +776,18 @@ export function SocietyOverviewWorkspace({
                 <p>我们的活动</p>
                 <h2 id="society-activities-title">在球桌两端相遇。</h2>
               </div>
-              <div className={styles.galleryControls}>
-                <button type="button" aria-label="查看上一项活动" disabled={!activities.length} onClick={() => scrollActivities(-1)}>
-                  <ChevronIcon direction="left" />
-                </button>
-                <button type="button" aria-label="查看下一项活动" disabled={!activities.length} onClick={() => scrollActivities(1)}>
-                  <ChevronIcon direction="right" />
-                </button>
+              <div className={styles.galleryToolbar}>
+                <span className={styles.activityOrderStatus} role="status" aria-live="polite">
+                  {activityOrderStatus ?? (activities.length > 1 ? "拖动卡片手柄调整顺序" : "")}
+                </span>
+                <div className={styles.galleryControls}>
+                  <button type="button" aria-label="查看上一项活动" disabled={!activities.length} onClick={() => scrollActivities(-1)}>
+                    <ChevronIcon direction="left" />
+                  </button>
+                  <button type="button" aria-label="查看下一项活动" disabled={!activities.length} onClick={() => scrollActivities(1)}>
+                    <ChevronIcon direction="right" />
+                  </button>
+                </div>
               </div>
             </header>
 
@@ -442,22 +805,52 @@ export function SocietyOverviewWorkspace({
                   <article
                     id={`society-card-${activity.id}`}
                     key={activity.id}
-                    className={`${styles.activityCard} ${focusCardId === activity.id ? styles.focusedCard : ""}`}
+                    data-activity-card-id={activity.id}
+                    style={activityDragStyle(activity.id, index)}
+                    className={`${styles.activityCard} ${
+                      focusCardId === activity.id ? styles.focusedCard : ""
+                    } ${activityDrag?.cardId === activity.id ? styles.draggingActivity : ""} ${
+                      activityDrag && activityDrag.cardId !== activity.id ? styles.shiftingActivity : ""
+                    }`}
                   >
                     <div className={styles.activityTopline}>
                       <span>{String(index + 1).padStart(2, "0")}</span>
-                      <span>{details || "长期活动"}</span>
+                      <div className={styles.activityMeta}>
+                        <span>{details || "长期活动"}</span>
+                        <button
+                          type="button"
+                          className={styles.dragHandle}
+                          aria-label={`调整${activityName}的顺序；可拖动，或使用左右方向键`}
+                          disabled={activityOrderSaving || activities.length < 2}
+                          onPointerDown={(event) => beginActivityDrag(event, activity.id)}
+                          onPointerMove={moveActivityDrag}
+                          onPointerUp={(event) => endActivityDrag(event)}
+                          onPointerCancel={(event) => endActivityDrag(event, true)}
+                          onKeyDown={(event) => moveActivityByKeyboard(event, activity.id)}
+                        >
+                          <GripIcon />
+                        </button>
+                      </div>
                     </div>
                     <h3>{activityName}</h3>
                     <div className={styles.activityCardBottom}>
                       <p>{text(activity, "description") ?? "活动介绍待补充。"}</p>
-                      <button
-                        type="button"
-                        aria-label={`用 Echo 更新${activityName}`}
-                        onClick={() => onAskAI(`请读取 ${viewKey} 中 ID 为 ${activity.id} 的活动卡片，和我确认后更新“${activityName}”的信息。`)}
-                      >
-                        <EchoIcon />
-                      </button>
+                      <div className={styles.cardActions}>
+                        <button
+                          type="button"
+                          aria-label={`直接编辑${activityName}`}
+                          onClick={() => openEditor(activity, activityName)}
+                        >
+                          <PencilIcon />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`用 Echo 更新${activityName}`}
+                          onClick={() => onAskAI(`请读取 ${viewKey} 中 ID 为 ${activity.id} 的活动卡片，和我确认后更新“${activityName}”的信息。`)}
+                        >
+                          <EchoIcon />
+                        </button>
+                      </div>
                     </div>
                   </article>
                 );
@@ -490,7 +883,18 @@ export function SocietyOverviewWorkspace({
                   >
                     <p>指导老师</p>
                     <h4>{objectName(advisor, "姓名待补充")}</h4>
-                    <button type="button" onClick={onOpenInspector} aria-label="打开指导老师卡片"><ArrowUpRightIcon /></button>
+                    <div className={styles.cardActions}>
+                      <button
+                        type="button"
+                        onClick={() => openEditor(advisor, objectName(advisor, "指导老师"))}
+                        aria-label={`编辑${objectName(advisor, "指导老师")}的人物资料`}
+                      >
+                        <PencilIcon />
+                      </button>
+                      <button type="button" onClick={onOpenInspector} aria-label="打开指导老师高级视图">
+                        <ArrowUpRightIcon />
+                      </button>
+                    </div>
                   </article>
                 )) : (
                   <EmptySlot compact eyebrow="指导老师" title="指导老师待补充" onActivate={() => promptToFill("指导老师")} />
@@ -515,6 +919,15 @@ export function SocietyOverviewWorkspace({
                       <p>{text(member, "department") ?? "部门待补充"}</p>
                       <h4>{memberName}</h4>
                       <span className={styles.memberPosition}>{text(member, "position") ?? "职位待补充"}</span>
+                      <div className={styles.cardActions}>
+                        <button
+                          type="button"
+                          onClick={() => openEditor(member, memberName)}
+                          aria-label={`编辑${memberName}的人物资料`}
+                        >
+                          <PencilIcon />
+                        </button>
+                      </div>
                     </article>
                   );
                 }) : (
@@ -540,21 +953,29 @@ export function SocietyOverviewWorkspace({
               const platformStatus = text(platform, "status") ?? "UNKNOWN";
               const accessInstructions = text(platform, "access_instructions");
               const className = `${styles.platformCard} ${focusCardId === platform.id ? styles.focusedCard : ""}`;
-              const body = (
-                <>
+              return (
+                <article id={`society-card-${platform.id}`} key={platform.id} className={className}>
                   <p>
                     {text(platform, "platform_type") ?? "平台入口"}
                     {platformStatus === "ACTIVE" ? "" : ` · ${platformStatusLabels[platformStatus] ?? platformStatus}`}
                   </p>
                   <h3>{label}</h3>
                   <span>{accessInstructions ?? text(platform, "description") ?? (platformStatus === "UNKNOWN" ? "访问或加入方式待确认" : "查看平台信息")}</span>
-                  <ArrowUpRightIcon />
-                </>
-              );
-              return href ? (
-                <a id={`society-card-${platform.id}`} key={platform.id} href={href} target="_blank" rel="noreferrer" className={className}>{body}</a>
-              ) : (
-                <article id={`society-card-${platform.id}`} key={platform.id} className={className}>{body}</article>
+                  <div className={styles.cardActions}>
+                    {href ? (
+                      <a href={href} target="_blank" rel="noreferrer" aria-label={`打开${label}`}>
+                        <ArrowUpRightIcon />
+                      </a>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => openEditor(platform, label)}
+                      aria-label={`直接编辑${label}`}
+                    >
+                      <PencilIcon />
+                    </button>
+                  </div>
+                </article>
               );
             }) : (
               <EmptySlot eyebrow="平台信息" title="加入方式与平台待补充" onActivate={() => promptToFill("加入方式和平台入口")} />
@@ -575,6 +996,18 @@ export function SocietyOverviewWorkspace({
           </footer>
         </section>
       </main>
+      {editorTarget && editorCard && editorCardType ? (
+        <SocietyCardEditor
+          key={editorCard.id}
+          card={editorCard}
+          cardType={editorCardType}
+          identityLabel={editorTarget.identityLabel}
+          saving={editorSaving}
+          error={editorError}
+          onClose={closeEditor}
+          onSave={(changes) => void saveEditor(changes)}
+        />
+      ) : null}
     </div>
   );
 }

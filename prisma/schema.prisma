@@ -915,6 +915,7 @@ model ViewSlotBinding {
   sourceCardId String   @map("source_card_id") @db.Uuid
   slotKey      String   @map("slot_key") @db.Text
   targetCardId String   @map("target_card_id") @db.Uuid
+  position     Int      @default(0)
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   sourceCard ViewCard @relation("ViewSlotSource", fields: [sourceCardId], references: [id], onDelete: Cascade)
@@ -922,6 +923,7 @@ model ViewSlotBinding {
 
   @@id([sourceCardId, slotKey, targetCardId])
   @@index([targetCardId])
+  @@index([sourceCardId, slotKey, position])
   @@map("view_slot_bindings")
 }
 
