@@ -40,7 +40,9 @@ export class PrismaCardGraphTransaction implements ViewTransaction {
       where: { id: cardId, viewKey: this.view.manifest.key },
       include: {
         dimensions: true,
-        outgoingSlots: { orderBy: [{ slotKey: "asc" }, { createdAt: "asc" }] },
+        outgoingSlots: {
+          orderBy: [{ slotKey: "asc" }, { position: "asc" }, { createdAt: "asc" }],
+        },
         relatedObjects: { orderBy: { createdAt: "asc" } },
       },
     });
@@ -62,7 +64,9 @@ export class PrismaCardGraphTransaction implements ViewTransaction {
       orderBy: { createdAt: "asc" },
       include: {
         dimensions: true,
-        outgoingSlots: { orderBy: [{ slotKey: "asc" }, { createdAt: "asc" }] },
+        outgoingSlots: {
+          orderBy: [{ slotKey: "asc" }, { position: "asc" }, { createdAt: "asc" }],
+        },
         relatedObjects: { orderBy: { createdAt: "asc" } },
       },
     });
@@ -157,10 +161,11 @@ export class PrismaCardGraphTransaction implements ViewTransaction {
     await this.database.viewSlotBinding.deleteMany({ where: { sourceCardId: cardId, slotKey: key } });
     if (targetIds.length) {
       await this.database.viewSlotBinding.createMany({
-        data: targetIds.map((targetCardId) => ({
+        data: targetIds.map((targetCardId, position) => ({
           sourceCardId: cardId,
           slotKey: key,
           targetCardId,
+          position,
         })),
       });
     }
@@ -251,7 +256,7 @@ export class PrismaCardGraphTransaction implements ViewTransaction {
     viewKey: string;
     cardTypeKey: string;
     dimensions: Array<{ dimensionKey: string; valueJson: Prisma.JsonValue }>;
-    outgoingSlots: Array<{ slotKey: string; targetCardId: string }>;
+    outgoingSlots: Array<{ slotKey: string; targetCardId: string; position: number }>;
     relatedObjects: Array<{ objectId: string }>;
   }): ViewCardState {
     const slots: Record<string, string[]> = {};

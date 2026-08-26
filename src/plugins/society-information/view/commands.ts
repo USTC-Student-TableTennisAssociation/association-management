@@ -18,6 +18,10 @@ const optionalShortText = (maxLength: number) => z.preprocess(
     : value,
   z.string().trim().min(1).max(maxLength).optional(),
 );
+const nullableOptionalShortText = (maxLength: number) => z.preprocess(
+  (value) => typeof value === "string" && !value.trim() ? null : value,
+  z.string().trim().min(1).max(maxLength).nullable().optional(),
+);
 
 const profileValuesSchema = z.object({
   rating: z.string().trim().max(100).optional(),
@@ -60,12 +64,18 @@ const teamMemberValuesSchema = z.object({
   description: z.string().max(5_000).nullable().optional(),
 });
 
-const teamMemberChangesSchema = z.object({
-  department: optionalShortText(200),
-  position: optionalShortText(200),
+const personChangesSchema = z.object({
+  department: nullableOptionalShortText(200),
+  position: nullableOptionalShortText(200),
   description: z.string().max(5_000).nullable().optional(),
 }).refine((changes) => Object.values(changes).some((value) => value !== undefined), {
-  message: "至少需要一个要更新的干事字段",
+  message: "至少需要一个要更新的人物资料字段",
+});
+
+const updatePersonSchema = z.object({
+  societyCardId: uuid,
+  personCardId: uuid,
+  changes: personChangesSchema,
 });
 
 const saveTeamMemberSchema = z.discriminatedUnion("mode", [
@@ -80,7 +90,7 @@ const saveTeamMemberSchema = z.discriminatedUnion("mode", [
     mode: z.literal("update"),
     societyCardId: uuid,
     memberCardId: uuid,
-    changes: teamMemberChangesSchema,
+    changes: personChangesSchema,
   }),
 ]);
 
@@ -122,6 +132,14 @@ const removeLongTermActivitySchema = z.object({
   societyCardId: uuid,
   activityCardId: uuid,
   reason: correctionReasonSchema,
+});
+
+const reorderLongTermActivitiesSchema = z.object({
+  societyCardId: uuid,
+  activityCardIds: z.array(uuid).min(1).refine(
+    (cardIds) => new Set(cardIds).size === cardIds.length,
+    { message: "活动 Card 不能重复" },
+  ),
 });
 
 const platformCreateValuesSchema = z.object({
@@ -209,6 +227,19 @@ function requireMembership(
   }
 }
 
+function requirePersonMembership(
+  society: ViewCardState,
+  person: ViewCardState,
+): void {
+  const personIds = new Set([
+    ...(society.slots.advisor ?? []),
+    ...(society.slots.team ?? []),
+  ]);
+  if (!personIds.has(person.id)) {
+    throw new Error("PersonCard 不属于当前 SocietyCard 的指导老师或干事队伍");
+  }
+}
+
 async function applyChanges(
   transaction: ViewTransaction,
   cardId: string,
@@ -247,7 +278,7 @@ function teamMemberDimensions(values: z.infer<typeof teamMemberValuesSchema>) {
   });
 }
 
-function teamMemberChanges(changes: z.infer<typeof teamMemberChangesSchema>) {
+function personChanges(changes: z.infer<typeof personChangesSchema>) {
   return {
     department: changes.department,
     position: changes.position,
@@ -415,6 +446,40 @@ const setAdvisors: CommandDefinition<z.infer<typeof setAdvisorsSchema>> = {
   },
 };
 
+const updatePerson: CommandDefinition<z.infer<typeof updatePersonSchema>> = {
+  key: "society.update_person",
+  version: "1",
+  label: "更新已有指导老师或干事的人物资料",
+  requiredPermissions: ["view.write"],
+  inputSchema: zodContractSchema(updatePersonSchema),
+  inputReferences: [
+    { path: ["societyCardId"], kind: "card" },
+    { path: ["personCardId"], kind: "card" },
+  ],
+  async execute(context, input) {
+    const society = await requireSociety(context.transaction, input.societyCardId);
+    const person = requireType(
+      await context.transaction.getCard(input.personCardId),
+      "PersonCard",
+    );
+    requirePersonMembership(society, person);
+    const changes = personChanges(input.changes);
+    await applyChanges(context.transaction, person.id, changes);
+    return {
+      summary: { cardId: person.id, societyCardId: society.id },
+      events: [{
+        type: "society.person_updated",
+        version: "1",
+        payload: {
+          cardId: person.id,
+          societyCardId: society.id,
+          changedDimensions: changedKeys(changes),
+        },
+      }],
+    };
+  },
+};
+
 const saveTeamMember: CommandDefinition<z.infer<typeof saveTeamMemberSchema>> = {
   key: "society.save_team_member",
   version: "2",
@@ -469,7 +534,7 @@ const saveTeamMember: CommandDefinition<z.infer<typeof saveTeamMemberSchema>> = 
       "PersonCard",
     );
     requireMembership(society, "team", member);
-    const changes = teamMemberChanges(input.changes);
+    const changes = personChanges(input.changes);
     await applyChanges(context.transaction, member.id, changes);
     return {
       summary: { cardId: member.id, societyCardId: society.id, created: false },
@@ -581,6 +646,38 @@ const saveLongTermActivity: CommandDefinition<z.infer<typeof saveLongTermActivit
           societyCardId: society.id,
           changedDimensions: changedKeys(changes),
         },
+      }],
+    };
+  },
+};
+
+const reorderLongTermActivities: CommandDefinition<z.infer<typeof reorderLongTermActivitiesSchema>> = {
+  key: "society.reorder_long_term_activities",
+  version: "1",
+  label: "调整长期活动展示顺序",
+  requiredPermissions: ["view.write"],
+  inputSchema: zodContractSchema(reorderLongTermActivitiesSchema),
+  inputReferences: [
+    { path: ["societyCardId"], kind: "card" },
+    { path: ["activityCardIds"], kind: "card", cardinality: "many" },
+  ],
+  async execute(context, input) {
+    const society = await requireSociety(context.transaction, input.societyCardId);
+    const current = society.slots.activities ?? [];
+    const requested = new Set(input.activityCardIds);
+    if (
+      current.length !== input.activityCardIds.length ||
+      current.some((cardId) => !requested.has(cardId))
+    ) {
+      throw new Error("活动排序必须完整包含当前社团的全部长期活动，且不能加入其它 Card");
+    }
+    await context.transaction.setSlot(society.id, "activities", input.activityCardIds);
+    return {
+      summary: { cardId: society.id, activityCardIds: input.activityCardIds },
+      events: [{
+        type: "society.long_term_activities_reordered",
+        version: "1",
+        payload: { cardId: society.id, activityCardIds: input.activityCardIds },
       }],
     };
   },
@@ -729,9 +826,11 @@ export const societyInformationCommands: readonly CommandDefinition[] = [
   initializeOverview,
   updateProfile,
   setAdvisors,
+  updatePerson,
   saveTeamMember,
   removeTeamMember,
   saveLongTermActivity,
+  reorderLongTermActivities,
   removeLongTermActivity,
   savePlatform,
   removePlatform,
