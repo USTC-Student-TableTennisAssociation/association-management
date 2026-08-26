@@ -75,10 +75,11 @@ function input() {
 beforeEach(() => {
   vi.clearAllMocks();
   const upsert = vi.fn().mockResolvedValue({ id: "memory-row" });
+  const update = vi.fn().mockResolvedValue({ id: "memory-row" });
   const transaction = {
     memoryCompilation: { findFirst: vi.fn().mockResolvedValue({ id: compilationId }) },
     memoryGlobalObject: { count: vi.fn().mockResolvedValue(1) },
-    memoryObjectHigherMemory: { upsert },
+    memoryObjectHigherMemory: { upsert, update },
   };
   databaseState.database = {
     memoryCompilation: { findFirst: vi.fn().mockResolvedValue({ id: compilationId }) },
@@ -200,6 +201,54 @@ describe("maintainObjectHigherMemories", () => {
 
     const database = databaseState.database as { $transaction: ReturnType<typeof vi.fn> };
     expect(database.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("never creates a missing Higher Memory in existing-only mode", async () => {
+    await expect(maintainObjectHigherMemories({
+      ...input(),
+      existingOnly: true,
+    })).resolves.toBe(0);
+
+    expect(aiState.generateText).not.toHaveBeenCalled();
+    expect(exploreState.followObject).not.toHaveBeenCalled();
+    const database = databaseState.database as { $transaction: ReturnType<typeof vi.fn> };
+    expect(database.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("uses update instead of upsert in existing-only mode", async () => {
+    const database = databaseState.database as {
+      memoryObjectHigherMemory: { findMany: ReturnType<typeof vi.fn> };
+      __transaction: {
+        memoryObjectHigherMemory: {
+          update: ReturnType<typeof vi.fn>;
+          upsert: ReturnType<typeof vi.fn>;
+        };
+      };
+    };
+    database.memoryObjectHigherMemory.findMany.mockResolvedValue([{
+      globalObjectId: objectId,
+      cognitiveMemory: {
+        identityAndBoundaries: "测试社团",
+        narrativeAndMeaning: "",
+        structuralModel: "",
+        operatingModel: "",
+        currentSituation: "旧状态",
+        openQuestions: [],
+      },
+      operationalIndex: { aspects: [] },
+      maintainedAt: new Date("2026-08-01T00:00:00.000Z"),
+    }]);
+
+    await expect(maintainObjectHigherMemories({
+      ...input(),
+      existingOnly: true,
+    })).resolves.toBe(1);
+
+    expect(database.__transaction.memoryObjectHigherMemory.update)
+      .toHaveBeenCalledWith(expect.objectContaining({
+        where: { globalObjectId: objectId },
+      }));
+    expect(database.__transaction.memoryObjectHigherMemory.upsert).not.toHaveBeenCalled();
   });
 
   it("rejects a structurally empty cognition document", async () => {

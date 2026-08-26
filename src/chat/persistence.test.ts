@@ -3,6 +3,7 @@ import { createUIMessageStream, readUIMessageStream } from "ai";
 
 import type { ClubChatMessage } from "@/ai/types";
 import {
+  appendAssistantTextMessage,
   ChatConversationAccessError,
   hasPersistableChatContent,
   loadChatMessages,
@@ -28,6 +29,8 @@ function databaseFixture(rows: unknown[] = []) {
       update: vi.fn().mockResolvedValue(undefined),
     },
     chatMessage: {
+      aggregate: vi.fn().mockResolvedValue({ _max: { position: 4 } }),
+      create: vi.fn().mockResolvedValue(undefined),
       upsert: vi.fn().mockResolvedValue(undefined),
       findMany: vi.fn().mockResolvedValue(rows),
     },
@@ -113,6 +116,29 @@ describe("chat persistence", () => {
         role: "ASSISTANT",
         parts: message.parts,
         position: 2,
+      }),
+    });
+  });
+
+  it("appends proactive assistant text after the latest persisted position", async () => {
+    const { database, transaction } = databaseFixture();
+
+    const message = await appendAssistantTextMessage({
+      actor,
+      conversationId,
+      text: "需要我同步检查相关知识吗？",
+    }, database as never);
+
+    expect(message).toEqual(expect.objectContaining({
+      role: "assistant",
+      parts: [{ type: "text", text: "需要我同步检查相关知识吗？" }],
+    }));
+    expect(message.id).toMatch(/^view-attention-/);
+    expect(transaction.chatMessage.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        conversationId,
+        role: "ASSISTANT",
+        position: 5,
       }),
     });
   });

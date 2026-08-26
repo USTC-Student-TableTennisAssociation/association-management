@@ -168,6 +168,17 @@ export interface DomainEventDefinition {
   key: string;
   version: string;
   payloadSchema: ContractSchema;
+  /**
+   * Controls when Echo may evaluate a human-authored event. The Runtime only
+   * schedules attention; the model still decides whether remaining silent is
+   * the most useful response.
+   */
+  aiAttention?: {
+    timing: "next_turn" | "after_settle" | "immediate";
+    settleMs?: number;
+  };
+  /** Refresh existing Object Higher Memory linked through affected Cards. */
+  higherMemory?: "reconcile_related_objects";
 }
 
 export interface KnowledgeProjectionDefinition {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 
 import {
   ChatMessageRole,
@@ -218,6 +219,45 @@ export async function saveChatMessage(input: {
       },
     });
   });
+}
+
+export async function appendAssistantTextMessage(input: {
+  actor: ChatHistoryActor;
+  conversationId: string;
+  text: string;
+}, database: PrismaClient = getDatabase()): Promise<ClubChatMessage> {
+  const cleanText = input.text.trim();
+  if (!cleanText) throw new Error("主动消息不能为空。");
+  const message: ClubChatMessage = {
+    id: `view-attention-${randomUUID()}`,
+    role: "assistant",
+    parts: [{ type: "text", text: cleanText }],
+  };
+  await database.$transaction(async (transaction) => {
+    const conversation = await requireOwnedConversation(
+      transaction,
+      input.actor.id,
+      input.conversationId,
+    );
+    const latest = await transaction.chatMessage.aggregate({
+      where: { conversationId: conversation.id },
+      _max: { position: true },
+    });
+    await transaction.chatMessage.create({
+      data: {
+        conversationId: conversation.id,
+        clientMessageId: message.id,
+        role: ChatMessageRole.ASSISTANT,
+        parts: jsonParts(message.parts),
+        position: (latest._max.position ?? -1) + 1,
+      },
+    });
+    await transaction.chatConversation.update({
+      where: { id: conversation.id },
+      data: { lastMessageAt: new Date() },
+    });
+  });
+  return message;
 }
 
 export async function loadChatMessages(

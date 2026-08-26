@@ -4,7 +4,7 @@ import { societyInformationViewModule } from "@/plugins/society-information/view
 
 export const societyInformationPlugin: EchoPluginManifest = {
   id: "echo.society-information",
-  version: "1.6.0",
+  version: "1.8.0",
   contributes: {
     views: [societyInformationViewModule],
     presentations: [societyOverviewPresentation],

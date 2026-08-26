@@ -22,7 +22,13 @@ export const societyInformationCardTypes = [
     label: "社团",
     description: "描述社团自身的基本身份与长期信息。",
     dimensions: [
-      { key: "rating", label: "社团星级", type: "text" },
+      {
+        key: "rating",
+        label: "社团星级",
+        description:
+          "社团在当前评价体系中正式获评的等级，属于会随评审变化的当前事实，不是纯展示文字；实质变化可能需要检查知识层中的旧记录。",
+        type: "text",
+      },
       { key: "founded_on", label: "成立时间", type: "date" },
       richText("purpose", "宗旨"),
       richText("description", "简介"),

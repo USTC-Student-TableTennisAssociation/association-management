@@ -16,6 +16,7 @@ export type HigherMemoryMaintenanceInput = {
   semanticContext: ChatAssertionSemanticContext;
   retrieval: MemoryRetrievalResult;
   queueDecision: HigherMemoryQueueDecision;
+  existingObjectMemoriesOnly?: boolean;
 };
 
 export type HigherMemoryMaintenanceResult = {
@@ -75,6 +76,7 @@ export async function maintainHigherMemories(
       () => maintainObjectHigherMemories({
         ...input,
         queueDecision: objectDecision,
+        existingOnly: input.existingObjectMemoriesOnly,
       }, trace),
       trace,
     );
