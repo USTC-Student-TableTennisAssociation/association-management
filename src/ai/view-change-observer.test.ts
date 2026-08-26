@@ -23,7 +23,7 @@ function input(): ViewChangeObserverInput {
     viewModule: societyInformationViewModule,
     snapshot: {
       viewKey: "society_information",
-      pluginVersion: "1.7.0",
+      pluginVersion: "1.8.0",
       schemaVersion: "5",
       stateVersion: "8",
       observedAt: "2026-08-26T00:00:00.000Z",
@@ -73,7 +73,7 @@ describe("View Change Observer", () => {
     expect(prompt).toContain("O1");
     expect(prompt).toContain("四星级社团");
     expect(prompt).toContain("旧资料仍记录为三星级社团");
-    expect(prompt).toContain("Shared Brain 一致性检查");
+    expect(prompt).toContain("独立后台链路自动完成");
     expect(prompt).toContain("不是纯展示文字");
     expect(prompt).not.toContain(societyCardId);
     expect(prompt).not.toContain(societyObjectId);
@@ -85,8 +85,8 @@ describe("View Change Observer", () => {
         toolName: "submitViewAttentionDecision",
         input: {
           action: "respond",
-          message: "正式概览已经改为四星级，需要我整理一条 Shared Brain 更新候选吗？",
-          reason: "正式状态与旧高层记忆存在冲突",
+          message: "四星级对应的评审结果是否还需要同步到公开平台简介？",
+          reason: "正式等级变化可能影响对外展示口径",
         },
       }],
     });

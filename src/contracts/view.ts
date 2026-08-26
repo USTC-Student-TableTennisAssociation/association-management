@@ -177,6 +177,8 @@ export interface DomainEventDefinition {
     timing: "next_turn" | "after_settle" | "immediate";
     settleMs?: number;
   };
+  /** Refresh existing Object Higher Memory linked through affected Cards. */
+  higherMemory?: "reconcile_related_objects";
 }
 
 export interface KnowledgeProjectionDefinition {
