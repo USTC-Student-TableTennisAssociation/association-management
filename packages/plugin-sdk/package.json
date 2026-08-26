@@ -1,0 +1,34 @@
+{
+  "name": "@echo/plugin-sdk",
+  "version": "0.1.0",
+  "description": "Public contracts and React helpers for Echo plugins",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepack": "pnpm build"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "^5.0.0",
+    "zod": "^4.0.0"
+  },
+  "license": "UNLICENSED"
+}

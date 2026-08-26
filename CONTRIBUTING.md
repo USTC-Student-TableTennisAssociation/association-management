@@ -79,10 +79,29 @@ View Module 的本体是 Card Schema 与业务运行规则。
 2. 为 Card Type 选择稳定 key，并明确每个 Dimension、Slot 与 Related Object Policy。
 3. 只暴露业务语义的 Domain Commands，不暴露 `createCard` / `setSlot` 等原语。
 4. 通过 `EchoPluginManifest` 贡献 View。
-5. 在 `src/shell/composition-root.ts` 完成第一方 Plugin 注册。
+5. 为 Plugin 添加 `echo.plugin.json`，运行 `pnpm echo:plugin install <目录>` 生成静态注册表。
 6. 添加 Registry、Command、Invariant 和架构边界测试。
 
 View Core 必须能在没有专属 Presentation 和 Skill 的情况下通过 Generic Inspector 与 Command API 独立运行。
+
+## 可发布 Plugin
+
+仓库外 Plugin 应依赖 `@echo/plugin-sdk`，并在 npm 包中包含编译后的 `dist/`、
+`echo.plugin.json` 和 `package.json#echoPlugin`。不要让 Echo 安装时再编译源码；React 专属 UI
+和服务端 Manifest 都应在 `prepack` 前构建完成。
+
+`packages/example-plugin` 是可复制的最小完整示例。发布前应改用自己拥有的 npm scope，
+先发布 SDK，再发布 Plugin，并用 tarball 做一次不依赖 registry 的发布前测试：
+
+```bash
+pnpm plugins:build
+pnpm --filter @echo/example-plugin pack
+pnpm echo:plugin install ./echo-example-plugin-0.1.0.tgz
+pnpm build
+pnpm echo:plugin remove echo.example-notes --purge
+```
+
+第一版只接受可信 Plugin，不支持升级、迁移和回滚；修改已发布行为时使用新的包版本。
 
 ## 数据库改动
 

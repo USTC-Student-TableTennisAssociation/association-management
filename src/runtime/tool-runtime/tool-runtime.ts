@@ -65,6 +65,10 @@ export class ToolRuntime {
     return [...this.contracts.values()];
   }
 
+  getContract(key: string, version: string): ToolCapabilityContract | undefined {
+    return this.contracts.get(this.contractKey(key, version));
+  }
+
   listProviders(): readonly ToolProviderExtension[] {
     return [...this.providers.values()];
   }

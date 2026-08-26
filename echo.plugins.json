@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "source": "local",
+      "manifest": "src/plugins/activity-operations/echo.plugin.json"
+    },
+    {
+      "source": "local",
+      "manifest": "src/plugins/society-information/echo.plugin.json"
+    }
+  ]
+}

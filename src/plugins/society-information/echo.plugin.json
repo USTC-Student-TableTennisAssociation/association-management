@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "echo.society-information",
+  "version": "1.8.0",
+  "server": {
+    "entry": "./manifest.ts",
+    "export": "societyInformationPlugin"
+  },
+  "contributes": {
+    "views": [
+      "society_information"
+    ],
+    "presentations": [
+      {
+        "loader": "society-information/immersive-overview",
+        "entry": "./presentation/society-overview-workspace.tsx",
+        "export": "SocietyOverviewWorkspace"
+      }
+    ],
+    "skills": [],
+    "tools": []
+  }
+}

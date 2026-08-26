@@ -23,6 +23,17 @@ describe("Echo plugin architecture boundaries", () => {
     }
   });
 
+  it("loads installed Plugins and Presentations through generated registries", () => {
+    const compositionRoot = source("src/shell/composition-root.ts");
+    const presentationHost = source(
+      "src/view-runtime/presentation-host/work-presentation-host.tsx",
+    );
+    expect(compositionRoot).not.toContain("@/plugins/");
+    expect(compositionRoot).toContain("installedPluginManifests");
+    expect(presentationHost).not.toContain("@/plugins/");
+    expect(presentationHost).toContain("installedPresentationComponents");
+  });
+
   it("keeps View Modules independent from Prisma and Runtime implementation", () => {
     const pluginSources = [
       "src/plugins/activity-operations/view/schema.ts",
