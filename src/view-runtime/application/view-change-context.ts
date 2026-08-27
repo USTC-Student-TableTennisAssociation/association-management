@@ -1,4 +1,11 @@
-import type { ViewCardState, ViewModule, ViewReadSnapshot } from "@/contracts";
+import type {
+  ViewCardState,
+  ViewChange,
+  ViewModule,
+  ViewReadSnapshot,
+  ViewReactionAttentionPolicy,
+} from "@/contracts";
+import { policyForViewChange } from "@/view-runtime/application/view-change-policy";
 
 export type ViewChangeExecution = {
   id: string;
@@ -7,10 +14,12 @@ export type ViewChangeExecution = {
   result: unknown;
   stateVersionBefore: string;
   stateVersionAfter: string;
+  changes: readonly ViewChange[];
 };
 
 export type ViewChangeEvent = {
   type: string;
+  version: string;
   payload: unknown;
   stateVersion: string;
 };
@@ -27,6 +36,8 @@ export type ViewChangeContextInput = {
   executions: readonly ViewChangeExecution[];
   events: readonly ViewChangeEvent[];
   objects: readonly ViewRelatedObject[];
+  attentionPolicy?: ViewReactionAttentionPolicy;
+  reactionGuidance?: readonly string[];
   recentConversation?: readonly { role: string; text: string }[];
 };
 
@@ -70,7 +81,7 @@ function presentCard(
         key,
         label: definition?.label ?? key,
         description: definition?.description ?? null,
-        value,
+        value: logicalValue(value, cardRefs, objectRefs),
       };
     }),
     slots: Object.fromEntries(Object.entries(card.slots).map(([key, ids]) => [
@@ -81,8 +92,101 @@ function presentCard(
   };
 }
 
+function addChangeCardIds(change: ViewChange, ids: Set<string>): void {
+  if (change.kind === "card_created" || change.kind === "card_deleted") {
+    ids.add(change.card.id);
+    Object.values(change.card.slots).flat().forEach((id) => ids.add(id));
+    return;
+  }
+  ids.add(change.cardId);
+  if (change.kind === "slot") {
+    change.before.forEach((id) => ids.add(id));
+    change.after.forEach((id) => ids.add(id));
+  }
+}
+
+function presentChange(
+  change: ViewChange,
+  viewModule: ViewModule,
+  cardRefs: ReadonlyMap<string, string>,
+  objectRefs: ReadonlyMap<string, string>,
+) {
+  const cardTypeKey = change.kind === "card_created" || change.kind === "card_deleted"
+    ? change.card.cardTypeKey
+    : change.cardTypeKey;
+  const cardType = viewModule.schema.cardTypes.find((candidate) =>
+    candidate.key === cardTypeKey
+  );
+  const cardId = change.kind === "card_created" || change.kind === "card_deleted"
+    ? change.card.id
+    : change.cardId;
+  const policy = policyForViewChange(viewModule, change);
+  const base = {
+    kind: change.kind,
+    card: {
+      ref: cardRefs.get(cardId) ?? "内部引用",
+      type: cardTypeKey,
+      label: cardType?.label ?? cardTypeKey,
+      definition: cardType?.description ?? null,
+    },
+    policy: policy ?? null,
+  };
+
+  switch (change.kind) {
+    case "card_created":
+    case "card_deleted":
+      return {
+        ...base,
+        state: presentCard(change.card, 0, viewModule, cardRefs, objectRefs),
+      };
+    case "dimension": {
+      const definition = cardType?.dimensions.find((candidate) =>
+        candidate.key === change.dimensionKey
+      );
+      return {
+        ...base,
+        field: {
+          key: change.dimensionKey,
+          label: definition?.label ?? change.dimensionKey,
+          definition: definition?.description ?? null,
+        },
+        before: logicalValue(change.before, cardRefs, objectRefs),
+        after: logicalValue(change.after, cardRefs, objectRefs),
+      };
+    }
+    case "slot": {
+      const definition = cardType?.slots.find((candidate) => candidate.key === change.slotKey);
+      return {
+        ...base,
+        relationship: {
+          key: change.slotKey,
+          label: definition?.label ?? change.slotKey,
+          definition: definition?.description ?? null,
+        },
+        before: change.before.map((id) => cardRefs.get(id) ?? "内部引用"),
+        after: change.after.map((id) => cardRefs.get(id) ?? "内部引用"),
+      };
+    }
+    case "related_objects":
+      return {
+        ...base,
+        relationship: {
+          key: "related_objects",
+          label: "关联认知 Object",
+          definition: cardType?.relatedObjects?.description ?? null,
+        },
+        before: change.before.map((id) => objectRefs.get(id) ?? "内部引用"),
+        after: change.after.map((id) => objectRefs.get(id) ?? "内部引用"),
+      };
+  }
+}
+
 export function buildViewChangeContext(input: ViewChangeContextInput) {
-  const cardRefs = new Map(input.snapshot.cards.map((card, index) => [card.id, `V${index + 1}`]));
+  const cardIds = new Set(input.snapshot.cards.map((card) => card.id));
+  input.executions.forEach((execution) =>
+    execution.changes.forEach((change) => addChangeCardIds(change, cardIds))
+  );
+  const cardRefs = new Map([...cardIds].map((cardId, index) => [cardId, `V${index + 1}`]));
   const objectRefs = new Map(input.objects.map((object, index) => [object.id, `O${index + 1}`]));
   const commandsByKey = new Map(input.viewModule.commands.map((command) => [command.key, command]));
   return {
@@ -96,6 +200,10 @@ export function buildViewChangeContext(input: ViewChangeContextInput) {
         presentCard(card, index, input.viewModule, cardRefs, objectRefs)
       ),
     },
+    aiReaction: {
+      attention: input.attentionPolicy ?? "evaluate",
+      guidance: input.reactionGuidance ?? [],
+    },
     relatedObjects: input.objects.map((object) => ({
       ref: objectRefs.get(object.id),
       canonicalName: object.canonicalName,
@@ -107,10 +215,14 @@ export function buildViewChangeContext(input: ViewChangeContextInput) {
       toStateVersion: execution.stateVersionAfter,
       input: logicalValue(execution.input, cardRefs, objectRefs),
       result: logicalValue(execution.result, cardRefs, objectRefs),
+      changes: execution.changes.map((change) =>
+        presentChange(change, input.viewModule, cardRefs, objectRefs)
+      ),
       events: input.events.filter((event) =>
         event.stateVersion === execution.stateVersionAfter
       ).map((event) => ({
         type: event.type,
+        version: event.version,
         payload: logicalValue(event.payload, cardRefs, objectRefs),
       })),
     })),

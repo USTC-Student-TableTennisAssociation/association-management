@@ -9,7 +9,6 @@ export type WorkPresentationProps = {
   presentationLoader?: string;
   focusCardId?: string;
   activeConversationId?: string;
-  onAIAttentionScheduled?: () => void;
   onOpenInspector: () => void;
   onAskAI: (prompt: string) => void;
 };

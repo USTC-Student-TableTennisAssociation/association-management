@@ -1,8 +1,11 @@
-import type { PrismaClient } from "@/generated/prisma/client";
+import type { Prisma, PrismaClient } from "@/generated/prisma/client";
 
-import type { ClubChatMessage } from "@/ai/types";
 import type { ViewChangeAttentionDecision } from "@/ai/view-change-observer";
-import type { ViewReadPort } from "@/contracts";
+import type {
+  ViewChange,
+  ViewReadPort,
+  ViewReactionAttentionPolicy,
+} from "@/contracts";
 import type { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import type {
   ViewChangeEvent,
@@ -10,39 +13,16 @@ import type {
   ViewRelatedObject,
 } from "@/view-runtime/application/view-change-context";
 
-type AttentionTiming = "next_turn" | "after_settle" | "immediate";
-
-export type ViewChangeSchedule = "scheduled" | "next_turn" | "ignored";
-
-type PendingBatch = {
-  actor: { id: string; displayName: string };
-  conversationId?: string;
-  viewKey: string;
-  executionIds: Set<string>;
-  evaluateAttention: boolean;
-  reconcileHigherMemory: boolean;
-  timer: ReturnType<typeof setTimeout>;
-};
-
 export type ViewAttentionEvaluator = (input: {
   viewModule: NonNullable<ReturnType<ExtensionRegistry["getView"]>>;
   snapshot: Awaited<ReturnType<ViewReadPort["query"]>>;
   executions: readonly ViewChangeExecution[];
   events: readonly ViewChangeEvent[];
   objects: readonly ViewRelatedObject[];
-  conversation: readonly ClubChatMessage[];
+  conversation: readonly [];
+  attentionPolicy: ViewReactionAttentionPolicy;
+  reactionGuidance: readonly string[];
 }) => Promise<ViewChangeAttentionDecision>;
-
-export type ViewAttentionMessageAppender = (input: {
-  actor: { id: string; displayName: string };
-  conversationId: string;
-  text: string;
-}) => Promise<unknown>;
-
-export type ViewAttentionConversationLoader = (input: {
-  actor: { id: string; displayName: string };
-  conversationId: string;
-}) => Promise<ClubChatMessage[]>;
 
 export type ViewHigherMemoryReconciler = (input: {
   viewModule: NonNullable<ReturnType<ExtensionRegistry["getView"]>>;
@@ -52,41 +32,40 @@ export type ViewHigherMemoryReconciler = (input: {
   objects: readonly ViewRelatedObject[];
 }) => Promise<number>;
 
-const timingRank: Record<AttentionTiming, number> = {
-  next_turn: 0,
-  after_settle: 1,
-  immediate: 2,
-};
-
-const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-function collectIds(value: unknown, target: Set<string>): void {
-  if (typeof value === "string") {
-    if (uuid.test(value)) target.add(value);
-    return;
-  }
-  if (Array.isArray(value)) {
-    value.forEach((item) => collectIds(item, target));
-    return;
-  }
-  if (!value || typeof value !== "object") return;
-  Object.values(value).forEach((item) => collectIds(item, target));
+function storedChanges(value: Prisma.JsonValue): ViewChange[] {
+  return Array.isArray(value) ? value as ViewChange[] : [];
 }
 
-export function configuredViewChangeSettleMs(
-  environment: Record<string, string | undefined> = process.env,
-): number {
-  const raw = environment.VIEW_CHANGE_SETTLE_MS?.trim();
-  if (!raw) return 20_000;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 1_000 || value > 300_000) {
-    throw new Error("VIEW_CHANGE_SETTLE_MS 必须是 1000 到 300000 之间的整数");
-  }
-  return value;
+function storedObjects(value: Prisma.JsonValue): ViewRelatedObject[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const id = item.id;
+    const canonicalName = item.canonicalName;
+    if (typeof id !== "string" || typeof canonicalName !== "string") return [];
+    return [{
+      id,
+      canonicalName,
+      ...("cognitiveMemory" in item ? { cognitiveMemory: item.cognitiveMemory } : {}),
+    }];
+  });
+}
+
+function storedStrings(value: Prisma.JsonValue): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function targetCardIds(value: Prisma.JsonValue): Set<string> {
+  if (!Array.isArray(value)) return new Set();
+  return new Set(value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    return typeof item.cardId === "string" ? [item.cardId] : [];
+  }));
 }
 
 export class ViewChangeCoordinator {
-  private readonly batches = new Map<string, PendingBatch>();
+  private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly knowledgeChains = new Map<string, Promise<void>>();
 
   constructor(private readonly dependencies: {
     database: PrismaClient;
@@ -94,230 +73,244 @@ export class ViewChangeCoordinator {
     readPort: ViewReadPort;
     evaluate: ViewAttentionEvaluator;
     reconcileHigherMemory: ViewHigherMemoryReconciler;
-    appendMessage: ViewAttentionMessageAppender;
-    loadConversation: ViewAttentionConversationLoader;
-    defaultSettleMs?: number;
   }) {}
 
-  async enqueue(input: {
-    executionId: string;
-    actor: { id: string; displayName: string };
-    conversationId?: string;
-  }): Promise<ViewChangeSchedule> {
-    const execution = await this.dependencies.database.viewCommandExecution.findFirst({
-      where: {
-        id: input.executionId,
-        actorId: input.actor.id,
-        initiator: "human",
-      },
-      select: {
-        id: true,
-        viewKey: true,
-        stateVersionAfter: true,
-      },
+  async enqueue(input: { reactionId: string; actorId: string }): Promise<boolean> {
+    const reaction = await this.dependencies.database.viewChangeReaction.findFirst({
+      where: { id: input.reactionId, actorId: input.actorId },
+      select: { id: true, settleUntil: true, attentionStatus: true, knowledgeStatus: true },
     });
-    if (!execution) return "ignored";
-    const viewModule = this.dependencies.registry.getView(execution.viewKey);
-    if (!viewModule) return "ignored";
-    const events = await this.dependencies.database.domainEventOutbox.findMany({
-      where: {
-        viewKey: execution.viewKey,
-        stateVersion: execution.stateVersionAfter,
-      },
-      select: { eventType: true, eventVersion: true },
-    });
-    const definitions = events.flatMap((event) => {
-      const definition = viewModule.events.find((candidate) =>
-        candidate.key === event.eventType && candidate.version === event.eventVersion
-      );
-      return definition ? [definition] : [];
-    });
-    const attentionPolicies = definitions.flatMap((definition) =>
-      definition.aiAttention ? [definition.aiAttention] : []
-    );
-    const reconcileHigherMemory = definitions.some((definition) =>
-      definition.higherMemory === "reconcile_related_objects"
-    );
-    if (!attentionPolicies.length && !reconcileHigherMemory) return "ignored";
-    const strongest = attentionPolicies.reduce<{
-      timing: AttentionTiming;
-      settleMs?: number;
-    }>((current, policy) =>
-      timingRank[policy.timing] > timingRank[current.timing] ? policy : current
-    , { timing: "next_turn" });
-    const evaluateAttention = Boolean(
-      input.conversationId && strongest.timing !== "next_turn",
-    );
-    if (!evaluateAttention && !reconcileHigherMemory) return "next_turn";
+    if (!reaction) return false;
+    if (reaction.attentionStatus !== "queued" && reaction.knowledgeStatus !== "queued") {
+      return false;
+    }
+    this.schedule(reaction.id, reaction.settleUntil);
+    return true;
+  }
 
-    const key = `${input.actor.id}:${execution.viewKey}`;
-    const existing = this.batches.get(key);
-    if (existing) clearTimeout(existing.timer);
-    const executionIds = existing?.executionIds ?? new Set<string>();
-    executionIds.add(execution.id);
-    const delay = evaluateAttention && strongest.timing === "immediate"
-      ? 0
-      : strongest.settleMs ?? this.dependencies.defaultSettleMs ?? configuredViewChangeSettleMs();
-    const batch: PendingBatch = {
-      actor: input.actor,
-      conversationId: evaluateAttention ? input.conversationId : existing?.conversationId,
-      viewKey: execution.viewKey,
-      executionIds,
-      evaluateAttention: Boolean(existing?.evaluateAttention || evaluateAttention),
-      reconcileHigherMemory: Boolean(
-        existing?.reconcileHigherMemory || reconcileHigherMemory,
-      ),
-      timer: setTimeout(() => void this.flush(key), delay),
-    };
-    this.batches.set(key, batch);
-    return evaluateAttention ? "scheduled" : "ignored";
+  async resumePending(input: { actorId: string; viewKey: string }): Promise<number> {
+    const reactions = await this.dependencies.database.viewChangeReaction.findMany({
+      where: {
+        actorId: input.actorId,
+        viewKey: input.viewKey,
+        OR: [{ attentionStatus: "queued" }, { knowledgeStatus: "queued" }],
+      },
+      select: { id: true, settleUntil: true },
+    });
+    reactions.forEach((reaction) => this.schedule(reaction.id, reaction.settleUntil));
+    return reactions.length;
   }
 
   dispose(): void {
-    this.batches.forEach((batch) => clearTimeout(batch.timer));
-    this.batches.clear();
+    this.timers.forEach((timer) => clearTimeout(timer));
+    this.timers.clear();
   }
 
-  private async flush(key: string): Promise<void> {
-    const batch = this.batches.get(key);
-    if (!batch) return;
-    this.batches.delete(key);
+  private schedule(reactionId: string, settleUntil: Date): void {
+    const existing = this.timers.get(reactionId);
+    if (existing) clearTimeout(existing);
+    const delay = Math.max(0, settleUntil.getTime() - Date.now());
+    this.timers.set(reactionId, setTimeout(() => void this.flush(reactionId), delay));
+  }
+
+  private enqueueKnowledge(viewKey: string, job: () => Promise<void>): Promise<void> {
+    const previous = this.knowledgeChains.get(viewKey) ?? Promise.resolve();
+    const scheduled = previous.catch(() => undefined).then(job);
+    this.knowledgeChains.set(viewKey, scheduled);
+    void scheduled.finally(() => {
+      if (this.knowledgeChains.get(viewKey) === scheduled) {
+        this.knowledgeChains.delete(viewKey);
+      }
+    });
+    return scheduled;
+  }
+
+  private async flush(reactionId: string): Promise<void> {
+    this.timers.delete(reactionId);
+    const database = this.dependencies.database;
     try {
-      const viewModule = this.dependencies.registry.getView(batch.viewKey);
-      if (!viewModule) return;
-      const rows = await this.dependencies.database.viewCommandExecution.findMany({
-        where: {
-          id: { in: [...batch.executionIds] },
-          actorId: batch.actor.id,
-          initiator: "human",
-        },
-        orderBy: [{ stateVersionAfter: "asc" }, { createdAt: "asc" }],
-        select: {
-          id: true,
-          commandKey: true,
-          inputJson: true,
-          resultSummaryJson: true,
-          stateVersionBefore: true,
-          stateVersionAfter: true,
-        },
+      const pending = await database.viewChangeReaction.findUnique({ where: { id: reactionId } });
+      if (!pending) return;
+      if (pending.settleUntil.getTime() > Date.now()) {
+        this.schedule(pending.id, pending.settleUntil);
+        return;
+      }
+      const now = new Date();
+      await Promise.all([
+        pending.attentionStatus === "queued"
+          ? database.viewChangeReaction.updateMany({
+              where: { id: reactionId, attentionStatus: "queued" },
+              data: { attentionStatus: "running", attentionStartedAt: now },
+            })
+          : Promise.resolve(),
+        pending.knowledgeStatus === "queued"
+          ? database.viewChangeReaction.updateMany({
+              where: { id: reactionId, knowledgeStatus: "queued" },
+              data: { knowledgeStatus: "running", knowledgeStartedAt: now },
+            })
+          : Promise.resolve(),
+      ]);
+
+      const reaction = await database.viewChangeReaction.findUnique({
+        where: { id: reactionId },
+        include: { execution: true },
       });
-      if (!rows.length) return;
-      const stateVersions = rows.map((row) => row.stateVersionAfter);
-      const eventRows = await this.dependencies.database.domainEventOutbox.findMany({
-        where: { viewKey: batch.viewKey, stateVersion: { in: stateVersions } },
-        orderBy: [{ stateVersion: "asc" }, { occurredAt: "asc" }],
-        select: { eventType: true, payloadJson: true, stateVersion: true },
+      if (!reaction) return;
+      if (reaction.attentionStatus !== "running" && reaction.knowledgeStatus !== "running") return;
+      const viewModule = this.dependencies.registry.getView(reaction.viewKey);
+      if (!viewModule) throw new Error(`View ${reaction.viewKey} 未加载`);
+
+      const eventRows = await database.domainEventOutbox.findMany({
+        where: { viewKey: reaction.viewKey, stateVersion: reaction.stateVersion },
+        orderBy: { occurredAt: "asc" },
       });
       const snapshot = await this.dependencies.readPort.query({
-        viewKey: batch.viewKey,
-        actor: { actorId: batch.actor.id, permissions: ["view.read"] },
+        viewKey: reaction.viewKey,
+        actor: { actorId: reaction.actorId ?? undefined, permissions: ["view.read"] },
       });
-      const executions: ViewChangeExecution[] = rows.map((row) => ({
-        id: row.id,
-        commandKey: row.commandKey,
-        input: row.inputJson,
-        result: row.resultSummaryJson,
-        stateVersionBefore: row.stateVersionBefore.toString(),
-        stateVersionAfter: row.stateVersionAfter.toString(),
-      }));
+      const changes = storedChanges(reaction.execution.changeSetJson);
+      const execution: ViewChangeExecution = {
+        id: reaction.execution.id,
+        commandKey: reaction.execution.commandKey,
+        input: reaction.execution.inputJson,
+        result: reaction.execution.resultSummaryJson,
+        stateVersionBefore: reaction.execution.stateVersionBefore.toString(),
+        stateVersionAfter: reaction.execution.stateVersionAfter.toString(),
+        changes,
+      };
       const events: ViewChangeEvent[] = eventRows.map((event) => ({
         type: event.eventType,
+        version: event.eventVersion,
         payload: event.payloadJson,
         stateVersion: event.stateVersion.toString(),
       }));
-      const referencedIds = new Set<string>();
-      executions.forEach((executionRow) => {
-        collectIds(executionRow.input, referencedIds);
-        collectIds(executionRow.result, referencedIds);
-      });
-      events.forEach((event) => collectIds(event.payload, referencedIds));
-      const impactedCards = snapshot.cards.filter((card) => referencedIds.has(card.id));
-      if (!impactedCards.length) return;
-      const attentionSnapshot = { ...snapshot, cards: impactedCards };
-      const impactedObjectIds = new Set(impactedCards
-        .flatMap((card) => card.relatedObjectIds));
-      const objectIds = [...new Set(impactedCards.flatMap((card) => card.relatedObjectIds))];
-      const objectRows = objectIds.length
-        ? await this.dependencies.database.memoryGlobalObject.findMany({
-            where: { id: { in: objectIds } },
-            orderBy: { canonicalName: "asc" },
-            select: {
-              id: true,
-              canonicalName: true,
-              higherMemory: { select: { cognitiveMemory: true } },
+      const impactedCardIds = targetCardIds(reaction.targetsJson);
+      const reactionSnapshot = {
+        ...snapshot,
+        cards: snapshot.cards.filter((card) => impactedCardIds.has(card.id)),
+      };
+      // This is the immutable pre-change knowledge snapshot persisted with the command.
+      // Both workers receive it concurrently, so reconciliation cannot corroborate itself.
+      const priorObjects = storedObjects(reaction.priorObjectsJson);
+      const guidance = storedStrings(reaction.guidanceJson);
+
+      const jobs: Promise<void>[] = [];
+      if (reaction.attentionStatus === "running") {
+        jobs.push(this.dependencies.evaluate({
+          viewModule,
+          snapshot: reactionSnapshot,
+          executions: [execution],
+          events,
+          objects: priorObjects,
+          conversation: [],
+          attentionPolicy: reaction.attentionPolicy as ViewReactionAttentionPolicy,
+          reactionGuidance: guidance,
+        }).then(async (decision) => {
+          const attentionStatus = decision.action === "request_confirmation"
+            ? "needs_confirmation"
+            : decision.action;
+          await database.viewChangeReaction.update({
+            where: { id: reaction.id },
+            data: {
+              attentionStatus,
+              message: decision.message || null,
+              reason: decision.reason,
+              attentionCompletedAt: new Date(),
             },
-          })
-        : [];
-      let objects: ViewRelatedObject[] = objectRows.map((object) => ({
-        id: object.id,
-        canonicalName: object.canonicalName,
-        ...(impactedObjectIds.has(object.id) && object.higherMemory
-          ? { cognitiveMemory: object.higherMemory.cognitiveMemory }
-          : {}),
-      }));
-      if (batch.reconcileHigherMemory) {
-        try {
-          const maintained = await this.dependencies.reconcileHigherMemory({
-            viewModule,
-            snapshot: attentionSnapshot,
-            executions,
-            events,
-            objects,
           });
-          console.info("[view.higher-memory]", JSON.stringify({
-            viewKey: batch.viewKey,
-            executionCount: executions.length,
-            maintained,
+          console.info("[view.reaction.attention]", JSON.stringify({
+            viewKey: reaction.viewKey,
+            reactionId: reaction.id,
+            status: attentionStatus,
+            reason: decision.reason,
           }));
-          if (maintained) {
-            const refreshedRows = await this.dependencies.database.memoryGlobalObject.findMany({
-              where: { id: { in: objectIds } },
-              orderBy: { canonicalName: "asc" },
-              select: {
-                id: true,
-                canonicalName: true,
-                higherMemory: { select: { cognitiveMemory: true } },
+        }).catch(async (error: unknown) => {
+          await database.viewChangeReaction.update({
+            where: { id: reaction.id },
+            data: {
+              attentionStatus: "failed",
+              attentionErrorMessage: error instanceof Error ? error.message : String(error),
+              attentionCompletedAt: new Date(),
+            },
+          });
+          console.error("[view.reaction.attention]", error);
+        }));
+      }
+      if (reaction.knowledgeStatus === "running") {
+        jobs.push(this.enqueueKnowledge(reaction.viewKey, async () => {
+          try {
+            const newerReconciliation = await database.viewChangeReaction.count({
+              where: {
+                viewKey: reaction.viewKey,
+                stateVersion: { gt: reaction.stateVersion },
+                knowledgePolicy: "reconcile",
+                knowledgeStatus: { not: "failed" },
               },
             });
-            objects = refreshedRows.map((object) => ({
-              id: object.id,
-              canonicalName: object.canonicalName,
-              ...(object.higherMemory
-                ? { cognitiveMemory: object.higherMemory.cognitiveMemory }
-                : {}),
+            if (newerReconciliation) {
+              await database.viewChangeReaction.update({
+                where: { id: reaction.id },
+                data: { knowledgeStatus: "completed", knowledgeCompletedAt: new Date() },
+              });
+              console.info("[view.reaction.knowledge]", JSON.stringify({
+                viewKey: reaction.viewKey,
+                reactionId: reaction.id,
+                skipped: "superseded",
+              }));
+              return;
+            }
+            const maintained = await this.dependencies.reconcileHigherMemory({
+              viewModule,
+              snapshot: reactionSnapshot,
+              executions: [execution],
+              events,
+              objects: priorObjects,
+            });
+            await database.viewChangeReaction.update({
+              where: { id: reaction.id },
+              data: { knowledgeStatus: "completed", knowledgeCompletedAt: new Date() },
+            });
+            console.info("[view.reaction.knowledge]", JSON.stringify({
+              viewKey: reaction.viewKey,
+              reactionId: reaction.id,
+              maintained,
             }));
+          } catch (error) {
+            await database.viewChangeReaction.update({
+              where: { id: reaction.id },
+              data: {
+                knowledgeStatus: "failed",
+                knowledgeErrorMessage: error instanceof Error ? error.message : String(error),
+                knowledgeCompletedAt: new Date(),
+              },
+            });
+            console.error("[view.reaction.knowledge]", error);
           }
-        } catch (error) {
-          console.error("[view.higher-memory]", error);
-        }
+        }));
       }
-      if (!batch.evaluateAttention || !batch.conversationId) return;
-      const conversation = await this.dependencies.loadConversation({
-        actor: batch.actor,
-        conversationId: batch.conversationId,
-      });
-      const decision = await this.dependencies.evaluate({
-        viewModule,
-        snapshot: attentionSnapshot,
-        executions,
-        events,
-        objects,
-        conversation,
-      });
-      console.info("[view.ai-attention]", JSON.stringify({
-        viewKey: batch.viewKey,
-        executionCount: executions.length,
-        action: decision.action,
-        reason: decision.reason,
-      }));
-      if (decision.action === "silent") return;
-      await this.dependencies.appendMessage({
-        actor: batch.actor,
-        conversationId: batch.conversationId,
-        text: decision.message,
-      });
+      await Promise.all(jobs);
     } catch (error) {
-      console.error("[view.ai-attention]", error);
+      console.error("[view.reaction]", error);
+      const completedAt = new Date();
+      const message = error instanceof Error ? error.message : String(error);
+      await Promise.all([
+        database.viewChangeReaction.updateMany({
+          where: { id: reactionId, attentionStatus: { in: ["queued", "running"] } },
+          data: {
+            attentionStatus: "failed",
+            attentionErrorMessage: message,
+            attentionCompletedAt: completedAt,
+          },
+        }),
+        database.viewChangeReaction.updateMany({
+          where: { id: reactionId, knowledgeStatus: { in: ["queued", "running"] } },
+          data: {
+            knowledgeStatus: "failed",
+            knowledgeErrorMessage: message,
+            knowledgeCompletedAt: completedAt,
+          },
+        }),
+      ]).catch(() => undefined);
     }
   }
 }

@@ -14,5 +14,5 @@ pnpm pack
 Echo Plugin CLI 安装：
 
 ```bash
-pnpm echo:plugin install ./echo-society-information-plugin-1.8.0.tgz
+pnpm echo:plugin install ./echo-society-information-plugin-1.10.0.tgz
 ```

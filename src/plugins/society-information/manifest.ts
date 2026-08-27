@@ -5,7 +5,7 @@ import { societyInformationViewModule } from "./view/schema.js";
 
 export const societyInformationPlugin = defineEchoPlugin({
   id: "echo.society-information",
-  version: "1.8.0",
+  version: "1.10.0",
   contributes: {
     views: [societyInformationViewModule],
     presentations: [societyOverviewPresentation],

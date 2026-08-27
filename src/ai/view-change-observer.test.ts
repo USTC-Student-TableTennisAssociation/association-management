@@ -23,7 +23,7 @@ function input(): ViewChangeObserverInput {
     viewModule: societyInformationViewModule,
     snapshot: {
       viewKey: "society_information",
-      pluginVersion: "1.8.0",
+      pluginVersion: "1.10.0",
       schemaVersion: "5",
       stateVersion: "8",
       observedAt: "2026-08-26T00:00:00.000Z",
@@ -44,9 +44,18 @@ function input(): ViewChangeObserverInput {
       result: { cardId: societyCardId, changedDimensions: ["rating"] },
       stateVersionBefore: "7",
       stateVersionAfter: "8",
+      changes: [{
+        kind: "dimension",
+        cardId: societyCardId,
+        cardTypeKey: "SocietyCard",
+        dimensionKey: "rating",
+        before: { present: true, value: "三星级社团" },
+        after: { present: true, value: "四星级社团" },
+      }],
     }],
     events: [{
       type: "society.profile_updated",
+      version: "1",
       payload: { cardId: societyCardId, changedDimensions: ["rating"] },
       stateVersion: "8",
     }],
@@ -55,6 +64,8 @@ function input(): ViewChangeObserverInput {
       canonicalName: "中国科学技术大学学生乒乓球协会",
       cognitiveMemory: { narrative: "旧资料仍记录为三星级社团。" },
     }],
+    attentionPolicy: "evaluate",
+    reactionGuidance: ["社团星级是正式评价事实。"],
     conversation: [{
       id: "user-1",
       role: "user",
@@ -72,8 +83,10 @@ describe("View Change Observer", () => {
     expect(prompt).toContain("V1");
     expect(prompt).toContain("O1");
     expect(prompt).toContain("四星级社团");
+    expect(prompt).toContain("三星级社团");
+    expect(prompt).toContain("社团在当前评价体系中正式获评的等级");
     expect(prompt).toContain("旧资料仍记录为三星级社团");
-    expect(prompt).toContain("独立后台链路自动完成");
+    expect(prompt).toContain("不得把本次修改所生成的派生知识");
     expect(prompt).toContain("不是纯展示文字");
     expect(prompt).not.toContain(societyCardId);
     expect(prompt).not.toContain(societyObjectId);
@@ -84,7 +97,7 @@ describe("View Change Observer", () => {
       toolCalls: [{
         toolName: "submitViewAttentionDecision",
         input: {
-          action: "respond",
+          action: "request_confirmation",
           message: "四星级对应的评审结果是否还需要同步到公开平台简介？",
           reason: "正式等级变化可能影响对外展示口径",
         },
@@ -92,7 +105,7 @@ describe("View Change Observer", () => {
     });
 
     await expect(observeViewChanges(input())).resolves.toEqual(expect.objectContaining({
-      action: "respond",
+      action: "request_confirmation",
     }));
     expect(aiState.generateText).toHaveBeenCalledWith(expect.objectContaining({
       toolChoice: { type: "tool", toolName: "submitViewAttentionDecision" },
@@ -116,5 +129,22 @@ describe("View Change Observer", () => {
       message: "",
       reason: "本次变化只是展示层微调",
     });
+  });
+
+  it("makes silence invalid in the tool schema for an always-visible review", async () => {
+    aiState.generateText.mockResolvedValue({
+      toolCalls: [{
+        toolName: "submitViewAttentionDecision",
+        input: {
+          action: "silent",
+          message: "",
+          reason: "没有发现冲突",
+        },
+      }],
+    });
+    const value = input();
+    value.attentionPolicy = "always";
+
+    await expect(observeViewChanges(value)).rejects.toThrow();
   });
 });

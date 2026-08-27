@@ -49,9 +49,18 @@ function input() {
       result: { cardId },
       stateVersionBefore: "2",
       stateVersionAfter: "3",
+      changes: [{
+        kind: "dimension" as const,
+        cardId,
+        cardTypeKey: "SocietyCard",
+        dimensionKey: "rating",
+        before: { present: true as const, value: "三星级社团" },
+        after: { present: true as const, value: "四星级社团" },
+      }],
     }],
     events: [{
       type: "society.profile_updated",
+      version: "1",
       payload: { cardId, changedDimensions: ["rating"] },
       stateVersion: "3",
     }],

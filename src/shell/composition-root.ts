@@ -9,10 +9,6 @@ import { PrismaViewReadPort } from "@/view-runtime/application/view-read-port";
 import { ViewChangeCoordinator } from "@/view-runtime/application/view-change-coordinator";
 import { observeViewChanges } from "@/ai/view-change-observer";
 import { reconcileViewHigherMemory } from "@/memory/view-higher-memory-reconciliation";
-import {
-  appendAssistantTextMessage,
-  loadChatMessages,
-} from "@/chat/persistence";
 
 export function createInstalledExtensionRegistry(): ExtensionRegistry {
   const registry = new ExtensionRegistry();
@@ -39,12 +35,6 @@ export const viewChangeCoordinator = new ViewChangeCoordinator({
   readPort: viewReadPort,
   evaluate: observeViewChanges,
   reconcileHigherMemory: reconcileViewHigherMemory,
-  appendMessage: (input) => appendAssistantTextMessage(input, database),
-  loadConversation: (input) => loadChatMessages(
-    input.actor,
-    input.conversationId,
-    database,
-  ),
 });
 
 export function createToolRuntime(): ToolRuntime {

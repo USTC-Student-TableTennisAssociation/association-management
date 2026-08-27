@@ -100,4 +100,18 @@ describe("ExtensionRegistry", () => {
       contributes: { views: [viewModule] },
     })).toThrow(/undeclared|\u672a声明/i);
   });
+
+  it("rejects an invalid View change policy from a published Plugin", () => {
+    const viewModule = view();
+    viewModule.schema.cardTypes[0].dimensions[0].changePolicy = {
+      attention: "sometimes" as never,
+    };
+    const registry = new ExtensionRegistry();
+
+    expect(() => registry.registerPlugin({
+      id: "echo.invalid-policy",
+      version: "1.0.0",
+      contributes: { views: [viewModule] },
+    })).toThrow(/changePolicy\.attention/);
+  });
 });

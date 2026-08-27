@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useEchoViewReactions } from "@sydaris/plugin-sdk/react";
 
 import type { ViewInspectorSnapshot } from "@/view-runtime/application/view-read-port";
 
@@ -24,6 +25,7 @@ export function WorkViewWorkspace({
   onAskAI: (prompt: string) => void;
 }) {
   const [reloadSequence, setReloadSequence] = useState(0);
+  const { reactions } = useEchoViewReactions(viewKey);
   const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
   const [result, setResult] = useState<{
     requestKey: string;
@@ -128,6 +130,33 @@ export function WorkViewWorkspace({
                       : "border-zinc-200"
                   }`}
                 >
+                  {(() => {
+                    const reaction = reactions.find((candidate) =>
+                      candidate.targets.some((target) => target.cardId === card.id)
+                    );
+                    if (!reaction) return null;
+                    const active = reaction.attention.status === "queued" ||
+                      reaction.attention.status === "running" ||
+                      reaction.knowledge.status === "queued" ||
+                      reaction.knowledge.status === "running";
+                    const label = active
+                      ? "Echo 正在核对"
+                      : reaction.attention.status === "needs_confirmation"
+                      ? "需要确认"
+                      : reaction.attention.status === "inform"
+                      ? "Echo 有一条说明"
+                      : reaction.attention.status === "failed" || reaction.knowledge.status === "failed"
+                      ? "核对暂不可用"
+                      : undefined;
+                    return label ? (
+                      <div className="mb-3 rounded-lg bg-zinc-50 px-3 py-2 text-xs text-zinc-600" role="status">
+                        <span className="font-medium">{label}</span>
+                        {reaction.attention.message ? (
+                          <p className="mt-1 leading-5 text-zinc-500">{reaction.attention.message}</p>
+                        ) : null}
+                      </div>
+                    ) : null;
+                  })()}
                   <dl className="space-y-3">
                     {(cardTypes.get(card.cardTypeKey)?.dimensions ?? []).map((dimension) => {
                       const value = card.dimensions[dimension.key];

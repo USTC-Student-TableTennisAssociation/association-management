@@ -2,7 +2,7 @@
 
 Echo Plugin 的公开 TypeScript 合同、描述文件 Schema 和 React hooks。
 
-> 当前是 `0.1.0-alpha.1` 预发布版，API 可能在后续 alpha 版调整。
+> 当前是 `0.1.0-alpha.3` 预发布版，API 可能在后续 alpha 版调整。
 
 ## 安装
 
@@ -38,6 +38,40 @@ export const notesPlugin = defineEchoPlugin({
   contributes: { views: [notesView] },
 });
 ```
+
+## View 修改语义与 AI 反应
+
+Dimension、Slot、Related Objects 和 Card Type 可以声明 `changePolicy`。Plugin 只声明
+业务语义和反应策略；Echo Runtime 负责事务前后差异记录、上下文脱敏、模型调用和
+Higher Memory 对账。
+
+```ts
+{
+  key: "status",
+  label: "状态",
+  description: "当前正式业务状态。",
+  type: "enum",
+  changePolicy: {
+    attention: "evaluate", // never | evaluate | always
+    knowledge: "reconcile", // none | reconcile
+    guidance: "区分措辞修改与真实状态变化。",
+  },
+}
+```
+
+`evaluate` 默认静默评估，只在存在冲突、重要联动或需要用户判断时主动回应；
+`always` 要求产生可见核对结果；`never` 不调用后台 Observer。是否对账 Higher Memory
+与是否打扰用户是两个独立决策。
+
+Presentation 可以通过无头 Hook 读取持久化 Reaction：
+
+```tsx
+const { reactions, markSeen } = useEchoViewReactions(viewKey);
+```
+
+Hook 只返回变更目标、`attention` / `knowledge` 状态、消息与时间戳，
+不规定标签、颜色、弹窗或布局。Specialized Presentation 可以自由设计呈现；
+Echo 的 Generic View 只提供一个可替换的默认呈现。
 
 ## `echo.plugin.json`
 

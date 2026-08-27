@@ -1,7 +1,7 @@
 import { z } from "zod";
 import semver from "semver";
 
-export const ECHO_PLUGIN_API_VERSION = "0.1.0-alpha.1";
+export const ECHO_PLUGIN_API_VERSION = "0.1.0-alpha.3";
 export const ECHO_PLUGIN_DESCRIPTOR_SCHEMA_VERSION = 1;
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
@@ -28,6 +28,96 @@ export type CommandKey = string;
 export type SemVer = string;
 export type VersionRange = string;
 export type AiWritePolicy = "approval_required" | "auto_execute";
+export type ViewReactionAttentionPolicy = "never" | "evaluate" | "always";
+export type ViewReactionKnowledgePolicy = "none" | "reconcile";
+export type ViewReactionTiming = "immediate" | "after_settle";
+
+export interface ViewChangePolicy {
+  /** Whether Echo should evaluate the change and whether the result must be visible. */
+  attention: ViewReactionAttentionPolicy;
+  /** Whether related Object Higher Memory should be reconciled in the background. */
+  knowledge?: ViewReactionKnowledgePolicy;
+  /** When background processing starts. Defaults to after_settle. */
+  timing?: ViewReactionTiming;
+  /** Optional debounce window for after_settle processing. */
+  settleMs?: number;
+  /** Domain guidance supplied to the Runtime-owned reaction evaluator. */
+  guidance?: string;
+}
+
+export type ViewReactionAttentionStatus =
+  | "not_required"
+  | "queued"
+  | "running"
+  | "silent"
+  | "inform"
+  | "needs_confirmation"
+  | "failed";
+
+export type ViewReactionKnowledgeStatus =
+  | "not_required"
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed";
+
+export type ViewReactionTarget =
+  | { kind: "card"; cardId: CardId; cardTypeKey: CardTypeKey }
+  | {
+      kind: "dimension";
+      cardId: CardId;
+      cardTypeKey: CardTypeKey;
+      dimensionKey: DimensionKey;
+    }
+  | {
+      kind: "slot";
+      cardId: CardId;
+      cardTypeKey: CardTypeKey;
+      slotKey: SlotKey;
+    }
+  | { kind: "related_objects"; cardId: CardId; cardTypeKey: CardTypeKey };
+
+export interface EchoViewReaction {
+  id: string;
+  executionId: string;
+  viewKey: ViewKey;
+  stateVersion: string;
+  targets: readonly ViewReactionTarget[];
+  attention: {
+    policy: ViewReactionAttentionPolicy;
+    status: ViewReactionAttentionStatus;
+    message?: string;
+    reason?: string;
+    completedAt?: string;
+  };
+  knowledge: {
+    policy: ViewReactionKnowledgePolicy;
+    status: ViewReactionKnowledgeStatus;
+    completedAt?: string;
+  };
+  seenAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EchoViewCommandResult =
+  | {
+      kind: "proposed";
+      proposalId: string;
+      viewKey: ViewKey;
+      stateVersion: string;
+    }
+  | {
+      kind: "executed";
+      executionId: string;
+      viewKey: ViewKey;
+      stateVersion: string;
+      summary?: unknown;
+      reaction?: Pick<
+        EchoViewReaction,
+        "id" | "executionId" | "viewKey" | "stateVersion" | "targets" | "attention" | "knowledge" | "createdAt" | "updatedAt"
+      >;
+    };
 
 export interface ViewSettings {
   aiWritePolicy: AiWritePolicy;
@@ -67,6 +157,7 @@ export interface DimensionDefinition {
     multiline?: boolean;
     displayFormat?: string;
   };
+  changePolicy?: ViewChangePolicy;
 }
 
 export interface SlotDefinition {
@@ -76,6 +167,7 @@ export interface SlotDefinition {
   cardinality: "one" | "many";
   required?: boolean;
   allowedTargetCardTypes: readonly CardTypeKey[];
+  changePolicy?: ViewChangePolicy;
 }
 
 export interface RelatedObjectPolicy {
@@ -83,6 +175,7 @@ export interface RelatedObjectPolicy {
   min?: number;
   max?: number;
   uniqueCardPerObject?: boolean;
+  changePolicy?: ViewChangePolicy;
 }
 
 export interface CardTypeDefinition {
@@ -92,6 +185,8 @@ export interface CardTypeDefinition {
   dimensions: readonly DimensionDefinition[];
   slots: readonly SlotDefinition[];
   relatedObjects?: RelatedObjectPolicy;
+  /** Applies to Card creation and deletion. Dimension and Slot policies override it. */
+  changePolicy?: ViewChangePolicy;
 }
 
 export interface ViewSchema {
@@ -124,6 +219,43 @@ export interface ViewCardState {
   slots: Readonly<Record<SlotKey, readonly CardId[]>>;
   relatedObjectIds: readonly ObjectId[];
 }
+
+export type ViewChangeValue =
+  | { present: false }
+  | { present: true; value: unknown };
+
+export type ViewChange =
+  | {
+      kind: "card_created";
+      card: ViewCardState;
+    }
+  | {
+      kind: "card_deleted";
+      card: ViewCardState;
+    }
+  | {
+      kind: "dimension";
+      cardId: CardId;
+      cardTypeKey: CardTypeKey;
+      dimensionKey: DimensionKey;
+      before: ViewChangeValue;
+      after: ViewChangeValue;
+    }
+  | {
+      kind: "slot";
+      cardId: CardId;
+      cardTypeKey: CardTypeKey;
+      slotKey: SlotKey;
+      before: readonly CardId[];
+      after: readonly CardId[];
+    }
+  | {
+      kind: "related_objects";
+      cardId: CardId;
+      cardTypeKey: CardTypeKey;
+      before: readonly ObjectId[];
+      after: readonly ObjectId[];
+    };
 
 export interface ViewTransaction {
   getCard(cardId: CardId): Promise<ViewCardState | undefined>;
@@ -187,11 +319,8 @@ export interface DomainEventDefinition {
   key: string;
   version: string;
   payloadSchema: ContractSchema;
-  aiAttention?: {
-    timing: "next_turn" | "after_settle" | "immediate";
-    settleMs?: number;
-  };
-  higherMemory?: "reconcile_related_objects";
+  /** Event-level reaction policy merged with policies inferred from concrete changes. */
+  reaction?: ViewChangePolicy;
 }
 
 export interface KnowledgeProjectionDefinition {
@@ -364,7 +493,6 @@ export interface EchoPresentationProps {
   presentationLoader?: string;
   focusCardId?: string;
   activeConversationId?: string;
-  onAIAttentionScheduled?: () => void;
   onOpenInspector: () => void;
   onAskAI: (prompt: string) => void;
 }
