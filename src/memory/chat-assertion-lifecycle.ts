@@ -21,6 +21,10 @@ import {
   maintainHigherMemories,
   type HigherMemoryMaintenanceInput,
 } from "@/memory/higher-memory-maintenance";
+import {
+  maintainActorHigherMemories,
+  type ActorHigherMemoryMaintenanceInput,
+} from "@/memory/actor-higher-memory";
 
 export type ChatMemoryMaintenanceInput = {
   assertion?: ChatAssertionCaptureInput;
@@ -32,6 +36,7 @@ export type ChatMemoryMaintenanceInput = {
   };
   consolidation?: KnowledgeConsolidationInput;
   higherMemory?: HigherMemoryMaintenanceInput;
+  actorHigherMemory?: ActorHigherMemoryMaintenanceInput;
 };
 
 export type ChatMemoryMaintenanceScheduler = {
@@ -63,7 +68,7 @@ export function createChatMemoryMaintenanceScheduler(
           "后台对话记忆线路开始",
           [
             "主回答已经结束。以下处理在后台执行，不影响本轮回答是否成功。",
-            "固定顺序：Assertion 发布 → Knowledge Consolidation → Object/Ambient Higher Memory。View Higher Memory 由 Domain Event Outbox 消费者维护。",
+            "固定顺序：Assertion 发布 → Knowledge Consolidation → Object/Ambient Higher Memory → Actor 私有 Higher Memory。View Higher Memory 由 Domain Event Outbox 消费者维护。",
           ].join("\n"),
         );
         let captureResult: ChatAssertionCaptureResult = input.completedAssertion?.result ?? {
@@ -237,6 +242,28 @@ export function createChatMemoryMaintenanceScheduler(
           await trace?.appendSection(
             "后台 Higher Memory 跳过",
             "Knowledge Consolidator 没有选择需要维护的 Object、identity、narrative 或 working_set。",
+          );
+        }
+
+        if (input.actorHigherMemory) {
+          try {
+            const maintained = await maintainActorHigherMemories(
+              input.actorHigherMemory,
+              trace,
+            );
+            console.info("[chat.actor-higher-memory]", JSON.stringify({
+              actorId: input.actorHigherMemory.actorId,
+              clientMessageId: input.actorHigherMemory.clientMessageId,
+              maintained,
+            }));
+          } catch (error) {
+            console.error("[chat.actor-higher-memory]", error);
+            await trace?.appendError("后台 Actor Higher Memory 失败", error);
+          }
+        } else {
+          await trace?.appendSection(
+            "Actor Higher Memory 跳过",
+            "本轮没有新的持久私人协作上下文，也没有精确偏好变更需要综合。",
           );
         }
 

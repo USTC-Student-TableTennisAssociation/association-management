@@ -9,6 +9,7 @@ const lifecycleState = vi.hoisted(() => ({
   receiptFail: vi.fn(),
   loadJob: vi.fn(),
   consolidate: vi.fn(),
+  maintainActor: vi.fn(),
   order: [] as string[],
 }));
 
@@ -31,6 +32,9 @@ vi.mock("@/memory/higher-memory-maintenance", () => ({
 }));
 vi.mock("@/memory/knowledge-consolidator", () => ({
   consolidateTurnKnowledge: lifecycleState.consolidate,
+}));
+vi.mock("@/memory/actor-higher-memory", () => ({
+  maintainActorHigherMemories: lifecycleState.maintainActor,
 }));
 
 import { createChatMemoryMaintenanceScheduler } from "@/memory/chat-assertion-lifecycle";
@@ -65,6 +69,10 @@ beforeEach(() => {
       focus: "已发布的新 Assertion 改变了当前状态。",
     }],
     ambientUpdates: [],
+  });
+  lifecycleState.maintainActor.mockImplementation(async () => {
+    lifecycleState.order.push("actor-higher-memory:start");
+    return 1;
   });
   lifecycleState.loadJob.mockResolvedValue({
     clientMessageId: "message-durable",
@@ -136,6 +144,26 @@ describe("post-answer memory maintenance pipeline", () => {
 
     expect(lifecycleState.capture).not.toHaveBeenCalled();
     expect(lifecycleState.maintain).toHaveBeenCalledOnce();
+  });
+
+  it("maintains Actor-private Higher Memory without publishing a shared Assertion", async () => {
+    const scheduler = createChatMemoryMaintenanceScheduler();
+    scheduler.publish({
+      actorHigherMemory: {
+        actorId: "actor-1",
+        clientMessageId: "message-private",
+      } as never,
+    });
+
+    await lifecycleState.afterCallback?.();
+
+    expect(lifecycleState.capture).not.toHaveBeenCalled();
+    expect(lifecycleState.maintain).not.toHaveBeenCalled();
+    expect(lifecycleState.maintainActor).toHaveBeenCalledWith(
+      expect.objectContaining({ actorId: "actor-1" }),
+      undefined,
+    );
+    expect(lifecycleState.order).toEqual(["actor-higher-memory:start"]);
   });
 
   it("does not recapture a foreground publication and consolidates verified knowledge", async () => {

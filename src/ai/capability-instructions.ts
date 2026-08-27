@@ -26,6 +26,9 @@ export const knownRuntimeToolNames = [
   "openArtifactKnowledge",
   "proposeLibraryPlan",
   "queueChatAssertionCapture",
+  "queueHigherMemoryMaintenance",
+  "updateActorHigherMemory",
+  "queueActorHigherMemoryMaintenance",
 ] as const;
 
 function has(toolNames: ReadonlySet<string>, name: string): boolean {
@@ -178,7 +181,36 @@ export function buildCapabilityInstructions(input: {
   if (has(toolNames, "queueChatAssertionCapture")) {
     sections.push([
       "只有当前用户原话本身陈述了值得长期检索的新组织事实时，才调用一次 queueChatAssertionCapture；问题、假设、头脑风暴、纯操作指令和只来自 Assistant 历史的事实不要调用。",
+      "只属于当前用户的称呼、语言、回复风格、互动边界和私人工作偏好不属于共享组织事实，应使用 Actor 私有记忆能力，不得发布为 Assertion 或连接到用户的 GlobalObject。",
       "普通事实使用 background。只有当前用户原话同时提供了正式 View 所需的缺失实体及其新事实时，才在打开 business_view actions 前用 foreground_for_view；来源文档中的实体不得经由 Chat Assertion Capture 重新发布。前台没有新发布内容不会使本轮先前检索到的 O# 或唯一 canonical name 失效。",
+    ].join("\n"));
+  }
+
+  if (has(toolNames, "queueHigherMemoryMaintenance")) {
+    sections.push([
+      "【Higher Memory 主动维护】",
+      "你知道系统拥有 Object、Ambient、View 与 Actor 四类 Higher Memory；本工具只登记回答后的共享 Object/Ambient 维护意图，View Higher Memory 由正式 View 事件链维护，Actor Higher Memory 使用独立的私有能力维护。",
+      "不要等用户说‘请记住’才维护。当本轮已经读取到真实证据，并由此形成值得跨会话延续的环境身份、组织叙事、近期共同工作集，或某个重要 Object 的新高层理解时，应主动调用 queueHigherMemoryMaintenance。",
+      "自动加载状态明确显示某个 Ambient scope 缺失时，如果本轮正式证据已经足以建立它，应主动为缺失 scope 登记第一版维护；证据不足则保持缺失，不要为了填空而猜测。",
+      "维护必须有本轮真实读取的正式 View、Grounded Assertion、Source 或既有 Higher Memory 支撑。问候、能力介绍、模型自我分析、系统诊断、单纯检索命中、一次性闲聊，以及某位用户给 Echo 起的私人称呼或个人偏好，都不是 Ambient Higher Memory。",
+      "工具成功只表示已登记后台维护意图，不表示 Higher Memory 已经更新；最终回答不得声称维护完成。",
+    ].join("\n"));
+  }
+
+  if (has(toolNames, "updateActorHigherMemory")) {
+    sections.push([
+      "【Actor 自然语言 Higher Memory 同步修订】",
+      "当前用户明确要求跨会话记住、修改或忘记私人称呼、互动约定、稳定工作方式或私人近期工作集时，主动调用 updateActorHigherMemory；不要只在文本中答应。",
+      "必须用当前用户消息的逐字引文支撑每次修订，并提交目标 scope 的完整自然语言新版本。工具 committed=true 后才可说已经记住或忘记；该记忆只属于当前认证 Actor，不传播到其人物 Object、Shared Brain、Ambient 或其他用户。",
+      "自然语言涉及关系时必须明确写出发起者、动作和接受者或对象，不使用会随对话视角变化的‘我/你’代替关系角色，也不得把记忆改写成语义 key-value。用户要求全局改变产品身份或对所有用户生效时，不得伪装成单个 Actor 的私人记忆。",
+    ].join("\n"));
+  }
+
+  if (has(toolNames, "queueActorHigherMemoryMaintenance")) {
+    sections.push([
+      "【Actor 私有 Higher Memory】",
+      "当前用户原话形成值得跨会话延续的私人互动上下文、稳定工作方式或私人近期工作集时，主动调用 queueActorHigherMemoryMaintenance。它不要求先发布共享 Assertion。",
+      "该工具只登记后台综合意图，不表示维护完成。用户明确要求本轮记住、修改或忘记时使用 updateActorHigherMemory 同步修订，不要再排队重复维护；不要从一次性闲聊、Assistant 历史或组织资料推断用户个性。",
     ].join("\n"));
   }
 

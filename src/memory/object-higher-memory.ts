@@ -24,6 +24,8 @@ import {
   parseOperationalMemoryIndex,
   renderCognitiveMemory,
   renderOperationalMemoryIndex,
+  sanitizeCognitiveMemory,
+  sanitizeOperationalMemoryIndex,
   type OperationalMemoryIndex,
 } from "@/memory/higher-memory-document";
 import type { ObjectHigherMemoryQueueDecision } from "@/memory/higher-memory-queue";
@@ -99,6 +101,7 @@ function maintenancePrompt(input: ObjectHigherMemoryMaintenanceInput, state: {
     "Operational Memory Index 是任务导航而不是事实正文。按 aspect 记录主题、有限覆盖程度、真实 Assertion/source 入口、推荐检索和未覆盖问题。coverage 最高只能是 substantial，绝不能声称 Higher Memory 对任意未来问题 complete。",
     "事实边界：Cognitive Memory 中的事实应由 grounded Assertion 或本轮实际读取的正式 Business View 支持。当前日期、决定和状态同样需要这些依据。用户提出问题、请求检索或近期在讨论某主题，不等于目标对象本身的 currentSituation。",
     "Object–Assertion 作用域：目标 Object 因与 Assertion 存在直接图连接而进入本轮候选。对每个目标分别采用对象中心视角：只把命题中确实关于该目标的内容吸收到 Cognitive Memory；其他相连 Object 的状态不能转写成该目标的状态。连接本身应保留为理解和导航依据，但不强迫任何 Cognitive section 发生变化。",
+    "人物隐私边界：Person Object Higher Memory 只保留理解组织角色与协作所需的高层信息，不写电话号码、邮箱、精确地址、身份证件、凭据或其他原始敏感值；需要联系方式时应回读有权限的正式 View 或来源。当前 Actor 的昵称、语气和私人偏好属于 Actor 私有记忆，也不得写入人物 Object。",
     "如果本轮用户提供了新事实，只有它已经被前一阶段成功发布为 Assertion 后才能吸收；提取失败或没有形成 Assertion 时，不要把它写成确定事实。",
     "Cognitive Memory 中不要写 A#、H#、数据库 UUID 或来源列表。Operational Index 中的 assertionIds、sourceNodeIds 和 sourceTitles 必须原样来自本轮实际可见证据；不确定时留空并把 coverage 设为 unknown。",
     "旧 Higher Memory 是连续认知的起点。按 section/aspect 更新：未被本轮信息改变的身份、叙事、结构和运行模型应保留；不要让一次近期话题整体改写对象世界模型。",
@@ -317,7 +320,10 @@ export async function maintainObjectHigherMemories(
   }
   const accepted = output.memories.map((memory) => ({
     ...memory,
-    operationalIndex: validatedOperationalIndex(memory.operationalIndex, finalRetrieval),
+    cognitiveMemory: sanitizeCognitiveMemory(memory.cognitiveMemory),
+    operationalIndex: sanitizeOperationalMemoryIndex(
+      validatedOperationalIndex(memory.operationalIndex, finalRetrieval),
+    ),
   }));
   if (!accepted.length) {
     await trace?.appendSection(

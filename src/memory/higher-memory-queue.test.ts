@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { EchoDebugTrace } from "@/ai/debug-trace";
 import {
+  addObjectTargetsToQueueDecision,
   ambientScopesFromQueueDecision,
   createHigherMemoryQueueTool,
   objectHigherMemoryQueueDecision,
@@ -72,6 +73,21 @@ describe("queueHigherMemoryMaintenance", () => {
     }, executionOptions)).resolves.toEqual(expect.objectContaining({ queued: true }));
   });
 
+  it("rejects Ambient intent when the runtime has not observed authoritative evidence", async () => {
+    const toolset = createHigherMemoryQueueTool({
+      hasObject: () => false,
+      canQueueAmbient: () => false,
+    });
+    await expect(toolset.tool.execute!({
+      targets: [{ scope: "identity" }],
+      reason: "模型仅凭问候猜测当前环境",
+    }, executionOptions)).resolves.toEqual(expect.objectContaining({
+      queued: false,
+      message: expect.stringContaining("尚未读取足以支持 Ambient Higher Memory"),
+    }));
+    expect(toolset.decision()).toBeUndefined();
+  });
+
   it("rejects an Object that the main dialogue has not actually inspected", async () => {
     const toolset = createHigherMemoryQueueTool({ hasObject: () => false });
     await expect(toolset.tool.execute!({
@@ -82,5 +98,23 @@ describe("queueHigherMemoryMaintenance", () => {
       reason: "模型猜测它可能重要",
     }, executionOptions)).resolves.toEqual(expect.objectContaining({ queued: false }));
     expect(toolset.decision()).toBeUndefined();
+  });
+
+  it("preserves proactive Ambient intent when a cold Object target is added", () => {
+    expect(addObjectTargetsToQueueDecision({
+      decision: {
+        targets: [{ scope: "identity" }, { scope: "working_set" }],
+        reason: "本轮读取正式 View 后形成了共享环境理解",
+      },
+      objectIds: ["00000000-0000-4000-8000-000000000003"],
+      reason: "唯一目标 Object 尚无 Higher Memory",
+    })).toEqual({
+      targets: [
+        { scope: "identity" },
+        { scope: "working_set" },
+        { scope: "object", globalObjectId: "00000000-0000-4000-8000-000000000003" },
+      ],
+      reason: "本轮读取正式 View 后形成了共享环境理解；唯一目标 Object 尚无 Higher Memory",
+    });
   });
 });

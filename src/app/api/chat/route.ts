@@ -114,8 +114,21 @@ import {
   loadAmbientHigherMemories,
   type AmbientHigherMemorySnapshot,
 } from "@/memory/ambient-higher-memory";
+import {
+  emptyActorPrivateMemory,
+  loadActorPrivateMemory,
+  type ActorPrivateMemorySnapshot,
+} from "@/memory/actor-higher-memory";
+import {
+  createActorHigherMemoryQueueTool,
+} from "@/memory/actor-higher-memory-queue";
+import { createActorHigherMemoryWriteToolset } from "@/memory/actor-higher-memory-write";
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
 import { operationalMemoryIndexSchema } from "@/memory/higher-memory-document";
+import {
+  addObjectTargetsToQueueDecision,
+  createHigherMemoryQueueTool,
+} from "@/memory/higher-memory-queue";
 import { getMemoryRetriever } from "@/memory/retriever";
 import { createObjectManagementToolset } from "@/memory/object-management-toolset";
 import { objectChangeProposalPresentationSchema } from "@/memory/object-management-types";
@@ -659,6 +672,17 @@ export async function POST(request: Request) {
       text: message.text,
     }));
   const memoryMaintenance = createChatMemoryMaintenanceScheduler(debugTrace);
+  let actorPrivateMemory: ActorPrivateMemorySnapshot = emptyActorPrivateMemory();
+  try {
+    actorPrivateMemory = await loadActorPrivateMemory(requestActor.id);
+    await debugTrace.appendJsonSection("主 Chat 自动加载的 Actor 私有记忆", {
+      higherMemoryScopes: actorPrivateMemory.higherMemories.map((item) => item.scope),
+      note: "调试摘要不复制 Actor 私有 Higher Memory 正文。",
+    });
+  } catch (error) {
+    console.error("[chat.actor-private-memory.load]", error);
+    await debugTrace.appendError("Actor 私有记忆加载失败", error);
+  }
   let ambientHigherMemories: AmbientHigherMemorySnapshot[] = [];
   try {
     ambientHigherMemories = await loadAmbientHigherMemories();
@@ -714,6 +738,7 @@ export async function POST(request: Request) {
       profile,
       memoryState: "not-searched",
       ambientHigherMemories,
+      actorPrivateMemory,
     });
   } catch (error) {
     memoryMaintenance.cancel("无法准备主模型上下文，后台记忆线路未启动。");
@@ -757,6 +782,18 @@ export async function POST(request: Request) {
       let libraryQueryTruncated: boolean | undefined;
       let libraryMatchedCount = 0;
       const sourceLayersUsed = new Set<string>();
+      const higherMemoryQueueToolset = createHigherMemoryQueueTool({
+        trace: debugTrace,
+        hasObject: (globalObjectId) => evidence.hasObject(globalObjectId),
+        canQueueAmbient: () => {
+          const snapshot = evidence.snapshot();
+          return ambientHigherMemories.length > 0 ||
+            snapshot.seedMap.assertions.length > 0 ||
+            Boolean(snapshot.seedMap.higherMemories?.length) ||
+            sourceLayersUsed.has("business_view") ||
+            sourceLayersUsed.has("source_document");
+        },
+      });
       const mainModelCalls: ChatMainModelCall[] = [];
       const mainToolExecutions: ChatMainToolExecution[] = [];
       const sharedResultBudget = new ToolResultTokenBudget(exploreResultTokenBudget);
@@ -768,6 +805,22 @@ export async function POST(request: Request) {
       let viewCommandAttemptCount = 0;
       let finalRawText = "";
       let finalAudit: GroundingAudit | undefined;
+      let memoryWriteCommitted = false;
+      let actorPrivateMemoryGrounded = actorPrivateMemory.higherMemories.length > 0;
+      const actorHigherMemoryWriteToolset = createActorHigherMemoryWriteToolset({
+        actorId: requestActor.id,
+        currentMessageId: latestUserMessage.id,
+        currentUserMessage: query,
+        trace: debugTrace,
+        onCommitted: (summary) => {
+          memoryWriteCommitted =
+            summary.replacedScopes.length + summary.clearedScopes.length > 0;
+          if (summary.replacedScopes.length > 0) actorPrivateMemoryGrounded = true;
+        },
+      });
+      const actorHigherMemoryQueueToolset = createActorHigherMemoryQueueTool({
+        trace: debugTrace,
+      });
       const streamObservation: ChatStreamObservation = {
         reasoningChars: 0,
         contentChars: 0,
@@ -932,6 +985,8 @@ export async function POST(request: Request) {
           text: rawText,
           contract: groundingState.contract(),
           validRefs: validReferenceRefs(),
+          memoryWriteCommitted,
+          actorPrivateMemoryGrounded,
         });
       };
       const exploreSystem = [
@@ -1207,12 +1262,18 @@ export async function POST(request: Request) {
         ...globalToolProviderToolset.tools,
         openArtifactKnowledge,
         queueChatAssertionCapture: assertionQueueToolset.tool,
+        queueHigherMemoryMaintenance: higherMemoryQueueToolset.tool,
+        updateActorHigherMemory: actorHigherMemoryWriteToolset.tool,
+        queueActorHigherMemoryMaintenance: actorHigherMemoryQueueToolset.tool,
         submitTurnHandoff,
       };
       const alwaysAvailableToolNames = [
         "searchMemory",
         "readMemoryWriteStatus",
         "queueChatAssertionCapture",
+        "queueHigherMemoryMaintenance",
+        "updateActorHigherMemory",
+        "queueActorHigherMemoryMaintenance",
         TURN_HANDOFF_TOOL,
         ...globalToolProviderToolset.toolNames,
       ];
@@ -1253,7 +1314,7 @@ export async function POST(request: Request) {
       };
       await debugTrace.appendJsonSection("本轮工具暴露", {
         exposedToolNames,
-        note: "首次调用提供三个类别入口、主题语义搜索、记忆状态与 Handoff；其他详细工具按需开放。",
+        note: "首次调用提供三个类别入口、主题语义搜索、记忆状态、Higher Memory 维护意图与 Handoff；其他详细工具按需开放。",
       });
       const result = streamText({
         model,
@@ -1577,10 +1638,20 @@ export async function POST(request: Request) {
             });
             return;
           }
+          const completedForegroundAssertion = assertionQueueToolset.foregroundResult();
+          memoryWriteCommitted = Boolean(
+            completedForegroundAssertion?.publishedAssertions ||
+            actorHigherMemoryWriteToolset.hasCommit(),
+          );
+          actorPrivateMemoryGrounded =
+            actorPrivateMemory.higherMemories.length > 0 ||
+            actorHigherMemoryWriteToolset.hasReplacementCommit();
           finalAudit = auditGroundedAnswer({
             text,
             contract: groundingState.contract(),
             validRefs: validReferenceRefs(),
+            memoryWriteCommitted,
+            actorPrivateMemoryGrounded,
           });
           const finalAnswer = finalAudit.text;
           streamObservation.finishReason = finishReason;
@@ -1639,7 +1710,11 @@ export async function POST(request: Request) {
           const accumulatedRetrieval = evidence.snapshot();
           const assertionQueueDecision = assertionQueueToolset.decision();
           const foregroundAssertionDecision = assertionQueueToolset.foregroundDecision();
-          const foregroundAssertionResult = assertionQueueToolset.foregroundResult();
+          const foregroundAssertionResult = completedForegroundAssertion;
+          let higherMemoryQueueDecision = higherMemoryQueueToolset.decision();
+          const actorHigherMemoryQueueDecision = actorHigherMemoryWriteToolset.hasCommit()
+            ? undefined
+            : actorHigherMemoryQueueToolset.decision();
           const handoffCall = steps
             .flatMap((step) => step.toolCalls)
             .findLast((call) => call.toolName === TURN_HANDOFF_TOOL);
@@ -1764,25 +1839,45 @@ export async function POST(request: Request) {
           );
           const hasConsolidationWork = Boolean(consolidationInput);
           const hasColdHigherMemoryWork = coldHigherMemoryTargetIds.size > 0;
-          const coldHigherMemoryInput = hasColdHigherMemoryWork
+          if (hasColdHigherMemoryWork) {
+            higherMemoryQueueDecision = addObjectTargetsToQueueDecision({
+              decision: higherMemoryQueueDecision,
+              objectIds: [...coldHigherMemoryTargetIds],
+              reason: "用户首次实质性检索了尚无 Higher Memory 的唯一目标 Object；基于本轮真实 Assertion 与来源建立第一版 Cognitive Memory 和 Operational Memory Index。",
+            });
+          }
+          const higherMemoryInput = higherMemoryQueueDecision
             ? {
                 clientMessageId: latestUserMessage.id,
                 submittedAt: submittedAt.toISOString(),
                 timezone: requestTimezone,
                 semanticContext,
                 retrieval: accumulatedRetrieval,
-                queueDecision: {
-                  targets: [...coldHigherMemoryTargetIds].map((globalObjectId) => ({
-                    scope: "object" as const,
-                    globalObjectId,
-                  })),
-                  reason: "用户首次实质性检索了尚无 Higher Memory 的唯一目标 Object；基于本轮真实 Assertion 与来源建立第一版 Cognitive Memory 和 Operational Memory Index。",
-                },
+                queueDecision: higherMemoryQueueDecision,
               }
             : undefined;
+          const hasHigherMemoryWork = Boolean(higherMemoryInput);
+          const actorHigherMemoryInput = actorHigherMemoryQueueDecision
+            ? {
+                actorId: requestActor.id,
+                actorDisplayName: requestActor.displayName,
+                clientMessageId: latestUserMessage.id,
+                submittedAt: submittedAt.toISOString(),
+                timezone: requestTimezone,
+                semanticContext,
+                queueDecision: actorHigherMemoryQueueDecision,
+              }
+            : undefined;
+          const hasActorHigherMemoryWork = Boolean(actorHigherMemoryInput);
           if (
             latestUserMessage &&
-            (hasBackgroundWork || hasForegroundWork || hasConsolidationWork || hasColdHigherMemoryWork)
+            (
+              hasBackgroundWork ||
+              hasForegroundWork ||
+              hasConsolidationWork ||
+              hasHigherMemoryWork ||
+              hasActorHigherMemoryWork
+            )
           ) {
             memoryMaintenance.publish({
               ...(hasBackgroundWork && receiptKey
@@ -1802,7 +1897,10 @@ export async function POST(request: Request) {
                   }
                 : {}),
               ...(consolidationInput ? { consolidation: consolidationInput } : {}),
-              ...(coldHigherMemoryInput ? { higherMemory: coldHigherMemoryInput } : {}),
+              ...(higherMemoryInput ? { higherMemory: higherMemoryInput } : {}),
+              ...(actorHigherMemoryInput
+                ? { actorHigherMemory: actorHigherMemoryInput }
+                : {}),
             });
           } else {
             await debugTrace.appendSection(
@@ -1813,10 +1911,10 @@ export async function POST(request: Request) {
             );
             await debugTrace.appendSection(
               "Higher Memory 入口判断",
-              "结果：本轮没有新事实审查意图，也没有实际打开知识或业务能力，因此不启动 Consolidator。",
+              "结果：本轮没有新事实审查意图、显式 Higher Memory 维护意图或冷启动 Object 目标，因此不启动维护链。",
             );
             memoryMaintenance.cancel(
-              "本轮没有可执行的 Assertion 或 Higher Memory Consolidation 工作。",
+              "本轮没有可执行的 Assertion、共享 Higher Memory 或 Actor 私有 Higher Memory 工作。",
             );
           }
           const answerSourceLayers = new Set<string>();
