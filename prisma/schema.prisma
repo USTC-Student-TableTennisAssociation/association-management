@@ -33,6 +33,24 @@ enum ViewCommandInitiator {
   system
 }
 
+enum ViewReactionAttentionStatus {
+  not_required
+  queued
+  running
+  silent
+  inform
+  needs_confirmation
+  failed
+}
+
+enum ViewReactionKnowledgeStatus {
+  not_required
+  queued
+  running
+  completed
+  failed
+}
+
 enum MemoryChatAssertionReceiptStatus {
   queued
   running
@@ -438,15 +456,15 @@ model MemoryAssertion {
   contextDependent                Boolean             @map("context_dependent")
   createdAt                       DateTime            @default(now()) @map("created_at")
 
-  compilation             MemoryCompilation                       @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  sourceRegion            MemorySourceRegion?                     @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
-  chatCapture             MemoryChatAssertionCapture?             @relation(fields: [chatCaptureId], references: [id], onDelete: Cascade)
-  chatEvidenceLinks       MemoryAssertionChatEvidenceLink[]
-  fragmentReferences      MemoryAssertionFragmentReference[]
-  objectLinks             MemoryAssertionObjectLink[]
-  objectCoverage          MemoryAssertionObjectCoverage[]
-  sourceBlockLinks        MemoryAssertionSourceBlock[]
-  embedding               MemoryAssertionEmbedding?
+  compilation        MemoryCompilation                  @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  sourceRegion       MemorySourceRegion?                @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
+  chatCapture        MemoryChatAssertionCapture?        @relation(fields: [chatCaptureId], references: [id], onDelete: Cascade)
+  chatEvidenceLinks  MemoryAssertionChatEvidenceLink[]
+  fragmentReferences MemoryAssertionFragmentReference[]
+  objectLinks        MemoryAssertionObjectLink[]
+  objectCoverage     MemoryAssertionObjectCoverage[]
+  sourceBlockLinks   MemoryAssertionSourceBlock[]
+  embedding          MemoryAssertionEmbedding?
 
   @@unique([sourceRegionId, sourceClaimId])
   @@unique([chatCaptureId, sourceClaimId])
@@ -650,8 +668,8 @@ model MemoryAssertionFragmentReference {
   objectFragmentId String @map("object_fragment_id") @db.Uuid
   ordinal          Int
 
-  assertion         MemoryAssertion                            @relation(fields: [assertionId], references: [id], onDelete: Cascade)
-  objectFragment    MemorySourceObjectFragment                 @relation(fields: [objectFragmentId], references: [id], onDelete: Cascade)
+  assertion      MemoryAssertion            @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  objectFragment MemorySourceObjectFragment @relation(fields: [objectFragmentId], references: [id], onDelete: Cascade)
 
   @@id([assertionId, ordinal])
   @@index([objectFragmentId])
@@ -679,14 +697,14 @@ model MemoryGlobalObject {
   globalObjectKey String @map("global_object_key") @db.Text
   canonicalName   String @map("canonical_name") @db.Text
 
-  compilation            MemoryCompilation                          @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  surfaceMemberships     MemoryGlobalObjectSurfaceMembership[]
-  chatMentions           MemoryChatObjectMention[]
-  assertionLinks         MemoryAssertionObjectLink[]
-  assertionCoverage      MemoryAssertionObjectCoverage[]
-  higherMemory           MemoryObjectHigherMemory?
-  relatedViewCards       ViewCardRelatedObject[]
-  authUsers              AuthUser[]
+  compilation        MemoryCompilation                     @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  surfaceMemberships MemoryGlobalObjectSurfaceMembership[]
+  chatMentions       MemoryChatObjectMention[]
+  assertionLinks     MemoryAssertionObjectLink[]
+  assertionCoverage  MemoryAssertionObjectCoverage[]
+  higherMemory       MemoryObjectHigherMemory?
+  relatedViewCards   ViewCardRelatedObject[]
+  authUsers          AuthUser[]
 
   @@unique([compilationId, globalObjectKey])
   @@index([compilationId])
@@ -776,8 +794,8 @@ model MemoryAssertionObjectLink {
   assertionId    String @map("assertion_id") @db.Uuid
   globalObjectId String @map("global_object_id") @db.Uuid
 
-  assertion    MemoryAssertion    @relation(fields: [assertionId], references: [id], onDelete: Cascade)
-  globalObject MemoryGlobalObject @relation(fields: [globalObjectId], references: [id], onDelete: Restrict)
+  assertion    MemoryAssertion                   @relation(fields: [assertionId], references: [id], onDelete: Cascade)
+  globalObject MemoryGlobalObject                @relation(fields: [globalObjectId], references: [id], onDelete: Restrict)
   occurrences  MemoryAssertionObjectOccurrence[]
 
   @@id([assertionId, globalObjectId])
@@ -872,6 +890,7 @@ model InstalledView {
   cards        ViewCard[]
   proposals    ViewCommandProposal[]
   executions   ViewCommandExecution[]
+  reactions    ViewChangeReaction[]
   outbox       DomainEventOutbox[]
   higherMemory ViewHigherMemory?
 
@@ -976,12 +995,51 @@ model ViewCommandExecution {
   stateVersionBefore BigInt               @map("state_version_before")
   stateVersionAfter  BigInt               @map("state_version_after")
   resultSummaryJson  Json?                @map("result_summary_json") @db.JsonB
+  changeSetJson      Json                 @default("[]") @map("change_set_json") @db.JsonB
   createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  installedView InstalledView @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
+  installedView InstalledView       @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
+  reaction      ViewChangeReaction?
 
   @@index([viewKey, createdAt])
   @@map("view_command_executions")
+}
+
+/// Runtime-owned semantic reaction to a committed View change. Presentation code consumes this
+/// headlessly and remains free to decide whether and how each state is rendered.
+model ViewChangeReaction {
+  id                    String                      @id @default(uuid()) @db.Uuid
+  executionId           String                      @unique @map("execution_id") @db.Uuid
+  viewKey               String                      @map("view_key") @db.Text
+  actorId               String?                     @map("actor_id") @db.Uuid
+  stateVersion          BigInt                      @map("state_version")
+  targetsJson           Json                        @map("targets_json") @db.JsonB
+  priorObjectsJson      Json                        @default("[]") @map("prior_objects_json") @db.JsonB
+  attentionPolicy       String                      @map("attention_policy") @db.Text
+  attentionStatus       ViewReactionAttentionStatus @map("attention_status")
+  knowledgePolicy       String                      @map("knowledge_policy") @db.Text
+  knowledgeStatus       ViewReactionKnowledgeStatus @map("knowledge_status")
+  guidanceJson          Json                        @default("[]") @map("guidance_json") @db.JsonB
+  message               String?                     @db.Text
+  reason                String?                     @db.Text
+  attentionErrorMessage String?                     @map("attention_error_message") @db.Text
+  knowledgeErrorMessage String?                     @map("knowledge_error_message") @db.Text
+  settleUntil           DateTime                    @map("settle_until") @db.Timestamptz(3)
+  attentionStartedAt    DateTime?                   @map("attention_started_at") @db.Timestamptz(3)
+  attentionCompletedAt  DateTime?                   @map("attention_completed_at") @db.Timestamptz(3)
+  knowledgeStartedAt    DateTime?                   @map("knowledge_started_at") @db.Timestamptz(3)
+  knowledgeCompletedAt  DateTime?                   @map("knowledge_completed_at") @db.Timestamptz(3)
+  seenAt                DateTime?                   @map("seen_at") @db.Timestamptz(3)
+  createdAt             DateTime                    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                    @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  execution     ViewCommandExecution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  installedView InstalledView        @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
+
+  @@index([actorId, viewKey, createdAt])
+  @@index([attentionStatus, settleUntil])
+  @@index([knowledgeStatus, settleUntil])
+  @@map("view_change_reactions")
 }
 
 model DomainEventOutbox {

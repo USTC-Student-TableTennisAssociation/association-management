@@ -6,6 +6,7 @@ import type {
   SkillExtension,
   ToolProviderExtension,
   ViewModule,
+  ViewChangePolicy,
 } from "@/contracts";
 
 const identifierPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
@@ -51,6 +52,31 @@ function assertUnique(
   }
 }
 
+function validateChangePolicy(label: string, policy: ViewChangePolicy | undefined): void {
+  if (!policy) return;
+  if (!["never", "evaluate", "always"].includes(policy.attention)) {
+    throw new ExtensionRegistrationError(`${label}.changePolicy.attention 不合法`);
+  }
+  if (policy.knowledge !== undefined && !["none", "reconcile"].includes(policy.knowledge)) {
+    throw new ExtensionRegistrationError(`${label}.changePolicy.knowledge 不合法`);
+  }
+  if (policy.timing !== undefined && !["immediate", "after_settle"].includes(policy.timing)) {
+    throw new ExtensionRegistrationError(`${label}.changePolicy.timing 不合法`);
+  }
+  if (
+    policy.settleMs !== undefined &&
+    (!Number.isSafeInteger(policy.settleMs) || policy.settleMs < 0 || policy.settleMs > 300_000)
+  ) {
+    throw new ExtensionRegistrationError(`${label}.changePolicy.settleMs 不合法`);
+  }
+  if (policy.guidance !== undefined && !policy.guidance.trim()) {
+    throw new ExtensionRegistrationError(`${label}.changePolicy.guidance 不能为空`);
+  }
+  if ((policy.guidance?.length ?? 0) > 2_000) {
+    throw new ExtensionRegistrationError(`${label}.changePolicy.guidance 不能超过 2000 字符`);
+  }
+}
+
 function validateViewModule(view: ViewModule): void {
   requireIdentifier("View key", view.manifest.key);
   if (view.schema.viewKey !== view.manifest.key) {
@@ -73,8 +99,13 @@ function validateViewModule(view: ViewModule): void {
     requireSchemaIdentifier(`Card Type key (${view.manifest.key})`, card.key);
     assertUnique(card.dimensions.map((dimension) => dimension.key), "Dimension key", card.key);
     assertUnique(card.slots.map((slot) => slot.key), "Slot key", card.key);
+    validateChangePolicy(`${view.manifest.key}.${card.key}`, card.changePolicy);
     for (const dimension of card.dimensions) {
       requireSchemaIdentifier(`Dimension key (${card.key})`, dimension.key);
+      validateChangePolicy(
+        `${view.manifest.key}.${card.key}.${dimension.key}`,
+        dimension.changePolicy,
+      );
     }
     for (const slot of card.slots) {
       requireSchemaIdentifier(`Slot key (${card.key})`, slot.key);
@@ -84,8 +115,16 @@ function validateViewModule(view: ViewModule): void {
           `${view.manifest.key}.${card.key}.${slot.key} 引用了未声明的同 View Card Type：${unknownTargets.join(", ")}`,
         );
       }
+      validateChangePolicy(
+        `${view.manifest.key}.${card.key}.${slot.key}`,
+        slot.changePolicy,
+      );
     }
     const policy = card.relatedObjects;
+    validateChangePolicy(
+      `${view.manifest.key}.${card.key}.relatedObjects`,
+      policy?.changePolicy,
+    );
     if (policy?.min !== undefined && policy.min < 0) {
       throw new ExtensionRegistrationError(`${card.key}.relatedObjects.min 不能小于 0`);
     }
@@ -103,6 +142,9 @@ function validateViewModule(view: ViewModule): void {
         `${card.key}.relatedObjects.uniqueCardPerObject 只能与 max: 1 一起使用`,
       );
     }
+  }
+  for (const event of view.events) {
+    validateChangePolicy(`${view.manifest.key}.${event.key}.reaction`, event.reaction);
   }
 }
 

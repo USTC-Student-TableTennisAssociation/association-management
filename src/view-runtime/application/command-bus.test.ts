@@ -67,6 +67,7 @@ function runtimeFixture(
       create: vi.fn().mockResolvedValue({ id: "execution-1" }),
     },
     domainEventOutbox: { create: vi.fn() },
+    viewCard: { findMany: vi.fn().mockResolvedValue([]) },
   };
   const database = {
     installedView: {
@@ -213,6 +214,10 @@ describe("ViewCommandBus", () => {
       data: { stateVersion: BigInt(4) },
     });
     expect(fixture.transaction.viewCommandExecution.create).toHaveBeenCalledOnce();
+    expect(fixture.transaction.viewCommandExecution.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ changeSetJson: [] }),
+      select: { id: true },
+    });
   });
 
   it("allows a member to approve their own AI Proposal", async () => {

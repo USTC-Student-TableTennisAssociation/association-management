@@ -3,8 +3,11 @@ import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import type {
   ActorContext,
   CommandDefinition,
+  ViewCardState,
+  ViewChange,
   ViewModule,
 } from "@/contracts";
+import type { EchoViewReaction } from "@sydaris/plugin-sdk";
 import { parseViewSettings } from "@/view-runtime/application/installed-views";
 import type { InstalledViewService } from "@/view-runtime/application/installed-views";
 import type { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
@@ -14,6 +17,15 @@ import {
   ViewNotFoundError,
   ViewRuntimeError,
 } from "@/view-runtime/domain/errors";
+import { diffViewCards } from "@/view-runtime/application/view-change-set";
+import {
+  resolveViewChangeReaction,
+  targetsForViewChanges,
+} from "@/view-runtime/application/view-change-policy";
+import {
+  configuredViewReactionSettleMs,
+  presentViewChangeReaction,
+} from "@/view-runtime/application/view-change-reaction";
 import { PrismaCardGraphTransaction } from "@/view-runtime/persistence/prisma-card-graph";
 
 type Initiator = "human" | "ai" | "system";
@@ -42,6 +54,7 @@ export type ViewCommandDispatchResult =
       viewKey: string;
       stateVersion: string;
       summary?: unknown;
+      reaction?: EchoViewReaction;
     };
 
 export type ViewCommandProposalDecisionResult =
@@ -80,6 +93,36 @@ function requirePermissions(actor: ActorContext, required: readonly string[]): v
 
 function retryableStateConflict(error: unknown): error is ViewConflictError {
   return error instanceof ViewConflictError && error.message === "View stateVersion 已变化";
+}
+
+function relatedObjectIdsForChanges(
+  changes: readonly ViewChange[],
+  cardsBefore: readonly ViewCardState[],
+  cardsAfter: readonly ViewCardState[],
+): string[] {
+  const cardIds = new Set<string>();
+  const objectIds = new Set<string>();
+  changes.forEach((change) => {
+    if (change.kind === "card_created" || change.kind === "card_deleted") {
+      cardIds.add(change.card.id);
+      change.card.relatedObjectIds.forEach((id) => objectIds.add(id));
+      return;
+    }
+    cardIds.add(change.cardId);
+    if (change.kind === "slot") {
+      change.before.forEach((id) => cardIds.add(id));
+      change.after.forEach((id) => cardIds.add(id));
+    }
+    if (change.kind === "related_objects") {
+      change.before.forEach((id) => objectIds.add(id));
+      change.after.forEach((id) => objectIds.add(id));
+    }
+  });
+  [...cardsBefore, ...cardsAfter].forEach((card) => {
+    if (!cardIds.has(card.id)) return;
+    card.relatedObjectIds.forEach((id) => objectIds.add(id));
+  });
+  return [...objectIds];
 }
 
 async function runtimeView(
@@ -340,6 +383,7 @@ export class ViewCommandBus {
       }
 
       const graph = new PrismaCardGraphTransaction(transaction, viewModule);
+      const cardsBefore = await graph.queryCards();
       const outcome = await command.execute({
         viewKey: input.viewKey,
         actor: input.actor,
@@ -349,6 +393,8 @@ export class ViewCommandBus {
         transaction: graph,
       }, parsedInput);
       for (const invariant of viewModule.invariants) await invariant.validate(graph);
+      const cardsAfter = await graph.queryCards();
+      const changeSet = diffViewCards(cardsBefore, cardsAfter);
 
       const nextStateVersion = stateVersionBefore + BigInt(1);
       const advanced = await transaction.installedView.updateMany({
@@ -369,10 +415,12 @@ export class ViewCommandBus {
           stateVersionBefore,
           stateVersionAfter: nextStateVersion,
           resultSummaryJson: outcome.summary === undefined ? Prisma.JsonNull : json(outcome.summary),
+          changeSetJson: json(changeSet),
         },
         select: { id: true },
       });
 
+      const eventDefinitions = [];
       for (const event of outcome.events ?? []) {
         const definition = viewModule.events.find(
           (candidate) => candidate.key === event.type && candidate.version === event.version,
@@ -382,6 +430,7 @@ export class ViewCommandBus {
             `Command 产生了未声明的 Event ${event.type}@${event.version}`,
           );
         }
+        eventDefinitions.push(definition);
         const payload = definition.payloadSchema.parse(event.payload);
         await transaction.domainEventOutbox.create({
           data: {
@@ -404,12 +453,61 @@ export class ViewCommandBus {
           data: { status: "applied", decidedAt: new Date(), appliedAt: new Date() },
         });
       }
+      let reaction: EchoViewReaction | undefined;
+      if (input.initiator === "human" && changeSet.length) {
+        const resolved = resolveViewChangeReaction({
+          viewModule,
+          changes: changeSet,
+          eventDefinitions,
+        });
+        if (resolved.attention !== "never" || resolved.knowledge !== "none") {
+          const objectIds = relatedObjectIdsForChanges(changeSet, cardsBefore, cardsAfter);
+          const priorObjects = objectIds.length
+            ? await transaction.memoryGlobalObject.findMany({
+                where: { id: { in: objectIds } },
+                orderBy: { canonicalName: "asc" },
+                select: {
+                  id: true,
+                  canonicalName: true,
+                  higherMemory: { select: { cognitiveMemory: true } },
+                },
+              })
+            : [];
+          const delay = resolved.timing === "immediate"
+            ? 0
+            : resolved.settleMs ?? configuredViewReactionSettleMs();
+          const row = await transaction.viewChangeReaction.create({
+            data: {
+              executionId: execution.id,
+              viewKey: input.viewKey,
+              actorId: input.actor.actorId,
+              stateVersion: nextStateVersion,
+              targetsJson: json(targetsForViewChanges(changeSet)),
+              priorObjectsJson: json(priorObjects.map((object) => ({
+                id: object.id,
+                canonicalName: object.canonicalName,
+                ...(object.higherMemory
+                  ? { cognitiveMemory: object.higherMemory.cognitiveMemory }
+                  : {}),
+              }))),
+              attentionPolicy: resolved.attention,
+              attentionStatus: resolved.attention === "never" ? "not_required" : "queued",
+              knowledgePolicy: resolved.knowledge,
+              knowledgeStatus: resolved.knowledge === "none" ? "not_required" : "queued",
+              guidanceJson: json(resolved.guidance),
+              settleUntil: new Date(Date.now() + delay),
+            },
+          });
+          reaction = presentViewChangeReaction(row);
+        }
+      }
       return {
         kind: "executed",
         executionId: execution.id,
         viewKey: input.viewKey,
         stateVersion: nextStateVersion.toString(),
         ...(outcome.summary === undefined ? {} : { summary: outcome.summary }),
+        ...(reaction ? { reaction } : {}),
       };
     });
   }

@@ -274,6 +274,97 @@
   opacity: clamp(0, calc(var(--purpose-progress) * 1.8 - 0.8), 1);
 }
 
+.ratingFact {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.reactionStatus {
+  display: inline-flex;
+  min-height: 1.75rem;
+  align-items: center;
+  gap: 0.32rem;
+  border: 1px solid rgb(0 72 137 / 12%);
+  border-radius: 999px;
+  background: rgb(0 72 137 / 6%);
+  padding: 0.32rem 0.58rem;
+  color: var(--blue);
+  font: inherit;
+  font-weight: 620;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: background-color 160ms ease, transform 100ms ease-out, opacity 220ms ease;
+}
+
+.reactionStatus:disabled {
+  cursor: default;
+}
+
+.reactionStatus:not(:disabled):hover {
+  background: rgb(0 72 137 / 11%);
+}
+
+.reactionStatus:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+.reactionStatus svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.45;
+}
+
+.reactionStatus[data-tone="checking"] svg {
+  animation: reaction-breathe 1.6s ease-in-out infinite;
+}
+
+.reactionStatus[data-tone="verified"] {
+  border-color: rgb(39 119 76 / 10%);
+  background: rgb(39 119 76 / 7%);
+  color: #27774c;
+  animation: reaction-confirmed 4.2s ease forwards;
+}
+
+.reactionStatus[data-tone="attention"] {
+  border-color: rgb(194 88 0 / 16%);
+  background: rgb(194 88 0 / 8%);
+  color: #a54d06;
+}
+
+.reactionStatus[data-tone="failed"] {
+  border-color: rgb(174 44 44 / 13%);
+  background: rgb(174 44 44 / 7%);
+  color: #a22f2f;
+}
+
+.reactionDetail {
+  width: min(32rem, 100%);
+  margin: 0.85rem 0 0 auto;
+  border-left: 2px solid var(--orange);
+  background: rgb(255 255 255 / 72%);
+  padding: 0.8rem 1rem;
+  color: #424247;
+  font-size: 0.76rem;
+  line-height: 1.6;
+  pointer-events: auto;
+}
+
+.reactionDetail p {
+  margin: 0;
+}
+
+@keyframes reaction-breathe {
+  50% { opacity: 0.42; }
+}
+
+@keyframes reaction-confirmed {
+  0%, 72% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
 .profileEditButton {
   display: inline-flex;
   min-height: 2.65rem;
@@ -1503,6 +1594,12 @@
   .platformCard,
   .primaryButton,
   .secondaryButton {
+    transition: none;
+  }
+
+  .reactionStatus,
+  .reactionStatus[data-tone="checking"] svg {
+    animation: none;
     transition: none;
   }
 

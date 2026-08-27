@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type {
+  EchoViewCommandResult,
+  EchoViewReaction,
   ViewCardState,
   ViewManifest,
   ViewSchema,
@@ -69,7 +71,7 @@ export function useEchoView(viewKey: string, refreshRevision = 0) {
 }
 
 export function useEchoCommand(viewKey: string) {
-  return useCallback(async <Result = unknown>(
+  return useCallback(async <Result = EchoViewCommandResult>(
     commandKey: string,
     input: unknown,
     expectedStateVersion?: string,
@@ -84,4 +86,65 @@ export function useEchoCommand(viewKey: string) {
     );
     return responseJson<Result>(response);
   }, [viewKey]);
+}
+
+export function useEchoViewReactions(
+  viewKey: string,
+  options: { limit?: number; pollIntervalMs?: number; enabled?: boolean } = {},
+) {
+  const { limit = 20, pollIntervalMs = 2_000, enabled = true } = options;
+  const [reactions, setReactions] = useState<readonly EchoViewReaction[]>([]);
+  const [error, setError] = useState<string>();
+  const [loading, setLoading] = useState(enabled);
+  const [reloadSequence, setReloadSequence] = useState(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = async () => {
+      try {
+        const response = await fetch(
+          `/api/views/${encodeURIComponent(viewKey)}/reactions?limit=${limit}`,
+          { cache: "no-store", signal: controller.signal },
+        );
+        const body = await responseJson<{ reactions: readonly EchoViewReaction[] }>(response);
+        setReactions(body.reactions);
+        setError(undefined);
+        setLoading(false);
+        const active = body.reactions.some((reaction) =>
+          reaction.attention.status === "queued" ||
+          reaction.attention.status === "running" ||
+          reaction.knowledge.status === "queued" ||
+          reaction.knowledge.status === "running"
+        );
+        timer = setTimeout(load, active ? pollIntervalMs : Math.max(pollIntervalMs, 10_000));
+      } catch (cause) {
+        if (controller.signal.aborted) return;
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setLoading(false);
+        timer = setTimeout(load, Math.max(pollIntervalMs, 10_000));
+      }
+    };
+    void load();
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [enabled, limit, pollIntervalMs, reloadSequence, viewKey]);
+
+  const refresh = useCallback(() => setReloadSequence((value) => value + 1), []);
+  const markSeen = useCallback(async (reactionId: string) => {
+    const response = await fetch(
+      `/api/views/${encodeURIComponent(viewKey)}/reactions/${encodeURIComponent(reactionId)}/seen`,
+      { method: "POST" },
+    );
+    const body = await responseJson<{ reaction: EchoViewReaction }>(response);
+    setReactions((current) => current.map((reaction) =>
+      reaction.id === body.reaction.id ? body.reaction : reaction
+    ));
+    return body.reaction;
+  }, [viewKey]);
+
+  return { reactions, error, loading: enabled && loading, refresh, markSeen };
 }

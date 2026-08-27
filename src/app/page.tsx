@@ -981,7 +981,6 @@ export default function Home() {
   const [currentUser, setCurrentUser] = useState<CurrentUser>();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string>();
-  const [attentionSyncRevision, setAttentionSyncRevision] = useState(0);
   const transport = useMemo(() => new DefaultChatTransport<ClubChatMessage>({
     api: "/api/chat",
     prepareSendMessagesRequest: ({ messages, body }) => ({
@@ -1108,65 +1107,6 @@ export default function Home() {
     });
     return () => controller.abort();
   }, [activeConversationId, setMessages]);
-
-  useEffect(() => {
-    if (
-      !activeConversationId ||
-      !attentionSyncRevision ||
-      historyState !== "ready" ||
-      isSending
-    ) return;
-    const controller = new AbortController();
-    const knownMessageIds = new Set(messages.map((message) => message.id));
-    const synchronize = async () => {
-      if (document.visibilityState === "hidden") return;
-      try {
-        const response = await fetch(
-          `/api/chat/conversations/${activeConversationId}/messages`,
-          { cache: "no-store", signal: controller.signal },
-        );
-        const body = await response.json() as {
-          messages?: ClubChatMessage[];
-          error?: string;
-        };
-        if (!response.ok || !Array.isArray(body.messages)) {
-          throw new Error(body.error ?? "无法同步对话。");
-        }
-        const additions = body.messages.filter((message) =>
-          message.id !== "welcome" && !knownMessageIds.has(message.id)
-        );
-        if (!additions.length) return;
-        additions.forEach((message) => knownMessageIds.add(message.id));
-        setMessages((current) => [
-          ...current,
-          ...additions.filter((message) => !current.some((item) => item.id === message.id)),
-        ]);
-        setAttentionSyncRevision(0);
-        void refreshConversations();
-      } catch (syncError) {
-        if (!controller.signal.aborted) console.error("[chat.history.sync]", syncError);
-      }
-    };
-    void synchronize();
-    const timer = window.setInterval(() => void synchronize(), 10_000);
-    const stopTimer = window.setTimeout(
-      () => setAttentionSyncRevision(0),
-      30 * 60 * 1_000,
-    );
-    return () => {
-      controller.abort();
-      window.clearInterval(timer);
-      window.clearTimeout(stopTimer);
-    };
-  }, [
-    activeConversationId,
-    attentionSyncRevision,
-    historyState,
-    isSending,
-    messages,
-    refreshConversations,
-    setMessages,
-  ]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -1538,9 +1478,6 @@ export default function Home() {
                 presentationLoader={activeWorkView?.presentation?.loader}
                 focusCardId={viewFocusCardId}
                 activeConversationId={activeConversationId}
-                onAIAttentionScheduled={() => {
-                  setAttentionSyncRevision((current) => current + 1);
-                }}
                 onOpenInspector={() => setWorkInspectorOpen(true)}
                 onAskAI={(prompt) => {
                   setInput(prompt);

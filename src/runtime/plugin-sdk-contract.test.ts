@@ -24,7 +24,7 @@ const descriptor = {
 
 describe("published Plugin SDK contract", () => {
   it("owns the package descriptor schema used by Echo", () => {
-    expect(ECHO_PLUGIN_API_VERSION).toBe("0.1.0-alpha.1");
+    expect(ECHO_PLUGIN_API_VERSION).toBe("0.1.0-alpha.3");
     expect(sdkPackage).toMatchObject({
       name: "@sydaris/plugin-sdk",
       version: ECHO_PLUGIN_API_VERSION,
@@ -37,7 +37,7 @@ describe("published Plugin SDK contract", () => {
 
   it("uses SemVer ranges for Echo compatibility", () => {
     expect(isEchoVersionCompatible("0.1.0", descriptor.engines.echo)).toBe(true);
-    expect(isEchoVersionCompatible("0.1.0-alpha.2", descriptor.engines.echo)).toBe(true);
+    expect(isEchoVersionCompatible("0.1.0-alpha.3", descriptor.engines.echo)).toBe(true);
     expect(isEchoVersionCompatible("0.2.0-alpha.1", descriptor.engines.echo)).toBe(false);
     expect(isEchoVersionCompatible("0.2.0", descriptor.engines.echo)).toBe(false);
     expect(() => parseEchoPluginPackageDescriptor({

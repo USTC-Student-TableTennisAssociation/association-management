@@ -14,8 +14,15 @@ import {
   useState,
 } from "react";
 
-import type { EchoPresentationProps, ViewCardState } from "@sydaris/plugin-sdk";
-import type { EchoViewSnapshot } from "@sydaris/plugin-sdk/react";
+import type {
+  EchoPresentationProps,
+  EchoViewCommandResult,
+  ViewCardState,
+} from "@sydaris/plugin-sdk";
+import {
+  type EchoViewSnapshot,
+  useEchoViewReactions,
+} from "@sydaris/plugin-sdk/react";
 
 import {
   SocietyCardEditor,
@@ -222,8 +229,6 @@ export function SocietyOverviewWorkspace({
   viewKey,
   refreshRevision = 0,
   focusCardId,
-  activeConversationId,
-  onAIAttentionScheduled,
   onOpenInspector,
   onAskAI,
 }: WorkspaceProps) {
@@ -239,6 +244,12 @@ export function SocietyOverviewWorkspace({
   const [activityDrag, setActivityDrag] = useState<ActivityDragState>();
   const [activityOrderSaving, setActivityOrderSaving] = useState(false);
   const [activityOrderStatus, setActivityOrderStatus] = useState<string>();
+  const [expandedReactionId, setExpandedReactionId] = useState<string>();
+  const {
+    reactions,
+    refresh: refreshReactions,
+    markSeen: markReactionSeen,
+  } = useEchoViewReactions(viewKey);
   const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
   const heroScrollRef = useRef<HTMLElement>(null);
   const heroStageRef = useRef<HTMLDivElement>(null);
@@ -434,18 +445,14 @@ export function SocietyOverviewWorkspace({
         body: JSON.stringify({
           input,
           expectedStateVersion: snapshot.stateVersion,
-          ...(activeConversationId ? { conversationId: activeConversationId } : {}),
         }),
       },
     );
-    const body = await response.json() as {
-      error?: string;
-      aiAttention?: "scheduled" | "next_turn" | "ignored";
-    };
+    const body = await response.json() as EchoViewCommandResult & { error?: string };
     if (!response.ok) throw new Error(body.error ?? "无法保存 View 修改");
-    if (body.aiAttention === "scheduled") onAIAttentionScheduled?.();
+    refreshReactions();
     return body;
-  }, [activeConversationId, onAIAttentionScheduled, snapshot, viewKey]);
+  }, [refreshReactions, snapshot, viewKey]);
 
   const openEditor = useCallback((card: ViewCardState, identityLabel: string) => {
     setEditorError(undefined);
@@ -701,8 +708,30 @@ export function SocietyOverviewWorkspace({
   const description = text(society, "description");
   const rating = text(society, "rating");
   const foundedOn = text(society, "founded_on");
-  const factLabels = [rating, foundedOn ? foundedLabel(foundedOn) : undefined].filter(
-    (item): item is string => Boolean(item),
+  const ratingReaction = society ? reactions.find((reaction) =>
+    reaction.targets.some((target) =>
+      target.kind === "dimension" &&
+      target.cardId === society.id &&
+      target.dimensionKey === "rating"
+    )
+  ) : undefined;
+  const reactionPresentation = ratingReaction
+    ? ratingReaction.attention.status === "queued" || ratingReaction.attention.status === "running"
+      ? { label: "Echo 正在核对", tone: "checking" }
+      : ratingReaction.attention.status === "silent"
+      ? { label: "已核对", tone: "verified" }
+      : ratingReaction.attention.status === "inform"
+      ? { label: "Echo 有一条说明", tone: "inform" }
+      : ratingReaction.attention.status === "needs_confirmation"
+      ? { label: "需要确认", tone: "attention" }
+      : ratingReaction.attention.status === "failed"
+      ? { label: "核对暂不可用", tone: "failed" }
+      : undefined
+    : undefined;
+  const showReactionDetail = Boolean(
+    ratingReaction &&
+    expandedReactionId === ratingReaction.id &&
+    ratingReaction.attention.message,
   );
   const promptToFill = (topic: string) => onAskAI(
     `请先读取 ${viewKey} 当前状态，帮我补充${topic}。以 synthesis 方式从 Shared Brain 与高价值原文中整理已有资料，先完整提交一版待审批草稿；可选细节不确定可以留空或明确标注推断，只有正式 Object 有歧义、当前状态冲突或必要字段无法确定时才询问，再只使用已声明的 society Commands 提交。`,
@@ -745,9 +774,37 @@ export function SocietyOverviewWorkspace({
               <p>我们的宗旨</p>
               <h2 id="society-purpose-title">{purpose}</h2>
               {description ? <p className={styles.purposeDescription}>{description}</p> : null}
-              {factLabels.length ? (
+              {rating || foundedOn ? (
                 <div className={styles.purposeFacts}>
-                  {factLabels.map((fact) => <span key={fact}>{fact}</span>)}
+                  {rating ? (
+                    <span className={styles.ratingFact}>
+                      {rating}
+                      {reactionPresentation && ratingReaction ? (
+                        <button
+                          type="button"
+                          className={styles.reactionStatus}
+                          data-tone={reactionPresentation.tone}
+                          aria-expanded={Boolean(showReactionDetail)}
+                          disabled={!ratingReaction.attention.message}
+                          onClick={() => {
+                            setExpandedReactionId((current) =>
+                              current === ratingReaction.id ? undefined : ratingReaction.id
+                            );
+                            if (!ratingReaction.seenAt) void markReactionSeen(ratingReaction.id);
+                          }}
+                        >
+                          <EchoIcon />
+                          {reactionPresentation.label}
+                        </button>
+                      ) : null}
+                    </span>
+                  ) : null}
+                  {foundedOn ? <span>{foundedLabel(foundedOn)}</span> : null}
+                </div>
+              ) : null}
+              {showReactionDetail && ratingReaction?.attention.message ? (
+                <div className={styles.reactionDetail} role="status">
+                  <p>{ratingReaction.attention.message}</p>
                 </div>
               ) : null}
               {society ? (

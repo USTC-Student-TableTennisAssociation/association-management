@@ -1,6 +1,7 @@
 import type {
   CardTypeDefinition,
   DimensionDefinition,
+  ViewChangePolicy,
   ViewModule,
 } from "@sydaris/plugin-sdk";
 
@@ -10,11 +11,43 @@ import { societyInformationInvariants } from "./invariants.js";
 
 export const SOCIETY_INFORMATION_VIEW_KEY = "society_information";
 
-const richText = (key: string, label: string): DimensionDefinition => ({
+const evaluateKnowledgeChange = {
+  attention: "evaluate",
+  knowledge: "reconcile",
+  guidance:
+    "区分纯措辞润色与组织事实变化。措辞润色保持安静；只有存在真实冲突、重要联动或需要用户判断的歧义时才主动回应。",
+} as const satisfies ViewChangePolicy;
+
+const evaluateRelationshipChange = {
+  attention: "evaluate",
+  knowledge: "reconcile",
+  guidance:
+    "这是正式业务关系的变化。先自动对账相关 Object Higher Memory；只有当前关系仍有冲突或后续动作需要用户决定时才请求确认。",
+} as const satisfies ViewChangePolicy;
+
+const ignorePresentationOrder = {
+  attention: "never",
+  knowledge: "none",
+} as const satisfies ViewChangePolicy;
+
+const reviewIdentityLinkChange = {
+  attention: "always",
+  knowledge: "reconcile",
+  guidance:
+    "Card 与稳定认知 Object 的身份关联发生变化，必须给出可见审查结果；存在身份歧义时请求用户确认。",
+} as const satisfies ViewChangePolicy;
+
+const richText = (
+  key: string,
+  label: string,
+  description: string,
+): DimensionDefinition => ({
   key,
   label,
+  description,
   type: "rich_text",
   presentation: { multiline: true },
+  changePolicy: evaluateKnowledgeChange,
 });
 
 export const societyInformationCardTypes = [
@@ -29,10 +62,17 @@ export const societyInformationCardTypes = [
         description:
           "社团在当前评价体系中正式获评的等级，属于会随评审变化的当前事实，不是纯展示文字；实质变化可能需要检查知识层中的旧记录。",
         type: "text",
+        changePolicy: evaluateKnowledgeChange,
       },
-      { key: "founded_on", label: "成立时间", type: "date" },
-      richText("purpose", "宗旨"),
-      richText("description", "简介"),
+      {
+        key: "founded_on",
+        label: "成立时间",
+        description: "社团正式成立的日期或年份，是稳定历史事实；修改时需要与已有组织认知对账。",
+        type: "date",
+        changePolicy: evaluateKnowledgeChange,
+      },
+      richText("purpose", "宗旨", "社团长期坚持的使命、价值取向与成立目的，不等同于近期活动宣传语。"),
+      richText("description", "简介", "面向读者概括社团身份、特色与长期定位的正文；文字润色通常不改变组织事实。"),
     ],
     slots: [
       {
@@ -41,6 +81,7 @@ export const societyInformationCardTypes = [
         description: "为该社团提供正式指导的人员 Card。",
         allowedTargetCardTypes: ["PersonCard"],
         cardinality: "many",
+        changePolicy: evaluateRelationshipChange,
       },
       {
         key: "team",
@@ -49,6 +90,7 @@ export const societyInformationCardTypes = [
           "当前任期干事队伍中可唯一指认、且有证据证明当前在任的真实个人 Card；身份可识别不等于当前在任。历任名单中的过往成员不属于此 Slot。",
         allowedTargetCardTypes: ["PersonCard"],
         cardinality: "many",
+        changePolicy: evaluateRelationshipChange,
       },
       {
         key: "activities",
@@ -56,6 +98,7 @@ export const societyInformationCardTypes = [
         description: "对理解社团有长期意义的活动或品牌赛事 Card。",
         allowedTargetCardTypes: ["ActivityCard"],
         cardinality: "many",
+        changePolicy: ignorePresentationOrder,
       },
       {
         key: "platforms",
@@ -63,6 +106,7 @@ export const societyInformationCardTypes = [
         description: "社团长期使用的平台、线上入口或公开信息渠道 Card。",
         allowedTargetCardTypes: ["PlatformCard"],
         cardinality: "many",
+        changePolicy: ignorePresentationOrder,
       },
     ],
     relatedObjects: {
@@ -70,7 +114,9 @@ export const societyInformationCardTypes = [
       min: 1,
       max: 1,
       uniqueCardPerObject: true,
+      changePolicy: reviewIdentityLinkChange,
     },
+    changePolicy: evaluateKnowledgeChange,
   },
   {
     key: "PersonCard",
@@ -82,14 +128,16 @@ export const societyInformationCardTypes = [
         label: "部门",
         description: "该人物在当前社团中的正式部门；没有可靠资料时留空，不推造组织单元。",
         type: "text",
+        changePolicy: evaluateKnowledgeChange,
       },
       {
         key: "position",
         label: "职位",
         description: "该人物在当前社团中的职位；没有可靠资料时留空。",
         type: "text",
+        changePolicy: evaluateKnowledgeChange,
       },
-      richText("description", "简介"),
+      richText("description", "简介", "该人物与社团有关的公开简介，只写入有依据且适合展示的信息。"),
     ],
     slots: [],
     relatedObjects: {
@@ -97,18 +145,22 @@ export const societyInformationCardTypes = [
       min: 1,
       max: 1,
       uniqueCardPerObject: true,
+      changePolicy: reviewIdentityLinkChange,
     },
+    changePolicy: evaluateKnowledgeChange,
   },
   {
     key: "ActivityCard",
     label: "活动",
     description: "对理解社团有长期意义的活动、品牌赛事或持续活动。",
     dimensions: [
-      richText("description", "简介"),
+      richText("description", "简介", "该长期活动的内容、定位和稳定特征，不用于记录单届活动流水。"),
       {
         key: "frequency",
         label: "举办频率",
+        description: "该长期活动通常重复举办的节奏；资料不足以确定时应留空。",
         type: "enum",
+        changePolicy: evaluateKnowledgeChange,
         constraints: {
           enumOptions: [
             { key: "WEEKLY", label: "每周" },
@@ -118,13 +170,21 @@ export const societyInformationCardTypes = [
           ],
         },
       },
-      { key: "usual_period", label: "通常举办时期", type: "text" },
+      {
+        key: "usual_period",
+        label: "通常举办时期",
+        description: "长期活动通常发生的时间范围或周期，不代表某一届活动的确定日期。",
+        type: "text",
+        changePolicy: evaluateKnowledgeChange,
+      },
       {
         key: "status",
         label: "状态",
+        description: "该长期活动目前是否持续举办；停止或暂停属于需要与既有认知对账的事实变化。",
         type: "enum",
         required: true,
         defaultValue: "ACTIVE",
+        changePolicy: evaluateKnowledgeChange,
         constraints: {
           enumOptions: [
             { key: "ACTIVE", label: "持续举办" },
@@ -140,7 +200,9 @@ export const societyInformationCardTypes = [
       min: 1,
       max: 1,
       uniqueCardPerObject: true,
+      changePolicy: reviewIdentityLinkChange,
     },
+    changePolicy: evaluateKnowledgeChange,
   },
   {
     key: "PlatformCard",
@@ -153,20 +215,22 @@ export const societyInformationCardTypes = [
         description: "平台或渠道的类别，例如 QQ 群、公众号、视频平台或网站。",
         type: "text",
         required: true,
+        changePolicy: evaluateKnowledgeChange,
       },
       {
         key: "url",
         label: "公开链接",
         description: "可以直接公开访问的 URL；没有可靠链接时留空。",
         type: "text",
+        changePolicy: evaluateKnowledgeChange,
       },
       {
-        ...richText("access_instructions", "访问说明"),
+        ...richText("access_instructions", "访问说明", "用户找到、进入、关注、联系或经由该平台加入社团的具体方法。"),
         description:
           "用户如何找到、进入、关注、联系或通过该平台加入社团，例如群号、账号搜索方式或入群申请方式。‘账号/链接待确认’不是访问说明，未知时留空。",
       },
       {
-        ...richText("description", "简介"),
+        ...richText("description", "简介", "该平台在社团中的长期用途、内容定位和面向人群。"),
         description: "该平台在社团中的用途或内容定位，不填写访问步骤。",
       },
       {
@@ -177,6 +241,7 @@ export const societyInformationCardTypes = [
         type: "enum",
         required: true,
         defaultValue: "UNKNOWN",
+        changePolicy: evaluateKnowledgeChange,
         constraints: {
           enumOptions: [
             { key: "ACTIVE", label: "正常使用" },
@@ -193,7 +258,9 @@ export const societyInformationCardTypes = [
       min: 1,
       max: 1,
       uniqueCardPerObject: true,
+      changePolicy: reviewIdentityLinkChange,
     },
+    changePolicy: evaluateKnowledgeChange,
   },
 ] as const satisfies readonly CardTypeDefinition[];
 
