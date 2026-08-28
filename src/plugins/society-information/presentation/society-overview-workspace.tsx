@@ -28,7 +28,13 @@ import {
 import {
   SocietyCardEditor,
   type SocietyDimensionChanges,
+  type SocietyRemovalReason,
 } from "./society-card-editor.js";
+import {
+  SocietyCardCreator,
+  type SocietyCreateKind,
+  type SocietyCreateSubmission,
+} from "./society-card-creator.js";
 import {
   galleryEdges,
   presentSocietyReaction,
@@ -48,11 +54,20 @@ type EmptySlotProps = {
   title: string;
   onActivate: () => void;
   compact?: boolean;
+  actionLabel?: string;
 };
 
 type EditorTarget = {
   cardId: string;
   identityLabel: string;
+  membership?: "advisor" | "team";
+};
+
+type CreatorTarget = {
+  kind: SocietyCreateKind;
+  title: string;
+  objectLabel: string;
+  cardTypeKey: "PersonCard" | "ActivityCard" | "PlatformCard";
 };
 
 type ActivityDragState = {
@@ -188,6 +203,14 @@ function PencilIcon() {
   );
 }
 
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 20 20" aria-hidden="true">
+      <path d="M10 4v12M4 10h12" />
+    </svg>
+  );
+}
+
 function GripIcon() {
   return (
     <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -221,7 +244,13 @@ function movedOrder(order: readonly string[], from: number, to: number): string[
   return next;
 }
 
-function EmptySlot({ eyebrow, title, onActivate, compact = false }: EmptySlotProps) {
+function EmptySlot({
+  eyebrow,
+  title,
+  onActivate,
+  compact = false,
+  actionLabel = "用 Echo 补充",
+}: EmptySlotProps) {
   return (
     <button
       type="button"
@@ -230,7 +259,10 @@ function EmptySlot({ eyebrow, title, onActivate, compact = false }: EmptySlotPro
     >
       <span>{eyebrow}</span>
       <strong>{title}</strong>
-      <span className={styles.emptySlotAction}><EchoIcon />用 Echo 补充</span>
+      <span className={styles.emptySlotAction}>
+        {actionLabel === "用 Echo 补充" ? <EchoIcon /> : <PlusIcon />}
+        {actionLabel}
+      </span>
     </button>
   );
 }
@@ -281,7 +313,11 @@ export function SocietyOverviewWorkspace({
   const [heroReady, setHeroReady] = useState(false);
   const [editorTarget, setEditorTarget] = useState<EditorTarget>();
   const [editorSaving, setEditorSaving] = useState(false);
+  const [editorRemoving, setEditorRemoving] = useState(false);
   const [editorError, setEditorError] = useState<string>();
+  const [creatorTarget, setCreatorTarget] = useState<CreatorTarget>();
+  const [creatorSaving, setCreatorSaving] = useState(false);
+  const [creatorError, setCreatorError] = useState<string>();
   const [activityOrderOverride, setActivityOrderOverride] = useState<{
     ids: string[];
     stateVersion: string;
@@ -372,6 +408,15 @@ export function SocietyOverviewWorkspace({
   ), [snapshot]);
   const editorCard = editorTarget ? cardsById.get(editorTarget.cardId) : undefined;
   const editorCardType = editorCard ? cardTypesByKey.get(editorCard.cardTypeKey) : undefined;
+  const creatorCardType = creatorTarget ? cardTypesByKey.get(creatorTarget.cardTypeKey) : undefined;
+  const creatorExcludedObjectIds = useMemo(() => {
+    const cardIds = creatorTarget?.kind === "activity"
+      ? slotActivityIds
+      : creatorTarget?.kind === "platform"
+      ? society?.slots.platforms ?? []
+      : [...(society?.slots.advisor ?? []), ...(society?.slots.team ?? [])];
+    return new Set(cardIds.flatMap((cardId) => cardsById.get(cardId)?.relatedObjectIds ?? []));
+  }, [cardsById, creatorTarget?.kind, slotActivityIds, society?.slots]);
   const objectName = useCallback((card: ViewCardState | undefined, fallback: string) =>
     card?.relatedObjectIds.map((id) => objectNames.get(id)).find(Boolean) ?? fallback,
   [objectNames]);
@@ -565,14 +610,28 @@ export function SocietyOverviewWorkspace({
     return body;
   }, [refreshReactions, snapshot, viewKey]);
 
-  const openEditor = useCallback((card: ViewCardState, identityLabel: string) => {
+  const openEditor = useCallback((
+    card: ViewCardState,
+    identityLabel: string,
+    membership?: EditorTarget["membership"],
+  ) => {
     setEditorError(undefined);
-    setEditorTarget({ cardId: card.id, identityLabel });
+    setEditorTarget({ cardId: card.id, identityLabel, membership });
   }, []);
 
   const closeEditor = useCallback(() => {
     setEditorTarget(undefined);
     setEditorError(undefined);
+  }, []);
+
+  const openCreator = useCallback((target: CreatorTarget) => {
+    setCreatorError(undefined);
+    setCreatorTarget(target);
+  }, []);
+
+  const closeCreator = useCallback(() => {
+    setCreatorTarget(undefined);
+    setCreatorError(undefined);
   }, []);
 
   const saveEditor = useCallback(async (changes: SocietyDimensionChanges) => {
@@ -629,6 +688,111 @@ export function SocietyOverviewWorkspace({
       setEditorSaving(false);
     }
   }, [editorCard, executeHumanCommand, society]);
+
+  const createCard = useCallback(async (submission: SocietyCreateSubmission) => {
+    if (!society || !creatorTarget) return;
+    let commandKey: string;
+    let input: unknown;
+    switch (creatorTarget.kind) {
+      case "advisor":
+        commandKey = "society.set_advisors";
+        input = {
+          societyCardId: society.id,
+          advisorObjectIds: [
+            ...advisors.flatMap((advisor) => advisor.relatedObjectIds.slice(0, 1)),
+            submission.object.id,
+          ],
+        };
+        break;
+      case "team":
+        commandKey = "society.save_team_member";
+        input = {
+          mode: "create",
+          societyCardId: society.id,
+          memberName: submission.object.canonicalName,
+          memberObjectId: submission.object.id,
+          values: submission.values,
+        };
+        break;
+      case "activity":
+        commandKey = "society.save_long_term_activity";
+        input = {
+          mode: "create",
+          societyCardId: society.id,
+          activityName: submission.object.canonicalName,
+          activityObjectId: submission.object.id,
+          values: remapChanges(submission.values, { usual_period: "usualPeriod" }),
+        };
+        break;
+      case "platform":
+        commandKey = "society.save_platform";
+        input = {
+          mode: "create",
+          societyCardId: society.id,
+          platformName: submission.object.canonicalName,
+          platformObjectId: submission.object.id,
+          values: {
+            ...remapChanges(submission.values, {
+              platform_type: "platformType",
+              access_instructions: "accessInstructions",
+            }),
+            status: submission.values.status ?? "UNKNOWN",
+          },
+        };
+        break;
+    }
+
+    setCreatorSaving(true);
+    setCreatorError(undefined);
+    try {
+      await executeHumanCommand(commandKey, input);
+      setCreatorTarget(undefined);
+      setReloadSequence((value) => value + 1);
+    } catch (cause) {
+      setCreatorError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setCreatorSaving(false);
+    }
+  }, [advisors, creatorTarget, executeHumanCommand, society]);
+
+  const removeEditorCard = useCallback(async (reason: SocietyRemovalReason) => {
+    if (!society || !editorCard || !editorTarget) return;
+    let commandKey: string;
+    let input: unknown;
+    if (editorCard.cardTypeKey === "ActivityCard") {
+      commandKey = "society.remove_long_term_activity";
+      input = { societyCardId: society.id, activityCardId: editorCard.id, reason };
+    } else if (editorCard.cardTypeKey === "PlatformCard") {
+      commandKey = "society.remove_platform";
+      input = { societyCardId: society.id, platformCardId: editorCard.id, reason };
+    } else if (editorCard.cardTypeKey === "PersonCard" && editorTarget.membership === "team") {
+      commandKey = "society.remove_team_member";
+      input = { societyCardId: society.id, memberCardId: editorCard.id, reason };
+    } else if (editorCard.cardTypeKey === "PersonCard" && editorTarget.membership === "advisor") {
+      commandKey = "society.set_advisors";
+      input = {
+        societyCardId: society.id,
+        advisorObjectIds: advisors
+          .filter((advisor) => advisor.id !== editorCard.id)
+          .flatMap((advisor) => advisor.relatedObjectIds.slice(0, 1)),
+      };
+    } else {
+      setEditorError("这张 Card 不能从社团概览中移除");
+      return;
+    }
+
+    setEditorRemoving(true);
+    setEditorError(undefined);
+    try {
+      await executeHumanCommand(commandKey, input);
+      setEditorTarget(undefined);
+      setReloadSequence((value) => value + 1);
+    } catch (cause) {
+      setEditorError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setEditorRemoving(false);
+    }
+  }, [advisors, editorCard, editorTarget, executeHumanCommand, society]);
 
   const commitActivityOrder = useCallback(async (
     nextOrder: string[],
@@ -848,6 +1012,18 @@ export function SocietyOverviewWorkspace({
   const rating = text(society, "rating");
   const foundedOn = text(society, "founded_on");
   const societyReaction = society ? reactionByCardId.get(society.id) : undefined;
+  const editorRemoveLabel = editorCard?.cardTypeKey === "ActivityCard"
+    ? "移除这项长期活动"
+    : editorCard?.cardTypeKey === "PlatformCard"
+    ? "移除这个平台入口"
+    : editorTarget?.membership === "advisor"
+    ? "移出指导老师名单"
+    : editorTarget?.membership === "team"
+    ? "移出干事队伍"
+    : undefined;
+  const creatorDimensions = creatorTarget?.kind === "advisor"
+    ? []
+    : creatorCardType?.dimensions ?? [];
   const promptToFill = (topic: string) => onAskAI(
     `请先读取 ${viewKey} 当前状态，帮我补充${topic}。以 synthesis 方式从 Shared Brain 与高价值原文中整理已有资料，先完整提交一版待审批草稿；可选细节不确定可以留空或明确标注推断，只有正式 Object 有歧义、当前状态冲突或必要字段无法确定时才询问，再只使用已声明的 society Commands 提交。`,
   );
@@ -942,6 +1118,21 @@ export function SocietyOverviewWorkspace({
                 <h2 id="society-activities-title">在球桌两端相遇。</h2>
               </div>
               <div className={styles.galleryToolbar}>
+                {society ? (
+                  <button
+                    type="button"
+                    className={styles.sectionAddButton}
+                    onClick={() => openCreator({
+                      kind: "activity",
+                      title: "新增长期活动",
+                      objectLabel: "活动 Object",
+                      cardTypeKey: "ActivityCard",
+                    })}
+                  >
+                    <PlusIcon />
+                    新增活动
+                  </button>
+                ) : null}
                 <span className={styles.activityOrderStatus} role="status" aria-live="polite">
                   {activityOrderStatus ?? (activities.length > 1 ? "拖动卡片手柄调整顺序" : "")}
                 </span>
@@ -1010,24 +1201,40 @@ export function SocietyOverviewWorkspace({
                       <div className={styles.cardActions}>
                         <button
                           type="button"
+                          className={styles.labeledCardAction}
                           aria-label={`直接编辑${activityName}`}
                           onClick={() => openEditor(activity, activityName)}
                         >
                           <PencilIcon />
+                          编辑
                         </button>
                         <button
                           type="button"
+                          className={styles.labeledCardAction}
                           aria-label={`用 Echo 更新${activityName}`}
                           onClick={() => onAskAI(`请读取 ${viewKey} 中 ID 为 ${activity.id} 的活动卡片，和我确认后更新“${activityName}”的信息。`)}
                         >
                           <EchoIcon />
+                          Echo
                         </button>
                       </div>
                     </div>
                   </article>
                 );
               }) : (
-                <EmptySlot eyebrow="活动卡片" title="长期活动待补充" onActivate={() => promptToFill("长期活动")} />
+                <EmptySlot
+                  eyebrow="活动卡片"
+                  title="长期活动待补充"
+                  actionLabel={society ? "直接新增" : "用 Echo 补充"}
+                  onActivate={() => society
+                    ? openCreator({
+                        kind: "activity",
+                        title: "新增长期活动",
+                        objectLabel: "活动 Object",
+                        cardTypeKey: "ActivityCard",
+                      })
+                    : promptToFill("长期活动")}
+                />
               )}
               <div className={styles.galleryEnd} aria-hidden="true" />
             </div>
@@ -1044,7 +1251,24 @@ export function SocietyOverviewWorkspace({
             <div className={styles.peopleBlock}>
               <div className={styles.peopleBlockHeading}>
                 <h3>指导老师</h3>
-                <span>{String(advisors.length).padStart(2, "0")}</span>
+                <div className={styles.peopleBlockControls}>
+                  <span>{String(advisors.length).padStart(2, "0")}</span>
+                  {society ? (
+                    <button
+                      type="button"
+                      className={styles.sectionAddButton}
+                      onClick={() => openCreator({
+                        kind: "advisor",
+                        title: "新增指导老师",
+                        objectLabel: "人物 Object",
+                        cardTypeKey: "PersonCard",
+                      })}
+                    >
+                      <PlusIcon />
+                      新增指导老师
+                    </button>
+                  ) : null}
+                </div>
               </div>
               <div className={styles.peopleGrid}>
                 {advisors.length ? advisors.map((advisor) => {
@@ -1066,19 +1290,35 @@ export function SocietyOverviewWorkspace({
                       <div className={styles.cardActions}>
                         <button
                           type="button"
-                          onClick={() => openEditor(advisor, objectName(advisor, "指导老师"))}
+                          className={styles.labeledCardAction}
+                          onClick={() => openEditor(advisor, objectName(advisor, "指导老师"), "advisor")}
                           aria-label={`编辑${objectName(advisor, "指导老师")}的人物资料`}
                         >
                           <PencilIcon />
+                          编辑
                         </button>
-                        <button type="button" onClick={onOpenInspector} aria-label="打开指导老师高级视图">
+                        <button type="button" className={styles.labeledCardAction} onClick={onOpenInspector} aria-label="打开指导老师高级视图">
                           <ArrowUpRightIcon />
+                          高级
                         </button>
                       </div>
                     </article>
                   );
                 }) : (
-                  <EmptySlot compact eyebrow="指导老师" title="指导老师待补充" onActivate={() => promptToFill("指导老师")} />
+                  <EmptySlot
+                    compact
+                    eyebrow="指导老师"
+                    title="指导老师待补充"
+                    actionLabel={society ? "直接新增" : "用 Echo 补充"}
+                    onActivate={() => society
+                      ? openCreator({
+                          kind: "advisor",
+                          title: "新增指导老师",
+                          objectLabel: "人物 Object",
+                          cardTypeKey: "PersonCard",
+                        })
+                      : promptToFill("指导老师")}
+                  />
                 )}
               </div>
             </div>
@@ -1086,7 +1326,24 @@ export function SocietyOverviewWorkspace({
             <div className={styles.peopleBlock}>
               <div className={styles.peopleBlockHeading}>
                 <h3>干事队伍</h3>
-                <span>{String(teamMembers.length).padStart(2, "0")}</span>
+                <div className={styles.peopleBlockControls}>
+                  <span>{String(teamMembers.length).padStart(2, "0")}</span>
+                  {society ? (
+                    <button
+                      type="button"
+                      className={styles.sectionAddButton}
+                      onClick={() => openCreator({
+                        kind: "team",
+                        title: "新增干事成员",
+                        objectLabel: "人物 Object",
+                        cardTypeKey: "PersonCard",
+                      })}
+                    >
+                      <PlusIcon />
+                      新增干事
+                    </button>
+                  ) : null}
+                </div>
               </div>
               <div className={styles.peopleGrid}>
                 {teamMembers.length ? teamMembers.map((member) => {
@@ -1110,16 +1367,31 @@ export function SocietyOverviewWorkspace({
                       <div className={styles.cardActions}>
                         <button
                           type="button"
-                          onClick={() => openEditor(member, memberName)}
+                          className={styles.labeledCardAction}
+                          onClick={() => openEditor(member, memberName, "team")}
                           aria-label={`编辑${memberName}的人物资料`}
                         >
                           <PencilIcon />
+                          编辑
                         </button>
                       </div>
                     </article>
                   );
                 }) : (
-                  <EmptySlot compact eyebrow="干事队伍" title="干事成员待补充" onActivate={() => promptToFill("干事队伍，记录每位干事的姓名、部门和职位")} />
+                  <EmptySlot
+                    compact
+                    eyebrow="干事队伍"
+                    title="干事成员待补充"
+                    actionLabel={society ? "直接新增" : "用 Echo 补充"}
+                    onActivate={() => society
+                      ? openCreator({
+                          kind: "team",
+                          title: "新增干事成员",
+                          objectLabel: "人物 Object",
+                          cardTypeKey: "PersonCard",
+                        })
+                      : promptToFill("干事队伍，记录每位干事的姓名、部门和职位")}
+                  />
                 )}
               </div>
             </div>
@@ -1133,6 +1405,25 @@ export function SocietyOverviewWorkspace({
             <h2 id="society-join-title">下一场，等你上场。</h2>
             {description ? <p>{description}</p> : null}
           </header>
+
+          {society ? (
+            <div className={styles.platformToolbar}>
+              <span>{platforms.length} 个平台入口</span>
+              <button
+                type="button"
+                className={styles.sectionAddButton}
+                onClick={() => openCreator({
+                  kind: "platform",
+                  title: "新增平台入口",
+                  objectLabel: "平台 Object",
+                  cardTypeKey: "PlatformCard",
+                })}
+              >
+                <PlusIcon />
+                新增平台
+              </button>
+            </div>
+          ) : null}
 
           <div className={styles.platformGrid}>
             {platforms.length ? platforms.map((platform) => {
@@ -1158,22 +1449,37 @@ export function SocietyOverviewWorkspace({
                   <span>{accessInstructions ?? text(platform, "description") ?? (platformStatus === "UNKNOWN" ? "访问或加入方式待确认" : "查看平台信息")}</span>
                   <div className={styles.cardActions}>
                     {href ? (
-                      <a href={href} target="_blank" rel="noreferrer" aria-label={`打开${label}`}>
+                      <a className={styles.labeledCardAction} href={href} target="_blank" rel="noreferrer" aria-label={`打开${label}`}>
                         <ArrowUpRightIcon />
+                        打开
                       </a>
                     ) : null}
                     <button
                       type="button"
+                      className={styles.labeledCardAction}
                       onClick={() => openEditor(platform, label)}
                       aria-label={`直接编辑${label}`}
                     >
                       <PencilIcon />
+                      编辑
                     </button>
                   </div>
                 </article>
               );
             }) : (
-              <EmptySlot eyebrow="平台信息" title="加入方式与平台待补充" onActivate={() => promptToFill("加入方式和平台入口")} />
+              <EmptySlot
+                eyebrow="平台信息"
+                title="加入方式与平台待补充"
+                actionLabel={society ? "直接新增" : "用 Echo 补充"}
+                onActivate={() => society
+                  ? openCreator({
+                      kind: "platform",
+                      title: "新增平台入口",
+                      objectLabel: "平台 Object",
+                      cardTypeKey: "PlatformCard",
+                    })
+                  : promptToFill("加入方式和平台入口")}
+              />
             )}
           </div>
 
@@ -1198,9 +1504,26 @@ export function SocietyOverviewWorkspace({
           cardType={editorCardType}
           identityLabel={editorTarget.identityLabel}
           saving={editorSaving}
+          removing={editorRemoving}
           error={editorError}
+          removeLabel={editorRemoveLabel}
           onClose={closeEditor}
           onSave={(changes) => void saveEditor(changes)}
+          onRemove={editorRemoveLabel ? (reason) => void removeEditorCard(reason) : undefined}
+        />
+      ) : null}
+      {creatorTarget && creatorCardType ? (
+        <SocietyCardCreator
+          key={creatorTarget.kind}
+          kind={creatorTarget.kind}
+          title={creatorTarget.title}
+          objectLabel={creatorTarget.objectLabel}
+          dimensions={creatorDimensions}
+          excludedObjectIds={creatorExcludedObjectIds}
+          saving={creatorSaving}
+          error={creatorError}
+          onClose={closeCreator}
+          onCreate={(submission) => void createCard(submission)}
         />
       ) : null}
     </div>
