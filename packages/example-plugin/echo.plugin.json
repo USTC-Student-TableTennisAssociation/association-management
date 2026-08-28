@@ -23,6 +23,7 @@
     "skills": [
       "echo.example-notes.daily-planner"
     ],
+    "toolCapabilities": [],
     "tools": [
       "echo.example-calendar"
     ]

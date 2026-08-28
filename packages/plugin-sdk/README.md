@@ -2,7 +2,7 @@
 
 Echo Plugin 的公开 TypeScript 合同、描述文件 Schema 和 React hooks。
 
-> 当前是 `0.1.0-alpha.3` 预发布版，API 可能在后续 alpha 版调整。
+> 当前是 `0.1.0-alpha.5` 预发布版，API 可能在后续 alpha 版调整。
 
 ## 安装
 
@@ -38,6 +38,62 @@ export const notesPlugin = defineEchoPlugin({
   contributes: { views: [notesView] },
 });
 ```
+
+## Skill 执行契约
+
+Skill 是由 Chat Runtime 激活的专用 AI 工作流，不是可以直接修改数据的回调。
+它声明语义输入、执行指令、知识来源、可读 View 与精确到 Command 的写入范围。
+Runtime 负责校验依赖、注入指令、限制 Command，并把 `skillId` 记入 Proposal / Execution 审计链。
+
+```ts
+const dailyPlanner: SkillExtension = {
+  id: "echo.notes.daily-planner",
+  version: "1.0.0",
+  label: "每日计划",
+  description: "结合日历整理当日计划。",
+  inputSchema: zodContractSchema(z.object({ focus: z.string().optional() })),
+  instructions: "读取日历，核对当前 Notes View，再提交一则计划笔记。",
+  viewAccess: [{
+    viewKey: "notes",
+    schemaVersion: "1",
+    mode: "write",
+    commands: ["notes.create"],
+  }],
+  knowledge: [],
+  requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
+};
+```
+
+`mode: "write"` 同时允许读取目标 View，但只能执行 `commands` 中显式列出的
+Domain Command。跨 Plugin 读取 View 时，提供 Skill 的 Plugin 还应通过
+`EchoPluginManifest.requires` 声明对应 Plugin 版本依赖。
+
+## Tool 调用方边界
+
+Plugin 可以通过 `contributes.toolCapabilities` 持有 Capability Contract，
+并由 `contributes.tools` 中的 Provider 实现。每个 Contract 必须显式声明
+`allowedCallers`；只读并不等于可以暴露给 AI。
+
+```ts
+const internalSourceRead: ToolCapabilityContract = {
+  key: "competition.source.read",
+  version: "1.0.0",
+  description: "读取比赛源数据。",
+  semanticContract: "只返回比赛级数据，不返回个人身份。",
+  inputSchema,
+  outputSchema,
+  sideEffect: "none",
+  allowedCallers: ["view", "automation"],
+  requiredPermissions: ["tool.competition.source.read"],
+};
+```
+
+Runtime 会在执行时校验 `ToolContext.caller`。只有同时声明
+`allowedCallers: ["agent"]` 且无副作用的 Capability 才会进入 AI 对话 Toolset。
+
+View Command 同样必须声明 `allowedInitiators`。例如由 View 内部同步服务
+使用的 Command 应设为 `allowedInitiators: ["system"]`；Runtime 不会将它放入
+AI Actions，普通人工 Command API 也无法执行。
 
 ## View 修改语义与 AI 反应
 
@@ -89,6 +145,7 @@ Echo 的 Generic View 只提供一个可替换的默认呈现。
     "views": ["notes"],
     "presentations": [],
     "skills": [],
+    "toolCapabilities": [],
     "tools": []
   }
 }

@@ -4,10 +4,12 @@ import type {
   ExtensionKind,
   PresentationExtension,
   SkillExtension,
+  ToolCapabilityContract,
   ToolProviderExtension,
   ViewModule,
   ViewChangePolicy,
 } from "@/contracts";
+import { isVersionCompatible } from "@sydaris/plugin-sdk";
 
 const identifierPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const schemaIdentifierPattern = /^[A-Za-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*$/;
@@ -95,6 +97,19 @@ function validateViewModule(view: ViewModule): void {
   assertUnique(view.events.map((event) => `${event.key}@${event.version}`), "Event key/version", view.manifest.key);
 
   const cardTypeKeys = new Set(view.schema.cardTypes.map((card) => card.key));
+  for (const command of view.commands) {
+    if (command.allowedInitiators.length === 0) {
+      throw new ExtensionRegistrationError(
+        `Command ${command.key} 必须声明 allowedInitiators`,
+      );
+    }
+    assertUnique(command.allowedInitiators, "allowed initiator", command.key);
+    if (command.allowedInitiators.some((initiator) =>
+      !["human", "ai", "system"].includes(initiator)
+    )) {
+      throw new ExtensionRegistrationError(`Command ${command.key} allowedInitiators 不合法`);
+    }
+  }
   for (const card of view.schema.cardTypes) {
     requireSchemaIdentifier(`Card Type key (${view.manifest.key})`, card.key);
     assertUnique(card.dimensions.map((dimension) => dimension.key), "Dimension key", card.key);
@@ -148,6 +163,107 @@ function validateViewModule(view: ViewModule): void {
   }
 }
 
+function validateSkill(
+  skill: SkillExtension,
+  availableViews: ReadonlyMap<string, ViewModule>,
+): void {
+  if (!skill.label.trim()) {
+    throw new ExtensionRegistrationError(`Skill ${skill.id} label 不能为空`);
+  }
+  if (!skill.description.trim()) {
+    throw new ExtensionRegistrationError(`Skill ${skill.id} description 不能为空`);
+  }
+  if (!skill.instructions.trim()) {
+    throw new ExtensionRegistrationError(`Skill ${skill.id} instructions 不能为空`);
+  }
+  if (skill.instructions.length > 20_000) {
+    throw new ExtensionRegistrationError(`Skill ${skill.id} instructions 过长`);
+  }
+  const accessKeys = skill.viewAccess.map((access) => access.viewKey);
+  assertUnique(accessKeys, "View access", skill.id);
+  for (const access of skill.viewAccess) {
+    const view = availableViews.get(access.viewKey);
+    if (!view) {
+      throw new ExtensionRegistrationError(
+        `Skill ${skill.id} 引用了未注册 View：${access.viewKey}`,
+      );
+    }
+    if (view.manifest.schemaVersion !== access.schemaVersion) {
+      throw new ExtensionRegistrationError(
+        `Skill ${skill.id} 需要 ${access.viewKey} schemaVersion ${access.schemaVersion}，` +
+          `当前为 ${view.manifest.schemaVersion}`,
+      );
+    }
+    if (access.mode === "write") {
+      if (access.commands.length === 0) {
+        throw new ExtensionRegistrationError(
+          `Skill ${skill.id} 的可写 View ${access.viewKey} 必须声明 Commands`,
+        );
+      }
+      assertUnique(access.commands, "Command access", `${skill.id}/${access.viewKey}`);
+      const commandKeys = new Set(view.commands.map((command) => command.key));
+      const unknownCommands = access.commands.filter((command) => !commandKeys.has(command));
+      if (unknownCommands.length) {
+        throw new ExtensionRegistrationError(
+          `Skill ${skill.id} 引用了 ${access.viewKey} 未声明的 Commands：` +
+            unknownCommands.join(", "),
+        );
+      }
+      const nonAgentCommands = access.commands.filter((commandKey) =>
+        !view.commands.find((command) => command.key === commandKey)
+          ?.allowedInitiators.includes("ai")
+      );
+      if (nonAgentCommands.length) {
+        throw new ExtensionRegistrationError(
+          `Skill ${skill.id} 引用了不允许 AI 调用的 Commands：` +
+            nonAgentCommands.join(", "),
+        );
+      }
+    }
+  }
+  assertUnique(skill.knowledge, "Knowledge source", skill.id);
+  assertUnique(
+    skill.requiresCapabilities.map((requirement) => requirement.key),
+    "Capability requirement",
+    skill.id,
+  );
+  for (const requirement of skill.requiresCapabilities) {
+    requireIdentifier(`Skill ${skill.id} Capability key`, requirement.key);
+    if (!requirement.versions.trim()) {
+      throw new ExtensionRegistrationError(
+        `Skill ${skill.id} Capability ${requirement.key} 的 versions 不能为空`,
+      );
+    }
+  }
+}
+
+function validateToolCapability(contract: ToolCapabilityContract): void {
+  requireIdentifier("Tool Capability key", contract.key);
+  requireSemver(`Tool Capability ${contract.key} version`, contract.version);
+  if (!contract.description.trim()) {
+    throw new ExtensionRegistrationError(`Tool Capability ${contract.key} description 不能为空`);
+  }
+  if (!contract.semanticContract.trim()) {
+    throw new ExtensionRegistrationError(
+      `Tool Capability ${contract.key} semanticContract 不能为空`,
+    );
+  }
+  if (contract.allowedCallers.length === 0) {
+    throw new ExtensionRegistrationError(
+      `Tool Capability ${contract.key} 必须声明 allowedCallers`,
+    );
+  }
+  if (contract.allowedCallers.some((caller) =>
+    !["view", "automation", "agent"].includes(caller)
+  )) {
+    throw new ExtensionRegistrationError(
+      `Tool Capability ${contract.key} allowedCallers 不合法`,
+    );
+  }
+  assertUnique(contract.allowedCallers, "allowed caller", contract.key);
+  assertUnique(contract.requiredPermissions, "required permission", contract.key);
+}
+
 type Registered<T> = {
   pluginId: string;
   pluginVersion: string;
@@ -159,6 +275,7 @@ export class ExtensionRegistry {
   private readonly views = new Map<string, Registered<ViewModule>>();
   private readonly presentations = new Map<string, Registered<PresentationExtension>>();
   private readonly skills = new Map<string, Registered<SkillExtension>>();
+  private readonly toolCapabilities = new Map<string, Registered<ToolCapabilityContract>>();
   private readonly tools = new Map<string, Registered<ToolProviderExtension>>();
   private readonly activations = new Map<string, ExtensionActivation>();
 
@@ -168,13 +285,48 @@ export class ExtensionRegistry {
     if (this.plugins.has(plugin.id)) {
       throw new ExtensionRegistrationError(`Plugin 已注册：${plugin.id}`);
     }
+    for (const requirement of plugin.requires ?? []) {
+      const installed = this.plugins.get(requirement.pluginId);
+      if (!installed) {
+        throw new ExtensionRegistrationError(
+          `Plugin ${plugin.id} 需要先注册 ${requirement.pluginId}@${requirement.versions}`,
+        );
+      }
+      if (!isVersionCompatible(installed.version, requirement.versions)) {
+        throw new ExtensionRegistrationError(
+          `Plugin ${plugin.id} 需要 ${requirement.pluginId}@${requirement.versions}，` +
+            `当前为 ${installed.version}`,
+        );
+      }
+    }
 
     const additions: Array<{
       kind: ExtensionKind;
       id: string;
       extension: ViewModule | PresentationExtension | SkillExtension | ToolProviderExtension;
     }> = [];
-    for (const view of plugin.contributes.views ?? []) {
+    const pluginToolCapabilities = plugin.contributes.toolCapabilities ?? [];
+    const capabilityKeys = pluginToolCapabilities.map((contract) =>
+      `${contract.key}@${contract.version}`
+    );
+    assertUnique(capabilityKeys, "Tool Capability key/version", plugin.id);
+    for (const contract of pluginToolCapabilities) {
+      validateToolCapability(contract);
+      const key = `${contract.key}@${contract.version}`;
+      if (this.toolCapabilities.has(key)) {
+        throw new ExtensionRegistrationError(
+          `Tool Capability 已由其他 Plugin 注册：${key}`,
+        );
+      }
+    }
+    const pluginViews = plugin.contributes.views ?? [];
+    const availableViews = new Map<string, ViewModule>([
+      ...[...this.views.entries()].map(([viewKey, registered]) =>
+        [viewKey, registered.extension] as const
+      ),
+      ...pluginViews.map((view) => [view.manifest.key, view] as const),
+    ]);
+    for (const view of pluginViews) {
       validateViewModule(view);
       additions.push({ kind: "view", id: view.manifest.key, extension: view });
     }
@@ -191,6 +343,7 @@ export class ExtensionRegistry {
     for (const skill of plugin.contributes.skills ?? []) {
       requireIdentifier("Skill id", skill.id);
       requireSemver(`Skill ${skill.id} version`, skill.version);
+      validateSkill(skill, availableViews);
       additions.push({ kind: "skill", id: skill.id, extension: skill });
     }
     for (const tool of plugin.contributes.tools ?? []) {
@@ -210,6 +363,13 @@ export class ExtensionRegistry {
     }
 
     this.plugins.set(plugin.id, plugin);
+    for (const contract of pluginToolCapabilities) {
+      this.toolCapabilities.set(`${contract.key}@${contract.version}`, {
+        pluginId: plugin.id,
+        pluginVersion: plugin.version,
+        extension: contract,
+      });
+    }
     for (const addition of additions) {
       const registered = {
         pluginId: plugin.id,
@@ -256,6 +416,10 @@ export class ExtensionRegistry {
 
   listToolProviders(options: { includeDisabled?: boolean } = {}): readonly ToolProviderExtension[] {
     return this.list(this.tools, "tool", options);
+  }
+
+  listToolCapabilityContracts(): readonly ToolCapabilityContract[] {
+    return [...this.toolCapabilities.values()].map((registered) => registered.extension);
   }
 
   setEnabled(kind: ExtensionKind, extensionId: string, enabled: boolean): void {

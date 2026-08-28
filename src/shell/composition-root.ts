@@ -40,6 +40,9 @@ export const viewChangeCoordinator = new ViewChangeCoordinator({
 export function createToolRuntime(): ToolRuntime {
   const runtime = new ToolRuntime();
   builtinToolCapabilityContracts.forEach((contract) => runtime.registerContract(contract));
+  extensionRegistry.listToolCapabilityContracts().forEach((contract) =>
+    runtime.registerContract(contract)
+  );
   extensionRegistry.listToolProviders().forEach((provider) => runtime.registerProvider(provider));
   return runtime;
 }

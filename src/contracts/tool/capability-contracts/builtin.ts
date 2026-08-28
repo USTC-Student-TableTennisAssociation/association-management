@@ -29,6 +29,7 @@ export const builtinToolCapabilityContracts: readonly ToolCapabilityContract[] =
       })),
     })),
     sideEffect: "none",
+    allowedCallers: ["agent"],
     requiredPermissions: ["tool.calendar.read"],
   },
   {
@@ -44,6 +45,7 @@ export const builtinToolCapabilityContracts: readonly ToolCapabilityContract[] =
     })),
     outputSchema: zodContractSchema(z.object({ id: z.string(), created: z.boolean() })),
     sideEffect: "reversible",
+    allowedCallers: ["agent"],
     requiredPermissions: ["tool.calendar.write"],
     supportsDryRun: true,
   },
@@ -59,6 +61,7 @@ export const builtinToolCapabilityContracts: readonly ToolCapabilityContract[] =
     })),
     outputSchema: zodContractSchema(z.object({ messageId: z.string(), accepted: z.boolean() })),
     sideEffect: "external_irreversible",
+    allowedCallers: ["agent"],
     requiredPermissions: ["tool.email.send"],
     supportsDryRun: true,
   },
@@ -76,6 +79,7 @@ export const builtinToolCapabilityContracts: readonly ToolCapabilityContract[] =
       missingFields: z.array(z.string()),
     })),
     sideEffect: "none",
+    allowedCallers: ["agent"],
     requiredPermissions: ["tool.receipt.read"],
   },
   {
@@ -86,6 +90,7 @@ export const builtinToolCapabilityContracts: readonly ToolCapabilityContract[] =
     inputSchema: zodContractSchema(z.object({ artifact: artifactSchema })),
     outputSchema: zodContractSchema(z.object({ text: z.string(), truncated: z.boolean() })),
     sideEffect: "none",
+    allowedCallers: ["agent"],
     requiredPermissions: ["tool.document.read"],
   },
   {
@@ -100,6 +105,7 @@ export const builtinToolCapabilityContracts: readonly ToolCapabilityContract[] =
     })),
     outputSchema: zodContractSchema(z.object({ artifact: artifactSchema })),
     sideEffect: "reversible",
+    allowedCallers: ["agent"],
     requiredPermissions: ["tool.file.store"],
     supportsDryRun: true,
   },

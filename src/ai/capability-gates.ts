@@ -76,6 +76,10 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
   }) => Promise<unknown>;
   findArtifacts: (input: { title: string }) => Promise<unknown>;
   describeBusinessViewActions: (viewKey: string) => unknown;
+  authorizeAction?: (
+    area: ActionArea,
+    businessViewKey?: string,
+  ) => { allowed: boolean; reason?: string };
 }): ToolSet {
   return {
     openBusinessContext: tool({
@@ -118,6 +122,18 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
         reason: z.string().trim().min(1).max(300),
       }),
       execute: async ({ area, reason }) => {
+        const authorization = handlers.authorizeAction?.(
+          area,
+          state.businessViewKey,
+        );
+        if (authorization && !authorization.allowed) {
+          return {
+            opened: false,
+            area,
+            reason,
+            next: authorization.reason ?? "当前工作流不允许打开该 Action 区域。",
+          };
+        }
         if (area !== "library" && !state.businessContext) {
           return {
             opened: false,
@@ -147,6 +163,7 @@ export const TURN_KERNEL_INSTRUCTIONS = `
 你是 Echo 的主对话模型。请先理解用户这一轮真正要做什么，再决定是直接回答还是打开更多能力。
 
 - 问候、闲聊、改写、翻译、总结用户已给文字，以及不依赖 Echo 内部资料的任务，直接回答。
+- 用户明确点名某个已安装 Skill，或当前任务与 Skill 目标高度匹配时，先调用 activateSkill。Skill 激活后必须遵守其 View/Command 边界和专用指令；不得用普通对话模式绕过 Skill Runtime 的写入约束。
 - 需要理解 Echo 的业务状态、组织事实、人物或活动背景时，调用 openBusinessContext。该入口会立即返回正式 View 中的相关 Card 及其 Object Higher Memory；只有它明确不足时才 expandEvidence。
 - 需要按主题查找跨文件、跨对象的组织知识时，直接调用 searchMemory。文件标题搜索只证明文件是否存在，未执行 searchMemory 前不得声称 Shared Brain 没有相关 Object、Assertion 或主题知识。
 - searchMemory 必须区分任务形状：单一明确事实使用 fact；完整理解、名单/表格、资料梳理或多字段 View 填充使用 synthesis。一次 query 只表达一个内聚的信息需求；多字段 synthesis 可先定位主体，再针对尚未覆盖的字段分别窄查。返回 partial/truncated、列表中出现“等”、或读完某个章节，只证明该次选择已完成，不证明用户要求的完整集合已经穷尽。Reference Assertion 未回读来源前不能作为事实。

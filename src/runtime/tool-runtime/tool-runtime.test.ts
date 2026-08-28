@@ -14,6 +14,7 @@ function runtime() {
     inputSchema: zodContractSchema(z.object({ to: z.string().email(), body: z.string() })),
     outputSchema: zodContractSchema(z.object({ messageId: z.string() })),
     sideEffect: "external_irreversible",
+    allowedCallers: ["agent"],
     requiredPermissions: ["tool.email.send"],
   });
   return runtime;
@@ -33,11 +34,11 @@ describe("ToolRuntime", () => {
       capabilityKey: "email.send",
       capabilityVersion: "1.0.0",
       providerId: "gmail",
-      context: { permissions: ["tool.email.send"] },
+      context: { caller: { kind: "agent" }, permissions: ["tool.email.send"] },
       value: { to: "person@example.com", body: "Hello" },
     })).resolves.toEqual({ messageId: "message-1" });
     expect(execute).toHaveBeenCalledWith(
-      { permissions: ["tool.email.send"] },
+      { caller: { kind: "agent" }, permissions: ["tool.email.send"] },
       { to: "person@example.com", body: "Hello" },
     );
 
@@ -45,7 +46,7 @@ describe("ToolRuntime", () => {
       capabilityKey: "email.send",
       capabilityVersion: "1.0.0",
       providerId: "gmail",
-      context: { permissions: ["tool.email.send"] },
+      context: { caller: { kind: "agent" }, permissions: ["tool.email.send"] },
       value: { to: "not-an-email", body: "Hello" },
     })).rejects.toThrow();
   });
@@ -83,8 +84,30 @@ describe("ToolRuntime", () => {
       capabilityKey: "email.send",
       capabilityVersion: "1.0.0",
       providerId: "gmail",
-      context: { permissions: [] },
+      context: { caller: { kind: "agent" }, permissions: [] },
       value: { to: "person@example.com", body: "Hello" },
     })).rejects.toThrow(/permission|\u6743限/i);
+  });
+
+  it("enforces the declared caller boundary", async () => {
+    const subject = runtime();
+    subject.registerProvider({
+      id: "gmail",
+      version: "1.0.0",
+      implementations: [{
+        capability: { key: "email.send", version: "1.0.0" },
+        execute: async () => ({ messageId: "x" }),
+      }],
+    });
+    await expect(subject.execute({
+      capabilityKey: "email.send",
+      capabilityVersion: "1.0.0",
+      providerId: "gmail",
+      context: {
+        caller: { kind: "view", viewKey: "competition_records" },
+        permissions: ["tool.email.send"],
+      },
+      value: { to: "person@example.com", body: "Hello" },
+    })).rejects.toThrow(/不允许 view 调用/);
   });
 });

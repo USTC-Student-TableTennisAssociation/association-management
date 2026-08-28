@@ -12,6 +12,7 @@ import type {
   ViewInformationReference,
   ViewReferenceBundle,
 } from "@/agent-runtime/view-types";
+import type { AgentSkillSession } from "@/agent-runtime/skill-runtime";
 import { ViewCommandBus } from "@/view-runtime/application/command-bus";
 import { PrismaViewReadPort } from "@/view-runtime/application/view-read-port";
 import { ViewRuntimeError } from "@/view-runtime/domain/errors";
@@ -141,6 +142,7 @@ export function createAgentViewToolset(input: {
   registry: ExtensionRegistry;
   readPort: PrismaViewReadPort;
   commandBus: ViewCommandBus;
+  skillSession?: AgentSkillSession;
   onCommandAttempt?: () => void;
   onProposal?: (proposal: ViewCommandProposalNotice) => void;
   findExistingObjectsByCanonicalName?: (
@@ -159,11 +161,15 @@ export function createAgentViewToolset(input: {
   const describeCommands = (viewKey: string) => {
     const view = registry.getView(viewKey);
     if (!view) throw new ViewRuntimeError(`View ${viewKey} 未注册或未启用`);
+    const commands = view.commands.filter((command) =>
+      command.allowedInitiators.includes("ai") &&
+      (input.skillSession?.canRunCommand(viewKey, command.key) ?? true)
+    );
     return {
       viewKey,
       schemaVersion: view.manifest.schemaVersion,
       semanticInstructions: view.manifest.aiSemanticInstructions ?? null,
-      commands: view.commands.map((command) => ({
+      commands: commands.map((command) => ({
         commandKey: command.key,
         label: command.label,
         inputSchema: modelFacingCommandInputSchema(
@@ -276,6 +282,11 @@ export function createAgentViewToolset(input: {
   };
 
   const readView = (viewKey: string) => {
+    if (!(input.skillSession?.canReadView(viewKey) ?? true)) {
+      throw new ViewRuntimeError(
+        `已激活 Skill ${input.skillSession?.active()?.extension.id} 不允许读取 View ${viewKey}`,
+      );
+    }
     const existing = snapshots.get(viewKey);
     if (existing) return existing;
     const pending = readPort.query({ viewKey, actor: input.actor }).then((snapshot) => {
@@ -389,7 +400,8 @@ export function createAgentViewToolset(input: {
         for (const commandRequest of requests) {
           try {
             const snapshot = await readView(commandRequest.viewKey);
-            const availableCommands = registry.getView(commandRequest.viewKey)?.commands ?? [];
+            const availableCommands = (registry.getView(commandRequest.viewKey)?.commands ?? [])
+              .filter((candidate) => candidate.allowedInitiators.includes("ai"));
             const command = availableCommands.find((candidate) =>
               candidate.key === commandRequest.commandKey ||
               `${candidate.key}@${candidate.version}` === commandRequest.commandKey
@@ -398,6 +410,12 @@ export function createAgentViewToolset(input: {
               throw new ViewRuntimeError(
                 `View ${commandRequest.viewKey} 没有声明 Command ${commandRequest.commandKey}；` +
                   `可用 commandKey：${availableCommands.map((candidate) => candidate.key).join("、")}`,
+              );
+            }
+            if (!(input.skillSession?.canRunCommand(commandRequest.viewKey, command.key) ?? true)) {
+              throw new ViewRuntimeError(
+                `已激活 Skill ${input.skillSession?.active()?.extension.id} ` +
+                  `不允许调用 ${commandRequest.viewKey}.${command.key}`,
               );
             }
             const references = command.inputReferences ?? [];
@@ -411,6 +429,7 @@ export function createAgentViewToolset(input: {
               expectedStateVersion: snapshot.stateVersion,
               actor: input.actor,
               initiator: "ai",
+              skillId: input.skillSession?.active()?.extension.id,
             });
             results.push(result);
             if (result.kind === "proposed") {

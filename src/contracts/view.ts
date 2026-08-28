@@ -22,6 +22,7 @@ export type {
   KnowledgeProjectionDefinition,
   ObjectId,
   ProposalApprovalConflictPolicy,
+  ViewCommandInitiator,
   RelatedObjectPolicy,
   SemVer,
   SlotDefinition,

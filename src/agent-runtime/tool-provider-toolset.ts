@@ -27,7 +27,11 @@ export function createAgentToolProviderToolset(input: {
         implementation.capability.key,
         implementation.capability.version,
       );
-      if (!contract || contract.sideEffect !== "none") continue;
+      if (
+        !contract ||
+        contract.sideEffect !== "none" ||
+        !contract.allowedCallers.includes("agent")
+      ) continue;
       const name = toolName(provider.id, contract.key);
       if (tools[name]) {
         throw new Error(`全局 Tool 名称冲突：${name}`);
@@ -45,7 +49,10 @@ export function createAgentToolProviderToolset(input: {
           capabilityVersion: contract.version,
           providerId: provider.id,
           context: {
-            actorId: input.actor.actorId,
+            caller: {
+              kind: "agent",
+              ...(input.actor.actorId ? { actorId: input.actor.actorId } : {}),
+            },
             permissions: input.actor.permissions,
           },
           value,

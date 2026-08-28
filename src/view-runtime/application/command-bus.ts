@@ -91,6 +91,17 @@ function requirePermissions(actor: ActorContext, required: readonly string[]): v
   if (missing.length) throw new ViewRuntimeError(`缺少 View Command 权限：${missing.join(", ")}`);
 }
 
+function requireInitiator(
+  command: CommandDefinition,
+  initiator: Initiator,
+): void {
+  if (!command.allowedInitiators.includes(initiator)) {
+    throw new ViewRuntimeError(
+      `Command ${command.key} 不允许 ${initiator} 调用`,
+    );
+  }
+}
+
 function retryableStateConflict(error: unknown): error is ViewConflictError {
   return error instanceof ViewConflictError && error.message === "View stateVersion 已变化";
 }
@@ -169,6 +180,7 @@ export class ViewCommandBus {
     await this.installedViews.synchronize();
     const { viewModule, installed } = await runtimeView(this.database, this.registry, input.viewKey);
     const command = commandFor(viewModule, input.commandKey, input.commandVersion);
+    requireInitiator(command, input.initiator);
     requirePermissions(input.actor, command.requiredPermissions ?? []);
     const parsedInput = command.inputSchema.parse(input.input);
     const expected = input.expectedStateVersion === undefined
@@ -260,6 +272,7 @@ export class ViewCommandBus {
       const viewModule = this.registry.getView(proposal.viewKey);
       if (!viewModule) throw new ViewNotFoundError(proposal.viewKey);
       const command = commandFor(viewModule, proposal.commandKey, proposal.commandVersion);
+      requireInitiator(command, "ai");
       const parsedInput = command.inputSchema.parse(proposal.inputJson);
       const conflictPolicy = command.proposalApprovalConflictPolicy?.(parsedInput) ?? "exact";
       const commandInput = {
@@ -357,6 +370,7 @@ export class ViewCommandBus {
     const viewModule = this.registry.getView(input.viewKey);
     if (!viewModule) throw new ViewNotFoundError(input.viewKey);
     const command = commandFor(viewModule, input.commandKey, input.commandVersion);
+    requireInitiator(command, input.initiator);
     requirePermissions(input.actor, command.requiredPermissions ?? []);
     const parsedInput = command.inputSchema.parse(input.input);
     const requestedStateVersion = input.expectedStateVersion === undefined
