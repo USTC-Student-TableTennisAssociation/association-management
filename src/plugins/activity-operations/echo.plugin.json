@@ -1,19 +1,25 @@
 {
   "schemaVersion": 1,
   "id": "echo.activity-operations",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "engines": {
-    "echo": ">=0.1.0-alpha.1 <0.2.0-0"
+    "echo": ">=0.1.0-alpha.3 <0.2.0-0"
   },
   "server": {
-    "entry": "./manifest.ts",
+    "entry": "./dist/manifest.js",
     "export": "activityOperationsPlugin"
   },
   "contributes": {
     "views": [
       "activity_operations"
     ],
-    "presentations": [],
+    "presentations": [
+      {
+        "loader": "activity-operations/operations-workspace",
+        "entry": "./dist/presentation/activity-operations-workspace.js",
+        "export": "ActivityOperationsWorkspace"
+      }
+    ],
     "skills": [],
     "toolCapabilities": [],
     "tools": []

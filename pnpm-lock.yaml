@@ -128,6 +128,27 @@ importers:
         specifier: ^4.0.0
         version: 4.4.3
 
+  src/plugins/activity-operations:
+    devDependencies:
+      '@sydaris/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../../packages/plugin-sdk
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.43
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      react:
+        specifier: ^19.0.0
+        version: 19.2.4
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
+
   src/plugins/society-information:
     devDependencies:
       '@sydaris/plugin-sdk':

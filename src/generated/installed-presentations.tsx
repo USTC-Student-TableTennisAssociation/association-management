@@ -3,12 +3,14 @@
 
 import type { ComponentType } from "react";
 import type { WorkPresentationProps } from "@/view-runtime/presentation-host/work-presentation-host";
-import { SocietyOverviewWorkspace as installedPresentation0 } from "@/plugins/society-information/dist/presentation/society-overview-workspace";
-import { CompetitionRecordsWorkspace as installedPresentation1 } from "@/plugins/competition-records/presentation/competition-records-workspace";
+import { ActivityOperationsWorkspace as installedPresentation0 } from "@/plugins/activity-operations/dist/presentation/activity-operations-workspace";
+import { SocietyOverviewWorkspace as installedPresentation1 } from "@/plugins/society-information/dist/presentation/society-overview-workspace";
+import { CompetitionRecordsWorkspace as installedPresentation2 } from "@/plugins/competition-records/presentation/competition-records-workspace";
 
 export const installedPresentationComponents: Readonly<
   Record<string, ComponentType<WorkPresentationProps>>
 > = {
-  "society-information/immersive-overview": installedPresentation0,
-  "competition-records/workspace": installedPresentation1,
+  "activity-operations/operations-workspace": installedPresentation0,
+  "society-information/immersive-overview": installedPresentation1,
+  "competition-records/workspace": installedPresentation2,
 };

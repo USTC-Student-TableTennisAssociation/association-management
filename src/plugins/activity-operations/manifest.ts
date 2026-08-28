@@ -1,10 +1,15 @@
-import type { EchoPluginManifest } from "@/contracts";
-import { activityOperationsViewModule } from "@/plugins/activity-operations/view/schema";
+import { defineEchoPlugin } from "@sydaris/plugin-sdk";
 
-export const activityOperationsPlugin: EchoPluginManifest = {
+import { activityOperationsPresentation } from "./presentation/extension.js";
+import { activityOperationsViewModule } from "./view/schema.js";
+
+export const activityOperationsPlugin = defineEchoPlugin({
   id: "echo.activity-operations",
-  version: "1.0.0",
+  version: "1.2.0",
   contributes: {
     views: [activityOperationsViewModule],
+    presentations: [activityOperationsPresentation],
+    skills: [],
+    tools: [],
   },
-};
+});
