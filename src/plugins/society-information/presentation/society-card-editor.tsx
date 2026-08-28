@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
   CardTypeDefinition,
@@ -104,29 +104,10 @@ export function SocietyCardEditor({
     cardType.dimensions.map((dimension) => [dimension.key, fieldValue(card, dimension)]),
   ), [card, cardType]);
   const [values, setValues] = useState<Record<string, string>>(initialValues);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [closing, setClosing] = useState(false);
   const sheetRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    const previous = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : undefined;
-    const firstField = sheetRef.current?.querySelector<HTMLElement>("input, textarea, select");
-    firstField?.focus();
-    return () => previous?.focus();
-  }, [card.id]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || saving) return;
-      event.preventDefault();
-      onClose();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [onClose, saving]);
-
+  const closeTimerRef = useRef<number | undefined>(undefined);
   const changes = useMemo(() => Object.fromEntries(
     cardType.dimensions.flatMap((dimension) => {
       const before = initialValues[dimension.key] ?? "";
@@ -137,16 +118,79 @@ export function SocietyCardEditor({
   ) as SocietyDimensionChanges, [cardType.dimensions, initialValues, values]);
   const hasChanges = Object.keys(changes).length > 0;
 
+  const finishClose = useCallback(() => {
+    if (saving || closing) return;
+    setConfirmDiscard(false);
+    setClosing(true);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    closeTimerRef.current = window.setTimeout(onClose, reducedMotion ? 0 : 180);
+  }, [closing, onClose, saving]);
+
+  const requestClose = useCallback(() => {
+    if (saving || closing) return;
+    if (hasChanges) {
+      setConfirmDiscard(true);
+      return;
+    }
+    finishClose();
+  }, [closing, finishClose, hasChanges, saving]);
+
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : undefined;
+    const firstField = sheetRef.current?.querySelector<HTMLElement>("input, textarea, select");
+    firstField?.focus();
+    return () => previous?.focus();
+  }, [card.id]);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current !== undefined) window.clearTimeout(closeTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !saving) {
+        event.preventDefault();
+        if (confirmDiscard) setConfirmDiscard(false);
+        else requestClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const sheet = sheetRef.current;
+      if (!sheet) return;
+      const focusable = [...sheet.querySelectorAll<HTMLElement>(
+        "button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex='-1'])",
+      )].filter((element) => element.offsetParent !== null);
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (!first || !last) return;
+      if (event.shiftKey && (document.activeElement === first || !sheet.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !sheet.contains(document.activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [confirmDiscard, requestClose, saving]);
+
   return (
     <div
       className={styles.editorScrim}
+      data-closing={closing ? "true" : undefined}
       onPointerDown={(event) => {
-        if (event.target === event.currentTarget && !saving) onClose();
+        if (event.target === event.currentTarget && !saving) requestClose();
       }}
     >
       <section
         ref={sheetRef}
         className={styles.editorSheet}
+        data-closing={closing ? "true" : undefined}
         role="dialog"
         aria-modal="true"
         aria-labelledby="society-editor-title"
@@ -157,7 +201,7 @@ export function SocietyCardEditor({
             <h2 id="society-editor-title">编辑{identityLabel}</h2>
             <span>名称来自关联 Object；这里可以修改这张 Card 的全部正式字段。</span>
           </div>
-          <button type="button" onClick={onClose} disabled={saving} aria-label="关闭编辑面板">
+          <button type="button" onClick={requestClose} disabled={saving || closing} aria-label="关闭编辑面板">
             <CloseIcon />
           </button>
         </header>
@@ -191,17 +235,30 @@ export function SocietyCardEditor({
             ))}
           </div>
 
-          <div className={styles.editorFooter}>
-            <p role="status" aria-live="polite">
-              {error ?? (hasChanges ? "修改会立即写入正式 View，并保留审计记录。" : "尚未修改字段。")}
-            </p>
-            <div>
-              <button type="button" onClick={onClose} disabled={saving}>取消</button>
-              <button type="submit" disabled={!hasChanges || saving}>
-                {saving ? "正在保存…" : "保存修改"}
-              </button>
+          {confirmDiscard ? (
+            <div className={styles.discardPrompt} role="alert">
+              <div>
+                <strong>放弃未保存的修改？</strong>
+                <p>关闭后，本次填写的内容不会保留。</p>
+              </div>
+              <div>
+                <button type="button" autoFocus onClick={() => setConfirmDiscard(false)}>继续编辑</button>
+                <button type="button" onClick={finishClose}>放弃修改</button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className={styles.editorFooter}>
+              <p role="status" aria-live="polite">
+                {error ?? (hasChanges ? "修改会立即写入正式 View，并保留审计记录。" : "尚未修改字段。")}
+              </p>
+              <div>
+                <button type="button" onClick={requestClose} disabled={saving || closing}>取消</button>
+                <button type="submit" disabled={!hasChanges || saving || closing}>
+                  {saving ? "正在保存…" : "保存修改"}
+                </button>
+              </div>
+            </div>
+          )}
         </form>
       </section>
     </div>

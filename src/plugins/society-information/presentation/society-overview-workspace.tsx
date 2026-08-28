@@ -17,6 +17,7 @@ import {
 import type {
   EchoPresentationProps,
   EchoViewCommandResult,
+  EchoViewReaction,
   ViewCardState,
 } from "@sydaris/plugin-sdk";
 import {
@@ -28,6 +29,12 @@ import {
   SocietyCardEditor,
   type SocietyDimensionChanges,
 } from "./society-card-editor.js";
+import {
+  galleryEdges,
+  presentSocietyReaction,
+  projectedActivityIndex,
+  reactionsByCard,
+} from "./society-overview-state.js";
 import badgeImage from "./assets/ustctta-badge.svg";
 import heroImage from "./assets/hero-evening-hall.png";
 import wordmarkImage from "./assets/ustctta-wordmark.svg";
@@ -65,9 +72,12 @@ type ActivityDragSession = {
   centers: number[];
   span: number;
   order: string[];
+  activated: boolean;
+  deltaX: number;
+  lastX: number;
+  lastTime: number;
+  velocityX: number;
 };
-
-const OFFICIAL_PURPOSE = "服务科大乒乓球爱好者，促进科大乒乓球运动发展。";
 
 const frequencyLabels: Record<string, string> = {
   WEEKLY: "每周",
@@ -225,6 +235,41 @@ function EmptySlot({ eyebrow, title, onActivate, compact = false }: EmptySlotPro
   );
 }
 
+function ReactionNotice({
+  reaction,
+  expanded,
+  onToggle,
+  compact = false,
+}: {
+  reaction?: EchoViewReaction;
+  expanded: boolean;
+  onToggle: () => void;
+  compact?: boolean;
+}) {
+  const presentation = presentSocietyReaction(reaction);
+  if (!reaction || !presentation) return null;
+  return (
+    <div className={`${styles.reactionNotice} ${compact ? styles.compactReactionNotice : ""}`}>
+      <button
+        type="button"
+        className={styles.reactionStatus}
+        data-tone={presentation.tone}
+        aria-expanded={expanded}
+        disabled={!reaction.attention.message}
+        onClick={onToggle}
+      >
+        <EchoIcon />
+        {presentation.label}
+      </button>
+      {expanded && reaction.attention.message ? (
+        <div className={styles.reactionDetail} role="status">
+          <p>{reaction.attention.message}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function SocietyOverviewWorkspace({
   viewKey,
   refreshRevision = 0,
@@ -245,6 +290,7 @@ export function SocietyOverviewWorkspace({
   const [activityOrderSaving, setActivityOrderSaving] = useState(false);
   const [activityOrderStatus, setActivityOrderStatus] = useState<string>();
   const [expandedReactionId, setExpandedReactionId] = useState<string>();
+  const [galleryBoundary, setGalleryBoundary] = useState({ atStart: true, atEnd: true });
   const {
     reactions,
     refresh: refreshReactions,
@@ -256,6 +302,7 @@ export function SocietyOverviewWorkspace({
   const heroBadgeRef = useRef<HTMLDivElement>(null);
   const heroWordmarkRef = useRef<HTMLDivElement>(null);
   const activityGalleryRef = useRef<HTMLDivElement>(null);
+  const overviewContentRef = useRef<HTMLDivElement>(null);
   const activityDragSessionRef = useRef<ActivityDragSession | undefined>(undefined);
   const lastFocusedCardIdRef = useRef<string | undefined>(undefined);
   const [result, setResult] = useState<{
@@ -328,6 +375,40 @@ export function SocietyOverviewWorkspace({
   const objectName = useCallback((card: ViewCardState | undefined, fallback: string) =>
     card?.relatedObjectIds.map((id) => objectNames.get(id)).find(Boolean) ?? fallback,
   [objectNames]);
+  const reactionByCardId = useMemo(() => reactionsByCard(reactions), [reactions]);
+  const attentionReactions = useMemo(() => reactions.filter((reaction) => {
+    if (reaction.seenAt) return false;
+    const presentation = presentSocietyReaction(reaction);
+    return presentation && presentation.tone !== "verified";
+  }), [reactions]);
+
+  const toggleReaction = useCallback((reaction: EchoViewReaction) => {
+    setExpandedReactionId((current) => current === reaction.id ? undefined : reaction.id);
+    if (!reaction.seenAt) void markReactionSeen(reaction.id);
+  }, [markReactionSeen]);
+
+  const scrollToOverview = useCallback(() => {
+    overviewContentRef.current?.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "start",
+    });
+  }, []);
+
+  const openFirstAttentionReaction = useCallback(() => {
+    const reaction = attentionReactions[0];
+    if (!reaction) return;
+    const targetCardId = reaction.targets[0]?.cardId;
+    const target = targetCardId
+      ? document.getElementById(`society-card-${targetCardId}`) ??
+        document.getElementById("society-purpose-anchor")
+      : overviewContentRef.current;
+    target?.scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      block: "center",
+    });
+    setExpandedReactionId(reaction.attention.message ? reaction.id : undefined);
+    if (!reaction.seenAt) void markReactionSeen(reaction.id);
+  }, [attentionReactions, markReactionSeen]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -360,6 +441,7 @@ export function SocietyOverviewWorkspace({
       const lockupProgress = clamp(progress / 0.72);
       const surfaceProgress = clamp((progress - 0.24) / 0.48);
       const purposeProgress = clamp((progress - 0.43) / 0.36);
+      stage.toggleAttribute("data-past-intro", progress > 0.24);
       const badgeWidth = badge.offsetWidth;
       const wordmarkWidth = wordmark.offsetWidth;
       const finalBadgeWidth = clamp(stage.clientWidth * 0.044, 42, 52);
@@ -407,6 +489,31 @@ export function SocietyOverviewWorkspace({
   }, [snapshot]);
 
   useEffect(() => {
+    const gallery = activityGalleryRef.current;
+    if (!gallery) return;
+    let animationFrame = 0;
+    const update = () => {
+      animationFrame = 0;
+      const next = galleryEdges(gallery);
+      setGalleryBoundary((current) =>
+        current.atStart === next.atStart && current.atEnd === next.atEnd ? current : next
+      );
+    };
+    const schedule = () => {
+      if (!animationFrame) animationFrame = window.requestAnimationFrame(update);
+    };
+    const resizeObserver = new ResizeObserver(schedule);
+    resizeObserver.observe(gallery);
+    gallery.addEventListener("scroll", schedule, { passive: true });
+    schedule();
+    return () => {
+      if (animationFrame) window.cancelAnimationFrame(animationFrame);
+      resizeObserver.disconnect();
+      gallery.removeEventListener("scroll", schedule);
+    };
+  }, [activities.length]);
+
+  useEffect(() => {
     if (!focusCardId) {
       lastFocusedCardIdRef.current = undefined;
       return;
@@ -425,12 +532,16 @@ export function SocietyOverviewWorkspace({
 
   const scrollActivities = useCallback((direction: -1 | 1) => {
     const gallery = activityGalleryRef.current;
-    if (!gallery) return;
+    if (
+      !gallery ||
+      (direction < 0 && galleryBoundary.atStart) ||
+      (direction > 0 && galleryBoundary.atEnd)
+    ) return;
     gallery.scrollBy({
       left: gallery.clientWidth * 0.76 * direction,
       behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
     });
-  }, []);
+  }, [galleryBoundary]);
 
   const executeHumanCommand = useCallback(async (
     commandKey: string,
@@ -584,16 +695,33 @@ export function SocietyOverviewWorkspace({
       centers,
       span,
       order: [...effectiveActivityIds],
+      activated: false,
+      deltaX: 0,
+      lastX: event.clientX,
+      lastTime: performance.now(),
+      velocityX: 0,
     };
-    setActivityOrderStatus("拖动后松手即可保存顺序");
-    setActivityDrag({ cardId, startIndex, targetIndex: startIndex, deltaX: 0, span });
   }, [activityOrderSaving, effectiveActivityIds]);
 
   const moveActivityDrag = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     const session = activityDragSessionRef.current;
     if (!session || session.pointerId !== event.pointerId) return;
-    event.preventDefault();
     const deltaX = event.clientX - session.startX;
+    if (!session.activated && Math.abs(deltaX) < 10) return;
+    event.preventDefault();
+    if (!session.activated) {
+      session.activated = true;
+      setActivityOrderStatus("松手即可保存活动顺序");
+    }
+    const now = performance.now();
+    const elapsed = now - session.lastTime;
+    if (elapsed > 0) {
+      const measuredVelocity = (event.clientX - session.lastX) * 1_000 / elapsed;
+      session.velocityX = session.velocityX * 0.55 + measuredVelocity * 0.45;
+    }
+    session.deltaX = deltaX;
+    session.lastX = event.clientX;
+    session.lastTime = now;
     const projectedCenter = session.centers[session.startIndex] + deltaX;
     const targetIndex = session.centers.reduce((closest, center, index) =>
       Math.abs(center - projectedCenter) < Math.abs(session.centers[closest] - projectedCenter)
@@ -621,6 +749,17 @@ export function SocietyOverviewWorkspace({
     }
     activityDragSessionRef.current = undefined;
     setActivityDrag(undefined);
+    if (!session.activated) {
+      setActivityOrderStatus(undefined);
+      return;
+    }
+    const releaseVelocity = performance.now() - session.lastTime > 80 ? 0 : session.velocityX;
+    session.targetIndex = projectedActivityIndex({
+      centers: session.centers,
+      startIndex: session.startIndex,
+      deltaX: session.deltaX,
+      velocityX: releaseVelocity,
+    });
     if (cancelled || session.startIndex === session.targetIndex) {
       setActivityOrderStatus(cancelled ? "已取消活动排序" : undefined);
       return;
@@ -704,35 +843,11 @@ export function SocietyOverviewWorkspace({
   const societyName = society
     ? objectName(society, "中国科学技术大学学生乒乓球协会")
     : "中国科学技术大学学生乒乓球协会";
-  const purpose = text(society, "purpose") ?? OFFICIAL_PURPOSE;
+  const purpose = text(society, "purpose");
   const description = text(society, "description");
   const rating = text(society, "rating");
   const foundedOn = text(society, "founded_on");
-  const ratingReaction = society ? reactions.find((reaction) =>
-    reaction.targets.some((target) =>
-      target.kind === "dimension" &&
-      target.cardId === society.id &&
-      target.dimensionKey === "rating"
-    )
-  ) : undefined;
-  const reactionPresentation = ratingReaction
-    ? ratingReaction.attention.status === "queued" || ratingReaction.attention.status === "running"
-      ? { label: "Echo 正在核对", tone: "checking" }
-      : ratingReaction.attention.status === "silent"
-      ? { label: "已核对", tone: "verified" }
-      : ratingReaction.attention.status === "inform"
-      ? { label: "Echo 有一条说明", tone: "inform" }
-      : ratingReaction.attention.status === "needs_confirmation"
-      ? { label: "需要确认", tone: "attention" }
-      : ratingReaction.attention.status === "failed"
-      ? { label: "核对暂不可用", tone: "failed" }
-      : undefined
-    : undefined;
-  const showReactionDetail = Boolean(
-    ratingReaction &&
-    expandedReactionId === ratingReaction.id &&
-    ratingReaction.attention.message,
-  );
+  const societyReaction = society ? reactionByCardId.get(society.id) : undefined;
   const promptToFill = (topic: string) => onAskAI(
     `请先读取 ${viewKey} 当前状态，帮我补充${topic}。以 synthesis 方式从 Shared Brain 与高价值原文中整理已有资料，先完整提交一版待审批草稿；可选细节不确定可以留空或明确标注推断，只有正式 Object 有歧义、当前状态冲突或必要字段无法确定时才询问，再只使用已声明的 society Commands 提交。`,
   );
@@ -772,41 +887,21 @@ export function SocietyOverviewWorkspace({
 
             <section id="society-purpose-anchor" className={styles.purposeScene} aria-labelledby="society-purpose-title">
               <p>我们的宗旨</p>
-              <h2 id="society-purpose-title">{purpose}</h2>
+              <h2 id="society-purpose-title" data-empty={purpose ? undefined : "true"}>
+                {purpose ?? "宗旨待补充"}
+              </h2>
               {description ? <p className={styles.purposeDescription}>{description}</p> : null}
               {rating || foundedOn ? (
                 <div className={styles.purposeFacts}>
-                  {rating ? (
-                    <span className={styles.ratingFact}>
-                      {rating}
-                      {reactionPresentation && ratingReaction ? (
-                        <button
-                          type="button"
-                          className={styles.reactionStatus}
-                          data-tone={reactionPresentation.tone}
-                          aria-expanded={Boolean(showReactionDetail)}
-                          disabled={!ratingReaction.attention.message}
-                          onClick={() => {
-                            setExpandedReactionId((current) =>
-                              current === ratingReaction.id ? undefined : ratingReaction.id
-                            );
-                            if (!ratingReaction.seenAt) void markReactionSeen(ratingReaction.id);
-                          }}
-                        >
-                          <EchoIcon />
-                          {reactionPresentation.label}
-                        </button>
-                      ) : null}
-                    </span>
-                  ) : null}
+                  {rating ? <span>{rating}</span> : null}
                   {foundedOn ? <span>{foundedLabel(foundedOn)}</span> : null}
                 </div>
               ) : null}
-              {showReactionDetail && ratingReaction?.attention.message ? (
-                <div className={styles.reactionDetail} role="status">
-                  <p>{ratingReaction.attention.message}</p>
-                </div>
-              ) : null}
+              <ReactionNotice
+                reaction={societyReaction}
+                expanded={expandedReactionId === societyReaction?.id}
+                onToggle={() => societyReaction && toggleReaction(societyReaction)}
+              />
               {society ? (
                 <button
                   type="button"
@@ -819,16 +914,25 @@ export function SocietyOverviewWorkspace({
               ) : null}
             </section>
 
-            <div className={styles.scrollCue} aria-hidden="true"><DownArrowIcon /></div>
+            <button type="button" className={styles.scrollCue} onClick={scrollToOverview}>
+              <span>直接查看概览</span>
+              <DownArrowIcon />
+            </button>
           </div>
         </section>
 
-        <div className={styles.lightStory}>
-          <div className={styles.brandRail} aria-hidden="true">
-            <div className={styles.contentBrand}>
+        <div ref={overviewContentRef} id="society-overview-content" className={styles.lightStory}>
+          <div className={styles.brandRail}>
+            <div className={styles.contentBrand} aria-hidden="true">
               <Image src={badgeImage} alt="" width={52} height={55} />
               <Image src={wordmarkImage} alt="" width={890} height={84} />
             </div>
+            {attentionReactions.length ? (
+              <button type="button" className={styles.reactionInbox} onClick={openFirstAttentionReaction}>
+                <EchoIcon />
+                {attentionReactions.length} 项待查看
+              </button>
+            ) : null}
           </div>
 
           <section className={styles.activitiesSection} aria-labelledby="society-activities-title">
@@ -842,10 +946,10 @@ export function SocietyOverviewWorkspace({
                   {activityOrderStatus ?? (activities.length > 1 ? "拖动卡片手柄调整顺序" : "")}
                 </span>
                 <div className={styles.galleryControls}>
-                  <button type="button" aria-label="查看上一项活动" disabled={!activities.length} onClick={() => scrollActivities(-1)}>
+                  <button type="button" aria-label="查看上一项活动" disabled={!activities.length || galleryBoundary.atStart} onClick={() => scrollActivities(-1)}>
                     <ChevronIcon direction="left" />
                   </button>
-                  <button type="button" aria-label="查看下一项活动" disabled={!activities.length} onClick={() => scrollActivities(1)}>
+                  <button type="button" aria-label="查看下一项活动" disabled={!activities.length || galleryBoundary.atEnd} onClick={() => scrollActivities(1)}>
                     <ChevronIcon direction="right" />
                   </button>
                 </div>
@@ -862,6 +966,7 @@ export function SocietyOverviewWorkspace({
                   statusLabels[status] ?? status,
                 ].filter(Boolean).join(" · ");
                 const activityName = objectName(activity, "长期活动");
+                const activityReaction = reactionByCardId.get(activity.id);
                 return (
                   <article
                     id={`society-card-${activity.id}`}
@@ -893,6 +998,12 @@ export function SocietyOverviewWorkspace({
                         </button>
                       </div>
                     </div>
+                    <ReactionNotice
+                      compact
+                      reaction={activityReaction}
+                      expanded={expandedReactionId === activityReaction?.id}
+                      onToggle={() => activityReaction && toggleReaction(activityReaction)}
+                    />
                     <h3>{activityName}</h3>
                     <div className={styles.activityCardBottom}>
                       <p>{text(activity, "description") ?? "活动介绍待补充。"}</p>
@@ -936,28 +1047,37 @@ export function SocietyOverviewWorkspace({
                 <span>{String(advisors.length).padStart(2, "0")}</span>
               </div>
               <div className={styles.peopleGrid}>
-                {advisors.length ? advisors.map((advisor) => (
-                  <article
-                    id={`society-card-${advisor.id}`}
-                    key={advisor.id}
-                    className={`${styles.personCard} ${focusCardId === advisor.id ? styles.focusedCard : ""}`}
-                  >
-                    <p>指导老师</p>
-                    <h4>{objectName(advisor, "姓名待补充")}</h4>
-                    <div className={styles.cardActions}>
-                      <button
-                        type="button"
-                        onClick={() => openEditor(advisor, objectName(advisor, "指导老师"))}
-                        aria-label={`编辑${objectName(advisor, "指导老师")}的人物资料`}
-                      >
-                        <PencilIcon />
-                      </button>
-                      <button type="button" onClick={onOpenInspector} aria-label="打开指导老师高级视图">
-                        <ArrowUpRightIcon />
-                      </button>
-                    </div>
-                  </article>
-                )) : (
+                {advisors.length ? advisors.map((advisor) => {
+                  const advisorReaction = reactionByCardId.get(advisor.id);
+                  return (
+                    <article
+                      id={`society-card-${advisor.id}`}
+                      key={advisor.id}
+                      className={`${styles.personCard} ${focusCardId === advisor.id ? styles.focusedCard : ""}`}
+                    >
+                      <p>指导老师</p>
+                      <ReactionNotice
+                        compact
+                        reaction={advisorReaction}
+                        expanded={expandedReactionId === advisorReaction?.id}
+                        onToggle={() => advisorReaction && toggleReaction(advisorReaction)}
+                      />
+                      <h4>{objectName(advisor, "姓名待补充")}</h4>
+                      <div className={styles.cardActions}>
+                        <button
+                          type="button"
+                          onClick={() => openEditor(advisor, objectName(advisor, "指导老师"))}
+                          aria-label={`编辑${objectName(advisor, "指导老师")}的人物资料`}
+                        >
+                          <PencilIcon />
+                        </button>
+                        <button type="button" onClick={onOpenInspector} aria-label="打开指导老师高级视图">
+                          <ArrowUpRightIcon />
+                        </button>
+                      </div>
+                    </article>
+                  );
+                }) : (
                   <EmptySlot compact eyebrow="指导老师" title="指导老师待补充" onActivate={() => promptToFill("指导老师")} />
                 )}
               </div>
@@ -971,6 +1091,7 @@ export function SocietyOverviewWorkspace({
               <div className={styles.peopleGrid}>
                 {teamMembers.length ? teamMembers.map((member) => {
                   const memberName = objectName(member, "姓名待补充");
+                  const memberReaction = reactionByCardId.get(member.id);
                   return (
                     <article
                       id={`society-card-${member.id}`}
@@ -978,6 +1099,12 @@ export function SocietyOverviewWorkspace({
                       className={`${styles.personCard} ${styles.memberCard} ${focusCardId === member.id ? styles.focusedCard : ""}`}
                     >
                       <p>{text(member, "department") ?? "部门待补充"}</p>
+                      <ReactionNotice
+                        compact
+                        reaction={memberReaction}
+                        expanded={expandedReactionId === memberReaction?.id}
+                        onToggle={() => memberReaction && toggleReaction(memberReaction)}
+                      />
                       <h4>{memberName}</h4>
                       <span className={styles.memberPosition}>{text(member, "position") ?? "职位待补充"}</span>
                       <div className={styles.cardActions}>
@@ -1013,6 +1140,7 @@ export function SocietyOverviewWorkspace({
               const label = objectName(platform, text(platform, "platform_type") ?? "平台入口");
               const platformStatus = text(platform, "status") ?? "UNKNOWN";
               const accessInstructions = text(platform, "access_instructions");
+              const platformReaction = reactionByCardId.get(platform.id);
               const className = `${styles.platformCard} ${focusCardId === platform.id ? styles.focusedCard : ""}`;
               return (
                 <article id={`society-card-${platform.id}`} key={platform.id} className={className}>
@@ -1020,6 +1148,12 @@ export function SocietyOverviewWorkspace({
                     {text(platform, "platform_type") ?? "平台入口"}
                     {platformStatus === "ACTIVE" ? "" : ` · ${platformStatusLabels[platformStatus] ?? platformStatus}`}
                   </p>
+                  <ReactionNotice
+                    compact
+                    reaction={platformReaction}
+                    expanded={expandedReactionId === platformReaction?.id}
+                    onToggle={() => platformReaction && toggleReaction(platformReaction)}
+                  />
                   <h3>{label}</h3>
                   <span>{accessInstructions ?? text(platform, "description") ?? (platformStatus === "UNKNOWN" ? "访问或加入方式待确认" : "查看平台信息")}</span>
                   <div className={styles.cardActions}>
