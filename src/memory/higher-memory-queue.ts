@@ -81,6 +81,7 @@ export function addObjectTargetsToQueueDecision(input: {
 export function createHigherMemoryQueueTool(input: {
   trace?: EchoDebugTrace;
   hasObject?: (globalObjectId: string) => boolean;
+  canQueueAmbient?: () => boolean;
 }) {
   let decision: HigherMemoryQueueDecision | undefined;
 
@@ -92,6 +93,7 @@ export function createHigherMemoryQueueTool(input: {
       "object 目标必须原样使用本轮工具实际返回的 GlobalObject database id。",
       "这只登记静默维护意图；后台会在 Chat Assertion 阶段完整结束后取得主对话的完整语义上下文并开始维护。",
       "普通检索命中、顺带提及、问候、一次性细节或没有形成新的高层理解时不要调用。",
+      "Echo 的昵称、语气、亲密称呼和单个用户的私人偏好不属于共享 Ambient scope；不要用本工具伪造 Actor 私有记忆或改变产品品牌。",
       "首次实质性讨论可以创建缺失的 identity/narrative/working_set Higher Memory。每轮至多调用一次，不要向用户宣称维护已经完成。",
     ].join(""),
     inputSchema: z.object({
@@ -127,6 +129,15 @@ export function createHigherMemoryQueueTool(input: {
             unknownObjectIds.join(", "),
         };
       }
+      const ambientTargets = uniqueTargets.filter((target) => target.scope !== "object");
+      if (ambientTargets.length && input.canQueueAmbient && !input.canQueueAmbient()) {
+        return {
+          queued: false,
+          alreadyQueued: false,
+          message:
+            "本轮尚未读取足以支持 Ambient Higher Memory 的正式 View、Grounded Assertion、Source 或既有 Higher Memory；请先取得真实证据，证据仍不足时不要为了填空而维护。",
+        };
+      }
       decision = { targets: uniqueTargets, reason };
       const labels = decision.targets.map((target) =>
         target.scope === "object"
@@ -148,7 +159,7 @@ export function createHigherMemoryQueueTool(input: {
       return {
         queued: true,
         alreadyQueued: false,
-        message: "已登记回答后的 Higher Memory 维护意图；请继续完成正常回答。",
+        message: "已登记回答后的 Higher Memory 维护意图；后台尚未执行，不能向用户声称已经更新。请继续完成正常回答。",
       };
     },
   });

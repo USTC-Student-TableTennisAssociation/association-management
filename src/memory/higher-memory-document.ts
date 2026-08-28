@@ -26,14 +26,56 @@ export const operationalMemoryIndexSchema = z.object({
 export type CognitiveMemory = z.infer<typeof cognitiveMemorySchema>;
 export type OperationalMemoryIndex = z.infer<typeof operationalMemoryIndexSchema>;
 
+const rawContactPatterns = [
+  /(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)/gu,
+  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu,
+];
+
+export function redactHigherMemoryContactDetails(value: string): string {
+  return rawContactPatterns.reduce(
+    (redacted, pattern) =>
+      redacted.replace(pattern, "[原始联系方式已省略；需要时读取权威来源]"),
+    value,
+  );
+}
+
+export function sanitizeCognitiveMemory(
+  memory: CognitiveMemory,
+): CognitiveMemory {
+  return {
+    identityAndBoundaries: redactHigherMemoryContactDetails(memory.identityAndBoundaries),
+    narrativeAndMeaning: redactHigherMemoryContactDetails(memory.narrativeAndMeaning),
+    structuralModel: redactHigherMemoryContactDetails(memory.structuralModel),
+    operatingModel: redactHigherMemoryContactDetails(memory.operatingModel),
+    currentSituation: redactHigherMemoryContactDetails(memory.currentSituation),
+    openQuestions: memory.openQuestions.map(redactHigherMemoryContactDetails),
+  };
+}
+
+export function sanitizeOperationalMemoryIndex(
+  index: OperationalMemoryIndex,
+): OperationalMemoryIndex {
+  return {
+    aspects: index.aspects.map((aspect) => ({
+      ...aspect,
+      key: redactHigherMemoryContactDetails(aspect.key),
+      label: redactHigherMemoryContactDetails(aspect.label),
+      summary: redactHigherMemoryContactDetails(aspect.summary),
+      sourceTitles: aspect.sourceTitles.map(redactHigherMemoryContactDetails),
+      recommendedQueries: aspect.recommendedQueries.map(redactHigherMemoryContactDetails),
+      unresolvedAspects: aspect.unresolvedAspects.map(redactHigherMemoryContactDetails),
+    })),
+  };
+}
+
 export const emptyOperationalMemoryIndex = (): OperationalMemoryIndex => ({ aspects: [] });
 
 export function parseCognitiveMemory(value: unknown): CognitiveMemory {
-  return cognitiveMemorySchema.parse(value);
+  return sanitizeCognitiveMemory(cognitiveMemorySchema.parse(value));
 }
 
 export function parseOperationalMemoryIndex(value: unknown): OperationalMemoryIndex {
-  return operationalMemoryIndexSchema.parse(value);
+  return sanitizeOperationalMemoryIndex(operationalMemoryIndexSchema.parse(value));
 }
 
 export function renderCognitiveMemory(memory: CognitiveMemory): string {

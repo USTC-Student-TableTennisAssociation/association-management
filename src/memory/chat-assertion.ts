@@ -482,7 +482,7 @@ function extractionPrompt(
     "严格遵循用户原话，采用最小规范化，不要为了正式、顺畅或好看而润色事实。只允许用经用户原话支撑的 Object 占位符补全省略主语、展开明确的时间缩写、删除不改变事实的会话语气，以及做不改变含义的必要语法拼接。不得改变谓词、事实强度、因果、范围、确定程度、时态或状态类型；不确定是否忠实时，宁可不输出。",
     "转述来源属于事实强度，必须保留说话者或转述限定，不能把有来源的说法提升成无来源限定的确定事实。",
     "保留计划、预计、建议、观察、可能等确定程度。用户用陈述句说某件事‘可能’发生、时间‘大概’如此、地点‘尚未确定/待定’，是在陈述带有认识不确定性或未决状态的事实，可以安全发布，但 Assertion 必须逐字保留这些限定；不能因为存在‘可能’就提交空结果。只有‘如果/假设/要是……’等条件推演、提问或头脑风暴才属于不可发布的假设。",
-    "不要提取问题、条件假设、头脑风暴、操作指令、纯闲聊；不要把带有历史时间范围的状态改写成现在仍有效。相对时间以给定服务器时间解释，但 submittedAt 只是审计时间，不是命题有效期。",
+    "不要提取问题、条件假设、头脑风暴、操作指令、纯闲聊；只属于当前 Actor 的助手昵称、用户称呼、语言、回复风格、格式、互动边界或私人工作偏好也不是共享组织事实，必须留给 Actor 私有记忆，不能发布为 Assertion、不能连接 conversationActorObject。不要把带有历史时间范围的状态改写成现在仍有效。相对时间以给定服务器时间解释，但 submittedAt 只是审计时间，不是命题有效期。",
     "完成搜索和判断后必须单独调用 submitChatAssertionExtraction，不要在普通文本中输出 JSON，也不要把提交与搜索工具放在同一次响应中。提交参数顶层只能是 objects、surfaceCorrections、assertions；没有安全纠正时 surfaceCorrections=[]。Assertion 每项字段严格为 globalStatementTemplateMarkdown、objectRefs、evidence；evidence 每项严格为 messageId、quotes。",
     JSON.stringify({
       queueDecision: input.queueDecision,

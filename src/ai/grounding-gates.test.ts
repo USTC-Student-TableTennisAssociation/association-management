@@ -267,6 +267,64 @@ describe("grounding gates", () => {
     expect(result.text).not.toContain("流程非常复杂");
   });
 
+  it("removes an unsupported promise to remember a conversational preference", () => {
+    const result = auditGroundedAnswer({
+      text: "好的，我会记住这项偏好，以后都会按这种格式回答。当前对话里可以继续这样做。",
+      contract: contract(),
+      validRefs: [],
+    });
+
+    expect(result.mode).toBe("redacted");
+    expect(result.issues).toContain("unsupported_memory_commitment");
+    expect(result.text).toContain("没有完成可验证的长期记忆写入");
+    expect(result.text).toContain("当前对话里可以继续这样做");
+    expect(result.text).not.toContain("我会记住这个偏好");
+  });
+
+  it("removes unsupported claims about cross-user nickname scope", () => {
+    const result = auditGroundedAnswer({
+      text: "这是你给我的专属称呼。面对其他人时，我仍使用默认身份。你在当前对话里可以这样叫我。",
+      contract: contract(),
+      validRefs: [],
+    });
+
+    expect(result.mode).toBe("redacted");
+    expect(result.issues).toContain("unsupported_actor_scoped_personalization");
+    expect(result.text).toContain("没有已验证的 Actor 私有 Higher Memory");
+    expect(result.text).toContain("当前对话里可以这样叫我");
+    expect(result.text).not.toContain("面对其他人时");
+  });
+
+  it("keeps Actor-scoped personalization after an exact private preference commit", () => {
+    const text = "这是你给我的专属称呼，只对你生效。";
+    expect(auditGroundedAnswer({
+      text,
+      contract: contract(),
+      validRefs: [],
+      memoryWriteCommitted: true,
+      actorPrivateMemoryGrounded: true,
+    })).toEqual({ text, changed: false, mode: "passed", issues: [] });
+  });
+
+  it("keeps a verified foreground memory commitment", () => {
+    const text = "我已经记住这项经过验证的组织事实。";
+    expect(auditGroundedAnswer({
+      text,
+      contract: contract(),
+      validRefs: [],
+      memoryWriteCommitted: true,
+    })).toEqual({ text, changed: false, mode: "passed", issues: [] });
+  });
+
+  it("does not confuse a completed Business View save with a memory commitment", () => {
+    const text = "我已保存活动 Card，并生成了对应的正式业务状态。";
+    expect(auditGroundedAnswer({
+      text,
+      contract: contract(),
+      validRefs: [],
+    })).toEqual({ text, changed: false, mode: "passed", issues: [] });
+  });
+
   it("does not replace a Business View action result with the empty-state answer", () => {
     const state = new GroundingState("请帮我在业务视角里创建这个条目");
     state.observeBusinessContext(emptyBusinessContext(["场地申请"]));

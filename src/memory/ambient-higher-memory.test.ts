@@ -113,6 +113,13 @@ describe("ambient Higher Memory", () => {
     expect(context).toContain("Object–Assertion 图");
   });
 
+  it("always explains the architecture and explicit empty Ambient state", () => {
+    const context = buildAmbientHigherMemoryContext([]);
+    expect(context).toContain("本轮没有加载到 identity、narrative 或 working_set");
+    expect(context).toContain("不代表 Higher Memory 架构不存在");
+    expect(context).toContain("Object Higher Memory");
+  });
+
   it("uses the real dialogue context without requiring another search and upserts both scopes", async () => {
     await expect(maintainAmbientHigherMemories(input())).resolves.toBe(2);
 

@@ -189,6 +189,9 @@ describe("packContext", () => {
     expect(result.system).not.toContain("Locate");
     expect(result.system).not.toContain("资料不足");
     expect(result.report.estimatedTokens.memory).toBe(0);
+    expect(result.system).toContain("本轮没有加载到 identity、narrative 或 working_set");
+    expect(result.system).toContain("没有一个关于 Echo 自身的 Object Higher Memory");
+    expect(result.system).toContain("不等于“Echo 没有 Higher Memory”");
   });
 
   it("always includes environment identity and working set before any search", () => {
@@ -212,6 +215,27 @@ describe("packContext", () => {
     expect(result.system).toContain("Shared Working Set");
     expect(result.system).toContain("近期主要在准备一场比赛");
     expect(result.system).not.toContain("本轮 Object–Assertion Locate");
+  });
+
+  it("automatically loads only the current Actor's natural-language Higher Memory", () => {
+    const result = packContext({
+      messages: [message("user", "你好")],
+      retrieval: retrieval(),
+      profile: roomyProfile,
+      memoryState: "not-searched",
+      actorPrivateMemory: {
+        higherMemories: [{
+          scope: "interaction",
+          contentMarkdown: "当前用户希望 Echo 在回答不确定问题时先说明证据边界。",
+          maintainedAt: "2026-08-27T00:00:00.000Z",
+        }],
+      },
+    });
+
+    expect(result.system).toContain("当前 Actor 的私有长期记忆");
+    expect(result.system).toContain("当前用户希望 Echo 在回答不确定问题时先说明证据边界");
+    expect(result.system).toContain("不得向其他 Actor 暴露");
+    expect(result.system).toContain("Interaction Context");
   });
 
   it("reports component estimates and a consistent total", () => {

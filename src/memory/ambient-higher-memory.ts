@@ -87,7 +87,6 @@ export async function loadAmbientHigherMemories(): Promise<AmbientHigherMemorySn
 export function buildAmbientHigherMemoryContext(
   memories: AmbientHigherMemorySnapshot[],
 ): string {
-  if (!memories.length) return "";
   const byScope = new Map(memories.map((memory) => [memory.scope, memory]));
   const sections = ambientHigherMemoryScopes.flatMap((scope) => {
     const memory = byScope.get(scope);
@@ -106,12 +105,14 @@ export function buildAmbientHigherMemoryContext(
   });
   return [
     "## Echo 自动加载的 Ambient Higher Memory",
+    memories.length
+      ? `运行状态：本轮已加载 ${memories.length} 个 Ambient scope（${memories.map((memory) => memory.scope).join("、")}）。`
+      : "运行状态：本轮没有加载到 identity、narrative 或 working_set 内容。这只表示当前没有可用于本轮的 Ambient Higher Memory，不代表 Higher Memory 架构不存在，也不代表 Echo 只拥有 Object Higher Memory。",
     "以下内容是 Echo 在过去真实互动和正式证据中形成的高层环境理解，本轮无需先搜索即可用于进入状态。已存在的 Environment Identity 是有来源的环境默认值，不应在每轮重新退回‘环境类型未知’；只有权威新证据冲突时才修正。",
     "它不是精确业务状态的权威来源，也不代表下列内容截至今天仍全部有效。用户询问精确当前状态、要求来源或准备执行动作时，应读取正式 Business View 或按需检索。",
     "Ambient scope 描述跨单一 Object 的共享环境认知。具体 Object 的事实及关系留在 Object–Assertion 图和 Object Higher Memory 中，不得仅因被讨论就提升为 Ambient。",
     "Ambient Higher Memory 没有 H# 引用标记，不得伪造引用。",
-    "",
-    sections.join("\n\n"),
+    ...(sections.length ? ["", sections.join("\n\n")] : []),
   ].join("\n");
 }
 

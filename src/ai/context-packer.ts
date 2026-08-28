@@ -3,6 +3,10 @@ import type { ModelMessage } from "ai";
 import type { ModelProfile } from "@/ai/model-profile";
 import type { AmbientHigherMemorySnapshot } from "@/memory/ambient-higher-memory";
 import {
+  emptyActorPrivateMemory,
+  type ActorPrivateMemorySnapshot,
+} from "@/memory/actor-higher-memory";
+import {
   buildSystemPrompt,
   buildSystemPromptParts,
   type MemoryPromptState,
@@ -184,11 +188,13 @@ function contextTokenCounts(
   retrieval: MemoryRetrievalResult,
   memoryState: MemoryPromptState,
   ambientHigherMemories: AmbientHigherMemorySnapshot[],
+  actorPrivateMemory: ActorPrivateMemorySnapshot,
 ) {
   const promptParts = buildSystemPromptParts(
     retrieval,
     memoryState,
     ambientHigherMemories,
+    actorPrivateMemory,
   );
   const systemTokens = estimateTokens(promptParts.base);
   const memoryTokens = promptParts.memory
@@ -217,9 +223,11 @@ export function packContext(input: {
   profile: ModelProfile;
   memoryState?: MemoryPromptState;
   ambientHigherMemories?: AmbientHigherMemorySnapshot[];
+  actorPrivateMemory?: ActorPrivateMemorySnapshot;
 }): PreparedContext {
   const memoryState = input.memoryState ?? "searched";
   const ambientHigherMemories = input.ambientHigherMemories ?? [];
+  const actorPrivateMemory = input.actorPrivateMemory ?? emptyActorPrivateMemory();
   const { history, current } = splitCurrentMessage(input.messages);
   const hardInput =
     input.profile.contextWindowTokens -
@@ -233,6 +241,7 @@ export function packContext(input: {
     emptyRetrieval,
     memoryState,
     ambientHigherMemories,
+    actorPrivateMemory,
   );
   const mandatoryTokens =
     estimateTokens(mandatorySystem) + estimateMessageTokens(current);
@@ -254,7 +263,12 @@ export function packContext(input: {
     Math.max(input.profile.preferredInputTokens, mandatoryTokens),
   );
 
-  let system = buildSystemPrompt(retrieval, memoryState, ambientHigherMemories);
+  let system = buildSystemPrompt(
+    retrieval,
+    memoryState,
+    ambientHigherMemories,
+    actorPrivateMemory,
+  );
   let counts = contextTokenCounts(
     system,
     historySelection.turns,
@@ -262,6 +276,7 @@ export function packContext(input: {
     retrieval,
     memoryState,
     ambientHigherMemories,
+    actorPrivateMemory,
   );
 
   while (counts.totalInput > targetInput && historySelection.turns.length > 0) {
@@ -273,6 +288,7 @@ export function packContext(input: {
       retrieval,
       memoryState,
       ambientHigherMemories,
+      actorPrivateMemory,
     );
   }
 
@@ -284,7 +300,12 @@ export function packContext(input: {
         retrieval.seedMap.assertions.length - 1,
       ),
     };
-    system = buildSystemPrompt(retrieval, memoryState, ambientHigherMemories);
+    system = buildSystemPrompt(
+      retrieval,
+      memoryState,
+      ambientHigherMemories,
+      actorPrivateMemory,
+    );
     counts = contextTokenCounts(
       system,
       historySelection.turns,
@@ -292,6 +313,7 @@ export function packContext(input: {
       retrieval,
       memoryState,
       ambientHigherMemories,
+      actorPrivateMemory,
     );
   }
 

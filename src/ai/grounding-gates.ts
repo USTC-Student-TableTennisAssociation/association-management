@@ -26,6 +26,12 @@ const BUSINESS_VIEW_ACTION_PATTERN =
   /(?:请|帮我|需要|把|将|能否|可以).{0,20}(?:新增|添加|修改|更新|改成|写入|收录|建立|创建|删除|补建)/u;
 const BUSINESS_VIEW_ABSENCE_ACK_PATTERN =
   /(?:没有.{0,50}(?:Card|卡片|条目|收录|内容)|(?:未|尚未|暂未).{0,30}(?:收录|建立|创建)|(?:0|零)\s*个?\s*(?:Card|卡片|条目)|(?:正式\s*View|业务视角).{0,30}(?:是空的|为空|看不到)|看不到.{0,30}(?:内容|Card|卡片|条目))/iu;
+const DURABLE_MEMORY_COMMITMENT_PATTERN =
+  /(?:(?:已经|已|会|将|以后|从现在起|一直|永远).{0,16}(?:记住|记得|记下)|(?:已经|已|会|将).{0,16}(?:保存|写入|归档).{0,12}(?:记忆|Higher\s*Memory|长期知识)|(?:已经|已).{0,12}(?:进入|写入|保存到).{0,12}(?:记忆|Higher\s*Memory))/iu;
+const ACTOR_SCOPED_PERSONALIZATION_PATTERN =
+  /(?:专属称呼|只属于(?:你|我们)|只对你.{0,16}(?:使用|生效|这样叫)|面对其他人时.{0,40}(?:名字|身份|叫|称作)|对其他人.{0,40}(?:叫|称作|身份))/iu;
+const MEMORY_BOUNDARY_PATTERN =
+  /(?:没有|尚未|暂未|未完成|不能|无法|不会|不代表|只在当前对话|仅在当前对话|不能保证|无法保证|如果|若要|需要.{0,12}成功)/u;
 
 function searchable(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("zh-CN")
@@ -466,6 +472,52 @@ function redactUnsupportedClaims(input: {
   };
 }
 
+function redactUnsupportedConversationMemoryClaims(input: {
+  text: string;
+  memoryWriteCommitted: boolean;
+  actorPrivateMemoryGrounded: boolean;
+}): {
+  text: string;
+  issues: string[];
+  notices: string[];
+  redactedCount: number;
+} {
+  const issues: string[] = [];
+  const notices: string[] = [];
+  let redactedCount = 0;
+  const segments = input.text.match(
+    /[^。！？!?\n]+[。！？!?]|[^。！？!?\n]+|\n+/gu,
+  ) ?? [input.text];
+  const kept = segments.map((segment) => {
+    if (!segment.trim() || MEMORY_BOUNDARY_PATTERN.test(segment)) return segment;
+    const unsupportedWrite = !input.memoryWriteCommitted &&
+      DURABLE_MEMORY_COMMITMENT_PATTERN.test(segment);
+    const unsupportedScope = !input.actorPrivateMemoryGrounded &&
+      ACTOR_SCOPED_PERSONALIZATION_PATTERN.test(segment);
+    if (!unsupportedWrite && !unsupportedScope) return segment;
+    if (unsupportedWrite) issues.push("unsupported_memory_commitment");
+    if (unsupportedScope) issues.push("unsupported_actor_scoped_personalization");
+    redactedCount += 1;
+    return "";
+  });
+  if (issues.includes("unsupported_memory_commitment")) {
+    notices.push(
+      "本轮没有完成可验证的长期记忆写入；当前称呼或偏好只能在本次对话上下文中沿用，不能承诺跨会话仍然记得。",
+    );
+  }
+  if (issues.includes("unsupported_actor_scoped_personalization")) {
+    notices.push(
+      "当前没有已验证的 Actor 私有 Higher Memory，不能承诺某项私人称呼或互动约定跨用户隔离生效。",
+    );
+  }
+  return {
+    text: kept.join("").replace(/\n{3,}/gu, "\n\n").trim(),
+    issues: unique(issues),
+    notices,
+    redactedCount,
+  };
+}
+
 /**
  * Final server-side grounding audit.
  *
@@ -479,6 +531,8 @@ export function auditGroundedAnswer(input: {
   text: string;
   contract: GroundingContract;
   validRefs: Iterable<string>;
+  memoryWriteCommitted?: boolean;
+  actorPrivateMemoryGrounded?: boolean;
 }): GroundingAudit {
   const text = input.text.trim();
   const validRefs = new Set(input.validRefs);
@@ -555,7 +609,17 @@ export function auditGroundedAnswer(input: {
     notices.push(`${missing}；不要把未覆盖部分理解为 Echo 当前事实。`);
   }
 
-  const redaction = redactUnsupportedClaims({ text, validRefs });
+  const memoryAudit = redactUnsupportedConversationMemoryClaims({
+    text,
+    memoryWriteCommitted: input.memoryWriteCommitted ?? false,
+    actorPrivateMemoryGrounded: input.actorPrivateMemoryGrounded ?? false,
+  });
+  issues.push(...memoryAudit.issues);
+  notices.push(...memoryAudit.notices);
+  const redaction = redactUnsupportedClaims({
+    text: memoryAudit.text,
+    validRefs,
+  });
   issues.push(...redaction.issues);
 
   if (
@@ -574,6 +638,15 @@ export function auditGroundedAnswer(input: {
   }
 
   if (!redaction.text) {
+    if (memoryAudit.redactedCount) {
+      const safeText = memoryAudit.notices.map(boundaryNotice).join("\n\n");
+      return {
+        text: safeText,
+        changed: safeText !== text,
+        mode: "redacted",
+        issues: unique(issues),
+      };
+    }
     return {
       text: citationFallback(redaction.issues),
       changed: true,
@@ -592,7 +665,11 @@ export function auditGroundedAnswer(input: {
   return {
     text: auditedText,
     changed,
-    mode: redaction.redactedCount ? "redacted" : changed ? "annotated" : "passed",
+    mode: redaction.redactedCount || memoryAudit.redactedCount
+      ? "redacted"
+      : changed
+        ? "annotated"
+        : "passed",
     issues: unique(issues),
   };
 }

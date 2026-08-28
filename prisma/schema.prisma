@@ -81,6 +81,12 @@ enum MemoryAmbientHigherMemoryScope {
   working_set
 }
 
+enum MemoryActorHigherMemoryScope {
+  interaction
+  working_style
+  working_set
+}
+
 enum LibraryNodeKind {
   file
   folder
@@ -583,9 +589,30 @@ model MemoryActor {
   chatAssertionCaptures MemoryChatAssertionCapture[]
   chatAssertionReceipts MemoryChatAssertionReceipt[]
   chatConversations     ChatConversation[]
+  higherMemories        MemoryActorHigherMemory[]
   authUser              AuthUser?
 
   @@map("memory_actors")
+}
+
+/// 只属于一个稳定 Actor 的跨会话高层协作认知。
+/// 与 Compilation 和 GlobalObject 解耦，不能作为共享组织事实或正式业务状态的证据。
+model MemoryActorHigherMemory {
+  id                String                       @id @default(uuid()) @db.Uuid
+  actorId           String                       @map("actor_id") @db.Uuid
+  scope             MemoryActorHigherMemoryScope
+  contentMarkdown   String                       @map("content_markdown") @db.Text
+  maintainedAt      DateTime                     @map("maintained_at") @db.Timestamptz(3)
+  triggerMessageId  String                       @map("trigger_message_id") @db.Text
+  maintenanceReason String                       @map("maintenance_reason") @db.Text
+  createdAt         DateTime                     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime                     @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  actor MemoryActor @relation(fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@unique([actorId, scope])
+  @@index([actorId, maintainedAt])
+  @@map("memory_actor_higher_memories")
 }
 
 /// Actor 的私有 AI 对话。共享组织认知通过 Assertion / Business View 汇合，不通过暴露完整对话汇合。
