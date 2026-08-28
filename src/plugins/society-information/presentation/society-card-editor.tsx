@@ -11,15 +11,19 @@ import type {
 import styles from "./society-overview.module.css";
 
 export type SocietyDimensionChanges = Record<string, string | null>;
+export type SocietyRemovalReason = "ENTERED_BY_MISTAKE" | "WRONG_OBJECT";
 
 type SocietyCardEditorProps = {
   card: ViewCardState;
   cardType: CardTypeDefinition;
   identityLabel: string;
   saving: boolean;
+  removing?: boolean;
   error?: string;
+  removeLabel?: string;
   onClose: () => void;
   onSave: (changes: SocietyDimensionChanges) => void;
+  onRemove?: (reason: SocietyRemovalReason) => void;
 };
 
 function stringValue(value: unknown, fallback: unknown): string {
@@ -96,15 +100,20 @@ export function SocietyCardEditor({
   cardType,
   identityLabel,
   saving,
+  removing = false,
   error,
+  removeLabel,
   onClose,
   onSave,
+  onRemove,
 }: SocietyCardEditorProps) {
   const initialValues = useMemo(() => Object.fromEntries(
     cardType.dimensions.map((dimension) => [dimension.key, fieldValue(card, dimension)]),
   ), [card, cardType]);
   const [values, setValues] = useState<Record<string, string>>(initialValues);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removeReason, setRemoveReason] = useState<SocietyRemovalReason>("ENTERED_BY_MISTAKE");
   const [closing, setClosing] = useState(false);
   const sheetRef = useRef<HTMLElement>(null);
   const closeTimerRef = useRef<number | undefined>(undefined);
@@ -117,23 +126,24 @@ export function SocietyCardEditor({
     }),
   ) as SocietyDimensionChanges, [cardType.dimensions, initialValues, values]);
   const hasChanges = Object.keys(changes).length > 0;
+  const busy = saving || removing;
 
   const finishClose = useCallback(() => {
-    if (saving || closing) return;
+    if (busy || closing) return;
     setConfirmDiscard(false);
     setClosing(true);
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     closeTimerRef.current = window.setTimeout(onClose, reducedMotion ? 0 : 180);
-  }, [closing, onClose, saving]);
+  }, [busy, closing, onClose]);
 
   const requestClose = useCallback(() => {
-    if (saving || closing) return;
+    if (busy || closing) return;
     if (hasChanges) {
       setConfirmDiscard(true);
       return;
     }
     finishClose();
-  }, [closing, finishClose, hasChanges, saving]);
+  }, [busy, closing, finishClose, hasChanges]);
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement
@@ -150,9 +160,10 @@ export function SocietyCardEditor({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !saving) {
+      if (event.key === "Escape" && !busy) {
         event.preventDefault();
-        if (confirmDiscard) setConfirmDiscard(false);
+        if (confirmRemove) setConfirmRemove(false);
+        else if (confirmDiscard) setConfirmDiscard(false);
         else requestClose();
         return;
       }
@@ -177,14 +188,14 @@ export function SocietyCardEditor({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [confirmDiscard, requestClose, saving]);
+  }, [busy, confirmDiscard, confirmRemove, requestClose]);
 
   return (
     <div
       className={styles.editorScrim}
       data-closing={closing ? "true" : undefined}
       onPointerDown={(event) => {
-        if (event.target === event.currentTarget && !saving) requestClose();
+        if (event.target === event.currentTarget && !busy) requestClose();
       }}
     >
       <section
@@ -201,7 +212,7 @@ export function SocietyCardEditor({
             <h2 id="society-editor-title">编辑{identityLabel}</h2>
             <span>名称来自关联 Object；这里可以修改这张 Card 的全部正式字段。</span>
           </div>
-          <button type="button" onClick={requestClose} disabled={saving || closing} aria-label="关闭编辑面板">
+          <button type="button" onClick={requestClose} disabled={busy || closing} aria-label="关闭编辑面板">
             <CloseIcon />
           </button>
         </header>
@@ -210,7 +221,7 @@ export function SocietyCardEditor({
           className={styles.editorForm}
           onSubmit={(event) => {
             event.preventDefault();
-            if (hasChanges && !saving) onSave(changes);
+            if (hasChanges && !busy) onSave(changes);
           }}
         >
           <div className={styles.editorFields}>
@@ -220,7 +231,7 @@ export function SocietyCardEditor({
                 {renderField({
                   dimension,
                   value: values[dimension.key] ?? "",
-                  disabled: saving,
+                  disabled: busy,
                   onChange: (value) => setValues((current) => ({
                     ...current,
                     [dimension.key]: value,
@@ -235,7 +246,32 @@ export function SocietyCardEditor({
             ))}
           </div>
 
-          {confirmDiscard ? (
+          {confirmRemove && onRemove ? (
+            <div className={styles.removePrompt} role="alert">
+              <div>
+                <strong>确认{removeLabel ?? "移除这项内容"}？</strong>
+                <p>这会修改正式 View；活动与平台 Card 会被删除，人员关系会从当前名单中解除。</p>
+                {error ? <p role="alert">{error}</p> : null}
+                <label>
+                  移除原因
+                  <select
+                    value={removeReason}
+                    disabled={removing}
+                    onChange={(event) => setRemoveReason(event.target.value as SocietyRemovalReason)}
+                  >
+                    <option value="ENTERED_BY_MISTAKE">录入有误</option>
+                    <option value="WRONG_OBJECT">关联了错误对象</option>
+                  </select>
+                </label>
+              </div>
+              <div>
+                <button type="button" disabled={removing} onClick={() => setConfirmRemove(false)}>继续编辑</button>
+                <button type="button" disabled={removing} onClick={() => onRemove(removeReason)}>
+                  {removing ? "正在移除…" : "确认移除"}
+                </button>
+              </div>
+            </div>
+          ) : confirmDiscard ? (
             <div className={styles.discardPrompt} role="alert">
               <div>
                 <strong>放弃未保存的修改？</strong>
@@ -252,8 +288,18 @@ export function SocietyCardEditor({
                 {error ?? (hasChanges ? "修改会立即写入正式 View，并保留审计记录。" : "尚未修改字段。")}
               </p>
               <div>
-                <button type="button" onClick={requestClose} disabled={saving || closing}>取消</button>
-                <button type="submit" disabled={!hasChanges || saving || closing}>
+                {onRemove ? (
+                  <button
+                    type="button"
+                    className={styles.editorRemoveButton}
+                    disabled={busy || closing}
+                    onClick={() => setConfirmRemove(true)}
+                  >
+                    移除
+                  </button>
+                ) : null}
+                <button type="button" onClick={requestClose} disabled={busy || closing}>取消</button>
+                <button type="submit" disabled={!hasChanges || busy || closing}>
                   {saving ? "正在保存…" : "保存修改"}
                 </button>
               </div>
