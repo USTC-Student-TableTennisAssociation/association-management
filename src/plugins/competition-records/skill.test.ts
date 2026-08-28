@@ -60,7 +60,7 @@ describe("competition series curator Skill", () => {
     )).toBe(true);
     expect(session.canRunCommand(
       "competition_records",
-      "competition.create_edition",
+      "competition.sync_editions",
     )).toBe(false);
     expect(session.canOpenAction("business_view", "competition_records")).toBe(true);
     expect(session.canOpenAction("business_view", "society_information")).toBe(false);

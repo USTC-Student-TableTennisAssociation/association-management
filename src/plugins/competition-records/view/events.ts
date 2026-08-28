@@ -7,22 +7,6 @@ const uuid = z.string().uuid();
 
 export const competitionRecordsEvents: readonly DomainEventDefinition[] = [
   {
-    key: "competition.edition_created",
-    version: "1",
-    payloadSchema: zodContractSchema(z.object({
-      cardId: uuid,
-      objectId: uuid.nullable(),
-    })),
-  },
-  {
-    key: "competition.edition_updated",
-    version: "1",
-    payloadSchema: zodContractSchema(z.object({
-      cardId: uuid,
-      changedDimensions: z.array(z.string().min(1)),
-    })),
-  },
-  {
     key: "competition.editions_synced",
     version: "1",
     payloadSchema: zodContractSchema(z.object({
