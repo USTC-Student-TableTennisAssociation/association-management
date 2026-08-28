@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { EchoPluginManifest } from "@/contracts";
 import activityDescriptor from "@/plugins/activity-operations/echo.plugin.json";
-import { activityOperationsPlugin } from "@/plugins/activity-operations/manifest";
+import { activityOperationsPlugin } from "@/plugins/activity-operations/dist/manifest";
 import competitionDescriptor from "@/plugins/competition-records/echo.plugin.json";
 import { competitionRecordsPlugin } from "@/plugins/competition-records/manifest";
 import societyDescriptor from "@/plugins/society-information/echo.plugin.json";

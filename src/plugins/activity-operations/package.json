@@ -1,0 +1,44 @@
+{
+  "name": "echo-activity-operations-plugin",
+  "version": "1.2.0",
+  "description": "Reusable activity methods and execution maps for Echo",
+  "type": "module",
+  "files": [
+    "dist",
+    "echo.plugin.json",
+    "README.md"
+  ],
+  "exports": {
+    "./server": {
+      "types": "./dist/manifest.d.ts",
+      "import": "./dist/manifest.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation/activity-operations-workspace.d.ts",
+      "import": "./dist/presentation/activity-operations-workspace.js"
+    },
+    "./echo.plugin.json": "./echo.plugin.json"
+  },
+  "echoPlugin": "./echo.plugin.json",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.package.json && node scripts/copy-assets.mjs",
+    "prepack": "pnpm build"
+  },
+  "peerDependencies": {
+    "@sydaris/plugin-sdk": ">=0.1.0-alpha.3 <0.2.0-0",
+    "react": "^19.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@sydaris/plugin-sdk": "workspace:*",
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "^5.0.0",
+    "zod": "^4.0.0"
+  },
+  "license": "Apache-2.0"
+}

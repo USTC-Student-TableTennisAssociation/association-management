@@ -27,7 +27,7 @@ const skillPlugin: EchoPluginManifest = {
       instructions: "核对资料后，只调用 activity.update_activity。",
       viewAccess: [{
         viewKey: "activity_operations",
-        schemaVersion: "1",
+        schemaVersion: activityOperationsPlugin.contributes.views?.[0]?.manifest.schemaVersion ?? "1",
         mode: "write",
         commands: ["activity.update_activity"],
       }],

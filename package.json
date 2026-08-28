@@ -26,9 +26,10 @@
     "library:import": "prisma generate && node scripts/import-library.mjs",
     "preecho:plugin": "pnpm --filter @sydaris/plugin-sdk build",
     "echo:plugin": "node scripts/echo-plugin.mjs",
-    "plugins:build": "pnpm --filter @sydaris/plugin-sdk build && pnpm --filter echo-society-information-plugin build && pnpm --filter @sydaris/example-plugin build",
+    "plugins:build": "pnpm --filter @sydaris/plugin-sdk build && pnpm --filter echo-activity-operations-plugin build && pnpm --filter echo-society-information-plugin build && pnpm --filter @sydaris/example-plugin build",
     "plugins:pack:sdk": "pnpm --filter @sydaris/plugin-sdk pack",
     "plugins:pack:example": "pnpm --filter @sydaris/example-plugin pack",
+    "plugins:pack:activity": "pnpm --filter echo-activity-operations-plugin pack",
     "plugins:pack:society": "pnpm --filter echo-society-information-plugin pack"
   },
   "dependencies": {
