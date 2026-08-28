@@ -252,6 +252,10 @@
   text-wrap: balance;
 }
 
+.purposeScene h2[data-empty="true"] {
+  color: #8e8e93;
+}
+
 .purposeDescription {
   max-width: 38rem;
   margin: clamp(2rem, 4cqh, 3rem) 0 0 auto;
@@ -272,12 +276,6 @@
   font-size: 0.69rem;
   font-weight: 560;
   opacity: clamp(0, calc(var(--purpose-progress) * 1.8 - 0.8), 1);
-}
-
-.ratingFact {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.55rem;
 }
 
 .reactionStatus {
@@ -315,6 +313,27 @@
   fill: none;
   stroke: currentColor;
   stroke-width: 1.45;
+}
+
+.reactionNotice {
+  display: flex;
+  width: min(32rem, 100%);
+  flex-direction: column;
+  align-items: flex-end;
+  margin: 0.85rem 0 0 auto;
+  pointer-events: auto;
+}
+
+.compactReactionNotice {
+  width: min(24rem, 100%);
+  align-items: flex-start;
+  margin: 1rem 0 0;
+}
+
+.compactReactionNotice .reactionDetail {
+  width: 100%;
+  margin-left: 0;
+  background: rgb(255 255 255 / 58%);
 }
 
 .reactionStatus[data-tone="checking"] svg {
@@ -396,13 +415,37 @@
   z-index: 5;
   bottom: clamp(1.2rem, 3.5cqh, 2.4rem);
   left: 50%;
-  display: grid;
-  width: 2.5rem;
-  height: 2.5rem;
-  place-items: center;
+  display: inline-flex;
+  min-height: 2.5rem;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 999px;
+  background: rgb(3 10 22 / 28%);
+  padding: 0.65rem 0.85rem 0.65rem 1rem;
   color: rgb(255 255 255 / 62%);
+  font: inherit;
+  font-size: 0.69rem;
+  font-weight: 590;
   opacity: clamp(0, calc(1 - var(--hero-progress) * 4), 1);
+  cursor: pointer;
+  pointer-events: auto;
   transform: translateX(-50%);
+  transition: background-color 160ms ease, color 160ms ease, transform 100ms ease-out;
+}
+
+.scrollCue:hover {
+  background: rgb(3 10 22 / 48%);
+  color: white;
+}
+
+.scrollCue:active {
+  transform: translateX(-50%) scale(0.97);
+}
+
+.heroStage[data-past-intro] .scrollCue {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .scrollCue svg,
@@ -414,6 +457,7 @@
 .personCard button svg,
 .platformCard > svg,
 .primaryButton svg,
+.reactionInbox svg,
 .emptySlotAction svg {
   width: 1.1rem;
   height: 1.1rem;
@@ -442,6 +486,37 @@
   top: 0;
   height: 0;
   pointer-events: none;
+}
+
+.reactionInbox {
+  position: absolute;
+  top: clamp(0.9rem, 3cqh, 1.7rem);
+  right: clamp(1.2rem, 4.8cqw, 3.5rem);
+  display: inline-flex;
+  min-height: 2.65rem;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid rgb(3 78 162 / 10%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 82%);
+  padding: 0.68rem 0.9rem;
+  box-shadow: 0 0.8rem 2.4rem rgb(32 38 50 / 10%);
+  color: var(--blue);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 640;
+  backdrop-filter: blur(20px) saturate(145%);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background-color 160ms ease, transform 100ms ease-out;
+}
+
+.reactionInbox:hover {
+  background: white;
+}
+
+.reactionInbox:active {
+  transform: scale(0.97);
 }
 
 .contentBrand {
@@ -1005,6 +1080,30 @@
   background: rgb(255 255 255 / 17%);
 }
 
+.platformCard .reactionStatus {
+  border-color: rgb(255 255 255 / 14%);
+  background: rgb(255 255 255 / 9%);
+  color: rgb(255 255 255 / 82%);
+}
+
+.platformCard .reactionStatus[data-tone="attention"] {
+  color: #ffc18f;
+}
+
+.platformCard .reactionStatus[data-tone="failed"] {
+  color: #ffaaa2;
+}
+
+.platformCard .reactionStatus[data-tone="verified"] {
+  color: #9fe0bd;
+}
+
+.platformCard .compactReactionNotice .reactionDetail {
+  border-left-color: #ff9a65;
+  background: rgb(255 255 255 / 9%);
+  color: rgb(255 255 255 / 74%);
+}
+
 .joinSection .emptySlot {
   min-height: 18rem;
   border-color: rgb(255 255 255 / 22%);
@@ -1115,6 +1214,15 @@
   backdrop-filter: blur(32px) saturate(150%);
   transform-origin: 88% 100%;
   animation: editor-sheet-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.editorScrim[data-closing="true"] {
+  pointer-events: none;
+  animation: editor-scrim-out 180ms ease-in both;
+}
+
+.editorSheet[data-closing="true"] {
+  animation: editor-sheet-out 180ms cubic-bezier(0.4, 0, 1, 1) both;
 }
 
 .editorHeader {
@@ -1307,9 +1415,69 @@
   opacity: 0.42;
 }
 
+.discardPrompt {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  border-top: 1px solid rgb(181 72 46 / 12%);
+  background: #fff4ef;
+  padding: 1rem 1.7rem 1.25rem;
+}
+
+.discardPrompt strong {
+  display: block;
+  color: #7c2f1e;
+  font-size: 0.76rem;
+  font-weight: 680;
+}
+
+.discardPrompt p {
+  margin: 0.3rem 0 0;
+  color: #97523f;
+  font-size: 0.66rem;
+  line-height: 1.5;
+}
+
+.discardPrompt > div:last-child {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.55rem;
+}
+
+.discardPrompt button {
+  min-height: 2.5rem;
+  border: 0;
+  border-radius: 999px;
+  padding: 0.68rem 1rem;
+  font-size: 0.74rem;
+  font-weight: 640;
+  cursor: pointer;
+  transition: transform 100ms ease-out, background-color 160ms ease;
+}
+
+.discardPrompt button:first-child {
+  background: #e8e8ed;
+  color: #424247;
+}
+
+.discardPrompt button:last-child {
+  background: #a23c25;
+  color: white;
+}
+
+.discardPrompt button:active {
+  transform: scale(0.96);
+}
+
 @keyframes editor-scrim-in {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+@keyframes editor-scrim-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }
 
 @keyframes editor-sheet-in {
@@ -1320,6 +1488,17 @@
   to {
     opacity: 1;
     transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes editor-sheet-out {
+  from {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate3d(0, 1.5rem, 0) scale(0.97);
   }
 }
 
@@ -1424,6 +1603,10 @@
     width: 9.6rem;
   }
 
+  .reactionInbox {
+    right: 1rem;
+  }
+
   .activitiesSection,
   .teamSection {
     padding-top: 8rem;
@@ -1523,12 +1706,19 @@
     flex-direction: column;
   }
 
+  .discardPrompt {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .editorFooter > p {
     max-width: none;
   }
 
   .editorFooter > div,
-  .editorFooter button {
+  .editorFooter button,
+  .discardPrompt > div:last-child,
+  .discardPrompt button {
     flex: 1;
   }
 }
@@ -1586,6 +1776,8 @@
   .galleryControls button,
   .dragHandle,
   .profileEditButton,
+  .scrollCue,
+  .reactionInbox,
   .cardActions > button,
   .cardActions > a,
   .activityCardBottom button,
@@ -1616,6 +1808,7 @@
 @media (prefers-reduced-transparency: reduce) {
   .loadingMark,
   .errorCard,
+  .reactionInbox,
   .editorScrim,
   .editorSheet {
     backdrop-filter: none;
@@ -1623,6 +1816,8 @@
 
   .loadingMark,
   .errorCard { background: #0b1a2c; }
+
+  .reactionInbox { background: white; }
 
   .editorScrim { background: rgb(1 6 14 / 54%); }
   .editorSheet { background: #fafafc; }
