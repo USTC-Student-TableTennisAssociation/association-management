@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import type { EchoPluginManifest } from "@/contracts";
 import activityDescriptor from "@/plugins/activity-operations/echo.plugin.json";
 import { activityOperationsPlugin } from "@/plugins/activity-operations/manifest";
+import competitionDescriptor from "@/plugins/competition-records/echo.plugin.json";
+import { competitionRecordsPlugin } from "@/plugins/competition-records/manifest";
 import societyDescriptor from "@/plugins/society-information/echo.plugin.json";
 import { societyInformationPlugin } from "@/plugins/society-information/dist/manifest";
 
@@ -20,6 +22,7 @@ type Descriptor = {
 
 describe.each([
   [activityDescriptor, activityOperationsPlugin],
+  [competitionDescriptor, competitionRecordsPlugin],
   [societyDescriptor, societyInformationPlugin],
 ] as readonly (readonly [Descriptor, EchoPluginManifest])[])("installed Plugin descriptor", (descriptor, plugin) => {
   it(`${plugin.id} keeps purge ownership and runtime contributions aligned`, () => {

@@ -4,9 +4,11 @@
 import type { ComponentType } from "react";
 import type { WorkPresentationProps } from "@/view-runtime/presentation-host/work-presentation-host";
 import { SocietyOverviewWorkspace as installedPresentation0 } from "@/plugins/society-information/dist/presentation/society-overview-workspace";
+import { CompetitionRecordsWorkspace as installedPresentation1 } from "@/plugins/competition-records/presentation/competition-records-workspace";
 
 export const installedPresentationComponents: Readonly<
   Record<string, ComponentType<WorkPresentationProps>>
 > = {
   "society-information/immersive-overview": installedPresentation0,
+  "competition-records/workspace": installedPresentation1,
 };

@@ -8,6 +8,10 @@
     {
       "source": "local",
       "manifest": "src/plugins/society-information/echo.plugin.json"
+    },
+    {
+      "source": "local",
+      "manifest": "src/plugins/competition-records/echo.plugin.json"
     }
   ]
 }
