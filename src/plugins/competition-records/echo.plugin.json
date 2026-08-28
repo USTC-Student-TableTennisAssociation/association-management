@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "echo.competition-records",
+  "version": "0.1.0",
+  "engines": {
+    "echo": ">=0.1.0-alpha.1 <0.2.0-0"
+  },
+  "server": {
+    "entry": "./manifest.ts",
+    "export": "competitionRecordsPlugin"
+  },
+  "contributes": {
+    "views": [
+      "competition_records"
+    ],
+    "presentations": [
+      {
+        "loader": "competition-records/workspace",
+        "entry": "./presentation/competition-records-workspace.tsx",
+        "export": "CompetitionRecordsWorkspace"
+      }
+    ],
+    "skills": [
+      "echo.competition-records.curate-series"
+    ],
+    "toolCapabilities": [
+      "competition.source.read",
+      "competition.edition.project"
+    ],
+    "tools": [
+      "ustctta.competition-source",
+      "echo.competition-edition-projection"
+    ]
+  }
+}

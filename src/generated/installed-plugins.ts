@@ -2,8 +2,10 @@
 import type { EchoPluginManifest } from "@/contracts";
 import { activityOperationsPlugin as installedPlugin0 } from "@/plugins/activity-operations/manifest";
 import { societyInformationPlugin as installedPlugin1 } from "@/plugins/society-information/dist/manifest";
+import { competitionRecordsPlugin as installedPlugin2 } from "@/plugins/competition-records/manifest";
 
 export const installedPluginManifests: readonly EchoPluginManifest[] = [
   installedPlugin0,
   installedPlugin1,
+  installedPlugin2,
 ];
