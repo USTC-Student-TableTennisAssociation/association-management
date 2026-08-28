@@ -18,13 +18,14 @@ const descriptor = {
     views: ["example_view"],
     presentations: [],
     skills: [],
+    toolCapabilities: [],
     tools: [],
   },
 } as const;
 
 describe("published Plugin SDK contract", () => {
   it("owns the package descriptor schema used by Echo", () => {
-    expect(ECHO_PLUGIN_API_VERSION).toBe("0.1.0-alpha.3");
+    expect(ECHO_PLUGIN_API_VERSION).toBe("0.1.0-alpha.5");
     expect(sdkPackage).toMatchObject({
       name: "@sydaris/plugin-sdk",
       version: ECHO_PLUGIN_API_VERSION,

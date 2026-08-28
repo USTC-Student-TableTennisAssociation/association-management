@@ -1,1 +1,5 @@
-export type { SkillExtension } from "@sydaris/plugin-sdk";
+export type {
+  SkillExtension,
+  SkillKnowledgeSource,
+  SkillViewAccess,
+} from "@sydaris/plugin-sdk";

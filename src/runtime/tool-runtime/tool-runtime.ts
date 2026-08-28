@@ -1,8 +1,10 @@
 import type {
   ToolCapabilityContract,
+  ToolCapabilityRequirement,
   ToolContext,
   ToolProviderExtension,
 } from "@/contracts";
+import { isVersionCompatible } from "@sydaris/plugin-sdk";
 
 export class ToolRuntimeError extends Error {
   constructor(message: string) {
@@ -16,6 +18,7 @@ const forbiddenContractKeys = [
   "outputSchema",
   "semanticContract",
   "sideEffect",
+  "allowedCallers",
   "requiredPermissions",
 ] as const;
 
@@ -73,6 +76,28 @@ export class ToolRuntime {
     return [...this.providers.values()];
   }
 
+  assertRequirementsAvailable(
+    requirements: readonly ToolCapabilityRequirement[],
+  ): void {
+    for (const requirement of requirements) {
+      const available = [...this.contracts.values()].some((contract) =>
+        contract.key === requirement.key &&
+        isVersionCompatible(contract.version, requirement.versions) &&
+        [...this.providers.values()].some((provider) =>
+          provider.implementations.some((implementation) =>
+            implementation.capability.key === contract.key &&
+            implementation.capability.version === contract.version
+          )
+        )
+      );
+      if (!available) {
+        throw new ToolRuntimeError(
+          `Skill 所需 Capability 不可用：${requirement.key}@${requirement.versions}`,
+        );
+      }
+    }
+  }
+
   async execute(input: {
     capabilityKey: string;
     capabilityVersion: string;
@@ -83,6 +108,11 @@ export class ToolRuntime {
     const key = this.contractKey(input.capabilityKey, input.capabilityVersion);
     const contract = this.contracts.get(key);
     if (!contract) throw new ToolRuntimeError(`Capability Contract 不存在：${key}`);
+    if (!contract.allowedCallers.includes(input.context.caller.kind)) {
+      throw new ToolRuntimeError(
+        `${key} 不允许 ${input.context.caller.kind} 调用`,
+      );
+    }
     const provider = this.providers.get(input.providerId);
     if (!provider) throw new ToolRuntimeError(`Tool Provider 不存在：${input.providerId}`);
     const implementation = provider.implementations.find(

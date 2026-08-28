@@ -53,9 +53,17 @@ describe("ExtensionRegistry", () => {
         skills: [{
           id: "echo.test.plan",
           version: "1.0.0",
-          targetView: { viewKey: viewModule.manifest.key, schemaVersion: "1" },
-          requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
+          label: "制定计划",
+          description: "根据日历为测试 View 制定计划。",
           inputSchema: zodContractSchema(z.object({ focus: z.string() })),
+          instructions: "先读取日历，再执行已声明的 View Command。",
+          viewAccess: [{
+            viewKey: viewModule.manifest.key,
+            schemaVersion: "1",
+            mode: "read",
+          }],
+          knowledge: [],
+          requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
         }],
         tools: [{ id: "echo.test.provider", version: "1.0.0", implementations: [] }],
       },
@@ -83,6 +91,35 @@ describe("ExtensionRegistry", () => {
       contributes: { views: [view()] },
     })).toThrow(ExtensionRegistrationError);
     expect(registry.listPlugins().map((plugin) => plugin.id)).toEqual(["echo.one"]);
+  });
+
+  it("rejects a Skill that requests an unknown View Command", () => {
+    const viewModule = view();
+    const registry = new ExtensionRegistry();
+    expect(() => registry.registerPlugin({
+      id: "echo.bad-skill",
+      version: "1.0.0",
+      contributes: {
+        views: [viewModule],
+        skills: [{
+          id: "echo.bad-skill.run",
+          version: "1.0.0",
+          label: "Bad Skill",
+          description: "Requests a command outside its target View.",
+          inputSchema: zodContractSchema(z.object({})),
+          instructions: "Run the missing command.",
+          viewAccess: [{
+            viewKey: viewModule.manifest.key,
+            schemaVersion: "1",
+            mode: "write",
+            commands: ["test.missing"],
+          }],
+          knowledge: [],
+          requiresCapabilities: [],
+        }],
+      },
+    })).toThrow(ExtensionRegistrationError);
+    expect(registry.listPlugins()).toEqual([]);
   });
 
   it("rejects a Slot target that is not declared inside the same View", () => {

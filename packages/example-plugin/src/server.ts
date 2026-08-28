@@ -20,6 +20,7 @@ const createNote: CommandDefinition<z.infer<typeof createNoteInput>> = {
   key: "example.create_note",
   version: "1",
   label: "创建笔记",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(createNoteInput),
   proposalApprovalConflictPolicy: () => "revalidate_latest",
@@ -92,9 +93,18 @@ const examplePresentation: PresentationExtension = {
 const exampleSkill: SkillExtension = {
   id: "echo.example-notes.daily-planner",
   version: "0.1.0",
-  targetView: { viewKey: VIEW_KEY, schemaVersion: "1" },
-  requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
+  label: "每日计划",
+  description: "结合日历为当天创建一则计划笔记。",
   inputSchema: zodContractSchema(z.object({ focus: z.string().optional() })),
+  instructions: "读取当天日历，归纳重点，然后使用 example.create_note 提交计划笔记。",
+  viewAccess: [{
+    viewKey: VIEW_KEY,
+    schemaVersion: "1",
+    mode: "write",
+    commands: ["example.create_note"],
+  }],
+  knowledge: [],
+  requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
 };
 
 const exampleToolProvider: ToolProviderExtension = {

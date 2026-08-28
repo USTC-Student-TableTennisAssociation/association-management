@@ -10,6 +10,7 @@ function runtimeFixture(
   policy: "approval_required" | "auto_execute",
   transactionStateVersion = 3,
   proposalConflictPolicy: "exact" | "revalidate_latest" = "exact",
+  allowedInitiators: readonly ("human" | "ai" | "system")[] = ["human", "ai"],
 ) {
   const proposalActorId = "00000000-0000-4000-8000-000000000001";
   const execute = vi.fn(async () => ({ summary: { accepted: true } }));
@@ -26,6 +27,7 @@ function runtimeFixture(
       key: "test.accept",
       version: "1",
       label: "Accept",
+      allowedInitiators,
       requiredPermissions: ["view.write"],
       inputSchema: zodContractSchema(z.object({ value: z.string() })),
       proposalApprovalConflictPolicy: () => proposalConflictPolicy,
@@ -103,6 +105,20 @@ function runtimeFixture(
 }
 
 describe("ViewCommandBus", () => {
+  it("rejects an AI caller for a system-only Command", async () => {
+    const fixture = runtimeFixture("auto_execute", 3, "exact", ["system"]);
+    await expect(fixture.bus.dispatch({
+      viewKey: "test_view",
+      commandKey: "test.accept",
+      commandVersion: "1",
+      input: { value: "hello" },
+      actor: { permissions: ["view.write"] },
+      initiator: "ai",
+      expectedStateVersion: "3",
+    })).rejects.toThrow(/不允许 ai 调用/);
+    expect(fixture.execute).not.toHaveBeenCalled();
+  });
+
   it("treats the stored Plugin version as diagnostic metadata", async () => {
     const fixture = runtimeFixture("auto_execute");
     fixture.database.installedView.findUnique.mockResolvedValueOnce({

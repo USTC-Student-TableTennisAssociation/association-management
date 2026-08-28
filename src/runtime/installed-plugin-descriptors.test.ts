@@ -1,14 +1,27 @@
 import { describe, expect, it } from "vitest";
 
+import type { EchoPluginManifest } from "@/contracts";
 import activityDescriptor from "@/plugins/activity-operations/echo.plugin.json";
 import { activityOperationsPlugin } from "@/plugins/activity-operations/manifest";
 import societyDescriptor from "@/plugins/society-information/echo.plugin.json";
 import { societyInformationPlugin } from "@/plugins/society-information/dist/manifest";
 
+type Descriptor = {
+  id: string;
+  version: string;
+  contributes: {
+    views: string[];
+    presentations: Array<{ loader: string }>;
+    skills: string[];
+    toolCapabilities: string[];
+    tools: string[];
+  };
+};
+
 describe.each([
   [activityDescriptor, activityOperationsPlugin],
   [societyDescriptor, societyInformationPlugin],
-] as const)("installed Plugin descriptor", (descriptor, plugin) => {
+] as readonly (readonly [Descriptor, EchoPluginManifest])[])("installed Plugin descriptor", (descriptor, plugin) => {
   it(`${plugin.id} keeps purge ownership and runtime contributions aligned`, () => {
     expect(descriptor.id).toBe(plugin.id);
     expect(descriptor.version).toBe(plugin.version);
@@ -22,6 +35,9 @@ describe.each([
     );
     expect(descriptor.contributes.skills).toEqual(
       (plugin.contributes.skills ?? []).map((skill) => skill.id),
+    );
+    expect(descriptor.contributes.toolCapabilities).toEqual(
+      (plugin.contributes.toolCapabilities ?? []).map((contract) => contract.key),
     );
     expect(descriptor.contributes.tools).toEqual(
       (plugin.contributes.tools ?? []).map((provider) => provider.id),

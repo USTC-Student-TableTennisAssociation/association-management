@@ -5,7 +5,10 @@ import { createAgentToolProviderToolset } from "@/agent-runtime/tool-provider-to
 import { zodContractSchema } from "@/contracts";
 import { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
 
-function runtime(sideEffect: "none" | "external_irreversible" = "none") {
+function runtime(
+  sideEffect: "none" | "external_irreversible" = "none",
+  allowedCallers: readonly ("agent" | "view" | "automation")[] = ["agent"],
+) {
   const subject = new ToolRuntime();
   subject.registerContract({
     key: sideEffect === "none" ? "calendar.read" : "email.send",
@@ -15,6 +18,7 @@ function runtime(sideEffect: "none" | "external_irreversible" = "none") {
     inputSchema: zodContractSchema(z.object({ query: z.string() })),
     outputSchema: zodContractSchema(z.object({ result: z.string() })),
     sideEffect,
+    allowedCallers,
     requiredPermissions: [sideEffect === "none" ? "tool.calendar.read" : "tool.email.send"],
   });
   const execute = vi.fn(async () => ({ result: "ok" }));
@@ -45,9 +49,21 @@ describe("global Tool Provider AI adapter", () => {
     ) => Promise<unknown>;
     await expect(execute({ query: "today" })).resolves.toEqual({ result: "ok" });
     expect(providerExecute).toHaveBeenCalledWith(
-      { actorId: "actor-1", permissions: ["tool.calendar.read"] },
+      {
+        caller: { kind: "agent", actorId: "actor-1" },
+        permissions: ["tool.calendar.read"],
+      },
       { query: "today" },
     );
+  });
+
+  it("keeps an internal read-only Provider out of AI chat", () => {
+    const { subject } = runtime("none", ["view", "automation"]);
+    const toolset = createAgentToolProviderToolset({
+      runtime: subject,
+      actor: { permissions: ["tool.calendar.read"] },
+    });
+    expect(toolset.toolNames).toEqual([]);
   });
 
   it("keeps side-effecting Providers out of AI chat until an approval UI exists", () => {

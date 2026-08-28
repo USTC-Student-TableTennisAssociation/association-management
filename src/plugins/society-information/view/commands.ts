@@ -359,6 +359,7 @@ const initializeOverview: CommandDefinition<z.infer<typeof initializeOverviewSch
   key: "society.initialize_overview",
   version: "2",
   label: "建立基础社团档案（只创建 SocietyCard，不含指导老师、干事、活动与平台）",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(initializeOverviewSchema),
   inputReferences: [{
@@ -389,6 +390,7 @@ const updateProfile: CommandDefinition<z.infer<typeof updateProfileSchema>> = {
   key: "society.update_profile",
   version: "1",
   label: "更新社团资料",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(updateProfileSchema),
   inputReferences: [{ path: ["societyCardId"], kind: "card" }],
@@ -411,6 +413,7 @@ const setAdvisors: CommandDefinition<z.infer<typeof setAdvisorsSchema>> = {
   key: "society.set_advisors",
   version: "1",
   label: "设置当前正式指导老师（自动创建或复用人物 Card，不要先加入干事队伍）",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(setAdvisorsSchema),
   inputReferences: [
@@ -450,6 +453,7 @@ const updatePerson: CommandDefinition<z.infer<typeof updatePersonSchema>> = {
   key: "society.update_person",
   version: "1",
   label: "更新已有指导老师或干事的人物资料",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(updatePersonSchema),
   inputReferences: [
@@ -484,6 +488,7 @@ const saveTeamMember: CommandDefinition<z.infer<typeof saveTeamMemberSchema>> = 
   key: "society.save_team_member",
   version: "2",
   label: "保存当前任期干事成员",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(saveTeamMemberSchema),
   inputReferences: [
@@ -555,6 +560,7 @@ const removeTeamMember: CommandDefinition<z.infer<typeof removeTeamMemberSchema>
   key: "society.remove_team_member",
   version: "1",
   label: "移除错误的干事成员",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(removeTeamMemberSchema),
   inputReferences: [
@@ -588,6 +594,7 @@ const saveLongTermActivity: CommandDefinition<z.infer<typeof saveLongTermActivit
   key: "society.save_long_term_activity",
   version: "2",
   label: "保存长期活动",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(saveLongTermActivitySchema),
   inputReferences: [
@@ -655,6 +662,7 @@ const reorderLongTermActivities: CommandDefinition<z.infer<typeof reorderLongTer
   key: "society.reorder_long_term_activities",
   version: "1",
   label: "调整长期活动展示顺序",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(reorderLongTermActivitiesSchema),
   inputReferences: [
@@ -687,6 +695,7 @@ const removeLongTermActivity: CommandDefinition<z.infer<typeof removeLongTermAct
   key: "society.remove_long_term_activity",
   version: "1",
   label: "移除错误的长期活动",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(removeLongTermActivitySchema),
   inputReferences: [
@@ -721,6 +730,7 @@ const savePlatform: CommandDefinition<z.infer<typeof savePlatformSchema>> = {
   key: "society.save_platform",
   version: "2",
   label: "保存平台入口",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(savePlatformSchema),
   inputReferences: [
@@ -792,6 +802,7 @@ const removePlatform: CommandDefinition<z.infer<typeof removePlatformSchema>> = 
   key: "society.remove_platform",
   version: "1",
   label: "移除错误的平台",
+  allowedInitiators: ["human", "ai"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(removePlatformSchema),
   inputReferences: [

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import semver from "semver";
 
-export const ECHO_PLUGIN_API_VERSION = "0.1.0-alpha.3";
+export const ECHO_PLUGIN_API_VERSION = "0.1.0-alpha.5";
 export const ECHO_PLUGIN_DESCRIPTOR_SCHEMA_VERSION = 1;
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
@@ -297,11 +297,13 @@ export interface CommandInputReferenceDefinition {
 }
 
 export type ProposalApprovalConflictPolicy = "exact" | "revalidate_latest";
+export type ViewCommandInitiator = "human" | "ai" | "system";
 
 export interface CommandDefinition<Input = unknown> {
   key: CommandKey;
   version: string;
   label: string;
+  allowedInitiators: readonly ViewCommandInitiator[];
   requiredPermissions?: readonly string[];
   inputSchema: ContractSchema<Input>;
   inputReferences?: readonly CommandInputReferenceDefinition[];
@@ -362,6 +364,12 @@ export interface PresentationExtension {
 }
 
 export type ToolCapabilityKey = string;
+export type ToolCallerKind = "view" | "automation" | "agent";
+
+export type ToolCaller =
+  | { kind: "view"; viewKey: ViewKey }
+  | { kind: "automation"; jobKey: string }
+  | { kind: "agent"; actorId?: string };
 
 export interface ToolCapabilityContract<Input = unknown, Output = unknown> {
   key: ToolCapabilityKey;
@@ -371,6 +379,8 @@ export interface ToolCapabilityContract<Input = unknown, Output = unknown> {
   inputSchema: ContractSchema<Input>;
   outputSchema: ContractSchema<Output>;
   sideEffect: "none" | "reversible" | "external_irreversible";
+  /** Runtime callers allowed to discover and execute this Capability. */
+  allowedCallers: readonly ToolCallerKind[];
   requiredPermissions: readonly string[];
   supportsDryRun?: boolean;
 }
@@ -381,7 +391,7 @@ export interface ToolCapabilityRequirement {
 }
 
 export interface ToolContext {
-  actorId?: string;
+  caller: ToolCaller;
   permissions: readonly string[];
   dryRun?: boolean;
 }
@@ -397,13 +407,41 @@ export interface ToolProviderExtension {
   implementations: readonly ToolCapabilityImplementation[];
 }
 
+export type SkillKnowledgeSource =
+  | "shared_brain"
+  | "library"
+  | "source_documents";
+
+export type SkillViewAccess =
+  | {
+      viewKey: ViewKey;
+      schemaVersion: string;
+      mode: "read";
+    }
+  | {
+      viewKey: ViewKey;
+      schemaVersion: string;
+      mode: "write";
+      commands: readonly CommandKey[];
+    };
+
+/**
+ * A prompt-driven, tool-using workflow that the Echo chat Runtime can activate.
+ *
+ * Skills do not mutate state directly. They constrain the views and commands
+ * available to the model, declare the knowledge layers and external
+ * capabilities the workflow needs, and supply workflow-specific instructions.
+ */
 export interface SkillExtension<Input = unknown> {
   id: string;
-  version: string;
-  targetView: { viewKey: ViewKey; schemaVersion: string };
-  readableViews?: ReadonlyArray<{ viewKey: ViewKey; schemaVersion: string }>;
-  requiresCapabilities: readonly ToolCapabilityRequirement[];
+  version: SemVer;
+  label: string;
+  description: string;
   inputSchema: ContractSchema<Input>;
+  instructions: string;
+  viewAccess: readonly SkillViewAccess[];
+  knowledge: readonly SkillKnowledgeSource[];
+  requiresCapabilities: readonly ToolCapabilityRequirement[];
 }
 
 export interface EchoPluginManifest {
@@ -414,6 +452,7 @@ export interface EchoPluginManifest {
     views?: readonly ViewModule[];
     presentations?: readonly PresentationExtension[];
     skills?: readonly SkillExtension[];
+    toolCapabilities?: readonly ToolCapabilityContract[];
     tools?: readonly ToolProviderExtension[];
   };
 }
@@ -457,6 +496,7 @@ export const echoPluginPackageDescriptorSchema = z.object({
       export: javascriptExportSchema,
     }).strict()).default([]),
     skills: uniqueIdentifierArraySchema,
+    toolCapabilities: uniqueIdentifierArraySchema,
     tools: uniqueIdentifierArraySchema,
   }).strict(),
 }).strict().superRefine((descriptor, context) => {
@@ -481,10 +521,14 @@ export function parseEchoPluginPackageDescriptor(value: unknown): EchoPluginPack
   return echoPluginPackageDescriptorSchema.parse(value);
 }
 
-export function isEchoVersionCompatible(echoVersion: string, requiredRange: string): boolean {
-  return semver.valid(echoVersion) !== null
+export function isVersionCompatible(version: string, requiredRange: string): boolean {
+  return semver.valid(version) !== null
     && semver.validRange(requiredRange, { includePrerelease: true }) !== null
-    && semver.satisfies(echoVersion, requiredRange, { includePrerelease: true });
+    && semver.satisfies(version, requiredRange, { includePrerelease: true });
+}
+
+export function isEchoVersionCompatible(echoVersion: string, requiredRange: string): boolean {
+  return isVersionCompatible(echoVersion, requiredRange);
 }
 
 export interface EchoPresentationProps {

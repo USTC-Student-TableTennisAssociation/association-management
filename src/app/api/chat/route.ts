@@ -65,6 +65,10 @@ import {
 import { createAgentViewToolset, registeredViewKeySchema } from "@/agent-runtime/view-toolset";
 import { createAgentToolProviderToolset } from "@/agent-runtime/tool-provider-toolset";
 import {
+  AgentSkillSession,
+  createAgentSkillToolset,
+} from "@/agent-runtime/skill-runtime";
+import {
   viewCommandProposalNoticeSchema,
   viewReferenceBundleSchema,
 } from "@/agent-runtime/view-types";
@@ -774,6 +778,19 @@ export async function POST(request: Request) {
       const groundingState = new GroundingState(query, pageContext, semanticConversation);
       const artifactReferences = createArtifactReferenceRegistry();
       const openedCapabilities = createOpenedCapabilities();
+      const skillSession = new AgentSkillSession(extensionRegistry, toolRuntime);
+      const skillToolset = createAgentSkillToolset({
+        session: skillSession,
+        onActivate: (activation) => {
+          void debugTrace.appendJsonSection("Skill 激活", {
+            id: activation.extension.id,
+            version: activation.extension.version,
+            input: activation.input,
+            viewAccess: activation.extension.viewAccess,
+            knowledge: activation.extension.knowledge,
+          });
+        },
+      });
       let mainModelCallNumber = 0;
       let exposedToolSchemaBytes = 0;
       let firstAuthoritativeTool: string | undefined;
@@ -903,6 +920,7 @@ export async function POST(request: Request) {
         registry: extensionRegistry,
         readPort: viewReadPort,
         commandBus: viewCommandBus,
+        skillSession,
         findExistingObjectsByCanonicalName: async (canonicalName) => {
           const compilation = await getDatabase().memoryCompilation.findFirst({
             orderBy: [{ importedAt: "desc" }, { id: "desc" }],
@@ -965,7 +983,9 @@ export async function POST(request: Request) {
         actor: {
           actorId: requestActor.id,
           permissions: toolRuntime.listContracts().flatMap((contract) =>
-            contract.sideEffect === "none" ? contract.requiredPermissions : []
+            contract.sideEffect === "none" && contract.allowedCallers.includes("agent")
+              ? contract.requiredPermissions
+              : []
           ),
         },
       });
@@ -1068,6 +1088,12 @@ export async function POST(request: Request) {
       const gatewayTools = createCapabilityGatewayTools(openedCapabilities, {
         viewKeySchema: registeredViewKeySchema(extensionRegistry),
         describeBusinessViewActions: (viewKey) => viewToolset.describeCommands(viewKey),
+        authorizeAction: (area, businessViewKey) => ({
+          allowed: skillSession.canOpenAction(area, businessViewKey),
+          reason: skillSession.active()
+            ? `已激活 Skill ${skillSession.active()!.extension.id} 未声明该 Action 权限。`
+            : undefined,
+        }),
         openBusinessContext: async ({ viewKey, focus, targetHints }) => {
           const viewModule = extensionRegistry.getView(viewKey)!;
           const [snapshot, viewHigherMemory] = await Promise.all([
@@ -1247,6 +1273,7 @@ export async function POST(request: Request) {
         },
       });
       const allTools: ToolSet = {
+        ...skillToolset.tools,
         ...gatewayTools,
         ...memoryTools,
         expandEvidence: memoryTools.searchMemory,
@@ -1268,6 +1295,7 @@ export async function POST(request: Request) {
         submitTurnHandoff,
       };
       const alwaysAvailableToolNames = [
+        ...skillToolset.toolNames,
         "searchMemory",
         "readMemoryWriteStatus",
         "queueChatAssertionCapture",
@@ -1305,6 +1333,7 @@ export async function POST(request: Request) {
               : "unknown" as const;
         return [
           exploreSystem,
+          skillSession.instructions(),
           buildCapabilityInstructions({
             preferredKnowledgeLayer,
             toolNames: enabledDetails,
