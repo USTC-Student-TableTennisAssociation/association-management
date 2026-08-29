@@ -34,6 +34,7 @@ import {
   detailedToolNames,
   TURN_KERNEL_INSTRUCTIONS,
 } from "@/ai/capability-gates";
+import { echoAIInvocationSchema } from "@/ai/ai-invocation";
 import { buildCapabilityInstructions } from "@/ai/capability-instructions";
 import { ContextPackingError, packContext } from "@/ai/context-packer";
 import { buildCurrentTimeInstruction } from "@/ai/current-time-context";
@@ -604,6 +605,7 @@ export async function POST(request: Request) {
     messages: messagesInput,
     dataSchemas: {
       memorySearch: zodSchema(memorySearchSchema),
+      aiInvocation: zodSchema(echoAIInvocationSchema),
       sourceReferences: zodSchema(sourceDocumentReferenceBundleSchema),
       artifactReferences: zodSchema(artifactReferenceBundleSchema),
       viewReferences: zodSchema(viewReferenceBundleSchema),
@@ -620,6 +622,14 @@ export async function POST(request: Request) {
   if (!query) return jsonError("消息内容不能为空。", 400);
   const latestUserMessageIndex = messages.findLastIndex((message) => message.role === "user");
   const latestUserMessage = messages[latestUserMessageIndex];
+  const invocationParts = latestUserMessage?.parts.filter((part) =>
+    part.type === "data-aiInvocation"
+  ) ?? [];
+  if (invocationParts.length > 1) return jsonError("一条消息只能发起一个 AI Action。", 400);
+  const requestedInvocation = invocationParts[0]?.data;
+  if (requestedInvocation && requestedInvocation.message !== query.trim()) {
+    return jsonError("AI Action 的可见意图与用户消息不一致。", 400);
+  }
   const submittedAt = new Date();
   let requestTimezone: string;
   const requestActor = authenticatedUser.actor;
@@ -638,6 +648,32 @@ export async function POST(request: Request) {
     userMessage: query,
     pageContext,
   });
+  const skillSession = new AgentSkillSession(extensionRegistry, toolRuntime);
+  if (requestedInvocation?.skill) {
+    try {
+      const activation = skillSession.activate(
+        requestedInvocation.skill.id,
+        requestedInvocation.skill.input,
+      );
+      if (pageContext?.activeViewKey && !skillSession.canReadView(pageContext.activeViewKey)) {
+        return jsonError(
+          `Skill ${activation.extension.id} 不允许从当前 View ${pageContext.activeViewKey} 发起。`,
+          400,
+        );
+      }
+      await debugTrace.appendJsonSection("Skill 预激活", {
+        actionId: requestedInvocation.actionId,
+        id: activation.extension.id,
+        version: activation.extension.version,
+        input: activation.input,
+        viewAccess: activation.extension.viewAccess,
+        knowledge: activation.extension.knowledge,
+      });
+    } catch (error) {
+      await debugTrace.appendError("Skill 预激活失败", error);
+      return jsonError(error instanceof Error ? error.message : "Skill 无法激活。", 400);
+    }
+  }
   if (latestUserMessage) {
     try {
       await saveChatMessage({
@@ -778,7 +814,6 @@ export async function POST(request: Request) {
       const groundingState = new GroundingState(query, pageContext, semanticConversation);
       const artifactReferences = createArtifactReferenceRegistry();
       const openedCapabilities = createOpenedCapabilities();
-      const skillSession = new AgentSkillSession(extensionRegistry, toolRuntime);
       const skillToolset = createAgentSkillToolset({
         session: skillSession,
         onActivate: (activation) => {

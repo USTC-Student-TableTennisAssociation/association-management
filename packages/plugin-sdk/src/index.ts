@@ -1,7 +1,7 @@
 import { z } from "zod";
 import semver from "semver";
 
-export const ECHO_PLUGIN_API_VERSION = "0.1.0-alpha.5";
+export const ECHO_PLUGIN_API_VERSION = "0.1.0-alpha.6";
 export const ECHO_PLUGIN_DESCRIPTOR_SCHEMA_VERSION = 1;
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
@@ -531,6 +531,22 @@ export function isEchoVersionCompatible(echoVersion: string, requiredRange: stri
   return isVersionCompatible(echoVersion, requiredRange);
 }
 
+/**
+ * A semantic AI action emitted by a Plugin Presentation.
+ *
+ * `message` is the short, user-visible intent stored in the conversation.
+ * Workflow instructions stay in the registered Skill; Presentations must not
+ * smuggle hidden system prompts through this contract.
+ */
+export interface EchoAIInvocation {
+  actionId: string;
+  message: string;
+  skill?: {
+    id: string;
+    input: unknown;
+  };
+}
+
 export interface EchoPresentationProps {
   viewKey: string;
   refreshRevision?: number;
@@ -538,7 +554,7 @@ export interface EchoPresentationProps {
   focusCardId?: string;
   activeConversationId?: string;
   onOpenInspector: () => void;
-  onAskAI: (prompt: string) => void;
+  onInvokeAI: (invocation: EchoAIInvocation) => void;
 }
 
 export function defineEchoPlugin<const Plugin extends EchoPluginManifest>(plugin: Plugin): Plugin {

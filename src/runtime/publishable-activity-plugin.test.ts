@@ -23,6 +23,7 @@ describe("publishable Activity Operations Plugin", () => {
   it("contains self-contained View and UI output", () => {
     const files = [
       "dist/manifest.js",
+      "dist/skill.js",
       "dist/view/schema.js",
       "dist/view/commands.js",
       "dist/view/invariants.js",

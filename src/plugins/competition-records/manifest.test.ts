@@ -16,6 +16,7 @@ describe("competition records Plugin", () => {
       "competition.organize_series",
     ]);
     expect(registry.listSkills().map((skill) => skill.id)).toEqual([
+      "echo.society-information.maintain-overview",
       "echo.competition-records.curate-series",
     ]);
     expect(registry.listToolCapabilityContracts().map((contract) => contract.key)).toEqual([

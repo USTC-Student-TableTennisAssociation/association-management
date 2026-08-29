@@ -16,6 +16,7 @@
   },
   "include": [
     "manifest.ts",
+    "skill.ts",
     "view/**/*.ts",
     "presentation/**/*.ts",
     "presentation/**/*.tsx"
