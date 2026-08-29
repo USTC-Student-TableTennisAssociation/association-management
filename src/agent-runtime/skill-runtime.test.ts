@@ -31,7 +31,6 @@ const skillPlugin: EchoPluginManifest = {
         mode: "write",
         commands: ["activity.update_activity"],
       }],
-      knowledge: ["shared_brain"],
       requiresCapabilities: [],
     }],
   },
@@ -55,18 +54,21 @@ describe("Agent Skill Runtime", () => {
       input: { skillId: string; input: unknown },
     ) => Promise<unknown>;
 
-    await expect(execute({
+    const result = await execute({
       skillId,
       input: { focus: "秋季活动" },
-    })).resolves.toMatchObject({
+    });
+    expect(result).toMatchObject({
       activated: true,
       input: { focus: "秋季活动" },
       skill: { id: skillId },
     });
+    expect(result).not.toHaveProperty("knowledge");
 
     expect(session.active()?.input).toEqual({ focus: "秋季活动" });
     expect(session.instructions()).toContain("activity.update_activity");
     expect(session.instructions()).toContain("只调用 activity.update_activity");
+    expect(session.instructions()).not.toContain("知识层：");
   });
 
   it("enforces the declared View and Command boundary", () => {
@@ -96,5 +98,26 @@ describe("Agent Skill Runtime", () => {
 
     expect(() => session.activate(skillId, { focus: "春季活动" }))
       .toThrow(SkillRuntimeError);
+  });
+
+  it("treats Capability requirements as activation-time availability checks", () => {
+    const requiredSkillId = "echo.test.requires-calendar";
+    const registry = new ExtensionRegistry();
+    registry.registerPlugin(activityOperationsPlugin);
+    registry.registerPlugin({
+      ...skillPlugin,
+      id: "echo.test-capability-skill",
+      contributes: {
+        skills: [{
+          ...skillPlugin.contributes.skills![0],
+          id: requiredSkillId,
+          requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
+        }],
+      },
+    });
+    const session = new AgentSkillSession(registry, new ToolRuntime());
+
+    expect(() => session.activate(requiredSkillId, { focus: "秋季活动" }))
+      .toThrow(/Capability 不可用/);
   });
 });

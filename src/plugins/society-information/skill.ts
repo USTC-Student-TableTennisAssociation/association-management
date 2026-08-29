@@ -42,7 +42,5 @@ export const societyOverviewMaintainerSkill: SkillExtension = {
       "society.remove_platform",
     ],
   }],
-  knowledge: ["shared_brain", "library", "source_documents"],
   requiresCapabilities: [],
 };
-

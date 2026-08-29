@@ -11,10 +11,13 @@ import {
 } from "@/library/shared-memory-publisher";
 
 const RUN_ID = "11111111-1111-4111-8111-111111111111";
+const LATER_RUN_ID = "11111111-1111-4111-8111-111111111112";
 const BLOB_ID = "22222222-2222-4222-8222-222222222222";
+const LATER_BLOB_ID = "22222222-2222-4222-8222-222222222223";
 const DRAFT_ID = "33333333-3333-4333-8333-333333333333";
 const OLD_OBJECT_ID = "44444444-4444-4444-8444-444444444444";
 const SHA = "a".repeat(64);
+const LATER_SHA = "b".repeat(64);
 
 function resolvedObject(key: string, label = "继往开来杯"): GlobalObjectDraft {
   return {
@@ -41,6 +44,94 @@ describe("library Shared Brain publication preparation", () => {
     await Promise.all(temporaryRoots.splice(0).map((root) =>
       rm(root, { recursive: true, force: true })
     ));
+  });
+
+  it("preserves a resolved Object identity when later material adds new cognition", () => {
+    const sharedObject: GlobalObjectDraft = {
+      draftObjectId: DRAFT_ID,
+      canonicalLabel: "继往开来杯",
+      labels: ["继往开来杯"],
+      members: [
+        {
+          key: `${RUN_ID}:assessment:0`,
+          runId: RUN_ID,
+          sourceName: "首份通知.docx",
+          label: "继往开来杯",
+          reason: "活动实体",
+        },
+        {
+          key: `${LATER_RUN_ID}:assessment:0`,
+          runId: LATER_RUN_ID,
+          sourceName: "补充通知.docx",
+          label: "继往开来杯",
+          reason: "同一活动的新材料",
+        },
+      ],
+    };
+    const publication = (
+      runId: string,
+      blobId: string,
+      sha256: string,
+      title: string,
+      statement: string,
+      excerpt: string,
+    ) => prepareSemanticPublication({
+      id: runId,
+      sourceBlobId: blobId,
+      profile: "coarse",
+      parserKey: "mineru-raw",
+      artifactLocation: null,
+      completedAt: new Date("2026-08-16T00:00:00Z"),
+      sourceBlob: { sha256 },
+      libraryNode: { name: title, originalRelativePath: title },
+      assessment: {
+        referenceCandidates: [],
+        assertionCandidates: [{
+          statement,
+          sourceExcerpt: excerpt,
+          objectLabels: ["继往开来杯"],
+          contextDependent: false,
+        }],
+        objectCandidates: [{
+          label: "继往开来杯",
+          action: "new_candidate",
+          reason: "文档明确命名活动",
+        }],
+      },
+    }, [sharedObject]);
+
+    const initial = publication(
+      RUN_ID,
+      BLOB_ID,
+      SHA,
+      "首份通知.docx",
+      "继往开来杯计划于十月举办。",
+      "活动计划于十月举办。",
+    );
+    const later = publication(
+      LATER_RUN_ID,
+      LATER_BLOB_ID,
+      LATER_SHA,
+      "补充通知.docx",
+      "继往开来杯已提交场地申请。",
+      "活动已提交场地申请。",
+    );
+
+    expect(initial.objects).toEqual([{ id: DRAFT_ID, canonicalName: "继往开来杯" }]);
+    expect(later.objects).toEqual([{ id: DRAFT_ID, canonicalName: "继往开来杯" }]);
+    expect(initial.assertions).toHaveLength(1);
+    expect(later.assertions).toHaveLength(1);
+    expect(later.assertions[0].id).not.toBe(initial.assertions[0].id);
+    expect(initial.objectLinks).toEqual([
+      { assertionId: initial.assertions[0].id, globalObjectId: DRAFT_ID },
+    ]);
+    expect(later.objectLinks).toEqual([
+      { assertionId: later.assertions[0].id, globalObjectId: DRAFT_ID },
+    ]);
+    expect(later.regions[0]).toMatchObject({
+      sourceTitle: "补充通知.docx",
+      sourceSha256: LATER_SHA,
+    });
   });
 
   it("publishes coarse Reference before a small number of grounded facts", () => {

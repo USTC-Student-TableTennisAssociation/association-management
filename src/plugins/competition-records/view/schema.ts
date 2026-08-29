@@ -175,5 +175,4 @@ export const competitionRecordsViewModule: ViewModule = {
   commands: competitionRecordsCommands,
   invariants: [],
   events: competitionRecordsEvents,
-  projections: [],
 };

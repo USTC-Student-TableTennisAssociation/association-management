@@ -221,7 +221,6 @@ function validateSkill(
       }
     }
   }
-  assertUnique(skill.knowledge, "Knowledge source", skill.id);
   assertUnique(
     skill.requiresCapabilities.map((requirement) => requirement.key),
     "Capability requirement",

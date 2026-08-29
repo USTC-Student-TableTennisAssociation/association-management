@@ -482,5 +482,4 @@ export const activityOperationsViewModule: ViewModule = {
   commands: activityOperationsCommands,
   invariants: activityOperationsInvariants,
   events: activityOperationsEvents,
-  projections: [],
 };

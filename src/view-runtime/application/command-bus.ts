@@ -410,7 +410,9 @@ export class ViewCommandBus {
       const cardsAfter = await graph.queryCards();
       const changeSet = diffViewCards(cardsBefore, cardsAfter);
 
-      const nextStateVersion = stateVersionBefore + BigInt(1);
+      const nextStateVersion = changeSet.length
+        ? stateVersionBefore + BigInt(1)
+        : stateVersionBefore;
       const advanced = await transaction.installedView.updateMany({
         where: { viewKey: input.viewKey, stateVersion: stateVersionBefore },
         data: { stateVersion: nextStateVersion },

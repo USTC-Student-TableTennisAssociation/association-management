@@ -2,7 +2,7 @@
 
 Echo Plugin 的公开 TypeScript 合同、描述文件 Schema 和 React hooks。
 
-> 当前是 `0.1.0-alpha.6` 预发布版，API 可能在后续 alpha 版调整。
+> 当前是 `0.1.0-alpha.7` 预发布版，API 可能在后续 alpha 版调整。
 
 ## 安装
 
@@ -29,7 +29,6 @@ const notesView = defineView({
   commands: [],
   invariants: [],
   events: [],
-  projections: [],
 });
 
 export const notesPlugin = defineEchoPlugin({
@@ -42,8 +41,9 @@ export const notesPlugin = defineEchoPlugin({
 ## Skill 执行契约
 
 Skill 是由 Chat Runtime 激活的专用 AI 工作流，不是可以直接修改数据的回调。
-它声明语义输入、执行指令、知识来源、可读 View 与精确到 Command 的写入范围。
+它声明语义输入、执行指令、可读 View、精确到 Command 的写入范围，以及激活前必须可用的外部 Capability。
 Runtime 负责校验依赖、注入指令、限制 Command，并把 `skillId` 记入 Proposal / Execution 审计链。
+Skill 不会限制 Runtime 的通用认知工具，也不会绑定某个具体 Capability Provider。
 
 ```ts
 const dailyPlanner: SkillExtension = {
@@ -59,7 +59,6 @@ const dailyPlanner: SkillExtension = {
     mode: "write",
     commands: ["notes.create"],
   }],
-  knowledge: [],
   requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
 };
 ```

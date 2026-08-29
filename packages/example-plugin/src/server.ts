@@ -75,7 +75,6 @@ const exampleNotesView = defineView({
     version: "1",
     payloadSchema: zodContractSchema(z.object({ cardId: z.string().uuid() })),
   }],
-  projections: [],
 });
 
 const examplePresentation: PresentationExtension = {
@@ -103,7 +102,6 @@ const exampleSkill: SkillExtension = {
     mode: "write",
     commands: ["example.create_note"],
   }],
-  knowledge: [],
   requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
 };
 

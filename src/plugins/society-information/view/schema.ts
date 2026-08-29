@@ -293,5 +293,4 @@ export const societyInformationViewModule: ViewModule = {
   commands: societyInformationCommands,
   invariants: societyInformationInvariants,
   events: societyInformationEvents,
-  projections: [],
 };

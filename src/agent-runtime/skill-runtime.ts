@@ -106,7 +106,6 @@ export class AgentSkillSession {
       extension.description,
       `本轮 Skill 输入：${JSON.stringify(input)}`,
       `View 权限：\n${viewScope || "（无）"}`,
-      `知识层：${extension.knowledge.join(", ") || "（无）"}`,
       "Skill 的写入范围由 Runtime 强制执行；不得调用未声明的 View Command。",
       extension.instructions,
     ].join("\n\n");
@@ -162,9 +161,8 @@ export function createAgentSkillToolset(input: {
           },
           input: activation.input,
           viewAccess: activation.extension.viewAccess,
-          knowledge: activation.extension.knowledge,
           next:
-            "按已激活 Skill 指令打开必要的 Business Context 和知识层，核对证据后使用允许的 View Command。",
+            "按已激活 Skill 指令打开必要的 Business Context，核对证据后使用允许的 View Command。",
         };
       },
     }),

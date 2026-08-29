@@ -37,7 +37,6 @@ const viewModule: ViewModule = {
   commands: [],
   invariants: [],
   events: [],
-  projections: [],
 };
 
 const change: ViewChange = {

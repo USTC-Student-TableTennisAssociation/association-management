@@ -52,7 +52,7 @@ describe("activity.create_activity", () => {
     }));
   });
 
-  it("keeps legacy activity creation without an Object compatible", async () => {
+  it("allows View-local Activity state without forcing a global Object anchor", async () => {
     const transaction = transactionFixture();
 
     await executeCreateActivity(transaction, { name: "人工录入活动" });
