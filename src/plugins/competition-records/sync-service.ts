@@ -46,7 +46,7 @@ export async function syncCompetitionEditions(input: {
   const write = await input.commandBus.dispatch({
     viewKey: "competition_records",
     commandKey: "competition.sync_editions",
-    commandVersion: "1",
+    commandVersion: "2",
     input: projection,
     actor: {
       ...(input.actor.actorId ? { actorId: input.actor.actorId } : {}),
@@ -57,7 +57,9 @@ export async function syncCompetitionEditions(input: {
   return {
     source: {
       sourceSystem: sourceBatch.sourceSystem,
-      retrievedAt: sourceBatch.retrievedAt,
+      sourceSnapshotAt: sourceBatch.sourceSnapshotAt,
+      complete: sourceBatch.complete,
+      pageCount: sourceBatch.pageCount,
       recordCount: sourceBatch.records.length,
     },
     mapping: {

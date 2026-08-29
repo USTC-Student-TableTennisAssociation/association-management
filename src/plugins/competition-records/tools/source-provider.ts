@@ -37,6 +37,22 @@ export type UstcttaCompetitionQuery = (
   values: readonly unknown[],
 ) => Promise<readonly SourceRow[]>;
 
+type SourceCursor = {
+  dateTime: string;
+  sourceId: string;
+};
+
+export type UstcttaCompetitionSnapshotSession = {
+  sourceSnapshotAt: string;
+  query: UstcttaCompetitionQuery;
+};
+
+export type UstcttaCompetitionSnapshotRunner = <Result>(
+  read: (session: UstcttaCompetitionSnapshotSession) => Promise<Result>,
+) => Promise<Result>;
+
+const SOURCE_PAGE_SIZE = 200;
+
 function iso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
@@ -56,47 +72,70 @@ function sourceDatabaseUrl(): string {
   return url.toString();
 }
 
-async function databaseQuery(
-  text: string,
-  values: readonly unknown[],
-): Promise<readonly SourceRow[]> {
+async function withDatabaseSnapshot<Result>(
+  read: (session: UstcttaCompetitionSnapshotSession) => Promise<Result>,
+): Promise<Result> {
   const pool = new Pool({
     connectionString: sourceDatabaseUrl(),
-    max: 2,
+    max: 1,
     connectionTimeoutMillis: 60_000,
     idleTimeoutMillis: 5_000,
   });
   const client = await pool.connect();
   try {
-    const result = await client.query<SourceRow>(text, [...values]);
-    return result.rows;
+    await client.query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
+    const snapshot = await client.query<{ sourceSnapshotAt: Date | string }>(
+      'SELECT statement_timestamp() AS "sourceSnapshotAt"',
+    );
+    const sourceSnapshotAt = snapshot.rows[0]?.sourceSnapshotAt;
+    if (!sourceSnapshotAt) throw new Error("无法取得 USTCTTA 数据库快照时间");
+    const result = await read({
+      sourceSnapshotAt: iso(sourceSnapshotAt),
+      query: async (text, values) =>
+        (await client.query<SourceRow>(text, [...values])).rows,
+    });
+    await client.query("COMMIT");
+    return result;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw error;
   } finally {
     client.release();
     await pool.end();
   }
 }
 
-export async function readUstcttaCompetitionData(
+function pageQuery(
   input: CompetitionSourceReadInput,
-  dependencies: {
-    query?: UstcttaCompetitionQuery;
-    now?: () => Date;
-  } = {},
-): Promise<CompetitionSourceBatch> {
+  cursor: SourceCursor | undefined,
+  pageSize: number,
+): { text: string; values: readonly unknown[] } {
   const values: unknown[] = [];
   const filters: string[] = [];
   if (!input.includeQuickMatches) filters.push('NOT m."isQuickMatch"');
-  if (input.sourceIds?.length) {
+  if (input.sourceIds !== undefined) {
     values.push(input.sourceIds);
     filters.push(`m.id = ANY($${values.length}::text[])`);
   }
-  if (input.updatedAfter) {
-    values.push(input.updatedAfter);
-    filters.push(`m."updatedAt" > $${values.length}::timestamptz`);
+  if (input.heldOnFrom) {
+    values.push(input.heldOnFrom);
+    filters.push(`m."dateTime"::date >= $${values.length}::date`);
   }
-  values.push(input.limit);
+  if (input.heldOnThrough) {
+    values.push(input.heldOnThrough);
+    filters.push(`m."dateTime"::date <= $${values.length}::date`);
+  }
+  if (cursor) {
+    values.push(cursor.dateTime, cursor.sourceId);
+    filters.push(
+      `(m."dateTime", m.id) < ($${values.length - 1}::timestamptz, $${values.length}::text)`,
+    );
+  }
+  values.push(pageSize + 1);
 
-  const rows = await (dependencies.query ?? databaseQuery)(`
+  return {
+    values,
+    text: `
     SELECT
       m.id AS "sourceId",
       m.title,
@@ -176,38 +215,81 @@ export async function readUstcttaCompetitionData(
     ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
     ORDER BY m."dateTime" DESC, m.id DESC
     LIMIT $${values.length}::int
-  `, values);
-
-  return {
-    sourceSystem: USTCTTA_SOURCE_SYSTEM,
-    sourceSchemaVersion: "1",
-    retrievedAt: (dependencies.now ?? (() => new Date()))().toISOString(),
-    records: rows.map((row) => ({
-      sourceId: row.sourceId,
-      title: row.title,
-      description: row.description,
-      dateTime: iso(row.dateTime),
-      heldOn: row.heldOn,
-      location: row.location,
-      isQuickMatch: row.isQuickMatch,
-      matchType: row.matchType,
-      status: row.status,
-      format: row.format,
-      maxParticipants: Number(row.maxParticipants),
-      registrationDeadline: iso(row.registrationDeadline),
-      participantCount: Number(row.participantCount),
-      participantCountBasis: row.participantCountBasis,
-      competitorUnitCount: Number(row.competitorUnitCount),
-      resultCount: Number(row.resultCount),
-      sourceCreatedAt: iso(row.sourceCreatedAt),
-      sourceUpdatedAt: iso(row.sourceUpdatedAt),
-    })),
+  `,
   };
+}
+
+export async function readUstcttaCompetitionData(
+  input: CompetitionSourceReadInput,
+  dependencies: {
+    runInSnapshot?: UstcttaCompetitionSnapshotRunner;
+    pageSize?: number;
+  } = {},
+): Promise<CompetitionSourceBatch> {
+  const pageSize = dependencies.pageSize ?? SOURCE_PAGE_SIZE;
+  if (!Number.isSafeInteger(pageSize) || pageSize < 1) {
+    throw new Error("Source Adapter 内部分页大小必须是正整数");
+  }
+  return (dependencies.runInSnapshot ?? withDatabaseSnapshot)(async (session) => {
+    const rows: SourceRow[] = [];
+    let cursor: SourceCursor | undefined;
+    let pageCount = 0;
+    for (;;) {
+      const query = pageQuery(input, cursor, pageSize);
+      const fetched = await session.query(query.text, query.values);
+      pageCount += 1;
+      const hasMore = fetched.length > pageSize;
+      const page = fetched.slice(0, pageSize);
+      rows.push(...page);
+      if (!hasMore) break;
+      const last = page.at(-1);
+      if (!last) throw new Error("USTCTTA 分页游标无法前进");
+      const nextCursor = {
+        dateTime: iso(last.dateTime),
+        sourceId: last.sourceId,
+      };
+      if (
+        cursor?.dateTime === nextCursor.dateTime &&
+        cursor.sourceId === nextCursor.sourceId
+      ) {
+        throw new Error("USTCTTA 分页游标重复，已终止读取以避免死循环");
+      }
+      cursor = nextCursor;
+    }
+
+    return {
+      sourceSystem: USTCTTA_SOURCE_SYSTEM,
+      sourceSchemaVersion: "1",
+      sourceSnapshotAt: session.sourceSnapshotAt,
+      complete: true,
+      pageCount,
+      records: rows.map((row) => ({
+        sourceId: row.sourceId,
+        title: row.title,
+        description: row.description,
+        dateTime: iso(row.dateTime),
+        heldOn: row.heldOn,
+        location: row.location,
+        isQuickMatch: row.isQuickMatch,
+        matchType: row.matchType,
+        status: row.status,
+        format: row.format,
+        maxParticipants: Number(row.maxParticipants),
+        registrationDeadline: iso(row.registrationDeadline),
+        participantCount: Number(row.participantCount),
+        participantCountBasis: row.participantCountBasis,
+        competitorUnitCount: Number(row.competitorUnitCount),
+        resultCount: Number(row.resultCount),
+        sourceCreatedAt: iso(row.sourceCreatedAt),
+        sourceUpdatedAt: iso(row.sourceUpdatedAt),
+      })),
+    };
+  });
 }
 
 export const ustcttaCompetitionSourceProvider: ToolProviderExtension = {
   id: USTCTTA_SOURCE_PROVIDER_ID,
-  version: "1.0.0",
+  version: "2.0.0",
   implementations: [{
     capability: {
       key: COMPETITION_SOURCE_READ_CAPABILITY,

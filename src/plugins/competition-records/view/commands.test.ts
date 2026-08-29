@@ -12,7 +12,6 @@ const IDS = {
   editionTwo: "00000000-0000-4000-8000-000000000102",
   series: "00000000-0000-4000-8000-000000000201",
   seriesObject: "00000000-0000-4000-8000-000000000301",
-  editionObject: "00000000-0000-4000-8000-000000000302",
 };
 
 function command(key: string): CommandDefinition<Record<string, unknown>> {
@@ -72,50 +71,6 @@ async function execute(
   }, parsed);
 }
 
-describe("competition.create_edition", () => {
-  it("records participant count and source identity", async () => {
-    const transaction = fixture();
-
-    await execute("competition.create_edition", transaction, {
-      objectId: IDS.editionObject,
-      name: "第十五次积分赛",
-      participantCount: 36,
-      sequenceNumber: 15,
-      sourceSystem: "USTCTTA",
-      sourceId: "match-15",
-    });
-
-    expect(transaction.createCard).toHaveBeenCalledWith({
-      cardTypeKey: "CompetitionEditionCard",
-      relatedObjectIds: [IDS.editionObject],
-      dimensions: {
-        name: "第十五次积分赛",
-        participant_count: 36,
-        sequence_number: 15,
-        source_system: "USTCTTA",
-        source_id: "match-15",
-      },
-    });
-  });
-
-  it("rejects a duplicate source record", async () => {
-    const transaction = fixture([
-      card({
-        id: IDS.edition,
-        cardTypeKey: "CompetitionEditionCard",
-        dimensions: { source_system: "USTCTTA", source_id: "match-15" },
-      }),
-    ]);
-
-    await expect(execute("competition.create_edition", transaction, {
-      name: "重复届次",
-      participantCount: 20,
-      sourceSystem: "USTCTTA",
-      sourceId: "match-15",
-    })).rejects.toThrow("已对应届次");
-  });
-});
-
 describe("competition.sync_editions", () => {
   it("creates missing source records and updates changed authoritative fields", async () => {
     const transaction = fixture([
@@ -136,7 +91,7 @@ describe("competition.sync_editions", () => {
       sourceSystem: "USTCTTA-site",
       sourceSchemaVersion: "1",
       mappingVersion: "1",
-      retrievedAt: "2026-08-28T00:00:00.000Z",
+      sourceSnapshotAt: "2026-08-28T00:00:00.000Z",
       editions: [{
         sourceSystem: "USTCTTA-site",
         sourceId: "match-15",

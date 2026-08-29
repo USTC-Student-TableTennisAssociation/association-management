@@ -60,7 +60,7 @@ export function projectCompetitionEditions(
     sourceSystem: input.batch.sourceSystem,
     sourceSchemaVersion: input.batch.sourceSchemaVersion,
     mappingVersion: "1",
-    retrievedAt: input.batch.retrievedAt,
+    sourceSnapshotAt: input.batch.sourceSnapshotAt,
     editions: input.batch.records.map((record) => {
       const sequenceNumber = sequenceNumberFromTitle(record.title);
       return {
@@ -77,7 +77,7 @@ export function projectCompetitionEditions(
 
 export const competitionEditionProjectionProvider: ToolProviderExtension = {
   id: COMPETITION_EDITION_PROJECTION_PROVIDER_ID,
-  version: "1.0.0",
+  version: "2.0.0",
   implementations: [{
     capability: {
       key: COMPETITION_EDITION_PROJECT_CAPABILITY,

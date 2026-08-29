@@ -13,33 +13,6 @@ import {
 const uuid = z.string().uuid();
 const name = z.string().trim().min(1).max(300);
 
-const createEditionSchema = z.object({
-  objectId: uuid.optional(),
-  name,
-  participantCount: z.number().int().min(0),
-  sequenceNumber: z.number().int().positive().optional(),
-  heldOn: z.string().trim().min(1).max(100).optional(),
-  sourceSystem: z.string().trim().min(1).max(100).default("USTCTTA"),
-  sourceId: z.string().trim().min(1).max(300).optional(),
-});
-
-const editionChangesSchema = z.object({
-  name: name.optional(),
-  participantCount: z.number().int().min(0).optional(),
-  sequenceNumber: z.number().int().positive().nullable().optional(),
-  heldOn: z.string().trim().min(1).max(100).nullable().optional(),
-  sourceSystem: z.string().trim().min(1).max(100).optional(),
-  sourceId: z.string().trim().min(1).max(300).nullable().optional(),
-}).refine(
-  (changes) => Object.values(changes).some((value) => value !== undefined),
-  { message: "至少需要一个要更新的届次字段" },
-);
-
-const updateEditionSchema = z.object({
-  editionCardId: uuid,
-  changes: editionChangesSchema,
-});
-
 const syncEditionsSchema = competitionEditionProjectOutputSchema.refine(
   (input) => {
     const identities = input.editions.map((edition) =>
@@ -136,31 +109,14 @@ async function requireEditions(
   transaction: ViewTransaction,
   cardIds: readonly string[],
 ): Promise<ViewCardState[]> {
-  return Promise.all(cardIds.map(async (cardId) =>
-    requireType(await transaction.getCard(cardId), "CompetitionEditionCard")
-  ));
-}
-
-async function assertSourceIdentityAvailable(input: {
-  transaction: ViewTransaction;
-  sourceSystem: string;
-  sourceId?: string | null;
-  excludingCardId?: string;
-}) {
-  if (!input.sourceId) return;
-  const editions = await input.transaction.queryCards({
-    cardTypeKey: "CompetitionEditionCard",
-  });
-  const duplicate = editions.find((edition) =>
-    edition.id !== input.excludingCardId &&
-    edition.dimensions.source_system === input.sourceSystem &&
-    edition.dimensions.source_id === input.sourceId
-  );
-  if (duplicate) {
-    throw new Error(
-      `来源 ${input.sourceSystem}/${input.sourceId} 已对应届次 Card ${duplicate.id}`,
-    );
+  const editions: ViewCardState[] = [];
+  for (const cardId of cardIds) {
+    editions.push(requireType(
+      await transaction.getCard(cardId),
+      "CompetitionEditionCard",
+    ));
   }
+  return editions;
 }
 
 async function assertEditionsCanJoinSeries(
@@ -178,96 +134,9 @@ async function assertEditionsCanJoinSeries(
   }
 }
 
-const createEdition: CommandDefinition<z.infer<typeof createEditionSchema>> = {
-  key: "competition.create_edition",
-  version: "1",
-  label: "记录比赛届次",
-  allowedInitiators: ["human", "ai"],
-  requiredPermissions: ["view.write"],
-  inputSchema: zodContractSchema(createEditionSchema),
-  inputReferences: [{
-    path: ["objectId"],
-    kind: "object",
-    inferFromCanonicalNamePath: ["name"],
-  }],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
-  async execute(context, input) {
-    await assertSourceIdentityAvailable({
-      transaction: context.transaction,
-      sourceSystem: input.sourceSystem,
-      sourceId: input.sourceId,
-    });
-    const cardId = await context.transaction.createCard({
-      cardTypeKey: "CompetitionEditionCard",
-      relatedObjectIds: input.objectId ? [input.objectId] : [],
-      dimensions: compactDimensions({
-        name: input.name,
-        participant_count: input.participantCount,
-        sequence_number: input.sequenceNumber,
-        held_on: input.heldOn,
-        source_system: input.sourceSystem,
-        source_id: input.sourceId,
-      }),
-    });
-    return {
-      summary: { cardId, created: true },
-      events: [{
-        type: "competition.edition_created",
-        version: "1",
-        payload: { cardId, objectId: input.objectId ?? null },
-      }],
-    };
-  },
-};
-
-const updateEdition: CommandDefinition<z.infer<typeof updateEditionSchema>> = {
-  key: "competition.update_edition",
-  version: "1",
-  label: "更新比赛届次",
-  allowedInitiators: ["human", "ai"],
-  requiredPermissions: ["view.write"],
-  inputSchema: zodContractSchema(updateEditionSchema),
-  inputReferences: [{ path: ["editionCardId"], kind: "card" }],
-  proposalApprovalConflictPolicy: () => "exact",
-  async execute(context, input) {
-    const edition = requireType(
-      await context.transaction.getCard(input.editionCardId),
-      "CompetitionEditionCard",
-    );
-    const nextSourceSystem = input.changes.sourceSystem ??
-      String(edition.dimensions.source_system ?? "USTCTTA");
-    const nextSourceId = input.changes.sourceId === undefined
-      ? (edition.dimensions.source_id as string | undefined)
-      : input.changes.sourceId;
-    await assertSourceIdentityAvailable({
-      transaction: context.transaction,
-      sourceSystem: nextSourceSystem,
-      sourceId: nextSourceId,
-      excludingCardId: edition.id,
-    });
-    const changes = dimensionChanges({
-      name: input.changes.name,
-      participant_count: input.changes.participantCount,
-      sequence_number: input.changes.sequenceNumber,
-      held_on: input.changes.heldOn,
-      source_system: input.changes.sourceSystem,
-      source_id: input.changes.sourceId,
-    });
-    await applyDimensionChanges(context.transaction, edition.id, changes);
-    return {
-      summary: { cardId: edition.id, changedDimensions: Object.keys(changes) },
-      events: [{
-        type: "competition.edition_updated",
-        version: "1",
-        payload: { cardId: edition.id, changedDimensions: Object.keys(changes) },
-      }],
-    };
-  },
-};
-
 const syncEditions: CommandDefinition<z.infer<typeof syncEditionsSchema>> = {
   key: "competition.sync_editions",
-  version: "1",
+  version: "2",
   label: "同步比赛届次",
   allowedInitiators: ["system"],
   requiredPermissions: ["view.write"],
@@ -343,7 +212,7 @@ const syncEditions: CommandDefinition<z.infer<typeof syncEditionsSchema>> = {
         sourceSystem: input.sourceSystem,
         sourceSchemaVersion: input.sourceSchemaVersion,
         mappingVersion: input.mappingVersion,
-        retrievedAt: input.retrievedAt,
+        sourceSnapshotAt: input.sourceSnapshotAt,
         total: input.editions.length,
         created,
         updated,
@@ -351,9 +220,10 @@ const syncEditions: CommandDefinition<z.infer<typeof syncEditionsSchema>> = {
       },
       events: [{
         type: "competition.editions_synced",
-        version: "1",
+        version: "2",
         payload: {
           sourceSystem: input.sourceSystem,
+          sourceSnapshotAt: input.sourceSnapshotAt,
           mappingVersion: input.mappingVersion,
           total: input.editions.length,
           created,
@@ -425,9 +295,9 @@ const organizeSeries: CommandDefinition<z.infer<typeof organizeSeriesSchema>> = 
     }
 
     await assertEditionsCanJoinSeries(editions, seriesCardId);
-    await Promise.all(editions.map((edition) =>
-      context.transaction.setSlot(edition.id, "series", [seriesCardId])
-    ));
+    for (const edition of editions) {
+      await context.transaction.setSlot(edition.id, "series", [seriesCardId]);
+    }
     return {
       summary: {
         seriesCardId,
@@ -448,8 +318,6 @@ const organizeSeries: CommandDefinition<z.infer<typeof organizeSeriesSchema>> = 
 };
 
 export const competitionRecordsCommands: readonly CommandDefinition[] = [
-  createEdition,
-  updateEdition,
   syncEditions,
   organizeSeries,
 ];

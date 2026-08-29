@@ -14,7 +14,7 @@ import { competitionRecordsViewModule } from "@/plugins/competition-records/view
 
 export const competitionRecordsPlugin: EchoPluginManifest = {
   id: "echo.competition-records",
-  version: "0.1.0",
+  version: "0.2.0",
   requires: [{
     pluginId: "echo.society-information",
     versions: "^1.10.0",
