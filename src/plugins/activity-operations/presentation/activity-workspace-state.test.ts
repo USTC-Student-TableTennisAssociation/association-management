@@ -20,7 +20,7 @@ function card(cardTypeKey: string, dimensions: Record<string, unknown> = {}, slo
 function snapshot(cards: readonly ViewCardState[]): EchoViewSnapshot {
   return {
     viewKey: "activity_operations",
-    pluginVersion: "1.2.0",
+    pluginVersion: "1.3.0",
     schemaVersion: "3",
     stateVersion: "8",
     observedAt: "2026-08-28T00:00:00Z",

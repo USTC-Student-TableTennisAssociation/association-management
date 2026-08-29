@@ -2,7 +2,7 @@
 
 Echo Plugin 的公开 TypeScript 合同、描述文件 Schema 和 React hooks。
 
-> 当前是 `0.1.0-alpha.5` 预发布版，API 可能在后续 alpha 版调整。
+> 当前是 `0.1.0-alpha.6` 预发布版，API 可能在后续 alpha 版调整。
 
 ## 安装
 
@@ -162,6 +162,23 @@ import { useEchoCommand, useEchoView } from "@sydaris/plugin-sdk/react";
 ```
 
 UI 只通过 Echo 的 View API 读取状态和执行 Domain Command。
+
+Presentation 通过结构化 Invocation 触发 AI，而不得在按钮中内嵌长提示词：
+
+```tsx
+props.onInvokeAI({
+  actionId: "notes.plan-today",
+  message: "帮我整理今日计划",
+  skill: {
+    id: "echo.notes.daily-planner",
+    input: { focus: "today" },
+  },
+});
+```
+
+`message` 是会话中可见、可持久化的简短用户意图。Skill 的指令、知识层和
+Command 边界由服务端注册的 `SkillExtension` 提供。Runtime 会校验 Skill 输入并在
+首个模型步骤前激活它；Presentation 无权通过隐藏字符串注入系统指令。
 
 ## 开发
 

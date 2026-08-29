@@ -2,6 +2,7 @@
 
 import { installedPresentationComponents } from "@/generated/installed-presentations";
 import { WorkViewWorkspace } from "@/view-runtime/generic-ui/work-view-workspace";
+import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
 
 export type WorkPresentationProps = {
   viewKey: string;
@@ -10,7 +11,7 @@ export type WorkPresentationProps = {
   focusCardId?: string;
   activeConversationId?: string;
   onOpenInspector: () => void;
-  onAskAI: (prompt: string) => void;
+  onInvokeAI: (invocation: EchoAIInvocation) => void;
 };
 
 export function WorkPresentationHost(props: WorkPresentationProps) {
@@ -27,7 +28,7 @@ export function WorkPresentationHost(props: WorkPresentationProps) {
       refreshRevision={props.refreshRevision}
       focusCardId={props.focusCardId}
       onOpenInspector={props.onOpenInspector}
-      onAskAI={props.onAskAI}
+      onInvokeAI={props.onInvokeAI}
     />
   );
 }

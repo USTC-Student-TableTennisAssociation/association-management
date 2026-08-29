@@ -19,6 +19,7 @@ import {
 } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
 
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import type { ArtifactReference } from "@/library/artifact-references";
@@ -1161,6 +1162,26 @@ export default function Home() {
     ).finally(() => void refreshConversations());
   }
 
+  function invokeAI(invocation: EchoAIInvocation) {
+    const message = invocation.message.trim();
+    if (!message || !activeConversationId || isSending || historyState !== "ready") return;
+    clearError();
+    setInput("");
+    setLayoutMode("collaborate");
+    void sendMessage(
+      {
+        parts: [
+          { type: "text", text: message },
+          {
+            type: "data-aiInvocation",
+            data: { ...invocation, message },
+          },
+        ],
+      },
+      { body: { pageContext, conversationId: activeConversationId } },
+    ).finally(() => void refreshConversations());
+  }
+
   function activateConversation(conversationId: string) {
     setHistoryState("loading");
     setHistoryError(undefined);
@@ -1465,10 +1486,7 @@ export default function Home() {
                 focusCardId={viewFocusCardId}
                 onClose={() => setWorkInspectorOpen(false)}
                 onOpenAI={() => setLayoutMode("collaborate")}
-                onAskAI={(prompt) => {
-                  setInput(prompt);
-                  setLayoutMode("collaborate");
-                }}
+                onInvokeAI={invokeAI}
               />
             ) : (
               <WorkPresentationHost
@@ -1479,10 +1497,7 @@ export default function Home() {
                 focusCardId={viewFocusCardId}
                 activeConversationId={activeConversationId}
                 onOpenInspector={() => setWorkInspectorOpen(true)}
-                onAskAI={(prompt) => {
-                  setInput(prompt);
-                  setLayoutMode("collaborate");
-                }}
+                onInvokeAI={invokeAI}
               />
             )
           ) : (
@@ -1495,10 +1510,7 @@ export default function Home() {
           <div className="min-h-0 min-w-0 flex-1 overflow-hidden">
             <KnowledgeGraphWorkspace
               assistantOpen={aiPaneVisible}
-              onAskAI={(prompt) => {
-                setInput(prompt);
-                setLayoutMode("collaborate");
-              }}
+              onInvokeAI={invokeAI}
             />
           </div>
         ) : (
@@ -1509,18 +1521,12 @@ export default function Home() {
                 onFolderChange={setActiveLibraryFolderId}
                 onOpenProcessing={() => setLibraryMode("processing")}
                 onOpenAI={() => setLayoutMode("collaborate")}
-                onAskAI={(prompt) => {
-                  setInput(prompt);
-                  setLayoutMode("collaborate");
-                }}
+                onInvokeAI={invokeAI}
               />
             ) : (
               <CompilationWorkspace
                 onOpenLibrary={() => setLibraryMode("files")}
-                onAskAI={(prompt) => {
-                  setInput(prompt);
-                  setLayoutMode("collaborate");
-                }}
+                onInvokeAI={invokeAI}
               />
             )}
           </div>

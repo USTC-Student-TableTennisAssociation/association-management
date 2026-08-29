@@ -307,7 +307,7 @@ export function SocietyOverviewWorkspace({
   refreshRevision = 0,
   focusCardId,
   onOpenInspector,
-  onAskAI,
+  onInvokeAI,
 }: WorkspaceProps) {
   const [reloadSequence, setReloadSequence] = useState(0);
   const [heroReady, setHeroReady] = useState(false);
@@ -1024,14 +1024,22 @@ export function SocietyOverviewWorkspace({
   const creatorDimensions = creatorTarget?.kind === "advisor"
     ? []
     : creatorCardType?.dimensions ?? [];
-  const promptToFill = (topic: string) => onAskAI(
-    `请先读取 ${viewKey} 当前状态，帮我补充${topic}。以 synthesis 方式从 Shared Brain 与高价值原文中整理已有资料，先完整提交一版待审批草稿；可选细节不确定可以留空或明确标注推断，只有正式 Object 有歧义、当前状态冲突或必要字段无法确定时才询问，再只使用已声明的 society Commands 提交。`,
-  );
-  const askToImprove = () => onAskAI(
-    society
-      ? `请帮我完善社团概览。先读取 ${viewKey} 当前状态，再以 synthesis 方式从 Shared Brain 与高价值原文中整理社团资料、指导老师、干事队伍、长期活动和平台入口，并完整提交一版待审批草稿；可选细节不确定可以留空或明确标注推断，只有正式 Object 有歧义、当前状态冲突或必要字段无法确定时才询问，再只使用已声明的 society Commands 提交。`
-      : `请帮我建立社团概览。先在知识中定位“中国科学技术大学学生乒乓球协会”的稳定 Object；唯一确认后以 synthesis 方式整理 Shared Brain 与高价值原文中的已有资料，无法唯一确认时才询问我，再使用 society.initialize_overview 建立正式概览。`,
-  );
+  const promptToFill = (topic: string) => onInvokeAI({
+    actionId: "society.fill-overview-topic",
+    message: `帮我补充社团概览中的${topic}。`,
+    skill: {
+      id: "echo.society-information.maintain-overview",
+      input: { operation: "fill-topic", phase: "propose", topic },
+    },
+  });
+  const askToImprove = () => onInvokeAI({
+    actionId: society ? "society.complete-overview" : "society.create-overview",
+    message: society ? "帮我完善社团概览。" : "帮我建立社团概览。",
+    skill: {
+      id: "echo.society-information.maintain-overview",
+      input: { operation: "complete", phase: "propose" },
+    },
+  });
 
   return (
     <div className={styles.workspace}>
@@ -1212,7 +1220,14 @@ export function SocietyOverviewWorkspace({
                           type="button"
                           className={styles.labeledCardAction}
                           aria-label={`用 Echo 更新${activityName}`}
-                          onClick={() => onAskAI(`请读取 ${viewKey} 中 ID 为 ${activity.id} 的活动卡片，和我确认后更新“${activityName}”的信息。`)}
+                          onClick={() => onInvokeAI({
+                            actionId: "society.refine-long-term-activity",
+                            message: `帮我检查并完善长期活动“${activityName}”。`,
+                            skill: {
+                              id: "echo.society-information.maintain-overview",
+                              input: { operation: "refine-card", phase: "discuss", cardId: activity.id },
+                            },
+                          })}
                         >
                           <EchoIcon />
                           Echo

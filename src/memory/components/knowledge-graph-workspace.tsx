@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
 
 import type {
   KnowledgeGraphAssertionNode,
@@ -147,10 +148,10 @@ function graphStyles(): StylesheetJson {
 }
 
 export function KnowledgeGraphWorkspace({
-  onAskAI,
+  onInvokeAI,
   assistantOpen,
 }: {
-  onAskAI: (prompt: string) => void;
+  onInvokeAI: (invocation: EchoAIInvocation) => void;
   assistantOpen: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -506,11 +507,14 @@ export function KnowledgeGraphWorkspace({
               ) : null}
               <button
                 type="button"
-                onClick={() => onAskAI(mode === "isolated"
-                  ? "请分析知识图谱中这些尚未连接 Assertion 的孤立 Object，并判断它们可能缺少哪些组织知识关系。"
-                  : mode === "all"
-                    ? "请解释完整组织知识图谱的主要关系簇、关键 Object 和值得关注的跨簇连接。"
-                    : "请解释当前组织知识图谱的核心结构、关键 Object 和最重要的关系簇。")}
+                onClick={() => onInvokeAI({
+                  actionId: `knowledge.explain-${mode}`,
+                  message: mode === "isolated"
+                    ? "帮我分析当前知识图谱中的孤立 Object。"
+                    : mode === "all"
+                      ? "帮我解读完整组织知识图谱。"
+                      : "帮我解读组织知识图谱的核心结构。",
+                })}
                 className="mt-4 w-full rounded-lg border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
               >
                 {mode === "isolated" ? "让 Echo 分析孤立项" : "让 Echo 解读这张图"}
@@ -526,7 +530,7 @@ export function KnowledgeGraphWorkspace({
               </div>
               <h2 className="mt-3 text-base font-semibold leading-6 text-zinc-950">{selectedObject.label}</h2>
               <p className="mt-1 text-xs text-zinc-500">{selectedObject.degree ? `连接 ${selectedObject.degree} 条可见 Assertion` : "尚未连接 Assertion"}</p>
-              <button type="button" onClick={() => onAskAI(`请解释知识图谱中的 Object「${selectedObject.label}」，以及它与相关 Assertion 和其他 Object 的关系。`)} className="mt-3 w-full rounded-lg bg-zinc-950 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-800">询问 Echo</button>
+              <button type="button" onClick={() => onInvokeAI({ actionId: "knowledge.explain-object", message: `帮我解读知识图谱中的 Object「${selectedObject.label}」。` })} className="mt-3 w-full rounded-lg bg-zinc-950 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-800">询问 Echo</button>
               {relatedAssertions.length ? <div className="mt-5 border-t border-zinc-100 pt-4">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-400">相关 Assertion</p>
                 <div className="mt-2 space-y-1.5">
@@ -561,7 +565,7 @@ export function KnowledgeGraphWorkspace({
                   })}
                 </div>
               </div>
-              <button type="button" onClick={() => onAskAI(`请解释这条 Assertion 的含义、依据，以及它连接这些 Object 的原因：${markdownLabel(selectedAssertion.statement)}`)} className="mt-4 w-full rounded-lg bg-zinc-950 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-800">询问 Echo</button>
+              <button type="button" onClick={() => onInvokeAI({ actionId: "knowledge.explain-assertion", message: `帮我解读这条 Assertion：${markdownLabel(selectedAssertion.statement)}` })} className="mt-4 w-full rounded-lg bg-zinc-950 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-800">询问 Echo</button>
             </div>
           ) : null}
         </aside>

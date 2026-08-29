@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "echo.society-information",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "engines": {
     "echo": ">=0.1.0-alpha.3 <0.2.0-0"
   },
@@ -20,7 +20,9 @@
         "export": "SocietyOverviewWorkspace"
       }
     ],
-    "skills": [],
+    "skills": [
+      "echo.society-information.maintain-overview"
+    ],
     "toolCapabilities": [],
     "tools": []
   }

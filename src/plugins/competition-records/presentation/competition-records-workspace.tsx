@@ -455,7 +455,7 @@ export function CompetitionRecordsWorkspace({
   viewKey,
   refreshRevision = 0,
   focusCardId,
-  onAskAI,
+  onInvokeAI,
 }: EchoPresentationProps) {
   const { snapshot, error: loadError, loading, refresh } = useEchoView(
     viewKey,
@@ -548,10 +548,22 @@ export function CompetitionRecordsWorkspace({
   };
 
   const askSeriesSkill = () => {
-    const scope = selectedSeries
-      ? `请重点核对并完善赛事系列“${selectedSeries.name}”，结合其 ${selectedSeries.editions.length} 个比赛届次和知识库资料。`
-      : `请优先整理以下尚未归类的比赛届次：${model.unassignedEditions.slice(0, 12).map((edition) => edition.name).join("、")}。`;
-    onAskAI(`请使用整理赛事系列 Skill。${scope}`);
+    const editionHints = selectedSeries
+      ? selectedSeries.editions.map((edition) => edition.name).slice(0, 30)
+      : model.unassignedEditions.map((edition) => edition.name).slice(0, 30);
+    onInvokeAI({
+      actionId: "competition.curate-series",
+      message: selectedSeries
+        ? `帮我核对并完善赛事系列“${selectedSeries.name}”。`
+        : "帮我整理尚未归类的比赛届次。",
+      skill: {
+        id: "echo.competition-records.curate-series",
+        input: {
+          ...(selectedSeries ? { seriesHint: selectedSeries.name } : {}),
+          editionHints,
+        },
+      },
+    });
   };
 
   const saveSeries = async (values: {

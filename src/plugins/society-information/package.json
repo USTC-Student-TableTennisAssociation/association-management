@@ -1,6 +1,6 @@
 {
   "name": "echo-society-information-plugin",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "description": "Publishable Society Information View plugin for Echo",
   "type": "module",
   "files": [

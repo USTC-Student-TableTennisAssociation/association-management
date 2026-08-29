@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
 import { useEchoViewReactions } from "@sydaris/plugin-sdk/react";
 
 import type { ViewInspectorSnapshot } from "@/view-runtime/application/view-read-port";
@@ -16,13 +17,13 @@ export function WorkViewWorkspace({
   refreshRevision = 0,
   focusCardId,
   onOpenInspector,
-  onAskAI,
+  onInvokeAI,
 }: {
   viewKey: string;
   refreshRevision?: number;
   focusCardId?: string;
   onOpenInspector: () => void;
-  onAskAI: (prompt: string) => void;
+  onInvokeAI: (invocation: EchoAIInvocation) => void;
 }) {
   const [reloadSequence, setReloadSequence] = useState(0);
   const { reactions } = useEchoViewReactions(viewKey);
@@ -101,7 +102,10 @@ export function WorkViewWorkspace({
             </button>
             <button
               type="button"
-              onClick={() => onAskAI(`请阅读 ${viewKey} 的当前正式状态，并告诉我最值得关注的事项。`)}
+              onClick={() => onInvokeAI({
+                actionId: "echo.inspect-view",
+                message: `请解读 ${viewKey} 的当前正式状态。`,
+              })}
               className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100"
             >
               让 AI 解读
