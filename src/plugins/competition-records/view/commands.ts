@@ -136,7 +136,7 @@ async function assertEditionsCanJoinSeries(
 
 const syncEditions: CommandDefinition<z.infer<typeof syncEditionsSchema>> = {
   key: "competition.sync_editions",
-  version: "1",
+  version: "2",
   label: "同步比赛届次",
   allowedInitiators: ["system"],
   requiredPermissions: ["view.write"],
@@ -212,7 +212,7 @@ const syncEditions: CommandDefinition<z.infer<typeof syncEditionsSchema>> = {
         sourceSystem: input.sourceSystem,
         sourceSchemaVersion: input.sourceSchemaVersion,
         mappingVersion: input.mappingVersion,
-        retrievedAt: input.retrievedAt,
+        sourceSnapshotAt: input.sourceSnapshotAt,
         total: input.editions.length,
         created,
         updated,
@@ -220,9 +220,10 @@ const syncEditions: CommandDefinition<z.infer<typeof syncEditionsSchema>> = {
       },
       events: [{
         type: "competition.editions_synced",
-        version: "1",
+        version: "2",
         payload: {
           sourceSystem: input.sourceSystem,
+          sourceSnapshotAt: input.sourceSnapshotAt,
           mappingVersion: input.mappingVersion,
           total: input.editions.length,
           created,

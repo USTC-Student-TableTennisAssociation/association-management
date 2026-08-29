@@ -32,7 +32,13 @@ type SyncWriteSummary = {
 };
 
 type SyncSummary = {
-  source: { sourceSystem: string; retrievedAt: string; recordCount: number };
+  source: {
+    sourceSystem: string;
+    sourceSnapshotAt: string;
+    complete: true;
+    pageCount: number;
+    recordCount: number;
+  };
   mapping: { version: string; editionCount: number };
   write: { kind: string; summary?: SyncWriteSummary };
 };
@@ -55,11 +61,24 @@ function shortDate(value: string | undefined): string {
   return match ? `${match[1]}/${match[2]}` : value.slice(0, 8);
 }
 
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return value;
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
+}
+
 function formatObservedAt(value: string | undefined): string {
   if (!value) return "正在读取正式 View";
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return "正式 View 已载入";
-  return `快照读取于 ${new Intl.DateTimeFormat("zh-CN", {
+  return `Echo 读取于 ${new Intl.DateTimeFormat("zh-CN", {
     month: "long",
     day: "numeric",
     hour: "2-digit",
@@ -515,7 +534,7 @@ export function CompetitionRecordsWorkspace({
       const response = await fetch("/api/views/competition_records/sync", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ includeQuickMatches: false, limit: 200 }),
+        body: JSON.stringify({ includeQuickMatches: false }),
       });
       const body = await response.json() as SyncSummary & { error?: string };
       if (!response.ok) throw new Error(body.error ?? "同步失败");
@@ -624,7 +643,10 @@ export function CompetitionRecordsWorkspace({
           <div className={styles.syncBanner}>
             <div>
               <SyncIcon />
-              <span>已从 {syncSummary.source.sourceSystem} 读取 {syncSummary.source.recordCount} 条比赛记录</span>
+              <span>
+                已从 {syncSummary.source.sourceSystem} 完整读取 {syncSummary.source.recordCount} 条比赛记录
+                （{syncSummary.source.pageCount} 批）· 源快照 {formatTimestamp(syncSummary.source.sourceSnapshotAt)}
+              </span>
             </div>
             <p>
               新增 <strong>{syncWrite?.created ?? 0}</strong>

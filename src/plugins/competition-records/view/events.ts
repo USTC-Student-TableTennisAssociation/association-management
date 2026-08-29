@@ -8,9 +8,10 @@ const uuid = z.string().uuid();
 export const competitionRecordsEvents: readonly DomainEventDefinition[] = [
   {
     key: "competition.editions_synced",
-    version: "1",
+    version: "2",
     payloadSchema: zodContractSchema(z.object({
       sourceSystem: z.string().min(1),
+      sourceSnapshotAt: z.string().datetime({ offset: true }),
       mappingVersion: z.string().min(1),
       total: z.number().int().min(0),
       created: z.number().int().min(0),

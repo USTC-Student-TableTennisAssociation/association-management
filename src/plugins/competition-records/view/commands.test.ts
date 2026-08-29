@@ -91,7 +91,7 @@ describe("competition.sync_editions", () => {
       sourceSystem: "USTCTTA-site",
       sourceSchemaVersion: "1",
       mappingVersion: "1",
-      retrievedAt: "2026-08-28T00:00:00.000Z",
+      sourceSnapshotAt: "2026-08-28T00:00:00.000Z",
       editions: [{
         sourceSystem: "USTCTTA-site",
         sourceId: "match-15",
