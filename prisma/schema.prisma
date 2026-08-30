@@ -920,7 +920,6 @@ model InstalledView {
   proposals    ViewCommandProposal[]
   executions   ViewCommandExecution[]
   reactions    ViewChangeReaction[]
-  outbox       DomainEventOutbox[]
   higherMemory ViewHigherMemory?
 
   @@map("installed_views")
@@ -1027,6 +1026,7 @@ model ViewCommandExecution {
   stateVersionAfter  BigInt               @map("state_version_after")
   resultSummaryJson  Json?                @map("result_summary_json") @db.JsonB
   changeSetJson      Json                 @default("[]") @map("change_set_json") @db.JsonB
+  eventsJson         Json                 @default("[]") @map("events_json") @db.JsonB
   createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
 
   installedView InstalledView        @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
@@ -1072,25 +1072,6 @@ model ViewChangeReaction {
   @@index([attentionStatus, settleUntil])
   @@index([knowledgeStatus, settleUntil])
   @@map("view_change_reactions")
-}
-
-model DomainEventOutbox {
-  id           String    @id @default(uuid()) @db.Uuid
-  eventType    String    @map("event_type") @db.Text
-  eventVersion String    @map("event_version") @db.Text
-  viewKey      String    @map("view_key") @db.Text
-  stateVersion BigInt    @map("state_version")
-  payloadJson  Json      @map("payload_json") @db.JsonB
-  metadataJson Json      @map("metadata_json") @db.JsonB
-  occurredAt   DateTime  @default(now()) @map("occurred_at") @db.Timestamptz(3)
-  publishedAt  DateTime? @map("published_at") @db.Timestamptz(3)
-  attempts     Int       @default(0)
-
-  installedView InstalledView @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
-
-  @@index([publishedAt, occurredAt])
-  @@index([viewKey, stateVersion])
-  @@map("domain_event_outbox")
 }
 
 /// 对 GlobalObject 身份的可审计修改建议；批准前不改变名称、归属或 Assertion 引用。

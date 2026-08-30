@@ -424,6 +424,25 @@ export class ViewCommandBus {
       });
       if (advanced.count !== 1) throw new ViewConflictError();
 
+      const eventDefinitions = [];
+      const events = [];
+      for (const event of outcome.events ?? []) {
+        const definition = viewModule.events.find(
+          (candidate) => candidate.key === event.type && candidate.version === event.version,
+        );
+        if (!definition) {
+          throw new ViewRuntimeError(
+            `Command 产生了未声明的 Event ${event.type}@${event.version}`,
+          );
+        }
+        eventDefinitions.push(definition);
+        events.push({
+          type: event.type,
+          version: event.version,
+          payload: definition.payloadSchema.parse(event.payload),
+        });
+      }
+
       const execution = await transaction.viewCommandExecution.create({
         data: {
           viewKey: input.viewKey,
@@ -437,37 +456,10 @@ export class ViewCommandBus {
           stateVersionAfter: nextStateVersion,
           resultSummaryJson: outcome.summary === undefined ? Prisma.JsonNull : json(outcome.summary),
           changeSetJson: json(changeSet),
+          eventsJson: json(events),
         },
         select: { id: true },
       });
-
-      const eventDefinitions = [];
-      for (const event of outcome.events ?? []) {
-        const definition = viewModule.events.find(
-          (candidate) => candidate.key === event.type && candidate.version === event.version,
-        );
-        if (!definition) {
-          throw new ViewRuntimeError(
-            `Command 产生了未声明的 Event ${event.type}@${event.version}`,
-          );
-        }
-        eventDefinitions.push(definition);
-        const payload = definition.payloadSchema.parse(event.payload);
-        await transaction.domainEventOutbox.create({
-          data: {
-            eventType: event.type,
-            eventVersion: event.version,
-            viewKey: input.viewKey,
-            stateVersion: nextStateVersion,
-            payloadJson: json(payload),
-            metadataJson: json({
-              actorId: input.actor.actorId,
-              initiator: input.initiator,
-              skillId: input.skillId,
-            }),
-          },
-        });
-      }
       if (options.proposalId) {
         await transaction.viewCommandProposal.update({
           where: { id: options.proposalId },

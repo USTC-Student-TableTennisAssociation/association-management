@@ -36,6 +36,20 @@ function storedChanges(value: Prisma.JsonValue): ViewChange[] {
   return Array.isArray(value) ? value as ViewChange[] : [];
 }
 
+function storedEvents(value: Prisma.JsonValue, stateVersion: string): ViewChangeEvent[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    if (typeof item.type !== "string" || typeof item.version !== "string") return [];
+    return [{
+      type: item.type,
+      version: item.version,
+      payload: "payload" in item ? item.payload : null,
+      stateVersion,
+    }];
+  });
+}
+
 function storedObjects(value: Prisma.JsonValue): ViewRelatedObject[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((item) => {
@@ -159,10 +173,6 @@ export class ViewChangeCoordinator {
       const viewModule = this.dependencies.registry.getView(reaction.viewKey);
       if (!viewModule) throw new Error(`View ${reaction.viewKey} 未加载`);
 
-      const eventRows = await database.domainEventOutbox.findMany({
-        where: { viewKey: reaction.viewKey, stateVersion: reaction.stateVersion },
-        orderBy: { occurredAt: "asc" },
-      });
       const snapshot = await this.dependencies.readPort.query({
         viewKey: reaction.viewKey,
         actor: { actorId: reaction.actorId ?? undefined, permissions: ["view.read"] },
@@ -177,12 +187,10 @@ export class ViewChangeCoordinator {
         stateVersionAfter: reaction.execution.stateVersionAfter.toString(),
         changes,
       };
-      const events: ViewChangeEvent[] = eventRows.map((event) => ({
-        type: event.eventType,
-        version: event.eventVersion,
-        payload: event.payloadJson,
-        stateVersion: event.stateVersion.toString(),
-      }));
+      const events = storedEvents(
+        reaction.execution.eventsJson,
+        reaction.execution.stateVersionAfter.toString(),
+      );
       const impactedCardIds = targetCardIds(reaction.targetsJson);
       const reactionSnapshot = {
         ...snapshot,

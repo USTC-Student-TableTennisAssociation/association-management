@@ -150,6 +150,9 @@ describe("Echo plugin architecture boundaries", () => {
     expect(schema).not.toContain("SemanticContentDimension");
     expect(schema).not.toContain("SemanticSlotBinding");
     expect(schema).not.toContain("publicContractVersion");
+    expect(schema).not.toContain("DomainEventOutbox");
+    expect(source("src/view-runtime/application/command-bus.ts"))
+      .not.toContain("domainEventOutbox");
     const viewCard = schema.match(/model ViewCard \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(viewCard).not.toMatch(/compilationId|sourceObjectId/);
     const related = schema.match(/model ViewCardRelatedObject \{[\s\S]*?\n\}/)?.[0] ?? "";

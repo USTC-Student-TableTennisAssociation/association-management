@@ -58,12 +58,6 @@ describe.runIf(runLive)("Plugin --purge database cleanup", () => {
         [randomUUID(), viewKey],
       );
       await client.query(
-        `INSERT INTO "domain_event_outbox"
-          ("id", "event_type", "event_version", "view_key", "state_version", "payload_json", "metadata_json")
-         VALUES ($1, 'test.created', '1', $2, 1, '{}'::jsonb, '{}'::jsonb)`,
-        [randomUUID(), viewKey],
-      );
-      await client.query(
         `INSERT INTO "view_higher_memories"
           ("id", "view_key", "content_markdown", "maintained_at", "maintenance_reason",
            "created_at", "updated_at")
@@ -72,14 +66,13 @@ describe.runIf(runLive)("Plugin --purge database cleanup", () => {
       );
 
       const result = await purgeViewData(client, [viewKey]);
-      expect(result.statements).toBe(9);
+      expect(result.statements).toBe(8);
       const checks = [];
       for (const table of [
         "installed_views",
         "view_cards",
         "view_command_proposals",
         "view_command_executions",
-        "domain_event_outbox",
         "view_higher_memories",
       ]) {
         checks.push(await client.query(
