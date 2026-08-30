@@ -481,15 +481,17 @@ model MemoryAssertion {
 /// 一次由主回答模型显式排队、并在回答后执行的 Assertion 提取事务。
 /// 完整主对话语义转录属于解释上下文，不是事实 Evidence。
 model MemoryChatAssertionCapture {
-  id                String   @id @default(uuid()) @db.Uuid
-  compilationId     String   @map("compilation_id") @db.Uuid
-  queuedByActorId   String   @map("queued_by_actor_id") @db.Uuid
-  queuedByMessageId String   @map("queued_by_message_id") @db.Text
-  queueReason       String   @map("queue_reason") @db.Text
-  submittedAt       DateTime @map("submitted_at") @db.Timestamptz(3)
-  timezone          String   @db.Text
-  semanticContext   Json     @map("semantic_context") @db.JsonB
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id                        String   @id @default(uuid()) @db.Uuid
+  compilationId             String   @map("compilation_id") @db.Uuid
+  queuedByActorId           String   @map("queued_by_actor_id") @db.Uuid
+  queuedByMessageId         String   @map("queued_by_message_id") @db.Text
+  queueReason               String   @map("queue_reason") @db.Text
+  submittedAt               DateTime @map("submitted_at") @db.Timestamptz(3)
+  timezone                  String   @db.Text
+  semanticContext           Json     @map("semantic_context") @db.JsonB
+  /// 与本次 Assertion 发布原子执行的确定性 Surface 纠错；这是 execution audit，不是 Proposal。
+  appliedSurfaceCorrections Json     @default("[]") @map("applied_surface_corrections") @db.JsonB
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   queuedBy    MemoryActor       @relation(fields: [queuedByActorId], references: [id], onDelete: Restrict)
