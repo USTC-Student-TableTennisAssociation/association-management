@@ -15,7 +15,7 @@ export async function GET(
     ? Math.min(100, Math.max(1, requestedLimit))
     : 20;
   try {
-    await viewChangeCoordinator.resumePending({ actorId: user.actor.id, viewKey });
+    await viewChangeCoordinator.resumePending({ viewKey });
     const rows = await getDatabase().viewChangeReaction.findMany({
       where: { actorId: user.actor.id, viewKey },
       orderBy: { createdAt: "desc" },

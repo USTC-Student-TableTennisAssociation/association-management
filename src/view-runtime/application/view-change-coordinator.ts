@@ -75,9 +75,9 @@ export class ViewChangeCoordinator {
     reconcileHigherMemory: ViewHigherMemoryReconciler;
   }) {}
 
-  async enqueue(input: { reactionId: string; actorId: string }): Promise<boolean> {
-    const reaction = await this.dependencies.database.viewChangeReaction.findFirst({
-      where: { id: input.reactionId, actorId: input.actorId },
+  async enqueue(input: { reactionId: string }): Promise<boolean> {
+    const reaction = await this.dependencies.database.viewChangeReaction.findUnique({
+      where: { id: input.reactionId },
       select: { id: true, settleUntil: true, attentionStatus: true, knowledgeStatus: true },
     });
     if (!reaction) return false;
@@ -88,10 +88,9 @@ export class ViewChangeCoordinator {
     return true;
   }
 
-  async resumePending(input: { actorId: string; viewKey: string }): Promise<number> {
+  async resumePending(input: { viewKey: string }): Promise<number> {
     const reactions = await this.dependencies.database.viewChangeReaction.findMany({
       where: {
-        actorId: input.actorId,
         viewKey: input.viewKey,
         OR: [{ attentionStatus: "queued" }, { knowledgeStatus: "queued" }],
       },

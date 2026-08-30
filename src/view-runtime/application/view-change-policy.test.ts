@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import type { DomainEventDefinition, ViewChange, ViewModule } from "@/contracts";
 import { zodContractSchema } from "@/contracts";
 import { z } from "zod";
-import { resolveViewChangeReaction } from "@/view-runtime/application/view-change-policy";
+import {
+  resolveViewChangeReaction,
+  resolveViewPostCommitReaction,
+} from "@/view-runtime/application/view-change-policy";
 
 const viewModule: ViewModule = {
   manifest: {
@@ -87,5 +90,36 @@ describe("View change reaction policy", () => {
         "Always surface identity conflicts.",
       ],
     });
+  });
+
+  it("keeps Human attention while making AI and System post-commit knowledge-only", () => {
+    const event: DomainEventDefinition = {
+      key: "society.changed",
+      version: "1",
+      payloadSchema: zodContractSchema(z.object({})),
+      reaction: { attention: "always", knowledge: "reconcile" },
+    };
+    const human = resolveViewPostCommitReaction({
+      viewModule,
+      changes: [change],
+      eventDefinitions: [event],
+      initiator: "human",
+    });
+    const ai = resolveViewPostCommitReaction({
+      viewModule,
+      changes: [change],
+      eventDefinitions: [event],
+      initiator: "ai",
+    });
+    const system = resolveViewPostCommitReaction({
+      viewModule,
+      changes: [change],
+      eventDefinitions: [event],
+      initiator: "system",
+    });
+
+    expect(human).toMatchObject({ attention: "always", knowledge: "reconcile" });
+    expect(ai).toMatchObject({ attention: "never", knowledge: "reconcile" });
+    expect(system).toMatchObject({ attention: "never", knowledge: "reconcile" });
   });
 });

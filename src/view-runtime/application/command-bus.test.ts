@@ -12,6 +12,7 @@ function runtimeFixture(
   proposalConflictPolicy: "exact" | "revalidate_latest" = "exact",
   allowedInitiators: readonly ("human" | "ai" | "system")[] = ["human", "ai"],
   simulateGraphChange = true,
+  reactionPolicy = false,
 ) {
   const proposalActorId = "00000000-0000-4000-8000-000000000001";
   const businessState = { value: "initial" };
@@ -49,6 +50,9 @@ function runtimeFixture(
         description: "Test Card",
         dimensions: [],
         slots: [],
+        ...(reactionPolicy
+          ? { changePolicy: { attention: "evaluate" as const, knowledge: "reconcile" as const } }
+          : {}),
       }],
     },
     commands: [{
@@ -96,6 +100,26 @@ function runtimeFixture(
       create: vi.fn().mockResolvedValue({ id: "execution-1" }),
     },
     domainEventOutbox: { create: vi.fn() },
+    viewChangeReaction: {
+      create: vi.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) =>
+        Promise.resolve({
+          id: "reaction-1",
+          ...data,
+          message: null,
+          reason: null,
+          attentionErrorMessage: null,
+          knowledgeErrorMessage: null,
+          attentionStartedAt: null,
+          attentionCompletedAt: null,
+          knowledgeStartedAt: null,
+          knowledgeCompletedAt: null,
+          seenAt: null,
+          createdAt: new Date("2026-08-30T00:00:00.000Z"),
+          updatedAt: new Date("2026-08-30T00:00:00.000Z"),
+        })
+      ),
+    },
+    memoryGlobalObject: { findMany: vi.fn().mockResolvedValue([]) },
     viewCard: { findMany: findViewCards },
   };
   const database = {
@@ -128,12 +152,19 @@ function runtimeFixture(
     }),
   };
   const installedViews = { synchronize: vi.fn().mockResolvedValue(undefined) };
+  const postCommit = { enqueue: vi.fn().mockResolvedValue(true) };
   return {
-    bus: new ViewCommandBus(database as never, registry, installedViews as never),
+    bus: new ViewCommandBus(
+      database as never,
+      registry,
+      installedViews as never,
+      postCommit,
+    ),
     businessState,
     database,
     execute,
     installedViews,
+    postCommit,
     proposalActorId,
     transaction,
   };
@@ -239,9 +270,84 @@ describe("ViewCommandBus", () => {
     expect(fixture.transaction.viewCommandExecution.create).toHaveBeenCalledOnce();
     expect(fixture.transaction.viewCommandProposal.update).toHaveBeenCalledWith({
       where: { id: "proposal-1" },
-      data: { status: "applied", decidedAt: expect.any(Date), appliedAt: expect.any(Date) },
+      data: {
+        status: "applied",
+        executionId: "execution-1",
+        decidedAt: expect.any(Date),
+        appliedAt: expect.any(Date),
+      },
     });
   });
+
+  it("schedules Human post-commit work inside the Runtime after the transaction commits", async () => {
+    const fixture = runtimeFixture(
+      "auto_execute",
+      3,
+      "exact",
+      ["human", "ai", "system"],
+      true,
+      true,
+    );
+
+    await expect(fixture.bus.dispatch({
+      viewKey: "test_view",
+      commandKey: "test.accept",
+      commandVersion: "1",
+      input: { value: "committed" },
+      actor: { actorId: fixture.proposalActorId, permissions: ["view.write"] },
+      initiator: "human",
+      expectedStateVersion: "3",
+    })).resolves.toMatchObject({
+      kind: "executed",
+      reaction: { id: "reaction-1" },
+    });
+
+    expect(fixture.transaction.viewChangeReaction.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        attentionPolicy: "evaluate",
+        attentionStatus: "queued",
+        knowledgePolicy: "reconcile",
+        knowledgeStatus: "queued",
+      }),
+    });
+    expect(fixture.postCommit.enqueue).toHaveBeenCalledWith({ reactionId: "reaction-1" });
+    expect(fixture.postCommit.enqueue.mock.invocationCallOrder[0])
+      .toBeGreaterThan(fixture.database.$transaction.mock.invocationCallOrder[0]);
+  });
+
+  it.each(["ai", "system"] as const)(
+    "routes %s execution through knowledge-only post-commit policy",
+    async (initiator) => {
+      const fixture = runtimeFixture(
+        "auto_execute",
+        3,
+        "exact",
+        ["human", "ai", "system"],
+        true,
+        true,
+      );
+
+      await fixture.bus.dispatch({
+        viewKey: "test_view",
+        commandKey: "test.accept",
+        commandVersion: "1",
+        input: { value: "committed" },
+        actor: { permissions: ["view.write"] },
+        initiator,
+        expectedStateVersion: "3",
+      });
+
+      expect(fixture.transaction.viewChangeReaction.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          attentionPolicy: "never",
+          attentionStatus: "not_required",
+          knowledgePolicy: "reconcile",
+          knowledgeStatus: "queued",
+        }),
+      });
+      expect(fixture.postCommit.enqueue).toHaveBeenCalledWith({ reactionId: "reaction-1" });
+    },
+  );
 
   it("rejects an AI caller for a system-only Command", async () => {
     const fixture = runtimeFixture("auto_execute", 3, "exact", ["system"]);
@@ -413,25 +519,43 @@ describe("ViewCommandBus", () => {
   });
 
   it("allows a member to approve their own AI Proposal", async () => {
-    const fixture = runtimeFixture("approval_required");
+    const fixture = runtimeFixture(
+      "approval_required",
+      3,
+      "exact",
+      ["human", "ai"],
+      true,
+      true,
+    );
 
     await expect(fixture.bus.decideProposal({
       proposalId: "proposal-1",
       decision: "approve",
       actor: { actorId: fixture.proposalActorId, permissions: ["view.write"] },
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       kind: "executed",
       executionId: "execution-1",
       viewKey: "test_view",
       stateVersion: "4",
       summary: { accepted: true },
+      reaction: {
+        id: "reaction-1",
+        attention: { policy: "never", status: "not_required" },
+        knowledge: { policy: "reconcile", status: "queued" },
+      },
     });
 
     expect(fixture.execute).toHaveBeenCalledOnce();
     expect(fixture.transaction.viewCommandProposal.update).toHaveBeenCalledWith({
       where: { id: "proposal-1" },
-      data: { status: "applied", decidedAt: expect.any(Date), appliedAt: expect.any(Date) },
+      data: {
+        status: "applied",
+        executionId: "execution-1",
+        decidedAt: expect.any(Date),
+        appliedAt: expect.any(Date),
+      },
     });
+    expect(fixture.postCommit.enqueue).toHaveBeenCalledWith({ reactionId: "reaction-1" });
   });
 
   it("treats a repeated approval of an applied Proposal as idempotent success", async () => {

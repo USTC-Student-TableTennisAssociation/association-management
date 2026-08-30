@@ -108,6 +108,17 @@ export function resolveViewChangeReaction(input: {
   return resolved;
 }
 
+export function resolveViewPostCommitReaction(input: {
+  viewModule: ViewModule;
+  changes: readonly ViewChange[];
+  eventDefinitions: readonly DomainEventDefinition[];
+  initiator: "human" | "ai" | "system";
+}): ResolvedViewChangeReaction {
+  const resolved = resolveViewChangeReaction(input);
+  if (input.initiator === "human") return resolved;
+  return { ...resolved, attention: "never" };
+}
+
 export function targetsForViewChanges(changes: readonly ViewChange[]): ViewReactionTarget[] {
   const targets = new Map<string, ViewReactionTarget>();
   changes.forEach((change) => {

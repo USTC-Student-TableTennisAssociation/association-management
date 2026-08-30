@@ -998,13 +998,15 @@ model ViewCommandProposal {
   expectedStateVersion BigInt         @map("expected_state_version")
   proposedByActorId    String?        @map("proposed_by_actor_id") @db.Uuid
   skillId              String?        @map("skill_id") @db.Text
+  executionId          String?        @unique @map("execution_id") @db.Uuid
   status               ProposalStatus @default(pending)
   failureReason        String?        @map("failure_reason") @db.Text
   createdAt            DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
   decidedAt            DateTime?      @map("decided_at") @db.Timestamptz(3)
   appliedAt            DateTime?      @map("applied_at") @db.Timestamptz(3)
 
-  installedView InstalledView @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
+  installedView InstalledView         @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
+  execution     ViewCommandExecution? @relation(fields: [executionId], references: [id], onDelete: SetNull)
 
   @@index([viewKey, status, createdAt])
   @@map("view_command_proposals")
@@ -1025,7 +1027,8 @@ model ViewCommandExecution {
   changeSetJson      Json                 @default("[]") @map("change_set_json") @db.JsonB
   createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  installedView InstalledView       @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
+  installedView InstalledView        @relation(fields: [viewKey], references: [viewKey], onDelete: Restrict)
+  proposal      ViewCommandProposal?
   reaction      ViewChangeReaction?
 
   @@index([viewKey, createdAt])

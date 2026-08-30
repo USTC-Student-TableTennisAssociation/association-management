@@ -1,8 +1,5 @@
 import { currentAuthUser } from "@/auth/session";
-import {
-  viewChangeCoordinator,
-  viewCommandBus,
-} from "@/shell/composition-root";
+import { viewCommandBus } from "@/shell/composition-root";
 
 export async function POST(
   request: Request,
@@ -29,16 +26,6 @@ export async function POST(
       },
       initiator: "human",
     });
-    if (result.kind === "executed" && result.reaction) {
-      try {
-        await viewChangeCoordinator.enqueue({
-          reactionId: result.reaction.id,
-          actorId: user.actor.id,
-        });
-      } catch (error) {
-        console.error("[view.reaction.enqueue]", error);
-      }
-    }
     return Response.json(result);
   } catch (error) {
     return Response.json(
