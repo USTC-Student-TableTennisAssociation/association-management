@@ -22,7 +22,6 @@ enum ProposalStatus {
 
 enum InstalledViewStatus {
   enabled
-  disabled
   incompatible
 }
 

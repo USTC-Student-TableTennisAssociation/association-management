@@ -381,7 +381,3 @@ class MinerUDocumentLoader:
         if path.suffix.lower() not in MinerUDocumentLoader.SUPPORTED_SUFFIXES:
             supported = "、".join(sorted(MinerUDocumentLoader.SUPPORTED_SUFFIXES))
             raise ValueError(f"MinerU 解析入口只支持 {supported}：{path}")
-
-
-# 保留原名以兼容深度冷启动和已有调用方。
-MinerUPdfLoader = MinerUDocumentLoader

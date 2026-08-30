@@ -35,7 +35,7 @@ function view(key = "test_view"): ViewModule {
 }
 
 describe("ExtensionRegistry", () => {
-  it("registers independently activatable extensions from one physical plugin", () => {
+  it("registers every extension contributed by one physical plugin", () => {
     const viewModule = view();
     const plugin: PluginManifest = {
       id: "sydaris.test",
@@ -73,10 +73,6 @@ describe("ExtensionRegistry", () => {
     expect(registry.listPresentations()).toHaveLength(1);
     expect(registry.listSkills()).toHaveLength(1);
     expect(registry.listToolProviders()).toHaveLength(1);
-
-    registry.setEnabled("presentation", "sydaris.test.board", false);
-    expect(registry.listPresentations()).toEqual([]);
-    expect(registry.listPresentations({ includeDisabled: true })).toHaveLength(1);
     expect(registry.getView("test_view")).toBe(viewModule);
   });
 

@@ -386,27 +386,25 @@ describe("Agent View Toolset foreground Object binding", () => {
     expect(proposals).toHaveBeenCalledTimes(1);
   });
 
-  it("binds the declared Command version in Runtime and normalizes a suffixed key", async () => {
+  it("rejects a version-suffixed Command key instead of normalizing it", async () => {
     const { commandBus, proposals, toolset } = fixture();
     await toolset.readView("activity_operations");
     const execute = toolset.tools.runViewCommand.execute as unknown as (
       request: Record<string, unknown>,
     ) => Promise<unknown>;
 
-    await execute({
+    await expect(execute({
       viewKey: "activity_operations",
       commandKey: "activity.create_activity@1",
       commandVersion: "wrong-model-version",
       input: { name: "版本自动绑定测试", status: "PLANNING" },
+    })).resolves.toMatchObject({
+      kind: "invalid",
+      commandKey: "activity.create_activity@1",
+      error: expect.stringContaining("没有声明 Command activity.create_activity@1"),
     });
 
-    expect(commandBus.dispatch).toHaveBeenCalledWith(expect.objectContaining({
-      commandKey: "activity.create_activity",
-      commandVersion: "1",
-    }));
-    expect(proposals).toHaveBeenCalledWith(expect.objectContaining({
-      commandKey: "activity.create_activity",
-      commandVersion: "1",
-    }));
+    expect(commandBus.dispatch).not.toHaveBeenCalled();
+    expect(proposals).not.toHaveBeenCalled();
   });
 });

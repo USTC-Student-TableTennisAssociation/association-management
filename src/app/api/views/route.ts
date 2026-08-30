@@ -20,7 +20,7 @@ export async function GET() {
   });
   return Response.json({
     views: installed.flatMap((state) => {
-      const viewModule = extensionRegistry.getView(state.viewKey, { includeDisabled: true });
+      const viewModule = extensionRegistry.getView(state.viewKey);
       const presentationExtension = extensionRegistry.listPresentations()
         .find((candidate) =>
           candidate.targetView === state.viewKey &&

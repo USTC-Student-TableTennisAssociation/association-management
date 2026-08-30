@@ -2,19 +2,9 @@
 
 import { installedPresentationComponents } from "@/generated/installed-presentations";
 import { WorkViewWorkspace } from "@/view-runtime/generic-ui/work-view-workspace";
-import type { AIInvocation } from "@sydaris/plugin-sdk";
+import type { PresentationProps } from "@sydaris/plugin-sdk";
 
-export type WorkPresentationProps = {
-  viewKey: string;
-  refreshRevision?: number;
-  presentationLoader?: string;
-  focusCardId?: string;
-  activeConversationId?: string;
-  onOpenInspector: () => void;
-  onInvokeAI: (invocation: AIInvocation) => void;
-};
-
-export function WorkPresentationHost(props: WorkPresentationProps) {
+export function WorkPresentationHost(props: PresentationProps) {
   const Presentation = props.presentationLoader
     ? installedPresentationComponents[props.presentationLoader]
     : undefined;

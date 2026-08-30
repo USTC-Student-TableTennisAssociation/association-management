@@ -130,8 +130,8 @@ export async function queueChatAssertionReceipt(input: QueueReceiptInput): Promi
   });
 }
 
-/** Load the durable work payload; after() only needs to retain this stable key. */
-export async function loadChatAssertionWritebackJob(
+/** Load the durable work payload owned by this receipt. */
+export async function loadChatAssertionReceiptInput(
   key: ChatAssertionReceiptKey,
 ): Promise<ChatAssertionCaptureInput> {
   const database = getDatabase();
@@ -155,15 +155,15 @@ export async function loadChatAssertionWritebackJob(
       retrieval: true,
     },
   });
-  if (!row) throw new Error("找不到持久化的 Assertion 写回任务");
+  if (!row) throw new Error("找不到持久化的 Assertion 回执");
   if (row.execution !== "background") {
-    throw new Error("前台 Assertion 回执不能作为后台写回任务执行");
+    throw new Error("前台 Assertion 回执不能作为后台写回输入执行");
   }
   if (row.status !== "queued") {
-    throw new Error(`Assertion 写回任务当前状态不是 queued：${row.status}`);
+    throw new Error(`Assertion 回执当前状态不是 queued：${row.status}`);
   }
   if (!row.timezone || !row.semanticContext || !row.retrieval) {
-    throw new Error("Assertion 写回任务缺少可恢复的完整输入");
+    throw new Error("Assertion 回执缺少可恢复的完整输入");
   }
   return {
     actor: row.actor,
