@@ -56,7 +56,6 @@ function presentExploreResult(
   evidence: MemoryEvidenceAccumulator,
 ) {
   const {
-    compilationId: _compilationId,
     globalObjectId,
     knowledgeState,
     objects,
@@ -67,7 +66,6 @@ function presentExploreResult(
     sourceTime,
     ...rest
   } = result;
-  void _compilationId;
   void _counts;
   const objectRefsByAssertionRef = new Map<string, string[]>();
   for (const connection of connections) {

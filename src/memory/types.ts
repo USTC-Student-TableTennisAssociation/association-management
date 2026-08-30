@@ -30,6 +30,7 @@ export type MemorySeedMatch = {
 
 export type MemoryAssertionKind = "grounded" | "reference";
 
+/** Optional temporal provenance supplied by a source-aware retriever. */
 export type MemorySourceTime = {
   sourceTitle: string;
   sourceSha256: string;
@@ -42,6 +43,8 @@ export type MemorySourceTime = {
 
 export type MemoryDocumentSourceReference = {
   kind?: "document";
+  /** Internal publication-run anchor used to reopen the exact source document. */
+  sourceDocumentId: string;
   sourceTitle: string;
   sourceSha256: string;
   sourceNodeId: string;
@@ -149,10 +152,7 @@ export type MemorySearchTrace = {
   version: "structured-seed-map.v1";
   query: string;
   snapshot: {
-    id: string;
-    sourceTitle: string;
-    sourceSha256: string;
-    compiledAt: string;
+    indexedAt: string | null;
     embeddingModel: string | null;
     embeddingRevision: string | null;
     embeddingDimension: number | null;
@@ -198,8 +198,6 @@ export type MemoryQuery = {
 export type MemoryRetrievalResult = {
   query: string;
   mode: "disabled" | "fixture" | "object-assertion";
-  /** Compilation identity retained even when a tool result omits the full Locate trace. */
-  compilationId?: string;
   seedMap: StructuredSeedMap;
   trace?: MemorySearchTrace;
 };

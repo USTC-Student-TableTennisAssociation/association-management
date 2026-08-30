@@ -11,7 +11,6 @@ import { objectChangePayloadSchema } from "@/memory/object-management-types";
 
 vi.mock("@/db", () => ({ getDatabase: vi.fn() }));
 
-const compilationId = "00000000-0000-4000-8000-000000000010";
 const objectId = "00000000-0000-4000-8000-000000000020";
 const fragmentId = "00000000-0000-4000-8000-000000000030";
 const assertionId = "00000000-0000-4000-8000-000000000040";
@@ -19,7 +18,6 @@ const assertionId = "00000000-0000-4000-8000-000000000040";
 function objectRow(options?: { withCard?: boolean }) {
   return {
     id: objectId,
-    compilationId,
     canonicalName: "项目负责人",
     surfaceMemberships: [{
       objectFragmentId: fragmentId,
@@ -52,9 +50,6 @@ function objectRow(options?: { withCard?: boolean }) {
 function mockDatabase(options?: { withCard?: boolean }) {
   const row = objectRow(options);
   const database = {
-    memoryCompilation: {
-      findFirst: vi.fn().mockResolvedValue({ id: compilationId }),
-    },
     memoryGlobalObject: {
       findUnique: vi.fn().mockResolvedValue(row),
       findMany: vi.fn().mockResolvedValue([{
@@ -75,7 +70,6 @@ function mockDatabase(options?: { withCard?: boolean }) {
         payload: data.payload,
         createdAt: new Date("2026-08-14T00:00:00.000Z"),
         failureReason: null,
-        compilationId,
       })),
     },
   };
@@ -144,7 +138,6 @@ describe("Object management service", () => {
           surfaceId: `document:${fragmentId}:1`,
         }],
       },
-      evidenceCompilationId: compilationId,
       allowedObjectIds: new Set([objectId]),
     });
 
@@ -168,7 +161,6 @@ describe("Object management service", () => {
           surfaceId: `document:${fragmentId}:1`,
         }],
       },
-      evidenceCompilationId: compilationId,
       allowedObjectIds: new Set(),
     })).rejects.toBeInstanceOf(ObjectManagementValidationError);
     expect(database.memoryObjectChangeProposal.create).not.toHaveBeenCalled();
@@ -212,7 +204,6 @@ describe("Object management service", () => {
           mergedObjectIds: [secondObjectId],
         }],
       },
-      evidenceCompilationId: compilationId,
       allowedObjectIds: new Set([objectId, secondObjectId]),
     });
 
@@ -223,7 +214,6 @@ describe("Object management service", () => {
   it("rechecks proposal status after the advisory lock and returns the concurrent result", async () => {
     const proposalRecord = {
       id: "00000000-0000-4000-8000-000000000070",
-      compilationId,
       status: "pending",
       reason: "并发测试",
       payload: {
@@ -245,9 +235,6 @@ describe("Object management service", () => {
           .mockResolvedValueOnce(proposalRecord)
           .mockResolvedValueOnce({ ...proposalRecord, status: "applied" }),
       },
-      memoryCompilation: {
-        findFirst: vi.fn().mockResolvedValue({ id: compilationId }),
-      },
       memoryGlobalObject: { update: vi.fn() },
       $queryRaw: vi.fn().mockResolvedValue([{ locked: 1 }]),
     };
@@ -257,9 +244,6 @@ describe("Object management service", () => {
           .mockResolvedValueOnce(proposalRecord)
           .mockResolvedValueOnce({ status: "applied", failureReason: null }),
         updateMany: vi.fn().mockResolvedValue({ count: 0 }),
-      },
-      memoryCompilation: {
-        findFirst: vi.fn().mockResolvedValue({ id: compilationId }),
       },
       memoryGlobalObject: {
         findUnique: vi.fn().mockResolvedValue(objectRow()),

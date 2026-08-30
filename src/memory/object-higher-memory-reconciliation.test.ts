@@ -2,13 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   maintain: vi.fn(),
-  findCompilation: vi.fn(),
-}));
-
-vi.mock("@/db", () => ({
-  getDatabase: () => ({
-    memoryCompilation: { findFirst: state.findCompilation },
-  }),
 }));
 vi.mock("@/memory/higher-memory-maintenance", () => ({
   maintainHigherMemories: state.maintain,
@@ -21,7 +14,6 @@ const cardId = "00000000-0000-4000-8000-000000000001";
 const existingObjectId = "00000000-0000-4000-8000-000000000002";
 const coldObjectId = "00000000-0000-4000-8000-000000000003";
 const executionId = "00000000-0000-4000-8000-000000000004";
-const compilationId = "00000000-0000-4000-8000-000000000005";
 
 function input() {
   return {
@@ -77,7 +69,6 @@ function input() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  state.findCompilation.mockResolvedValue({ id: compilationId });
   state.maintain.mockResolvedValue({ objectMemories: 1, ambientMemories: 0 });
 });
 
@@ -109,7 +100,6 @@ describe("Object Higher Memory reconciliation after a View change", () => {
 
     await expect(reconcileObjectHigherMemoryFromViewChange(value)).resolves.toBe(0);
 
-    expect(state.findCompilation).not.toHaveBeenCalled();
     expect(state.maintain).not.toHaveBeenCalled();
   });
 });

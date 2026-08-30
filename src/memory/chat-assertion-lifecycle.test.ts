@@ -79,7 +79,7 @@ beforeEach(() => {
     submittedAt: "2026-08-14T00:00:00.000Z",
     timezone: "Asia/Shanghai",
     semanticContext: {},
-    retrieval: { compilationId: "compilation-1" },
+    retrieval: {},
     queueDecision: { reason: "durable job" },
   });
 });
@@ -175,7 +175,7 @@ describe("post-answer memory maintenance pipeline", () => {
           submittedAt: "2026-08-14T00:00:00.000Z",
           timezone: "Asia/Shanghai",
           semanticContext: {},
-          retrieval: { compilationId: "compilation-1" },
+          retrieval: {},
         } as never,
         result: {
           publishedAssertions: 1,
@@ -193,7 +193,7 @@ describe("post-answer memory maintenance pipeline", () => {
         submittedAt: "2026-08-14T00:00:00.000Z",
         timezone: "Asia/Shanghai",
         semanticContext: {},
-        retrieval: { compilationId: "compilation-1" },
+        retrieval: {},
       } as never,
     });
 
@@ -213,14 +213,14 @@ describe("post-answer memory maintenance pipeline", () => {
         submittedAt: "2026-08-14T00:00:00.000Z",
         timezone: "Asia/Shanghai",
         semanticContext: {},
-        retrieval: { compilationId: "compilation-1" },
+        retrieval: {},
       } as never,
       consolidation: {
         clientMessageId: "message-3",
         submittedAt: "2026-08-14T00:00:00.000Z",
         timezone: "Asia/Shanghai",
         semanticContext: {},
-        retrieval: { compilationId: "compilation-1" },
+        retrieval: {},
       } as never,
     });
 
@@ -262,21 +262,21 @@ describe("post-answer memory maintenance pipeline", () => {
         submittedAt: "2026-08-14T00:00:00.000Z",
         timezone: "Asia/Shanghai",
         semanticContext: {},
-        retrieval: { compilationId: "compilation-1" },
+        retrieval: {},
       } as never,
       consolidation: {
         clientMessageId: "message-graph-scope",
         submittedAt: "2026-08-14T00:00:00.000Z",
         timezone: "Asia/Shanghai",
         semanticContext: {},
-        retrieval: { compilationId: "compilation-1" },
+        retrieval: {},
       } as never,
       higherMemory: {
         clientMessageId: "message-graph-scope",
         submittedAt: "2026-08-14T00:00:00.000Z",
         timezone: "Asia/Shanghai",
         semanticContext: {},
-        retrieval: { compilationId: "compilation-1" },
+        retrieval: {},
         queueDecision: {
           targets: [
             { scope: "object", globalObjectId: "early-model-target" },
@@ -312,14 +312,14 @@ describe("post-answer memory maintenance pipeline", () => {
     scheduler.publish({
       assertion: {
         clientMessageId: "message-4",
-        retrieval: { compilationId: "compilation-1" },
+        retrieval: {},
       } as never,
       consolidation: {
         clientMessageId: "message-4",
         submittedAt: "2026-08-14T00:00:00.000Z",
         timezone: "Asia/Shanghai",
         semanticContext: {},
-        retrieval: { compilationId: "compilation-1" },
+        retrieval: {},
       } as never,
     });
 

@@ -32,11 +32,6 @@ export type KnowledgeGraphEdge = {
 
 export type KnowledgeGraphPayload = {
   mode: KnowledgeGraphMode;
-  compilation: {
-    id: string;
-    sourceTitle: string;
-    importedAt: string;
-  };
   summary: {
     totalObjects: number;
     connectedObjects: number;
@@ -78,9 +73,8 @@ function renderStatement(row: AssertionRow) {
   }
 }
 
-function loadAssertionRows(compilationId: string) {
+function loadAssertionRows() {
   return getDatabase().memoryAssertion.findMany({
-    where: { compilationId },
     orderBy: [{ createdAt: "desc" }, { id: "asc" }],
     select: {
       id: true,
@@ -105,20 +99,13 @@ export async function loadKnowledgeGraph(
   mode: KnowledgeGraphMode = "core",
 ): Promise<KnowledgeGraphPayload> {
   const database = getDatabase();
-  const compilation = await database.memoryCompilation.findFirst({
-    orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    select: { id: true, sourceTitle: true, importedAt: true },
-  });
-  if (!compilation) throw new Error("数据库中没有可视化的 Compilation");
-
   const [rows, allObjects, totalAssertions] = await Promise.all([
-    loadAssertionRows(compilation.id),
+    loadAssertionRows(),
     database.memoryGlobalObject.findMany({
-      where: { compilationId: compilation.id },
       orderBy: { canonicalName: "asc" },
       select: { id: true, canonicalName: true },
     }),
-    database.memoryAssertion.count({ where: { compilationId: compilation.id } }),
+    database.memoryAssertion.count(),
   ]);
 
   const projectedRows = rows.map((row) => ({
@@ -157,11 +144,6 @@ export async function loadKnowledgeGraph(
       }));
     return {
       mode,
-      compilation: {
-        id: compilation.id,
-        sourceTitle: compilation.sourceTitle,
-        importedAt: compilation.importedAt.toISOString(),
-      },
       summary: {
         ...commonSummary,
         visibleObjects: objects.length,
@@ -261,11 +243,6 @@ export async function loadKnowledgeGraph(
 
   return {
     mode,
-    compilation: {
-      id: compilation.id,
-      sourceTitle: compilation.sourceTitle,
-      importedAt: compilation.importedAt.toISOString(),
-    },
     summary: {
       ...commonSummary,
       visibleObjects: objects.length,

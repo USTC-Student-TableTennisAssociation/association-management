@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -157,5 +157,25 @@ describe("Echo plugin architecture boundaries", () => {
     expect(viewCard).not.toMatch(/compilationId|sourceObjectId/);
     const related = schema.match(/model ViewCardRelatedObject \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(related).not.toMatch(/role|relationType|assertionId|provenance/);
+  });
+
+  it("models cognition as one Shared Brain without compilation snapshot compatibility", () => {
+    const schema = source("prisma/schema.prisma");
+    expect(schema).not.toMatch(/model MemoryCompilation\b|\bcompilationId\b/);
+
+    const runtimeFiles = [
+      ...typescriptSources(resolve(process.cwd(), "src/library")),
+      ...typescriptSources(resolve(process.cwd(), "src/memory")),
+    ];
+    for (const file of runtimeFiles) {
+      const contents = readFileSync(file, "utf8");
+      expect(contents, displayPath(file)).not.toMatch(
+        /\bmemoryCompilation\b|memory-compilation:/,
+      );
+    }
+
+    expect(existsSync(resolve(process.cwd(), "prisma/import-source-semantics.ts")))
+      .toBe(false);
+    expect(source("package.json")).not.toContain("memory:import-cold-start");
   });
 });

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 
@@ -13,11 +13,6 @@ import {
 } from "@/library/compilation-types";
 import type { GlobalObjectDraft } from "@/library/global-object-resolver";
 import { rebuildMemoryAssertionIndex } from "@/memory/assertion-indexer";
-
-const SHARED_COMPILATION_SCHEMA = "echo-shared-memory.v1";
-const SHARED_SOURCE_SHA = createHash("sha256")
-  .update("Echo Shared Brain workspace", "utf8")
-  .digest("hex");
 
 type PreparedBlock = {
   id: string;
@@ -77,7 +72,6 @@ type PreparedPublication = {
   sourceSha256: string;
   prefix: string;
   profile: "catalog" | "coarse" | "deep";
-  reuseExisting: boolean;
   objects: Array<{ id: string; canonicalName: string }>;
   regions: PreparedRegion[];
   blocks: PreparedBlock[];
@@ -94,7 +88,6 @@ type PreparedPublication = {
 };
 
 export type SharedMemoryPublicationResult = {
-  compilationId: string;
   publishedRunCount: number;
   assertionCount: number;
   objectCount: number;
@@ -124,7 +117,7 @@ export async function acquireSharedMemoryPublicationLock(
 ): Promise<void> {
   const rows = await transaction.$queryRaw<Array<{ lockResult: string }>>(Prisma.sql`
     SELECT pg_advisory_xact_lock(
-      hashtextextended('echo-shared-memory-publication', 0)
+      hashtextextended('sydaris-shared-memory-publication', 0)
     )::text AS "lockResult"
   `);
   if (rows.length !== 1) throw new Error("Shared Brain 发布事务锁获取失败");
@@ -438,7 +431,6 @@ export function prepareSemanticPublication(
     sourceSha256: run.sourceBlob.sha256,
     prefix,
     profile: run.profile,
-    reuseExisting: false,
     objects: commonObjects(run.id, resolvedObjects),
     regions: [{
       id: sourceRegionId,
@@ -481,25 +473,6 @@ export async function prepareDeepPublication(
     throw new Error("深度冷启动运行缺少 Blob");
   }
   const prefix = regionPrefix(run.sourceBlobId);
-  if (run.artifactLocation?.startsWith("memory-compilation:")) {
-    return {
-      runId: run.id,
-      sourceBlobId: run.sourceBlobId,
-      sourceSha256: run.sourceBlob.sha256,
-      prefix,
-      profile: "deep",
-      reuseExisting: true,
-      objects: commonObjects(run.id, resolvedObjects),
-      regions: [],
-      blocks: [],
-      fragments: [],
-      assertions: [],
-      assertionBlocks: [],
-      surfaceMemberships: [],
-      objectLinks: [],
-      objectCoverage: [],
-    };
-  }
   if (!run.artifactLocation) throw new Error("深度冷启动运行缺少产物位置");
   const resolutionPath = safeDeepResolutionPath(run.artifactLocation);
   const resolutionDirectory = path.dirname(resolutionPath);
@@ -670,7 +643,6 @@ export async function prepareDeepPublication(
     sourceSha256: run.sourceBlob.sha256,
     prefix,
     profile: "deep",
-    reuseExisting: false,
     objects: commonObjects(run.id, resolvedObjects),
     regions,
     blocks,
@@ -683,74 +655,16 @@ export async function prepareDeepPublication(
   };
 }
 
-async function ensureSharedCompilation(): Promise<string> {
-  const database = getDatabase();
-  return database.$transaction(async (transaction) => {
-    await acquireSharedMemoryPublicationLock(transaction);
-    const existing = await transaction.memoryCompilation.findFirst({
-      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    });
-    if (existing) return existing.id;
-    const id = randomUUID();
-    await transaction.memoryCompilation.create({
-      data: {
-        id,
-        schemaVersion: SHARED_COMPILATION_SCHEMA,
-        compiledAt: new Date(),
-        sourcePath: "library://shared-brain",
-        sourceTitle: "Echo Shared Brain",
-        sourceSha256: SHARED_SOURCE_SHA,
-        sourceParser: "echo-library-publisher",
-        sourcePageCount: 0,
-        sourceBlockCount: 0,
-        sourceTimeText: null,
-        sourceTimeSupportingBlockIds: [],
-        regionTreeSchemaVersion: "echo-library-tree.v1",
-        sourceNodeIds: [],
-        sourceNodeCount: 0,
-        assertionCount: 0,
-        objectFragmentCount: 0,
-        surfaceFormCount: 0,
-        fragmentReferenceCount: 0,
-        modelCalls: 0,
-      },
-    });
-    return id;
-  });
-}
-
 async function commitPublications(
-  compilationId: string,
   publications: PreparedPublication[],
 ): Promise<void> {
   const database = getDatabase();
   await database.$transaction(async (transaction) => {
     await acquireSharedMemoryPublicationLock(transaction);
-    const compilation = await transaction.memoryCompilation.findUnique({
-      where: { id: compilationId },
-    });
-    if (!compilation) throw new Error("Shared Brain Compilation 已变更");
-    const latest = await transaction.memoryCompilation.findFirst({
-      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-      select: { id: true },
-    });
-    if (latest?.id !== compilationId) throw new Error("Shared Brain 活跃 Compilation 已变更");
 
-    // 历史单文档 Compilation 第一次转为多文件 Shared Brain 时，先保住原来的来源身份。
-    await transaction.memorySourceRegion.updateMany({
-      where: { compilationId, sourceSha256: null },
-      data: {
-        sourcePath: compilation.sourcePath,
-        sourceTitle: compilation.sourceTitle,
-        sourceSha256: compilation.sourceSha256,
-        sourceParser: compilation.sourceParser,
-      },
-    });
-
-    for (const publication of publications.filter((item) => !item.reuseExisting)) {
+    for (const publication of publications) {
       await transaction.memorySourceRegion.deleteMany({
         where: {
-          compilationId,
           OR: [
             { sourceNodeId: { startsWith: publication.prefix } },
             { sourceSha256: publication.sourceSha256 },
@@ -759,7 +673,6 @@ async function commitPublications(
       });
       await transaction.memorySourceBlock.deleteMany({
         where: {
-          compilationId,
           sourceBlockId: { startsWith: publication.prefix },
         },
       });
@@ -775,21 +688,11 @@ async function commitPublications(
         objectRows.set(object.id, object);
       }
     }
-    const existingRows = objectRows.size
-      ? await transaction.memoryGlobalObject.findMany({
-          where: { id: { in: [...objectRows.keys()] } },
-          select: { id: true, compilationId: true },
-        })
-      : [];
-    if (existingRows.some((object) => object.compilationId !== compilationId)) {
-      throw new Error("Global Object 属于非当前 Shared Brain Compilation");
-    }
     for (const object of objectRows.values()) {
       await transaction.memoryGlobalObject.upsert({
         where: { id: object.id },
         create: {
           id: object.id,
-          compilationId,
           globalObjectKey: `library:${object.id}`,
           canonicalName: object.canonicalName,
         },
@@ -797,30 +700,27 @@ async function commitPublications(
       });
     }
 
-    const changed = publications.filter((item) => !item.reuseExisting);
-    const regions = changed.flatMap((item) => item.regions);
-    const blocks = changed.flatMap((item) => item.blocks);
-    const fragments = changed.flatMap((item) => item.fragments);
-    const assertions = changed.flatMap((item) => item.assertions);
-    const assertionBlocks = changed.flatMap((item) => item.assertionBlocks);
-    const memberships = changed.flatMap((item) => item.surfaceMemberships);
-    const links = changed.flatMap((item) => item.objectLinks);
-    const coverage = changed.flatMap((item) => item.objectCoverage);
-    const maximumOrder = await transaction.memorySourceBlock.aggregate({
-      where: { compilationId },
-      _max: { order: true },
-    });
-    const orderOffset = (maximumOrder._max.order ?? -1) + 1;
-
+    const regions = publications.flatMap((item) =>
+      item.regions.map((region) => ({ ...region, publicationRunId: item.runId }))
+    );
+    const blocks = publications.flatMap((item) =>
+      item.blocks.map((block) => ({ ...block, publicationRunId: item.runId }))
+    );
+    const fragments = publications.flatMap((item) => item.fragments);
+    const assertions = publications.flatMap((item) => item.assertions);
+    const assertionBlocks = publications.flatMap((item) => item.assertionBlocks);
+    const memberships = publications.flatMap((item) => item.surfaceMemberships);
+    const links = publications.flatMap((item) => item.objectLinks);
+    const coverage = publications.flatMap((item) => item.objectCoverage);
     if (regions.length) await transaction.memorySourceRegion.createMany({
-      data: regions.map((region) => ({ ...region, compilationId })),
+      data: regions,
     });
     if (blocks.length) await transaction.memorySourceBlock.createMany({
-      data: blocks.map((block, index) => ({
+      data: blocks.map((block) => ({
         id: block.id,
-        compilationId,
+        publicationRunId: block.publicationRunId,
         sourceBlockId: block.sourceBlockId,
-        order: orderOffset + index,
+        order: block.localOrder,
         blockType: block.blockType,
         sourcePages: block.sourcePages,
         headingLevel: block.headingLevel,
@@ -833,10 +733,10 @@ async function commitPublications(
       })),
     });
     if (fragments.length) await transaction.memorySourceObjectFragment.createMany({
-      data: fragments.map((fragment) => ({ ...fragment, compilationId })),
+      data: fragments,
     });
     if (assertions.length) await transaction.memoryAssertion.createMany({
-      data: assertions.map((assertion) => ({ ...assertion, compilationId })),
+      data: assertions,
     });
     if (assertionBlocks.length) await transaction.memoryAssertionSourceBlock.createMany({
       data: assertionBlocks,
@@ -856,16 +756,13 @@ async function commitPublications(
         return { assertionId, globalObjectId };
       }),
     });
-    if (changed.length) {
+    if (publications.length) {
       // 内容已变更后不对外声称旧向量索引仍然完整；事务提交后会尝试全量重建。
-      await transaction.memoryAssertionEmbeddingIndex.deleteMany({
-        where: { compilationId },
-      });
+      await transaction.memoryAssertionEmbeddingIndex.deleteMany();
     }
 
     await transaction.memoryGlobalObject.deleteMany({
       where: {
-        compilationId,
         surfaceMemberships: { none: {} },
         chatMentions: { none: {} },
         assertionLinks: { none: {} },
@@ -875,53 +772,6 @@ async function commitPublications(
       },
     });
 
-    const [allRegions, sourceBlockCount, assertionCount, allFragments, fragmentReferenceCount] =
-      await Promise.all([
-        transaction.memorySourceRegion.findMany({
-          where: { compilationId },
-          orderBy: { sourceNodeId: "asc" },
-          select: { sourceNodeId: true, sourcePages: true, modelCalls: true, sourceSha256: true },
-        }),
-        transaction.memorySourceBlock.count({ where: { compilationId } }),
-        transaction.memoryAssertion.count({ where: { compilationId } }),
-        transaction.memorySourceObjectFragment.findMany({
-          where: { compilationId },
-          select: { surfaceForms: true },
-        }),
-        transaction.memoryAssertionFragmentReference.count({
-          where: { assertion: { compilationId } },
-        }),
-      ]);
-    const pageKeys = new Set(allRegions.flatMap((region) =>
-      region.sourcePages.map((page) => `${region.sourceSha256 ?? "legacy"}:${page}`)
-    ));
-    await transaction.memoryCompilation.update({
-      where: { id: compilationId },
-      data: {
-        schemaVersion: SHARED_COMPILATION_SCHEMA,
-        compiledAt: new Date(),
-        importedAt: new Date(),
-        sourcePath: "library://shared-brain",
-        sourceTitle: "Echo Shared Brain",
-        sourceSha256: SHARED_SOURCE_SHA,
-        sourceParser: "echo-library-publisher",
-        sourcePageCount: pageKeys.size,
-        sourceBlockCount,
-        sourceTimeText: null,
-        sourceTimeSupportingBlockIds: [],
-        regionTreeSchemaVersion: "echo-library-tree.v1",
-        sourceNodeIds: allRegions.map((region) => region.sourceNodeId),
-        sourceNodeCount: allRegions.length,
-        assertionCount,
-        objectFragmentCount: allFragments.length,
-        surfaceFormCount: allFragments.reduce(
-          (total, fragment) => total + fragment.surfaceForms.length,
-          0,
-        ),
-        fragmentReferenceCount,
-        modelCalls: allRegions.reduce((total, region) => total + region.modelCalls, 0),
-      },
-    });
     for (const publication of publications) {
       const sourceObjectCount = new Set([
         ...publication.surfaceMemberships.map((item) => item.globalObjectId),
@@ -932,14 +782,7 @@ async function commitPublications(
         where: { id: publication.runId },
         data: {
           publishedAt: new Date(),
-          publishedAssertionCount: publication.reuseExisting
-            ? await transaction.memoryAssertion.count({
-                where: {
-                  compilationId,
-                  sourceRegion: { sourceSha256: publication.sourceSha256 },
-                },
-              })
-            : publication.assertions.length,
+          publishedAssertionCount: publication.assertions.length,
           publishedObjectCount: sourceObjectCount,
         },
       });
@@ -959,20 +802,18 @@ export async function publishLibraryRunsToSharedMemory(input: {
       ? await prepareDeepPublication(run, input.resolvedObjects)
       : prepareSemanticPublication(run, input.resolvedObjects));
   }
-  const compilationId = await ensureSharedCompilation();
   await database.libraryCompilationJob.update({
     where: { id: input.jobId },
     data: { globalStatusMessage: "正在把编译结果发布到 Shared Brain" },
   });
-  await commitPublications(compilationId, publications);
+  await commitPublications(publications);
 
   let embeddingStatus: SharedMemoryPublicationResult["embeddingStatus"] = "empty";
   let embeddingWarning: string | undefined;
-  const assertionTotal = await database.memoryAssertion.count({ where: { compilationId } });
+  const assertionTotal = await database.memoryAssertion.count();
   if (assertionTotal > 0) {
     try {
       await rebuildMemoryAssertionIndex({
-        compilationId,
         onProgress: async (completed, total) => {
           await database.libraryCompilationJob.update({
             where: { id: input.jobId },
@@ -989,8 +830,8 @@ export async function publishLibraryRunsToSharedMemory(input: {
     }
   }
   const [assertionCount, objectCount] = await Promise.all([
-    database.memoryAssertion.count({ where: { compilationId } }),
-    database.memoryGlobalObject.count({ where: { compilationId } }),
+    database.memoryAssertion.count(),
+    database.memoryGlobalObject.count(),
   ]);
   await database.libraryCompilationJob.update({
     where: { id: input.jobId },
@@ -1001,7 +842,6 @@ export async function publishLibraryRunsToSharedMemory(input: {
     },
   });
   return {
-    compilationId,
     publishedRunCount: publications.length,
     assertionCount,
     objectCount,

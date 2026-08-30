@@ -268,11 +268,13 @@ model LibrarySourceProcessingRun {
   createdAt               DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
   completedAt             DateTime?                @map("completed_at") @db.Timestamptz(3)
 
-  libraryNode LibraryNode               @relation(fields: [libraryNodeId], references: [id], onDelete: Cascade)
-  sourceBlob  LibrarySourceBlob?        @relation(fields: [sourceBlobId], references: [id], onDelete: Restrict)
-  job         LibraryCompilationJob?    @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  document    LibrarySourceDocument?
-  assessment  LibraryCatalogAssessment?
+  libraryNode      LibraryNode               @relation(fields: [libraryNodeId], references: [id], onDelete: Cascade)
+  sourceBlob       LibrarySourceBlob?        @relation(fields: [sourceBlobId], references: [id], onDelete: Restrict)
+  job              LibraryCompilationJob?    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  document         LibrarySourceDocument?
+  assessment       LibraryCatalogAssessment?
+  publishedRegions MemorySourceRegion[]
+  publishedBlocks  MemorySourceBlock[]
 
   @@unique([jobId, sourceBlobId])
   @@index([libraryNodeId, createdAt])
@@ -334,50 +336,10 @@ model LibraryPlan {
   @@map("library_plans")
 }
 
-/// Echo 当前 Shared Brain 快照。cold-start、粗编译、轻量编目和对话 Assertion 共用同一个活跃 Compilation。
-model MemoryCompilation {
-  id                           String   @id @default(uuid()) @db.Uuid
-  schemaVersion                String   @map("schema_version") @db.Text
-  compiledAt                   DateTime @map("compiled_at")
-  importedAt                   DateTime @default(now()) @map("imported_at")
-  sourcePath                   String   @map("source_path") @db.Text
-  sourceTitle                  String   @map("source_title") @db.Text
-  sourceSha256                 String   @map("source_sha256") @db.Text
-  sourceParser                 String   @map("source_parser") @db.Text
-  sourcePageCount              Int      @map("source_page_count")
-  sourceBlockCount             Int      @map("source_block_count")
-  /// 来源自身明确提供的时间锚点；不是其中全部 Assertion 的 validity。
-  sourceTimeText               String?  @map("source_time_text") @db.Text
-  sourceTimeSupportingBlockIds String[] @default([]) @map("source_time_supporting_block_ids")
-  regionTreeSchemaVersion      String   @map("region_tree_schema_version") @db.Text
-  sourceNodeIds                String[] @map("source_node_ids")
-  sourceNodeCount              Int      @map("source_node_count")
-  assertionCount               Int      @map("assertion_count")
-  objectFragmentCount          Int      @map("object_fragment_count")
-  surfaceFormCount             Int      @map("surface_form_count")
-  fragmentReferenceCount       Int      @map("fragment_reference_count")
-  modelCalls                   Int      @map("model_calls")
-
-  sourceRegions           MemorySourceRegion[]
-  sourceBlocks            MemorySourceBlock[]
-  objectFragments         MemorySourceObjectFragment[]
-  assertions              MemoryAssertion[]
-  chatEvidence            MemoryChatEvidence[]
-  chatAssertionCaptures   MemoryChatAssertionCapture[]
-  chatAssertionReceipts   MemoryChatAssertionReceipt[]
-  objectHigherMemories    MemoryObjectHigherMemory[]
-  globalObjects           MemoryGlobalObject[]
-  assertionEmbeddingIndex MemoryAssertionEmbeddingIndex?
-  objectChangeProposals   MemoryObjectChangeProposal[]
-
-  @@index([sourceSha256])
-  @@map("memory_compilations")
-}
-
 /// 区域树中实际拥有原文并经过 source semantics 编译的节点。
 model MemorySourceRegion {
   id                  String   @id @default(uuid()) @db.Uuid
-  compilationId       String   @map("compilation_id") @db.Uuid
+  publicationRunId    String   @map("publication_run_id") @db.Uuid
   sourceNodeId        String   @map("source_node_id") @db.Text
   schemaVersion       String   @map("schema_version") @db.Text
   label               String   @db.Text
@@ -390,17 +352,18 @@ model MemorySourceRegion {
   reviewAdditionCount Int      @map("review_addition_count")
   modelCalls          Int      @map("model_calls")
   createdAt           DateTime @map("created_at")
-  /// 多文件 Shared Brain 中的真实来源元数据；历史单文档 Compilation 可为 null。
+  /// Shared Brain 中每个来源区域自己的来源元数据。
   sourcePath          String?  @map("source_path") @db.Text
-  sourceTitle         String?  @map("source_title") @db.Text
-  sourceSha256        String?  @map("source_sha256") @db.Text
+  sourceTitle         String   @map("source_title") @db.Text
+  sourceSha256        String   @map("source_sha256") @db.Text
   sourceParser        String?  @map("source_parser") @db.Text
 
-  compilation     MemoryCompilation            @relation(fields: [compilationId], references: [id], onDelete: Cascade)
+  publicationRun  LibrarySourceProcessingRun   @relation(fields: [publicationRunId], references: [id], onDelete: Cascade)
   objectFragments MemorySourceObjectFragment[]
   assertions      MemoryAssertion[]
 
-  @@unique([compilationId, sourceNodeId])
+  @@unique([publicationRunId, sourceNodeId])
+  @@index([publicationRunId])
   @@index([label])
   @@index([sourceSha256])
   @@map("memory_source_regions")
@@ -408,51 +371,48 @@ model MemorySourceRegion {
 
 /// PDF 解析后的稳定原文块，是 Assertion 的来源依据和回看锚点。
 model MemorySourceBlock {
-  id            String   @id @default(uuid()) @db.Uuid
-  compilationId String   @map("compilation_id") @db.Uuid
-  sourceBlockId String   @map("source_block_id") @db.Text
-  order         Int
-  blockType     String   @map("block_type") @db.Text
-  sourcePages   Int[]    @map("source_pages")
-  headingLevel  Int?     @map("heading_level")
-  headingPath   String[] @map("heading_path")
-  sourceType    String?  @map("source_type") @db.Text
-  sourceSubType String?  @map("source_sub_type") @db.Text
-  bbox          Json?    @db.JsonB
-  assetPath     String?  @map("asset_path") @db.Text
-  markdown      String   @db.Text
+  id               String   @id @default(uuid()) @db.Uuid
+  publicationRunId String   @map("publication_run_id") @db.Uuid
+  sourceBlockId    String   @map("source_block_id") @db.Text
+  order            Int
+  blockType        String   @map("block_type") @db.Text
+  sourcePages      Int[]    @map("source_pages")
+  headingLevel     Int?     @map("heading_level")
+  headingPath      String[] @map("heading_path")
+  sourceType       String?  @map("source_type") @db.Text
+  sourceSubType    String?  @map("source_sub_type") @db.Text
+  bbox             Json?    @db.JsonB
+  assetPath        String?  @map("asset_path") @db.Text
+  markdown         String   @db.Text
 
-  compilation   MemoryCompilation            @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  assertionUses MemoryAssertionSourceBlock[]
+  publicationRun LibrarySourceProcessingRun   @relation(fields: [publicationRunId], references: [id], onDelete: Cascade)
+  assertionUses  MemoryAssertionSourceBlock[]
 
-  @@unique([compilationId, sourceBlockId])
-  @@unique([compilationId, order])
+  @@unique([publicationRunId, sourceBlockId])
+  @@unique([publicationRunId, order])
+  @@index([publicationRunId])
   @@map("memory_source_blocks")
 }
 
 /// Leaf compiler 产生的 source-local ObjectFragment；不是长期 Object，也不直接供 Search 使用。
 model MemorySourceObjectFragment {
   id               String   @id @default(uuid()) @db.Uuid
-  compilationId    String   @map("compilation_id") @db.Uuid
   sourceRegionId   String   @map("source_region_id") @db.Uuid
   sourceFragmentId String   @map("source_fragment_id") @db.Text
   surfaceForms     String[] @map("surface_forms")
   createdAt        DateTime @default(now()) @map("created_at")
 
-  compilation         MemoryCompilation                     @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   sourceRegion        MemorySourceRegion                    @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
   assertionReferences MemoryAssertionFragmentReference[]
   surfaceMemberships  MemoryGlobalObjectSurfaceMembership[]
 
   @@unique([sourceRegionId, sourceFragmentId])
-  @@index([compilationId])
   @@map("memory_source_object_fragments")
 }
 
 /// 来源中的内聚知识单元，或指向明确来源区域的导航索引。
 model MemoryAssertion {
   id                              String              @id @default(uuid()) @db.Uuid
-  compilationId                   String              @map("compilation_id") @db.Uuid
   sourceRegionId                  String?             @map("source_region_id") @db.Uuid
   chatCaptureId                   String?             @map("chat_capture_id") @db.Uuid
   sourceClaimId                   String              @map("source_claim_id") @db.Text
@@ -462,7 +422,6 @@ model MemoryAssertion {
   contextDependent                Boolean             @map("context_dependent")
   createdAt                       DateTime            @default(now()) @map("created_at")
 
-  compilation        MemoryCompilation                  @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   sourceRegion       MemorySourceRegion?                @relation(fields: [sourceRegionId], references: [id], onDelete: Cascade)
   chatCapture        MemoryChatAssertionCapture?        @relation(fields: [chatCaptureId], references: [id], onDelete: Cascade)
   chatEvidenceLinks  MemoryAssertionChatEvidenceLink[]
@@ -482,7 +441,6 @@ model MemoryAssertion {
 /// 完整主对话语义转录属于解释上下文，不是事实 Evidence。
 model MemoryChatAssertionCapture {
   id                        String   @id @default(uuid()) @db.Uuid
-  compilationId             String   @map("compilation_id") @db.Uuid
   queuedByActorId           String   @map("queued_by_actor_id") @db.Uuid
   queuedByMessageId         String   @map("queued_by_message_id") @db.Text
   queueReason               String   @map("queue_reason") @db.Text
@@ -493,12 +451,10 @@ model MemoryChatAssertionCapture {
   appliedSurfaceCorrections Json     @default("[]") @map("applied_surface_corrections") @db.JsonB
   createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-  queuedBy    MemoryActor       @relation(fields: [queuedByActorId], references: [id], onDelete: Restrict)
-  assertions  MemoryAssertion[]
+  queuedBy   MemoryActor       @relation(fields: [queuedByActorId], references: [id], onDelete: Restrict)
+  assertions MemoryAssertion[]
 
   @@unique([queuedByActorId, queuedByMessageId])
-  @@index([compilationId, submittedAt])
   @@map("memory_chat_assertion_captures")
 }
 
@@ -506,7 +462,6 @@ model MemoryChatAssertionCapture {
 /// Capture 只在成功发布时存在，而回执也会保留 queued/running/skipped/failed 结果。
 model MemoryChatAssertionReceipt {
   id                    String                           @id @default(uuid()) @db.Uuid
-  compilationId         String                           @map("compilation_id") @db.Uuid
   actorId               String                           @map("actor_id") @db.Uuid
   clientMessageId       String                           @map("client_message_id") @db.Text
   execution             String                           @db.Text
@@ -528,12 +483,10 @@ model MemoryChatAssertionReceipt {
   createdAt             DateTime                         @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt             DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  compilation  MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   actor        MemoryActor       @relation(fields: [actorId], references: [id], onDelete: Restrict)
   conversation ChatConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
   @@unique([actorId, clientMessageId])
-  @@index([compilationId, submittedAt])
   @@index([actorId, updatedAt])
   @@index([conversationId, submittedAt])
   @@map("memory_chat_assertion_receipts")
@@ -542,7 +495,6 @@ model MemoryChatAssertionReceipt {
 /// 被至少一条已发布 Assertion 使用的用户聊天 Evidence；Assistant 上下文只用于解释，不是事实依据。
 model MemoryChatEvidence {
   id                 String   @id @default(uuid()) @db.Uuid
-  compilationId      String   @map("compilation_id") @db.Uuid
   conversationId     String?  @map("conversation_id") @db.Uuid
   clientMessageId    String   @map("client_message_id") @db.Text
   submittedByActorId String   @map("submitted_by_actor_id") @db.Uuid
@@ -552,14 +504,12 @@ model MemoryChatEvidence {
   submittedAtBasis   String   @default("server_received") @map("submitted_at_basis") @db.Text
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  compilation    MemoryCompilation                 @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   conversation   ChatConversation?                 @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   submittedBy    MemoryActor                       @relation(fields: [submittedByActorId], references: [id], onDelete: Restrict)
   assertionLinks MemoryAssertionChatEvidenceLink[]
   objectMentions MemoryChatObjectMention[]
 
   @@unique([submittedByActorId, clientMessageId])
-  @@index([compilationId, submittedAt])
   @@index([conversationId, submittedAt])
   @@map("memory_chat_evidence")
 }
@@ -722,11 +672,9 @@ model MemoryAssertionSourceBlock {
 /// 完整 cold-start package 最终导入的 Global Object；Resolver runtime 不读写数据库。
 model MemoryGlobalObject {
   id              String @id @default(uuid()) @db.Uuid
-  compilationId   String @map("compilation_id") @db.Uuid
   globalObjectKey String @map("global_object_key") @db.Text
   canonicalName   String @map("canonical_name") @db.Text
 
-  compilation        MemoryCompilation                     @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   surfaceMemberships MemoryGlobalObjectSurfaceMembership[]
   chatMentions       MemoryChatObjectMention[]
   assertionLinks     MemoryAssertionObjectLink[]
@@ -735,8 +683,7 @@ model MemoryGlobalObject {
   relatedViewCards   ViewCardRelatedObject[]
   authUsers          AuthUser[]
 
-  @@unique([compilationId, globalObjectKey])
-  @@index([compilationId])
+  @@unique([globalObjectKey])
   @@map("memory_global_objects")
 }
 
@@ -767,7 +714,6 @@ model MemoryChatObjectMention {
 /// Operational Index 保存可校验的主题覆盖、来源入口和后续检索建议。
 model MemoryObjectHigherMemory {
   id                String   @id @default(uuid()) @db.Uuid
-  compilationId     String   @map("compilation_id") @db.Uuid
   globalObjectId    String   @unique @map("global_object_id") @db.Uuid
   cognitiveMemory   Json     @map("cognitive_memory") @db.JsonB
   operationalIndex  Json     @default("{\"aspects\":[]}") @map("operational_index") @db.JsonB
@@ -777,10 +723,9 @@ model MemoryObjectHigherMemory {
   createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  compilation  MemoryCompilation  @relation(fields: [compilationId], references: [id], onDelete: Cascade)
   globalObject MemoryGlobalObject @relation(fields: [globalObjectId], references: [id], onDelete: Cascade)
 
-  @@index([compilationId, maintainedAt])
+  @@index([maintainedAt])
   @@map("memory_object_higher_memories")
 }
 
@@ -877,16 +822,14 @@ model MemoryGlobalObjectSurfaceMembership {
   @@map("memory_global_object_surface_memberships")
 }
 
-/// Search 派生的 Assertion 向量索引状态；基础 cold-start importer 不负责写入。
+/// 唯一 Shared Brain 的 Assertion 向量索引状态。
 model MemoryAssertionEmbeddingIndex {
-  compilationId         String   @id @map("compilation_id") @db.Uuid
+  id                    String   @id @default("shared") @db.Text
   modelKey              String   @map("model_key") @db.Text
   modelRevision         String   @map("model_revision") @db.Text
   dimension             Int
   indexedAssertionCount Int      @map("indexed_assertion_count")
   indexedAt             DateTime @default(now()) @map("indexed_at")
-
-  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
 
   @@map("memory_assertion_embedding_indexes")
 }
@@ -1077,7 +1020,6 @@ model ViewChangeReaction {
 /// 对 GlobalObject 身份的可审计修改建议；批准前不改变名称、归属或 Assertion 引用。
 model MemoryObjectChangeProposal {
   id            String         @id @default(uuid()) @db.Uuid
-  compilationId String         @map("compilation_id") @db.Uuid
   status        ProposalStatus @default(pending)
   reason        String         @db.Text
   payload       Json           @db.JsonB
@@ -1086,8 +1028,6 @@ model MemoryObjectChangeProposal {
   appliedAt     DateTime?      @map("applied_at") @db.Timestamptz(3)
   failureReason String?        @map("failure_reason") @db.Text
 
-  compilation MemoryCompilation @relation(fields: [compilationId], references: [id], onDelete: Cascade)
-
-  @@index([compilationId, status, createdAt])
+  @@index([status, createdAt])
   @@map("memory_object_change_proposals")
 }

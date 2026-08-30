@@ -1102,21 +1102,12 @@ export async function captureChatAssertions(
     return result;
   }
 
-  const compilation = await database.memoryCompilation.findFirst({
-    orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    select: {
-      id: true,
-      assertionEmbeddingIndex: {
-        select: { modelKey: true, modelRevision: true, dimension: true, indexedAssertionCount: true },
-      },
-    },
+  const embeddingIndex = await database.memoryAssertionEmbeddingIndex.findUnique({
+    where: { id: "shared" },
+    select: { modelKey: true, modelRevision: true, dimension: true, indexedAssertionCount: true },
   });
-  if (!compilation?.assertionEmbeddingIndex) {
-    throw new Error("当前 Compilation 尚未建立完整 Assertion embedding index");
-  }
-  const initialCompilationId = input.retrieval.compilationId ?? input.retrieval.trace?.snapshot.id;
-  if (initialCompilationId && initialCompilationId !== compilation.id) {
-    throw new Error("主对话检索结果与当前 Compilation 不一致");
+  if (!embeddingIndex) {
+    throw new Error("Shared Brain 尚未建立完整 Assertion embedding index");
   }
 
   const authUser = await database.authUser.findUnique({
@@ -1125,7 +1116,6 @@ export async function captureChatAssertions(
       actorObject: {
         select: {
           id: true,
-          compilationId: true,
           globalObjectKey: true,
           canonicalName: true,
         },
@@ -1133,7 +1123,7 @@ export async function captureChatAssertions(
     },
   });
   const conversationActor: ConversationActorObject | undefined =
-    authUser?.actorObject?.compilationId === compilation.id
+    authUser?.actorObject
       ? {
           id: authUser.actorObject.id,
           globalObjectKey: authUser.actorObject.globalObjectKey,
@@ -1174,9 +1164,6 @@ export async function captureChatAssertions(
         throw new Error("只能检查主对话或后台搜索已经返回的 Object");
       }
       const inspection = await inspectObjectIdentity(objectId);
-      if (inspection.compilationId !== compilation.id) {
-        throw new Error("Object 身份检查结果与当前 Compilation 不一致");
-      }
       inspectedObjectIdentities.set(objectId, inspection);
       return inspection;
     },
@@ -1371,10 +1358,6 @@ export async function captureChatAssertions(
     }
   }
 
-  const finalCompilationId = finalRetrieval.compilationId ?? finalRetrieval.trace?.snapshot.id;
-  if (finalCompilationId && finalCompilationId !== compilation.id) {
-    throw new Error("后台 Assertion 搜索结果与当前 Compilation 不一致");
-  }
   const candidates = objectCandidates(finalRetrieval);
   const candidatesById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
   const userMessagesById = new Map(
@@ -1385,7 +1368,6 @@ export async function captureChatAssertions(
   const proposesNewObjects = extractionOutput.objects.some((object) => object.resolution === "create");
   const existingObjectRows = proposesNewObjects
     ? await database.memoryGlobalObject.findMany({
-        where: { compilationId: compilation.id },
         select: {
           id: true,
           canonicalName: true,
@@ -1526,9 +1508,9 @@ export async function captureChatAssertions(
     ].join("\n"),
   );
   if (
-    embeddings.model !== compilation.assertionEmbeddingIndex.modelKey ||
-    embeddings.modelRevision !== compilation.assertionEmbeddingIndex.modelRevision ||
-    embeddings.dimension !== compilation.assertionEmbeddingIndex.dimension ||
+    embeddings.model !== embeddingIndex.modelKey ||
+    embeddings.modelRevision !== embeddingIndex.modelRevision ||
+    embeddings.dimension !== embeddingIndex.dimension ||
     embeddings.vectors.length !== prepared.length
   ) {
     throw new Error("Chat Assertion embedding profile 与当前索引不一致");
@@ -1544,25 +1526,22 @@ export async function captureChatAssertions(
   const existingAffectedObjectIds = affectedObjectIds.filter((id) => !newObjectIds.has(id));
   try {
     await database.$transaction(async (transaction) => {
-      const current = await transaction.memoryCompilation.findFirst({
-        orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-        select: { id: true, assertionEmbeddingIndex: { select: { indexedAssertionCount: true } } },
+      const currentIndex = await transaction.memoryAssertionEmbeddingIndex.findUnique({
+        where: { id: "shared" },
+        select: { indexedAssertionCount: true },
       });
-      if (!current || current.id !== compilation.id || !current.assertionEmbeddingIndex) {
-        throw new Error("Chat Assertion 生成期间当前 Compilation 已改变");
-      }
-      const assertionCount = await transaction.memoryAssertion.count({ where: { compilationId: compilation.id } });
-      if (current.assertionEmbeddingIndex.indexedAssertionCount !== assertionCount) {
+      if (!currentIndex) throw new Error("Chat Assertion 生成期间 Shared Brain 索引已移除");
+      const assertionCount = await transaction.memoryAssertion.count();
+      if (currentIndex.indexedAssertionCount !== assertionCount) {
         throw new Error("当前 Assertion embedding index 不完整，拒绝发布 Chat Assertion");
       }
       if (usedNewObjects.length || automaticSurfaceCorrections.length) {
-        const lockKey = `chat-object-creation:${compilation.id}`;
+        const lockKey = "chat-object-creation:shared";
         await transaction.$queryRaw(transactionAdvisoryLockQuery(lockKey));
         for (const correction of automaticSurfaceCorrections) {
           await applyAutomaticSurfaceCorrection(transaction, correction);
         }
         const lockedIdentityRows = await transaction.memoryGlobalObject.findMany({
-          where: { compilationId: compilation.id },
           select: {
             id: true,
             canonicalName: true,
@@ -1587,7 +1566,7 @@ export async function captureChatAssertions(
       }
       if (existingAffectedObjectIds.length) {
         const objectCount = await transaction.memoryGlobalObject.count({
-          where: { compilationId: compilation.id, id: { in: existingAffectedObjectIds } },
+          where: { id: { in: existingAffectedObjectIds } },
         });
         if (objectCount !== existingAffectedObjectIds.length) {
           throw new Error("Chat Assertion 引用的已有 GlobalObject 已改变");
@@ -1607,7 +1586,6 @@ export async function captureChatAssertions(
           where: { submittedByActorId_clientMessageId: { submittedByActorId: actor.id, clientMessageId: messageId } },
           create: {
             id: randomUUID(),
-            compilationId: compilation.id,
             conversationId: input.conversationId,
             clientMessageId: messageId,
             submittedByActorId: actor.id,
@@ -1626,7 +1604,6 @@ export async function captureChatAssertions(
       await transaction.memoryChatAssertionCapture.create({
         data: {
           id: captureId,
-          compilationId: compilation.id,
           queuedByActorId: actor.id,
           queuedByMessageId: input.clientMessageId,
           queueReason: input.queueDecision.reason,
@@ -1641,7 +1618,6 @@ export async function captureChatAssertions(
         await transaction.memoryGlobalObject.createMany({
           data: usedNewObjects.map((object) => ({
             id: object.id,
-            compilationId: compilation.id,
             globalObjectKey: object.globalObjectKey,
             canonicalName: object.canonicalName,
           })),
@@ -1680,7 +1656,6 @@ export async function captureChatAssertions(
       await transaction.memoryAssertion.createMany({
         data: prepared.map((assertion) => ({
           id: assertion.id,
-          compilationId: compilation.id,
           chatCaptureId: captureId,
           sourceClaimId: assertion.sourceClaimId,
           kind: "grounded",
@@ -1729,7 +1704,7 @@ export async function captureChatAssertions(
         VALUES ${Prisma.join(values)}
       `);
       await transaction.memoryAssertionEmbeddingIndex.update({
-        where: { compilationId: compilation.id },
+        where: { id: "shared" },
         data: { indexedAssertionCount: { increment: prepared.length }, indexedAt: new Date() },
       });
     }, { maxWait: 30_000, timeout: 180_000 });

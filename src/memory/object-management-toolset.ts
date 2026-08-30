@@ -16,7 +16,6 @@ export function createObjectManagementToolset(input: {
 }) {
   const inspectedObjectIds = new Set<string>();
   const foregroundObjectIds = new Set<string>();
-  let evidenceCompilationId: string | undefined;
 
   const inspectTool = tool({
     description: [
@@ -29,7 +28,6 @@ export function createObjectManagementToolset(input: {
     execute: async ({ objectId }) => {
       const inspection = await inspectObjectIdentity(objectId);
       inspectedObjectIds.add(objectId);
-      evidenceCompilationId = evidenceCompilationId ?? inspection.compilationId;
       return inspection;
     },
   });
@@ -52,7 +50,6 @@ export function createObjectManagementToolset(input: {
         execute: async (payload) => {
           const proposal = await createObjectChangeProposal({
             payload,
-            evidenceCompilationId,
             allowedObjectIds: new Set([...inspectedObjectIds, ...foregroundObjectIds]),
           });
           input.onProposal?.(proposal);

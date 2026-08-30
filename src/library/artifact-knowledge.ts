@@ -148,29 +148,23 @@ export async function getArtifactPublishedKnowledge(input: {
   if (!node || node.kind !== "file" || !node.blob) {
     throw new Error("资料库文件不存在或没有原始 Blob");
   }
-  const [compilation, run] = await Promise.all([
-    database.memoryCompilation.findFirst({
-      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-      select: { id: true },
-    }),
-    database.librarySourceProcessingRun.findFirst({
+  const run = await database.librarySourceProcessingRun.findFirst({
       where: { sourceBlobId: node.blob.id, isCurrent: true },
       orderBy: { createdAt: "desc" },
       select: {
+        id: true,
         publishedAt: true,
         publishedAssertionCount: true,
         publishedObjectCount: true,
       },
-    }),
-  ]);
-  if (!compilation) throw new Error("Shared Brain 尚无有效 Compilation");
+    });
   const regions = await database.memorySourceRegion.findMany({
     where: {
-      compilationId: compilation.id,
       sourceSha256: node.blob.sha256,
     },
     orderBy: [{ sourceNodeId: "asc" }, { id: "asc" }],
     select: {
+      publicationRunId: true,
       sourceNodeId: true,
       label: true,
       sourceTitle: true,
@@ -213,7 +207,7 @@ export async function getArtifactPublishedKnowledge(input: {
   ])];
   const allObjectRows = allObjectIds.length
     ? await database.memoryGlobalObject.findMany({
-        where: { compilationId: compilation.id, id: { in: allObjectIds } },
+        where: { id: { in: allObjectIds } },
         select: {
           id: true,
           globalObjectKey: true,
@@ -292,6 +286,7 @@ export async function getArtifactPublishedKnowledge(input: {
       }),
       contextDependent: assertion.contextDependent,
       sources: assertion.sourceBlockLinks.map((link) => ({
+        sourceDocumentId: region.publicationRunId,
         sourceTitle: region.sourceTitle ?? node.name,
         sourceSha256: region.sourceSha256 ?? node.blob!.sha256,
         sourceNodeId: region.sourceNodeId,
@@ -369,7 +364,6 @@ export async function getArtifactPublishedKnowledge(input: {
     evidence: {
       kind: "artifact-knowledge",
       mode: "object-assertion",
-      compilationId: compilation.id,
       query: input.query?.trim() || node.name,
       objects,
       ...(higherMemories.length ? { higherMemories } : {}),

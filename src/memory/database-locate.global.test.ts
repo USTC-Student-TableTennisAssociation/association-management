@@ -12,28 +12,14 @@ const originalVectorRequired = process.env.MEMORY_VECTOR_REQUIRED;
 const originalMinimumLexicalScore = process.env.MEMORY_MIN_LEXICAL_SCORE;
 
 type MockDatabase = {
-  memoryCompilation: { findFirst: ReturnType<typeof vi.fn> };
-  memorySourceBlock: { findMany: ReturnType<typeof vi.fn> };
-  memoryGlobalObject: { findMany: ReturnType<typeof vi.fn> };
-  memoryAssertion: { findMany: ReturnType<typeof vi.fn> };
+  memoryAssertionEmbeddingIndex: { findUnique: ReturnType<typeof vi.fn> };
+  memorySourceObjectFragment: { count: ReturnType<typeof vi.fn> };
+  memoryGlobalObjectSurfaceMembership: { count: ReturnType<typeof vi.fn> };
+  memoryAssertionFragmentReference: { count: ReturnType<typeof vi.fn> };
+  memoryGlobalObject: { findMany: ReturnType<typeof vi.fn>; count: ReturnType<typeof vi.fn> };
+  memoryAssertion: { findMany: ReturnType<typeof vi.fn>; count: ReturnType<typeof vi.fn> };
   $queryRaw: ReturnType<typeof vi.fn>;
 };
-
-function snapshot(globalObjectCount: number, assertionCount: number) {
-  return {
-    id: "00000000-0000-4000-8000-000000000001",
-    sourceTitle: "GlobalObject test source",
-    sourceSha256: "test-sha256",
-    sourceTimeText: null,
-    sourceTimeSupportingBlockIds: [],
-    compiledAt: new Date("2026-08-10T00:00:00.000Z"),
-    objectFragmentCount: 4,
-    surfaceFormCount: 6,
-    fragmentReferenceCount: 6,
-    assertionEmbeddingIndex: null,
-    _count: { globalObjects: globalObjectCount, assertions: assertionCount },
-  };
-}
 
 function globalObjects() {
   return [
@@ -159,15 +145,18 @@ function assertions() {
 function sourceRows() {
   return ["assertion-1", "assertion-2", "assertion-3"].map((id, index) => ({
     id,
-    compilation: {
+    sourceRegion: {
+      publicationRunId: "00000000-0000-4000-8000-000000000090",
+      sourceNodeId: "region-1",
+      label: `区域 ${index + 1}`,
       sourceTitle: "GlobalObject test source",
       sourceSha256: "test-sha256",
     },
-    sourceRegion: { sourceNodeId: "region-1", label: `区域 ${index + 1}` },
     sourceBlockLinks: [
       {
         ordinal: 0,
         sourceBlock: {
+          publicationRunId: "00000000-0000-4000-8000-000000000090",
           sourceBlockId: `source-block-${index + 1}`,
           sourcePages: [index + 1],
           markdown: "SOURCEBLOCK_MARKDOWN_MUST_NOT_ENTER_LOCATE",
@@ -183,10 +172,16 @@ function useMockDatabase(input: {
   sources?: unknown[];
 }): MockDatabase {
   const database: MockDatabase = {
-    memoryCompilation: { findFirst: vi.fn().mockResolvedValue(snapshot(input.objects.length, input.assertions.length)) },
-    memorySourceBlock: { findMany: vi.fn().mockResolvedValue([]) },
-    memoryGlobalObject: { findMany: vi.fn().mockResolvedValue(input.objects) },
+    memoryAssertionEmbeddingIndex: { findUnique: vi.fn().mockResolvedValue(null) },
+    memorySourceObjectFragment: { count: vi.fn().mockResolvedValue(4) },
+    memoryGlobalObjectSurfaceMembership: { count: vi.fn().mockResolvedValue(6) },
+    memoryAssertionFragmentReference: { count: vi.fn().mockResolvedValue(6) },
+    memoryGlobalObject: {
+      findMany: vi.fn().mockResolvedValue(input.objects),
+      count: vi.fn().mockResolvedValue(input.objects.length),
+    },
     memoryAssertion: {
+      count: vi.fn().mockResolvedValue(input.assertions.length),
       findMany: vi.fn().mockImplementation(async (args: {
         select?: { globalStatementTemplateMarkdown?: boolean; sourceBlockLinks?: unknown };
       }) => {
@@ -344,25 +339,29 @@ describe("GlobalObject-backed Locate", () => {
       assertions: [referenceAssertion],
       sources: [{
         id: "assertion-reference",
-        compilation: {
+        sourceRegion: {
+          publicationRunId: "00000000-0000-4000-8000-000000000090",
+          sourceNodeId: "region-reference",
+          label: "人员分工",
           sourceTitle: "GlobalObject test source",
           sourceSha256: "test-sha256",
         },
-        sourceRegion: { sourceNodeId: "region-reference", label: "人员分工" },
         sourceBlockLinks: [{
           ordinal: 0,
-          sourceBlock: { sourceBlockId: "table-personnel", sourcePages: [6] },
+          sourceBlock: {
+            publicationRunId: "00000000-0000-4000-8000-000000000090",
+            sourceBlockId: "table-personnel",
+            sourcePages: [6],
+          },
         }],
       }],
     });
-    database.memoryCompilation.findFirst.mockResolvedValue({
-      ...snapshot(globalObjects().length, 1),
-      assertionEmbeddingIndex: {
+    database.memoryAssertionEmbeddingIndex.findUnique.mockResolvedValue({
         modelKey: "test-embedding",
         modelRevision: "v1",
         dimension: 3,
         indexedAssertionCount: 1,
-      },
+        indexedAt: new Date("2026-08-10T00:00:00.000Z"),
     });
     vi.mocked(embedMemoryQueries).mockResolvedValue({
       model: "test-embedding",

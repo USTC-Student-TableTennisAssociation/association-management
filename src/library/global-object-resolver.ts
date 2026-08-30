@@ -523,63 +523,6 @@ async function deepCandidates(input: {
   artifactLocation: string | null;
 }): Promise<IncomingObjectCandidate[]> {
   if (!input.artifactLocation) return [];
-  const memoryPrefix = "memory-compilation:";
-  if (input.artifactLocation.startsWith(memoryPrefix)) {
-    const compilationId = input.artifactLocation.slice(memoryPrefix.length);
-    const compilation = await getDatabase().memoryCompilation.findUnique({
-      where: { id: compilationId },
-      select: { sourceSha256: true },
-    });
-    const objects = await getDatabase().memoryGlobalObject.findMany({
-      where: {
-        compilationId,
-        ...(compilation?.sourceSha256 === input.sourceSha256
-          ? {}
-          : {
-              OR: [
-                {
-                  surfaceMemberships: {
-                    some: {
-                      objectFragment: {
-                        sourceRegion: { sourceSha256: input.sourceSha256 },
-                      },
-                    },
-                  },
-                },
-                {
-                  assertionLinks: {
-                    some: {
-                      assertion: {
-                        sourceRegion: { sourceSha256: input.sourceSha256 },
-                      },
-                    },
-                  },
-                },
-                {
-                  assertionCoverage: {
-                    some: {
-                      assertion: {
-                        sourceRegion: { sourceSha256: input.sourceSha256 },
-                      },
-                    },
-                  },
-                },
-              ],
-            }),
-      },
-      select: { id: true, canonicalName: true },
-      orderBy: { globalObjectKey: "asc" },
-    });
-    return objects.map((object, index) => ({
-      key: `${input.runId}:deep:${index}`,
-      runId: input.runId,
-      sourceName: input.sourceName,
-      label: object.canonicalName,
-      reason: "深度冷启动已存在的 Global Object",
-      action: "bind_existing" as const,
-      existingObjectId: object.id,
-    }));
-  }
   const artifactPath = safeGlobalArtifactPath(input.artifactLocation);
   if (!artifactPath) return [];
   const root = z.object({
@@ -832,13 +775,7 @@ async function promoteSuccessfulLibraryResults(
 }
 
 async function loadExistingObjects(): Promise<ExistingObject[]> {
-  const compilation = await getDatabase().memoryCompilation.findFirst({
-    orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    select: { id: true },
-  });
-  if (!compilation) return [];
   const objects = await getDatabase().memoryGlobalObject.findMany({
-    where: { compilationId: compilation.id },
     select: {
       id: true,
       canonicalName: true,
@@ -850,7 +787,7 @@ async function loadExistingObjects(): Promise<ExistingObject[]> {
       },
       chatMentions: { select: { surfaceForm: true } },
     },
-    orderBy: [{ compilationId: "desc" }, { globalObjectKey: "asc" }],
+    orderBy: { globalObjectKey: "asc" },
   });
   return objects.map((object) => ({
     id: object.id,

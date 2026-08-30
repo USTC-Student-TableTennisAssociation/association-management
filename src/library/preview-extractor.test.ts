@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 const databaseState = vi.hoisted(() => ({
-  findCompilation: vi.fn(),
+  findBlocks: vi.fn(),
 }));
 
 vi.mock("@/db", () => ({
   getDatabase: () => ({
-    memoryCompilation: { findFirst: databaseState.findCompilation },
+    memorySourceBlock: { findMany: databaseState.findBlocks },
   }),
 }));
 
@@ -14,7 +14,7 @@ import { extractLibraryPreview } from "@/library/preview-extractor";
 
 describe("extractLibraryPreview", () => {
   it("does not start MinerU when a chat preview has not explicitly allowed parsing", async () => {
-    databaseState.findCompilation.mockResolvedValue(null);
+    databaseState.findBlocks.mockResolvedValue([]);
 
     const preview = await extractLibraryPreview({
       storageKey: `blobs/${"a".repeat(2)}/${"a".repeat(64)}`,

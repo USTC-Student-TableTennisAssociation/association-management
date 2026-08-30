@@ -765,7 +765,7 @@ function ChatSurface({
                       <summary className="cursor-pointer font-medium text-sky-800">Locate Trace（{trace.durationMs} ms）</summary>
                       <div className="mt-2 space-y-3 rounded-md bg-white p-3">
                         <p>Query：{trace.query}</p>
-                        <p>快照：{trace.snapshot.sourceTitle} · {trace.snapshot.globalObjectCount} Global Objects · {trace.snapshot.assertionCount} Assertions</p>
+                        <p>Shared Brain：{trace.snapshot.globalObjectCount} Global Objects · {trace.snapshot.assertionCount} Assertions</p>
                         <p>Source IR：{trace.snapshot.objectFragmentCount} Fragments · {trace.snapshot.surfaceFormCount} Surface forms · {trace.snapshot.fragmentReferenceCount} References</p>
                         <p>Assertion embeddings：{trace.snapshot.embeddingModel ? `${trace.snapshot.embeddingModel}@${trace.snapshot.embeddingRevision ?? "unknown"}/${trace.snapshot.embeddingDimension ?? "unknown"} · ${trace.snapshot.embeddingAssertionCount}` : `未建立 · ${trace.snapshot.embeddingAssertionCount}`}</p>
                         <div>

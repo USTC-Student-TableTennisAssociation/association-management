@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  MemoryEvidenceAccumulator,
-  MemoryExploreSnapshotError,
-} from "@/memory/evidence-accumulator";
+import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import type { MemoryExploreResult } from "@/memory/explore";
 import type { MemoryRetrievalResult } from "@/memory/types";
 
@@ -44,6 +41,7 @@ function initial(): MemoryRetrievalResult {
         matchedBy: [],
         matchedFacets: ["facet-0"],
         sources: [{
+          sourceDocumentId: "run-1",
           sourceTitle: "手册",
           sourceSha256: "sha",
           sourceNodeId: "region-1",
@@ -59,10 +57,7 @@ function initial(): MemoryRetrievalResult {
       version: "structured-seed-map.v1",
       query: "继往开来是什么活动？",
       snapshot: {
-        id: "compilation-1",
-        sourceTitle: "手册",
-        sourceSha256: "sha",
-        compiledAt: "2026-01-01T00:00:00.000Z",
+        indexedAt: null,
         embeddingModel: null,
         embeddingRevision: null,
         embeddingDimension: null,
@@ -97,7 +92,6 @@ function explored(): MemoryExploreResult {
   return {
     kind: "follow-object",
     mode: "object-assertion",
-    compilationId: "compilation-1",
     globalObjectId: "object-1",
     objects: [
       {
@@ -139,6 +133,7 @@ function explored(): MemoryExploreResult {
         renderedStatement: "换届包含工作交接。",
         contextDependent: false,
         sources: [{
+          sourceDocumentId: "run-1",
           sourceTitle: "手册",
           sourceSha256: "sha",
           sourceNodeId: "region-2",
@@ -192,18 +187,6 @@ describe("MemoryEvidenceAccumulator", () => {
     expect(JSON.stringify(accumulator.snapshot())).not.toContain("不得进入");
   });
 
-  it("retains the Compilation discovered by a lazy first search", () => {
-    const accumulator = new MemoryEvidenceAccumulator({
-      query: "继往开来是什么活动？",
-      mode: "object-assertion",
-      seedMap: { facets: [], objects: [], assertions: [], connections: [] },
-    });
-
-    accumulator.merge(explored());
-
-    expect(accumulator.snapshot().compilationId).toBe("compilation-1");
-  });
-
   it("resolves a unique in-turn Object by O#、canonical name or surface form", () => {
     const accumulator = new MemoryEvidenceAccumulator(initial());
 
@@ -237,10 +220,4 @@ describe("MemoryEvidenceAccumulator", () => {
     expect(accumulator.invalidateHigherMemories(["object-1"])).toEqual([]);
   });
 
-  it("rejects evidence from another compilation", () => {
-    const accumulator = new MemoryEvidenceAccumulator(initial());
-    const result = { ...explored(), compilationId: "compilation-2" };
-
-    expect(() => accumulator.merge(result)).toThrow(MemoryExploreSnapshotError);
-  });
 });

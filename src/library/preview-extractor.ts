@@ -133,14 +133,8 @@ async function extractMinerUPreview(input: {
 }
 
 async function existingSourcePreview(sha256: string): Promise<string | undefined> {
-  const compilation = await getDatabase().memoryCompilation.findFirst({
-    where: { sourceSha256: sha256 },
-    orderBy: { importedAt: "desc" },
-    select: { id: true },
-  });
-  if (!compilation) return undefined;
   const blocks = await getDatabase().memorySourceBlock.findMany({
-    where: { compilationId: compilation.id },
+    where: { publicationRun: { sourceBlob: { sha256 } } },
     orderBy: { order: "asc" },
     take: 30,
     select: { markdown: true },

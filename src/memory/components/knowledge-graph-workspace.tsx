@@ -389,7 +389,7 @@ export function KnowledgeGraphWorkspace({
           <div className={`items-center gap-2 ${assistantOpen ? "hidden" : "flex"}`}>
             <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-teal-700">组织认知</span>
             <span className="size-1 rounded-full bg-zinc-300" />
-            <span className="truncate text-[10px] text-zinc-400">{graph?.compilation.sourceTitle ?? "正在读取最新 Compilation"}</span>
+            <span className="truncate text-[10px] text-zinc-400">{graph ? "Shared Brain" : "正在读取 Shared Brain"}</span>
           </div>
           <div className="mt-0.5 flex items-baseline gap-3">
             <h1 className="text-[17px] font-semibold tracking-[-0.02em] text-zinc-950">知识图谱</h1>

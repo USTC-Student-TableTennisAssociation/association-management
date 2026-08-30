@@ -24,7 +24,6 @@ vi.mock("@/memory/object-management-service", () => ({
   inspectObjectIdentity: vi.fn(),
 }));
 
-const compilationId = "00000000-0000-4000-8000-000000000010";
 const objectId = "00000000-0000-4000-8000-000000000020";
 const associationRef = "association";
 const presidentRef = "new-president";
@@ -56,7 +55,6 @@ function retrieval(): MemoryRetrievalResult {
   return {
     query: "乒协星级",
     mode: "object-assertion",
-    compilationId,
     seedMap: {
       facets: [],
       objects: [{
@@ -111,12 +109,6 @@ function input() {
 
 function mockDatabase() {
   const transaction = {
-    memoryCompilation: {
-      findFirst: vi.fn().mockResolvedValue({
-        id: compilationId,
-        assertionEmbeddingIndex: { indexedAssertionCount: 10 },
-      }),
-    },
     memoryAssertion: { count: vi.fn().mockResolvedValue(10), createMany: vi.fn() },
     memoryGlobalObject: {
       count: vi.fn().mockResolvedValue(1),
@@ -137,21 +129,21 @@ function mockDatabase() {
     memoryAssertionChatEvidenceLink: { createMany: vi.fn() },
     memoryAssertionObjectLink: { createMany: vi.fn() },
     memoryAssertionObjectOccurrence: { createMany: vi.fn() },
-    memoryAssertionEmbeddingIndex: { update: vi.fn() },
+    memoryAssertionEmbeddingIndex: {
+      findUnique: vi.fn().mockResolvedValue({ indexedAssertionCount: 10 }),
+      update: vi.fn(),
+    },
     $queryRaw: vi.fn(),
     $executeRaw: vi.fn(),
   };
   const database = {
     memoryChatAssertionCapture: { findFirst: vi.fn().mockResolvedValue(null) },
-    memoryCompilation: {
-      findFirst: vi.fn().mockResolvedValue({
-        id: compilationId,
-        assertionEmbeddingIndex: {
-          modelKey: "BAAI/bge-m3",
-          modelRevision: "test",
-          dimension: 1024,
-          indexedAssertionCount: 10,
-        },
+    memoryAssertionEmbeddingIndex: {
+      findUnique: vi.fn().mockResolvedValue({
+        modelKey: "BAAI/bge-m3",
+        modelRevision: "test",
+        dimension: 1024,
+        indexedAssertionCount: 10,
       }),
     },
     authUser: { findUnique: vi.fn().mockResolvedValue(null) },
@@ -256,7 +248,6 @@ describe("Chat Assertion capture agent", () => {
     database.authUser.findUnique.mockResolvedValue({
       actorObject: {
         id: actorObjectId,
-        compilationId,
         globalObjectKey: "actor:current-user",
         canonicalName: "当前 Actor",
       },
@@ -612,7 +603,6 @@ describe("Chat Assertion capture agent", () => {
 
     const createdObject = transaction.memoryGlobalObject.createMany.mock.calls[0][0].data[0];
     expect(createdObject).toMatchObject({
-      compilationId,
       canonicalName: "雷岳鑫",
       globalObjectKey: expect.stringMatching(/^chat-object:/),
     });
@@ -739,7 +729,6 @@ describe("Chat Assertion capture agent", () => {
       chatMentions: [],
     }]);
     vi.mocked(inspectObjectIdentity).mockResolvedValue({
-      compilationId,
       object: {
         id: objectId,
         canonicalName: "参考对象",

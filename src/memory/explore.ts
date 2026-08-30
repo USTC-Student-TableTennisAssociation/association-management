@@ -62,7 +62,6 @@ export type MemoryExploreAssertion = {
 export type MemoryExploreResult = {
   kind: "search-memory" | "follow-object" | "business-context" | "artifact-knowledge";
   mode: MemoryRetrievalResult["mode"];
-  compilationId?: string;
   query?: string;
   taskShape?: MemorySearchTaskShape;
   knowledgeState?: {
@@ -151,6 +150,7 @@ function safeSources(sources: MemorySourceReference[]): MemorySourceReference[] 
         }
       : {
           ...(source.kind ? { kind: source.kind } : {}),
+          sourceDocumentId: source.sourceDocumentId,
           sourceTitle: source.sourceTitle,
           sourceSha256: source.sourceSha256,
           sourceNodeId: source.sourceNodeId,
@@ -282,7 +282,6 @@ function compactLocatedSeedMap(
 }
 
 async function preferObjectHigherMemories(
-  compilationId: string | undefined,
   compact: Pick<MemoryExploreResult, "sourceTime" | "objects" | "assertions" | "connections" | "truncated">,
   targetObjectIds: string[],
 ): Promise<{
@@ -290,13 +289,12 @@ async function preferObjectHigherMemories(
   staleObjectIds: string[];
   newerAssertionIds: string[];
 }> {
-  if (!compilationId || !targetObjectIds.length) {
+  if (!targetObjectIds.length) {
     return { compact, staleObjectIds: [], newerAssertionIds: [] };
   }
   const database = getDatabase();
   const rows = await database.memoryObjectHigherMemory.findMany({
     where: {
-      compilationId,
       globalObjectId: { in: targetObjectIds },
     },
     select: {
@@ -315,7 +313,6 @@ async function preferObjectHigherMemories(
   const higherMemoryObjectIds = rows.map((row) => row.globalObjectId);
   const newerAssertions = await database.memoryAssertion.findMany({
     where: {
-      compilationId,
       createdAt: { gt: earliestMaintainedAt },
       objectLinks: { some: { globalObjectId: { in: higherMemoryObjectIds } } },
     },
@@ -392,7 +389,6 @@ function operationalAspectMatchScore(
  * Assertion or Source content into the model context by itself.
  */
 async function operationalIndexAssertionIds(input: {
-  compilationId: string;
   query: string;
   higherMemories: readonly MemoryHigherMemorySeed[];
 }): Promise<{ assertionIds: string[]; aspectKeys: string[] }> {
@@ -412,7 +408,6 @@ async function operationalIndexAssertionIds(input: {
   const sourceRegions = sourceNodeIds.length || sourceTitles.length
     ? await getDatabase().memorySourceRegion.findMany({
         where: {
-          compilationId: input.compilationId,
           OR: [
             ...(sourceNodeIds.length ? [{ sourceNodeId: { in: sourceNodeIds } }] : []),
             ...(sourceTitles.length ? [{ sourceTitle: { in: sourceTitles } }] : []),
@@ -439,7 +434,6 @@ async function operationalIndexAssertionIds(input: {
 
 /** Add Assertion candidates reached through an explicit memory index or Object relation. */
 async function appendAssertionsToCompact(
-  compilationId: string,
   compact: Pick<MemoryExploreResult, "sourceTime" | "objects" | "assertions" | "connections" | "truncated">,
   assertionIds: string[],
 ): Promise<typeof compact> {
@@ -449,7 +443,7 @@ async function appendAssertionsToCompact(
   const missingIds = assertionIds.filter((id) => !existingAssertionIds.has(id));
   if (!missingIds.length) return compact;
 
-  const loaded = await loadFollowAssertions(compilationId, missingIds);
+  const loaded = await loadFollowAssertions(missingIds);
   const loadedById = new Map(loaded.map((assertion) => [assertion.id, assertion]));
   const rendered = missingIds.flatMap((id) => {
     const assertion = loadedById.get(id);
@@ -461,7 +455,7 @@ async function appendAssertionsToCompact(
   const missingObjectIds = [...new Set(rendered.flatMap((assertion) =>
     assertion.associatedReferences.map((reference) => reference.globalObjectId)
   ))].filter((id) => !existingObjectIds.has(id));
-  const addedObjects = await loadGlobalObjects(compilationId, missingObjectIds);
+  const addedObjects = await loadGlobalObjects(missingObjectIds);
   const objects = [
     ...compact.objects,
     ...addedObjects.map((object, index) => compactObject({
@@ -532,21 +526,20 @@ function rankSynthesisCandidates(
 }
 
 async function targetLinkedAssertionIds(
-  compilationId: string,
   globalObjectId: string,
   query: string,
 ): Promise<string[]> {
   const database = getDatabase();
   const [coreLinks, coverageLinks] = await Promise.all([
     database.memoryAssertionObjectLink.findMany({
-      where: { globalObjectId, globalObject: { compilationId } },
+      where: { globalObjectId },
       select: { assertionId: true },
       distinct: ["assertionId"],
       orderBy: { assertionId: "asc" },
       take: FOLLOW_ASSERTION_SCAN_LIMIT,
     }),
     database.memoryAssertionObjectCoverage.findMany({
-      where: { globalObjectId, globalObject: { compilationId } },
+      where: { globalObjectId },
       select: { assertionId: true },
       distinct: ["assertionId"],
       orderBy: { assertionId: "asc" },
@@ -557,7 +550,7 @@ async function targetLinkedAssertionIds(
     ...coreLinks.map((row) => row.assertionId),
     ...coverageLinks.map((row) => row.assertionId),
   ])];
-  const loaded = await loadFollowAssertions(compilationId, assertionIds);
+  const loaded = await loadFollowAssertions(assertionIds);
   return loaded
     .map(renderFollowAssertion)
     .map((assertion) => {
@@ -694,14 +687,13 @@ export async function searchMemory(
   });
   throwIfAborted(runtime.signal);
   runtime.onLocate?.(retrieval);
-  const compilationId = retrieval.compilationId ?? retrieval.trace?.snapshot.id;
   let rawCompact = compactLocatedSeedMap(retrieval.seedMap, SEARCH_ASSERTION_LIMIT);
-  if (compilationId && targetObjectIds.length) {
+  if (targetObjectIds.length) {
     const missingTargetIds = targetObjectIds.filter((id) =>
       !rawCompact.objects.some((object) => object.id === id)
     );
     if (missingTargetIds.length) {
-      const loadedTargets = await loadGlobalObjects(compilationId, missingTargetIds);
+      const loadedTargets = await loadGlobalObjects(missingTargetIds);
       rawCompact = {
         ...rawCompact,
         objects: [
@@ -730,10 +722,9 @@ export async function searchMemory(
         staleObjectIds: [] as string[],
         newerAssertionIds: [] as string[],
       }
-    : await preferObjectHigherMemories(compilationId, rawCompact, targetIds);
-  if (compilationId && higherMemoryPreference.newerAssertionIds.length) {
+    : await preferObjectHigherMemories(rawCompact, targetIds);
+  if (higherMemoryPreference.newerAssertionIds.length) {
     rawCompact = await appendAssertionsToCompact(
-      compilationId,
       rawCompact,
       higherMemoryPreference.newerAssertionIds,
     );
@@ -741,16 +732,14 @@ export async function searchMemory(
   const preferredHigherMemories = (higherMemoryPreference.compact as typeof rawCompact & {
     higherMemories?: MemoryHigherMemorySeed[];
   }).higherMemories;
-  const operationalNavigation = compilationId && preferredHigherMemories?.length
+  const operationalNavigation = preferredHigherMemories?.length
     ? await operationalIndexAssertionIds({
-        compilationId,
         query: normalizedQuery,
         higherMemories: preferredHigherMemories,
       })
     : { assertionIds: [], aspectKeys: [] };
-  if (compilationId && operationalNavigation.assertionIds.length) {
+  if (operationalNavigation.assertionIds.length) {
     rawCompact = await appendAssertionsToCompact(
-      compilationId,
       rawCompact,
       operationalNavigation.assertionIds,
     );
@@ -764,15 +753,13 @@ export async function searchMemory(
     : undefined;
   const synthesisTargetId = targetIds.length === 1 ? targetIds[0] : undefined;
   let coldBootstrapApplied = false;
-  if (compilationId && taskShape === "synthesis" && synthesisTargetId) {
+  if (taskShape === "synthesis" && synthesisTargetId) {
     const linkedAssertionIds = await targetLinkedAssertionIds(
-      compilationId,
       synthesisTargetId,
       normalizedQuery,
     );
     if (linkedAssertionIds.length) {
       rawCompact = await appendAssertionsToCompact(
-        compilationId,
         rawCompact,
         linkedAssertionIds,
       );
@@ -856,7 +843,6 @@ export async function searchMemory(
   return resultWithCounts({
     kind: "search-memory",
     mode: retrieval.mode,
-    ...(compilationId ? { compilationId } : {}),
     query: normalizedQuery,
     taskShape,
     ...(targetIds.length === 1 && runtime.preferHigherMemory !== false
@@ -884,48 +870,10 @@ export async function searchMemory(
   });
 }
 
-async function latestCompilation(): Promise<{ id: string; sourceTime: MemorySourceTime }> {
-  const compilation = await getDatabase().memoryCompilation.findFirst({
-    orderBy: { importedAt: "desc" },
-    select: {
-      id: true,
-      sourceTitle: true,
-      sourceSha256: true,
-      sourceTimeText: true,
-      sourceTimeSupportingBlockIds: true,
-    },
-  });
-  if (!compilation) throw new Error("数据库中没有来源语义 Compilation");
-  const evidence = compilation.sourceTimeSupportingBlockIds.length
-    ? await getDatabase().memorySourceBlock.findMany({
-        where: {
-          compilationId: compilation.id,
-          sourceBlockId: { in: compilation.sourceTimeSupportingBlockIds },
-        },
-        select: { sourceBlockId: true, sourcePages: true },
-      })
-    : [];
-  const byId = new Map(evidence.map((item) => [item.sourceBlockId, item]));
-  return {
-    id: compilation.id,
-    sourceTime: {
-      sourceTitle: compilation.sourceTitle,
-      sourceSha256: compilation.sourceSha256,
-      text: compilation.sourceTimeText,
-      supportingBlocks: compilation.sourceTimeSupportingBlockIds.map((sourceBlockId) => {
-        const block = byId.get(sourceBlockId);
-        if (!block) throw new Error(`Source Time evidence block 不存在：${sourceBlockId}`);
-        return { sourceBlockId, pages: block.sourcePages };
-      }),
-    },
-  };
-}
-
-async function loadGlobalObjects(compilationId: string, objectIds: string[]) {
+async function loadGlobalObjects(objectIds: string[]) {
   if (!objectIds.length) return [];
   const rows = await getDatabase().memoryGlobalObject.findMany({
     where: {
-      compilationId,
       id: { in: [...new Set(objectIds)] },
     },
     select: {
@@ -966,11 +914,10 @@ async function loadGlobalObjects(compilationId: string, objectIds: string[]) {
   });
 }
 
-async function loadFollowAssertions(compilationId: string, assertionIds: string[]) {
+async function loadFollowAssertions(assertionIds: string[]) {
   if (!assertionIds.length) return [];
   return getDatabase().memoryAssertion.findMany({
     where: {
-      compilationId,
       id: { in: [...new Set(assertionIds)] },
     },
     select: {
@@ -979,9 +926,9 @@ async function loadFollowAssertions(compilationId: string, assertionIds: string[
       kind: true,
       globalStatementTemplateMarkdown: true,
       contextDependent: true,
-      compilation: { select: { sourceTitle: true, sourceSha256: true } },
       sourceRegion: {
         select: {
+          publicationRunId: true,
           sourceNodeId: true,
           label: true,
           sourceTitle: true,
@@ -1030,6 +977,7 @@ async function loadFollowAssertions(compilationId: string, assertionIds: string[
           ordinal: true,
           sourceBlock: {
             select: {
+              publicationRunId: true,
               sourceBlockId: true,
               sourcePages: true,
             },
@@ -1077,8 +1025,9 @@ function assertionSources(assertion: FollowAssertionRecord): MemorySourceReferen
   if (assertion.sourceRegion) {
     return assertion.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
       kind: "document",
-      sourceTitle: assertion.sourceRegion!.sourceTitle ?? assertion.compilation.sourceTitle,
-      sourceSha256: assertion.sourceRegion!.sourceSha256 ?? assertion.compilation.sourceSha256,
+      sourceDocumentId: sourceBlock.publicationRunId,
+      sourceTitle: assertion.sourceRegion!.sourceTitle,
+      sourceSha256: assertion.sourceRegion!.sourceSha256,
       sourceNodeId: assertion.sourceRegion!.sourceNodeId,
       sourceRegionLabel: assertion.sourceRegion!.label,
       sourceBlockId: sourceBlock.sourceBlockId,
@@ -1098,19 +1047,15 @@ function assertionSources(assertion: FollowAssertionRecord): MemorySourceReferen
 }
 
 function emptyFollowResult(input: {
-  compilationId: string;
   globalObjectId: string;
   focus?: string;
-  sourceTime: MemorySourceTime;
   warning: string;
 }): MemoryExploreResult {
   return resultWithCounts({
     kind: "follow-object",
     mode: "object-assertion",
-    compilationId: input.compilationId,
     globalObjectId: input.globalObjectId,
     ...(input.focus === undefined ? {} : { focus: input.focus }),
-    sourceTime: input.sourceTime,
     objects: [],
     assertions: [],
     connections: [],
@@ -1138,15 +1083,12 @@ export async function followObject(
   const normalizedFocus = optionalText(focus, "focus", FOCUS_CHAR_LIMIT);
   throwIfAborted(runtime.signal);
 
-  const compilation = await latestCompilation();
-  const compilationId = compilation.id;
   throwIfAborted(runtime.signal);
   const [targetObjects, coreLinkRows, coverageRows] = await Promise.all([
-    loadGlobalObjects(compilationId, [normalizedObjectId]),
+    loadGlobalObjects([normalizedObjectId]),
     getDatabase().memoryAssertionObjectLink.findMany({
       where: {
         globalObjectId: normalizedObjectId,
-        globalObject: { compilationId },
       },
       select: { assertionId: true },
       distinct: ["assertionId"],
@@ -1156,7 +1098,6 @@ export async function followObject(
     getDatabase().memoryAssertionObjectCoverage.findMany({
       where: {
         globalObjectId: normalizedObjectId,
-        globalObject: { compilationId },
       },
       select: { assertionId: true },
       distinct: ["assertionId"],
@@ -1168,11 +1109,9 @@ export async function followObject(
   const targetObject = targetObjects[0];
   if (!targetObject) {
     return emptyFollowResult({
-      compilationId,
       globalObjectId: normalizedObjectId,
       focus: normalizedFocus,
-      sourceTime: compilation.sourceTime,
-      warning: `GlobalObject ${normalizedObjectId} 不存在于当前 Compilation`,
+      warning: `GlobalObject ${normalizedObjectId} 不存在于 Shared Brain`,
     });
   }
   const allAssertionIds = [...new Set([
@@ -1181,7 +1120,7 @@ export async function followObject(
   ])].sort();
   const scanTruncated = allAssertionIds.length > FOLLOW_ASSERTION_SCAN_LIMIT;
   const scannedAssertionIds = allAssertionIds.slice(0, FOLLOW_ASSERTION_SCAN_LIMIT);
-  const loadedAssertions = await loadFollowAssertions(compilationId, scannedAssertionIds);
+  const loadedAssertions = await loadFollowAssertions(scannedAssertionIds);
   throwIfAborted(runtime.signal);
 
   const rankedAssertions = loadedAssertions
@@ -1206,7 +1145,7 @@ export async function followObject(
     for (const reference of assertion.associatedReferences) relatedObjectIds.add(reference.globalObjectId);
   }
 
-  const allObjects = await loadGlobalObjects(compilationId, [...relatedObjectIds]);
+  const allObjects = await loadGlobalObjects([...relatedObjectIds]);
   throwIfAborted(runtime.signal);
   const orderedObjects = allObjects
     .sort(
@@ -1261,10 +1200,8 @@ export async function followObject(
   return resultWithCounts({
     kind: "follow-object",
     mode: "object-assertion",
-    compilationId,
     globalObjectId: normalizedObjectId,
     ...(normalizedFocus === undefined ? {} : { focus: normalizedFocus }),
-    sourceTime: compilation.sourceTime,
     objects,
     assertions,
     connections,

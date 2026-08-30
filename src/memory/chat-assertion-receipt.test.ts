@@ -49,11 +49,6 @@ function receiptRow() {
 beforeEach(() => {
   vi.clearAllMocks();
   const transaction = {
-    memoryCompilation: {
-      findFirst: vi.fn().mockResolvedValue({
-        id: "00000000-0000-4000-8000-000000000020",
-      }),
-    },
     memoryActor: { upsert: vi.fn().mockResolvedValue(undefined) },
     memoryChatAssertionReceipt: { upsert: vi.fn().mockResolvedValue(undefined) },
   };

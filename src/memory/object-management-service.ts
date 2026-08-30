@@ -37,13 +37,6 @@ function normalizedName(value: string): string {
     .replace(/[\s“”"'《》〈〉【】（）()，,。.!！?？:：;；·—_\-]/g, "");
 }
 
-async function latestCompilation(database: DatabaseClient) {
-  return database.memoryCompilation.findFirst({
-    orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    select: { id: true },
-  });
-}
-
 function documentSurfaceId(objectFragmentId: string, ordinal: number): string {
   return `document:${objectFragmentId}:${ordinal}`;
 }
@@ -103,7 +96,6 @@ export async function inspectObjectIdentity(
   if (!object) throw new ObjectManagementValidationError(`Object ${objectId} 不存在`);
 
   return {
-    compilationId: object.compilationId,
     object: {
       id: object.id,
       canonicalName: object.canonicalName,
@@ -167,7 +159,6 @@ function surfaceNames(inspection: ObjectIdentityInspection): string[] {
 async function validateObjectChange(
   database: DatabaseClient,
   payload: ObjectChangePayload,
-  compilationId: string,
   options: {
     allowedObjectIds?: ReadonlySet<string>;
     rejectBusinessViewDependencies: boolean;
@@ -185,9 +176,6 @@ async function validateObjectChange(
   const inspections = new Map<string, ObjectIdentityInspection>();
   for (const objectId of objectIds) {
     const inspection = await inspectObjectIdentity(objectId, database);
-    if (inspection.compilationId !== compilationId) {
-      throw new ObjectManagementValidationError(`Object ${objectId} 不属于当前 Compilation`);
-    }
     inspections.set(objectId, inspection);
   }
 
@@ -208,7 +196,6 @@ async function validateObjectChange(
   }
 
   const allObjectRows = await database.memoryGlobalObject.findMany({
-    where: { compilationId },
     select: {
       id: true,
       canonicalName: true,
@@ -426,7 +413,6 @@ async function presentProposal(
     payload: Prisma.JsonValue;
     createdAt: Date;
     failureReason: string | null;
-    compilationId: string;
   },
   validated?: ValidatedObjectChange,
 ): Promise<ObjectChangeProposalPresentation> {
@@ -434,7 +420,6 @@ async function presentProposal(
   const state = validated ?? await validateObjectChange(
     getDatabase(),
     payload,
-    proposal.compilationId,
     { rejectBusinessViewDependencies: false },
   );
   return {
@@ -450,23 +435,16 @@ async function presentProposal(
 
 export async function createObjectChangeProposal(input: {
   payload: ObjectChangePayload;
-  evidenceCompilationId?: string;
   allowedObjectIds: ReadonlySet<string>;
 }): Promise<ObjectChangeProposalPresentation> {
   const database = getDatabase();
   const payload = objectChangePayloadSchema.parse(input.payload);
-  const compilation = await latestCompilation(database);
-  if (!compilation) throw new ObjectManagementValidationError("当前没有可用的 Shared Brain Compilation");
-  if (input.evidenceCompilationId && input.evidenceCompilationId !== compilation.id) {
-    throw new ObjectManagementValidationError("本轮检查结果与当前 active Compilation 不一致，请重新检查");
-  }
-  const validated = await validateObjectChange(database, payload, compilation.id, {
+  const validated = await validateObjectChange(database, payload, {
     allowedObjectIds: input.allowedObjectIds,
     rejectBusinessViewDependencies: false,
   });
   const proposal = await database.memoryObjectChangeProposal.create({
     data: {
-      compilationId: compilation.id,
       reason: payload.reason,
       payload: payload as Prisma.InputJsonValue,
     },
@@ -650,7 +628,6 @@ async function mergeObjects(
 
 async function splitObject(
   transaction: Prisma.TransactionClient,
-  compilationId: string,
   change: Extract<ObjectChange, { type: "SPLIT_OBJECT" }>,
 ): Promise<void> {
   const newObjectId = randomUUID();
@@ -666,7 +643,6 @@ async function splitObject(
   await transaction.memoryGlobalObject.create({
     data: {
       id: newObjectId,
-      compilationId,
       globalObjectKey: `managed-object:${newObjectId}`,
       canonicalName: change.newCanonicalName,
     },
@@ -791,15 +767,9 @@ export async function decideObjectChangeProposal(
       if (!current || current.status !== "pending") {
         throw new ObjectManagementValidationError("Proposal 已被处理");
       }
-      const compilation = await latestCompilation(transaction);
-      if (!compilation || compilation.id !== current.compilationId) {
-        throw new ObjectManagementValidationError(
-          "Proposal 来源 Compilation 已不是当前 active Compilation，禁止应用",
-        );
-      }
       const objectIds = unique(payload.changes.flatMap(objectIdsInChange)).sort();
       for (const objectId of objectIds) {
-        const lockKey = `object-management:${compilation.id}:${objectId}`;
+        const lockKey = `object-management:${objectId}`;
         await transaction.$queryRaw(transactionAdvisoryLockQuery(lockKey));
       }
       const lockedCurrent = await transaction.memoryObjectChangeProposal.findUnique({
@@ -808,7 +778,7 @@ export async function decideObjectChangeProposal(
       if (!lockedCurrent || lockedCurrent.status !== "pending") {
         throw new ObjectManagementValidationError("Proposal 已被其他请求处理");
       }
-      await validateObjectChange(transaction, payload, compilation.id, {
+      await validateObjectChange(transaction, payload, {
         rejectBusinessViewDependencies: true,
       });
       await transaction.memoryObjectChangeProposal.update({
@@ -827,7 +797,7 @@ export async function decideObjectChangeProposal(
         } else if (change.type === "MERGE_OBJECTS") {
           await mergeObjects(transaction, change);
         } else {
-          await splitObject(transaction, compilation.id, change);
+          await splitObject(transaction, change);
         }
       }
 

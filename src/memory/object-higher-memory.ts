@@ -55,22 +55,12 @@ export type ObjectHigherMemoryMaintenanceInput = {
  */
 export async function findExistingHigherMemoryObjectIds(input: {
   objectIds: string[];
-  compilationId?: string;
 }): Promise<string[]> {
   const objectIds = [...new Set(input.objectIds)];
   if (!objectIds.length) return [];
   const database = getDatabase();
-  const compilation = await database.memoryCompilation.findFirst({
-    orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    select: { id: true },
-  });
-  if (!compilation) throw new Error("数据库中没有来源语义 Compilation");
-  if (input.compilationId && input.compilationId !== compilation.id) {
-    throw new Error("Assertion 发布结果与当前 Compilation 不一致");
-  }
   const rows = await database.memoryObjectHigherMemory.findMany({
     where: {
-      compilationId: compilation.id,
       globalObjectId: { in: objectIds },
     },
     select: { globalObjectId: true },
@@ -163,17 +153,8 @@ export async function maintainObjectHigherMemories(
   }
   const targetIds = [...new Set(input.queueDecision.objectIds)];
   const database = getDatabase();
-  const compilation = await database.memoryCompilation.findFirst({
-    orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    select: { id: true },
-  });
-  if (!compilation) throw new Error("数据库中没有来源语义 Compilation");
-  const retrievalCompilationId = input.retrieval.compilationId ?? input.retrieval.trace?.snapshot.id;
-  if (retrievalCompilationId && retrievalCompilationId !== compilation.id) {
-    throw new Error("主对话检索结果与当前 Compilation 不一致");
-  }
   const objects = await database.memoryGlobalObject.findMany({
-    where: { compilationId: compilation.id, id: { in: targetIds } },
+    where: { id: { in: targetIds } },
     select: {
       id: true,
       globalObjectKey: true,
@@ -185,13 +166,13 @@ export async function maintainObjectHigherMemories(
   if (invalidIds.length) {
     await trace?.appendSection(
       "Higher Memory 目标校验",
-      `以下 Object 不属于当前 Compilation，已拒绝整次维护：${invalidIds.map((id) => `\`${id}\``).join("、")}`,
+      `以下 Object 不属于 Shared Brain，已拒绝整次维护：${invalidIds.map((id) => `\`${id}\``).join("、")}`,
     );
     return 0;
   }
   const orderedObjects = targetIds.map((id) => objectById.get(id)!);
   const oldRows = await database.memoryObjectHigherMemory.findMany({
-    where: { compilationId: compilation.id, globalObjectId: { in: targetIds } },
+    where: { globalObjectId: { in: targetIds } },
     select: { globalObjectId: true, cognitiveMemory: true, operationalIndex: true, maintainedAt: true },
   });
   const oldMemories = oldRows.map((memory) => ({
@@ -337,15 +318,8 @@ export async function maintainObjectHigherMemories(
   // not when the triggering chat message reached the server.
   const maintainedAt = new Date();
   await database.$transaction(async (transaction) => {
-    const current = await transaction.memoryCompilation.findFirst({
-      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-      select: { id: true },
-    });
-    if (!current || current.id !== compilation.id) {
-      throw new Error("Higher Memory 生成期间当前 Compilation 已改变");
-    }
     const currentObjectCount = await transaction.memoryGlobalObject.count({
-      where: { compilationId: compilation.id, id: { in: targetIds } },
+      where: { id: { in: targetIds } },
     });
     if (currentObjectCount !== targetIds.length) {
       throw new Error("Higher Memory 目标 Object 已改变");
@@ -367,7 +341,6 @@ export async function maintainObjectHigherMemories(
         await transaction.memoryObjectHigherMemory.upsert({
           where: { globalObjectId: memory.globalObjectId },
           create: {
-            compilationId: compilation.id,
             globalObjectId: memory.globalObjectId,
             ...data,
           },

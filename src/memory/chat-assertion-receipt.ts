@@ -87,12 +87,6 @@ export async function queueChatAssertionReceipt(input: QueueReceiptInput): Promi
   const database = getDatabase();
   const submittedAt = validDate(input.submittedAt);
   await database.$transaction(async (transaction) => {
-    const compilation = await transaction.memoryCompilation.findFirst({
-      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-      select: { id: true },
-    });
-    if (!compilation) throw new Error("当前没有可记录 Assertion 回执的 Compilation");
-
     await transaction.memoryActor.upsert({
       where: { id: input.actorId },
       create: {
@@ -109,7 +103,6 @@ export async function queueChatAssertionReceipt(input: QueueReceiptInput): Promi
         },
       },
       create: {
-        compilationId: compilation.id,
         actorId: input.actorId,
         clientMessageId: input.clientMessageId,
         execution: input.execution,
@@ -119,7 +112,6 @@ export async function queueChatAssertionReceipt(input: QueueReceiptInput): Promi
         ...persistedPayload(input),
       },
       update: {
-        compilationId: compilation.id,
         execution: input.execution,
         queueReason: input.queueReason,
         status: "queued",

@@ -38,6 +38,7 @@ function locatedSeedMap() {
     matchedBy: [],
     matchedFacets: ["facet-0"],
     sources: [{
+      sourceDocumentId: `run-${index + 1}`,
       sourceTitle: "Test source",
       sourceSha256: "sha",
       sourceNodeId: `source-node-${index + 1}`,
@@ -94,8 +95,8 @@ function assertionRow(input: {
     kind: input.kind ?? "grounded",
     globalStatementTemplateMarkdown: input.statement,
     contextDependent: input.kind === "reference",
-    compilation: { sourceTitle: "生存手册", sourceSha256: "sha" },
     sourceRegion: {
+      publicationRunId: "run-test",
       sourceNodeId: `region-${input.id}`,
       label: "来源章节",
       sourceTitle: "生存手册",
@@ -106,7 +107,11 @@ function assertionRow(input: {
     objectCoverage: input.objectCoverage ?? [],
     sourceBlockLinks: [{
       ordinal: 0,
-      sourceBlock: { sourceBlockId: `block-${input.id}`, sourcePages: [3] },
+      sourceBlock: {
+        publicationRunId: "run-test",
+        sourceBlockId: `block-${input.id}`,
+        sourcePages: [3],
+      },
     }],
   };
 }
@@ -118,10 +123,8 @@ describe("searchMemory", () => {
     const retrieve = vi.fn().mockResolvedValue({
       query: "query",
       mode: "object-assertion",
-      compilationId: "compilation-current",
       seedMap,
       trace: {
-        snapshot: { id: "compilation-current" },
         warnings: ["vector degraded for test"],
       },
     });
@@ -251,13 +254,22 @@ function followAssertionRows(includeReference = false) {
   const common = {
     kind: "grounded" as const,
     contextDependent: false,
-    compilation: { sourceTitle: "Follow test source", sourceSha256: "follow-sha" },
-    sourceRegion: { sourceNodeId: "region-1", label: "Follow region" },
+    sourceRegion: {
+      publicationRunId: "run-follow",
+      sourceNodeId: "region-1",
+      label: "Follow region",
+      sourceTitle: "Follow test source",
+      sourceSha256: "follow-sha",
+    },
     objectCoverage: [],
     chatEvidenceLinks: [],
     sourceBlockLinks: [{
       ordinal: 0,
-      sourceBlock: { sourceBlockId: "block-1", sourcePages: [2] },
+      sourceBlock: {
+        publicationRunId: "run-follow",
+        sourceBlockId: "block-1",
+        sourcePages: [2],
+      },
     }],
   };
   const assertions = [{
@@ -294,14 +306,6 @@ describe("followObject", () => {
       globalObject("global-student-union", "student-union-key", "学生会", ["学生会"]),
     ];
     const database = {
-      memoryCompilation: { findFirst: vi.fn().mockResolvedValue({
-        id: "compilation-current",
-        sourceTitle: "Follow test source",
-        sourceSha256: "follow-sha",
-        sourceTimeText: null,
-        sourceTimeSupportingBlockIds: [],
-      }) },
-      memorySourceBlock: { findMany: vi.fn().mockResolvedValue([]) },
       memoryGlobalObject: { findMany: vi.fn().mockImplementation(async (args: {
         where: { id: { in: string[] } };
       }) => allObjects.filter((object) =>
@@ -356,12 +360,12 @@ describe("followObject", () => {
       .toBe(false);
   });
 
-  it("returns an empty result for an Object outside the current Compilation", async () => {
+  it("returns an empty result for an Object outside the Shared Brain", async () => {
     const database = useFollowDatabase({ includeTarget: false });
     const result = await followObject("global-event");
 
     expect(result.counts).toEqual({ objects: 0, assertions: 0, connections: 0 });
-    expect(result.warnings).toEqual([expect.stringContaining("不存在于当前 Compilation")]);
+    expect(result.warnings).toEqual([expect.stringContaining("不存在于 Shared Brain")]);
     expect(database.memoryAssertion.findMany).not.toHaveBeenCalled();
   });
 });

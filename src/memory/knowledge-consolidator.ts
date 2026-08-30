@@ -84,7 +84,6 @@ export async function consolidateTurnKnowledge(
       semanticContext: input.semanticContext,
       retrieval: {
         query: input.retrieval.query,
-        compilationId: input.retrieval.compilationId,
         seedMap: input.retrieval.seedMap,
       },
     }),
