@@ -134,7 +134,6 @@ function mockDatabase() {
     memoryGlobalObjectSurfaceMembership: {
       deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
-    memoryObjectChangeProposal: { create: vi.fn() },
     memoryAssertionChatEvidenceLink: { createMany: vi.fn() },
     memoryAssertionObjectLink: { createMany: vi.fn() },
     memoryAssertionObjectOccurrence: { createMany: vi.fn() },
@@ -808,16 +807,14 @@ describe("Chat Assertion capture agent", () => {
     expect(transaction.memoryGlobalObject.createMany).toHaveBeenCalledWith({
       data: [expect.objectContaining({ canonicalName: "对象甲" })],
     });
-    expect(transaction.memoryObjectChangeProposal.create).toHaveBeenCalledWith({
+    expect(transaction.memoryChatAssertionCapture.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        status: "applied",
-        payload: expect.objectContaining({
-          changes: [{
-            type: "REMOVE_SURFACE",
-            objectId,
-            surfaceId: `document:${pollutedFragmentId}:1`,
-          }],
-        }),
+        appliedSurfaceCorrections: [{
+          objectId,
+          surfaceId: `document:${pollutedFragmentId}:1`,
+          surfaceForm: "对象",
+          reason: "泛称不能独立指向参考对象。",
+        }],
       }),
     });
   });

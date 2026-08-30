@@ -1561,26 +1561,6 @@ export async function captureChatAssertions(
         for (const correction of automaticSurfaceCorrections) {
           await applyAutomaticSurfaceCorrection(transaction, correction);
         }
-        if (automaticSurfaceCorrections.length) {
-          const appliedAt = new Date();
-          await transaction.memoryObjectChangeProposal.create({
-            data: {
-              compilationId: compilation.id,
-              status: "applied",
-              reason: "Assertion Agent 在新 Object 成功发布时自动纠正了已检查的明显泛称 Surface。",
-              payload: {
-                reason: "Assertion Agent 安全 Surface 纠错",
-                changes: automaticSurfaceCorrections.map((correction) => ({
-                  type: "REMOVE_SURFACE",
-                  objectId: correction.objectId,
-                  surfaceId: correction.surfaceId,
-                })),
-              },
-              decidedAt: appliedAt,
-              appliedAt,
-            },
-          });
-        }
         const lockedIdentityRows = await transaction.memoryGlobalObject.findMany({
           where: { compilationId: compilation.id },
           select: {
@@ -1653,6 +1633,8 @@ export async function captureChatAssertions(
           submittedAt,
           timezone: input.timezone,
           semanticContext: input.semanticContext as unknown as Prisma.InputJsonValue,
+          appliedSurfaceCorrections:
+            automaticSurfaceCorrections as unknown as Prisma.InputJsonValue,
         },
       });
       if (usedNewObjects.length) {
