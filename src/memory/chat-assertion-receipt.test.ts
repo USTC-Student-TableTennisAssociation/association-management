@@ -8,12 +8,16 @@ vi.mock("@/db", () => ({
 
 import {
   buildChatAssertionReceiptInstruction,
+  claimChatAssertionReceipt,
   completeChatAssertionReceipt,
   createMemoryWriteStatusTool,
   listChatAssertionReceipts,
   loadChatAssertionReceiptInput,
   queueChatAssertionReceipt,
+  recoverPendingChatAssertionReceipts,
 } from "@/memory/chat-assertion-receipt";
+
+const claimStartedAt = new Date("2026-08-14T01:00:01.000Z");
 
 const executionOptions = {
   toolCallId: "tool-call-1",
@@ -67,7 +71,8 @@ beforeEach(() => {
         clientMessageId: "message-current",
         execution: "background",
         queueReason: "用户提供了新任会长信息",
-        status: "queued",
+        status: "running",
+        startedAt: claimStartedAt,
         submittedAt: new Date("2026-08-14T01:00:00.000Z"),
         timezone: "Asia/Shanghai",
         semanticContext: {
@@ -161,6 +166,7 @@ describe("Chat Assertion processing receipts", () => {
     await expect(loadChatAssertionReceiptInput({
       actorId: "00000000-0000-4000-8000-000000000001",
       clientMessageId: "message-current",
+      startedAt: claimStartedAt,
     })).resolves.toEqual(expect.objectContaining({
       actor: expect.objectContaining({ displayName: "开发用户" }),
       conversationId: "00000000-0000-4000-8000-000000000081",
@@ -171,10 +177,34 @@ describe("Chat Assertion processing receipts", () => {
     }));
   });
 
+  it("atomically claims only a queued receipt", async () => {
+    const key = {
+      actorId: "00000000-0000-4000-8000-000000000001",
+      clientMessageId: "message-current",
+    };
+
+    await expect(claimChatAssertionReceipt(key)).resolves.toEqual({
+      ...key,
+      startedAt: expect.any(Date),
+    });
+
+    const database = databaseState.database as {
+      memoryChatAssertionReceipt: { updateMany: ReturnType<typeof vi.fn> };
+    };
+    expect(database.memoryChatAssertionReceipt.updateMany).toHaveBeenCalledWith({
+      where: { ...key, status: "queued" },
+      data: expect.objectContaining({
+        status: "running",
+        startedAt: expect.any(Date),
+      }),
+    });
+  });
+
   it("records actual published Assertion and Object IDs", async () => {
     await completeChatAssertionReceipt({
       actorId: "00000000-0000-4000-8000-000000000001",
       clientMessageId: "message-current",
+      startedAt: claimStartedAt,
     }, {
       publishedAssertions: 1,
       publishedAssertionIds: ["assertion-1"],
@@ -193,6 +223,8 @@ describe("Chat Assertion processing receipts", () => {
       where: {
         actorId: "00000000-0000-4000-8000-000000000001",
         clientMessageId: "message-current",
+        status: "running",
+        startedAt: claimStartedAt,
       },
       data: expect.objectContaining({
         status: "published",
@@ -201,6 +233,44 @@ describe("Chat Assertion processing receipts", () => {
         affectedObjectIds: ["object-1"],
       }),
     });
+  });
+
+  it("requeues stale background work and returns a bounded recovery batch", async () => {
+    const database = databaseState.database as {
+      memoryChatAssertionReceipt: {
+        updateMany: ReturnType<typeof vi.fn>;
+        findMany: ReturnType<typeof vi.fn>;
+      };
+    };
+    database.memoryChatAssertionReceipt.findMany.mockResolvedValueOnce([{
+      actorId: "00000000-0000-4000-8000-000000000001",
+      clientMessageId: "message-stale",
+    }]);
+
+    await expect(recoverPendingChatAssertionReceipts({
+      actorId: "00000000-0000-4000-8000-000000000001",
+    })).resolves.toEqual([{
+      actorId: "00000000-0000-4000-8000-000000000001",
+      clientMessageId: "message-stale",
+    }]);
+
+    expect(database.memoryChatAssertionReceipt.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        execution: "background",
+        status: "running",
+        OR: expect.arrayContaining([{ startedAt: null }]),
+      }),
+      data: expect.objectContaining({ status: "queued", startedAt: null }),
+    });
+    expect(database.memoryChatAssertionReceipt.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          execution: "background",
+          status: "queued",
+        }),
+        take: 5,
+      }),
+    );
   });
 
   it("builds a compact next-turn instruction that preserves the Evidence boundary", async () => {

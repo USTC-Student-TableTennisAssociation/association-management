@@ -24,6 +24,10 @@ export type ChatAssertionReceiptKey = {
   clientMessageId: string;
 };
 
+export type ChatAssertionReceiptClaim = ChatAssertionReceiptKey & {
+  startedAt: Date;
+};
+
 export type ChatAssertionReceipt = ChatAssertionReceiptKey & {
   execution: ChatAssertionExecution;
   queueReason: string;
@@ -56,6 +60,8 @@ const affectedObjectsSchema = z.array(z.object({
   canonicalName: z.string(),
   resolution: z.enum(["existing", "created"]),
 }));
+
+const STALE_RECEIPT_AFTER_MS = 10 * 60 * 1_000;
 
 function validDate(value: string): Date {
   const parsed = new Date(value);
@@ -132,14 +138,14 @@ export async function queueChatAssertionReceipt(input: QueueReceiptInput): Promi
 
 /** Load the durable work payload owned by this receipt. */
 export async function loadChatAssertionReceiptInput(
-  key: ChatAssertionReceiptKey,
+  claim: ChatAssertionReceiptClaim,
 ): Promise<ChatAssertionCaptureInput> {
   const database = getDatabase();
   const row = await database.memoryChatAssertionReceipt.findUnique({
     where: {
       actorId_clientMessageId: {
-        actorId: key.actorId,
-        clientMessageId: key.clientMessageId,
+        actorId: claim.actorId,
+        clientMessageId: claim.clientMessageId,
       },
     },
     select: {
@@ -149,6 +155,7 @@ export async function loadChatAssertionReceiptInput(
       execution: true,
       queueReason: true,
       status: true,
+      startedAt: true,
       submittedAt: true,
       timezone: true,
       semanticContext: true,
@@ -159,8 +166,11 @@ export async function loadChatAssertionReceiptInput(
   if (row.execution !== "background") {
     throw new Error("前台 Assertion 回执不能作为后台写回输入执行");
   }
-  if (row.status !== "queued") {
-    throw new Error(`Assertion 回执当前状态不是 queued：${row.status}`);
+  if (
+    row.status !== "running" ||
+    row.startedAt?.getTime() !== claim.startedAt.getTime()
+  ) {
+    throw new Error("Assertion 回执已不属于当前处理者");
   }
   if (!row.timezone || !row.semanticContext || !row.retrieval) {
     throw new Error("Assertion 回执缺少可恢复的完整输入");
@@ -177,28 +187,30 @@ export async function loadChatAssertionReceiptInput(
   };
 }
 
-export async function markChatAssertionReceiptRunning(
+export async function claimChatAssertionReceipt(
   key: ChatAssertionReceiptKey,
-): Promise<void> {
+): Promise<ChatAssertionReceiptClaim | undefined> {
   const database = getDatabase();
-  await database.memoryChatAssertionReceipt.updateMany({
+  const startedAt = new Date();
+  const claimed = await database.memoryChatAssertionReceipt.updateMany({
     where: {
       actorId: key.actorId,
       clientMessageId: key.clientMessageId,
-      status: { not: "published" },
+      status: "queued",
     },
     data: {
       status: "running",
-      startedAt: new Date(),
+      startedAt,
       completedAt: null,
       outcomeSummary: "Assertion Agent 正在提取、搜索与执行确定性校验。",
       errorMessage: null,
     },
   });
+  return claimed.count === 1 ? { ...key, startedAt } : undefined;
 }
 
 export async function completeChatAssertionReceipt(
-  key: ChatAssertionReceiptKey,
+  claim: ChatAssertionReceiptClaim,
   result: ChatAssertionCaptureResult,
 ): Promise<void> {
   const database = getDatabase();
@@ -209,7 +221,12 @@ export async function completeChatAssertionReceipt(
     ? `成功发布 ${result.publishedAssertions} 条 Assertion，关联 ${result.affectedObjects.length} 个 Object。`
     : "处理完成，但没有候选通过提取与确定性校验，因此未写入 Assertion、Evidence 或新 Object。";
   await database.memoryChatAssertionReceipt.updateMany({
-    where: key,
+    where: {
+      actorId: claim.actorId,
+      clientMessageId: claim.clientMessageId,
+      status: "running",
+      startedAt: claim.startedAt,
+    },
     data: {
       status,
       completedAt: new Date(),
@@ -224,16 +241,17 @@ export async function completeChatAssertionReceipt(
 }
 
 export async function failChatAssertionReceipt(
-  key: ChatAssertionReceiptKey,
+  claim: ChatAssertionReceiptClaim,
   error: unknown,
 ): Promise<void> {
   const database = getDatabase();
   const detail = errorMessage(error);
   await database.memoryChatAssertionReceipt.updateMany({
     where: {
-      actorId: key.actorId,
-      clientMessageId: key.clientMessageId,
-      status: { not: "published" },
+      actorId: claim.actorId,
+      clientMessageId: claim.clientMessageId,
+      status: "running",
+      startedAt: claim.startedAt,
     },
     data: {
       status: "failed",
@@ -241,6 +259,46 @@ export async function failChatAssertionReceipt(
       outcomeSummary: "Assertion 处理失败，没有确认新的发布结果。",
       errorMessage: detail,
     },
+  });
+}
+
+/**
+ * Requeue interrupted background work and return a small batch for request-time recovery.
+ * Atomic claiming still decides which process may actually execute each receipt.
+ */
+export async function recoverPendingChatAssertionReceipts(input: {
+  actorId: string;
+  limit?: number;
+}): Promise<ChatAssertionReceiptKey[]> {
+  const database = getDatabase();
+  const staleBefore = new Date(Date.now() - STALE_RECEIPT_AFTER_MS);
+  await database.memoryChatAssertionReceipt.updateMany({
+    where: {
+      actorId: input.actorId,
+      execution: "background",
+      status: "running",
+      OR: [
+        { startedAt: null },
+        { startedAt: { lt: staleBefore } },
+      ],
+    },
+    data: {
+      status: "queued",
+      startedAt: null,
+      completedAt: null,
+      outcomeSummary: "上一次处理已中断，等待 Assertion Agent 重新处理。",
+      errorMessage: null,
+    },
+  });
+  return database.memoryChatAssertionReceipt.findMany({
+    where: {
+      actorId: input.actorId,
+      execution: "background",
+      status: "queued",
+    },
+    orderBy: { submittedAt: "asc" },
+    take: Math.max(1, Math.min(input.limit ?? 5, 20)),
+    select: { actorId: true, clientMessageId: true },
   });
 }
 

@@ -81,9 +81,9 @@ function fixture(options: {
     attentionErrorMessage: null,
     knowledgeErrorMessage: null,
     settleUntil: new Date(Date.now() + 1_000),
-    attentionStartedAt: null,
+    attentionStartedAt: null as Date | null,
     attentionCompletedAt: null,
-    knowledgeStartedAt: null,
+    knowledgeStartedAt: null as Date | null,
     knowledgeCompletedAt: null,
     seenAt: null,
     createdAt: new Date(),
@@ -260,6 +260,66 @@ describe("View change reaction coordinator", () => {
     await expect(coordinator.resumePending({ viewKey: "society_information" }))
       .resolves.toBe(1);
     await vi.advanceTimersByTimeAsync(1_000);
+    coordinator.dispose();
+  });
+
+  it("requeues stale running work before resuming it", async () => {
+    const {
+      coordinator,
+      evaluate,
+      reaction,
+      viewChangeReaction,
+    } = fixture();
+    reaction.attentionStatus = "running";
+    reaction.knowledgeStatus = "running";
+    reaction.attentionStartedAt = new Date(Date.now() - 11 * 60 * 1_000);
+    reaction.knowledgeStartedAt = new Date(Date.now() - 11 * 60 * 1_000);
+    reaction.settleUntil = new Date(Date.now());
+
+    await expect(coordinator.resumePending({ viewKey: "society_information" }))
+      .resolves.toBe(1);
+    expect(viewChangeReaction.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        attentionStatus: "running",
+        OR: expect.arrayContaining([{ attentionStartedAt: null }]),
+      }),
+      data: expect.objectContaining({
+        attentionStatus: "queued",
+        attentionStartedAt: null,
+      }),
+    }));
+    expect(viewChangeReaction.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        knowledgeStatus: "running",
+        OR: expect.arrayContaining([{ knowledgeStartedAt: null }]),
+      }),
+      data: expect.objectContaining({
+        knowledgeStatus: "queued",
+        knowledgeStartedAt: null,
+      }),
+    }));
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(evaluate).toHaveBeenCalledTimes(1));
+    coordinator.dispose();
+  });
+
+  it("does not execute work when another process wins both claims", async () => {
+    const {
+      coordinator,
+      evaluate,
+      reconcileObjectHigherMemory,
+      reconcileViewHigherMemory,
+      viewChangeReaction,
+    } = fixture();
+    viewChangeReaction.updateMany.mockResolvedValue({ count: 0 });
+
+    await coordinator.enqueue({ reactionId });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(reconcileObjectHigherMemory).not.toHaveBeenCalled();
+    expect(reconcileViewHigherMemory).not.toHaveBeenCalled();
     coordinator.dispose();
   });
 

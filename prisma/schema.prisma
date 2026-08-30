@@ -484,6 +484,7 @@ model MemoryChatAssertionReceipt {
   conversation ChatConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
 
   @@unique([actorId, clientMessageId])
+  @@index([actorId, execution, status, startedAt], map: "chat_assertion_receipts_recovery_idx")
   @@index([actorId, updatedAt])
   @@index([conversationId, submittedAt])
   @@map("memory_chat_assertion_receipts")
