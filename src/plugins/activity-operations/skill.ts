@@ -43,7 +43,6 @@ export const activityPlaybookDesignerSkill: SkillExtension = {
       "activity.set_nested_playbook",
     ],
   }],
-  knowledge: ["shared_brain", "library", "source_documents"],
   requiresCapabilities: [],
 };
 
@@ -89,7 +88,5 @@ export const activityTaskMapPlannerSkill: SkillExtension = {
       "activity.set_task_dependency",
     ],
   }],
-  knowledge: ["shared_brain", "library", "source_documents"],
   requiresCapabilities: [],
 };
-

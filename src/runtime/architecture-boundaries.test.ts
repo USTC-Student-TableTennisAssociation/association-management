@@ -1,10 +1,57 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
+}
+
+type InstalledPluginSource = {
+  id: string;
+  root: string;
+  files: string[];
+};
+
+function typescriptSources(root: string): string[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    if (["dist", "node_modules"].includes(entry.name)) return [];
+    const path = resolve(root, entry.name);
+    if (entry.isDirectory()) return typescriptSources(path);
+    if (!/\.(?:ts|tsx)$/.test(entry.name) || /\.test\.|\.d\.ts$/.test(entry.name)) return [];
+    return [path];
+  });
+}
+
+function installedPluginSources(): InstalledPluginSource[] {
+  const installation = JSON.parse(source("echo.plugins.json")) as {
+    plugins: Array<{ source: string; manifest: string }>;
+  };
+  return installation.plugins.flatMap((plugin) => {
+    if (plugin.source !== "local") return [];
+    const manifestPath = resolve(process.cwd(), plugin.manifest);
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { id: string };
+    const root = dirname(manifestPath);
+    return [{ id: manifest.id, root, files: typescriptSources(root) }];
+  });
+}
+
+function displayPath(path: string): string {
+  return relative(process.cwd(), path);
+}
+
+function pluginBoundaryViolations(): Array<{ pluginId: string; message: string }> {
+  return installedPluginSources().flatMap((plugin) =>
+    plugin.files.flatMap((file) => {
+      const contents = readFileSync(file, "utf8");
+      return /from\s+["']@\//.test(contents)
+        ? [{
+            pluginId: plugin.id,
+            message: `${plugin.id}: ${displayPath(file)} imports a host-internal @/ module`,
+          }]
+        : [];
+    })
+  );
 }
 
 describe("Echo plugin architecture boundaries", () => {
@@ -50,25 +97,54 @@ describe("Echo plugin architecture boundaries", () => {
     expect(presentationHost).toContain("installedPresentationComponents");
   });
 
-  it("keeps View Modules independent from Prisma and Runtime implementation", () => {
-    const pluginSources = [
-      "src/plugins/activity-operations/view/schema.ts",
-      "src/plugins/activity-operations/view/commands.ts",
-      "src/plugins/society-information/view/schema.ts",
-      "src/plugins/society-information/view/commands.ts",
-    ].map(source).join("\n");
-    expect(pluginSources).not.toContain("@/generated/prisma");
-    expect(pluginSources).not.toContain("@/db");
-    expect(pluginSources).not.toContain("@/view-runtime");
+  it("does not hide new Plugin boundary violations behind the known normalization debt", () => {
+    const unexpected = pluginBoundaryViolations()
+      .filter((violation) => violation.pluginId !== "echo.competition-records")
+      .map((violation) => violation.message);
+    expect(unexpected).toEqual([]);
   });
 
-  it("makes the Generic Inspector strictly read-only", () => {
-    const inspector = source("src/view-runtime/generic-ui/generic-view-inspector.tsx");
-    expect(inspector).not.toMatch(/method:\s*["'](?:POST|PUT|PATCH|DELETE)/);
-    expect(inspector).not.toMatch(/runViewCommand|setDimension|setSlot|createCard|Raw Graph/i);
+  it.fails("keeps competition-records behind the public SDK boundary (normalization pending)", () => {
+    const pending = pluginBoundaryViolations()
+      .filter((violation) => violation.pluginId === "echo.competition-records")
+      .map((violation) => violation.message);
+    expect(pending).toEqual([]);
   });
 
-  it("contains only the new destructive View persistence model", () => {
+  it("keeps Generic Surfaces read-only", () => {
+    const genericSurfaces = [
+      "src/view-runtime/generic-ui/generic-view-inspector.tsx",
+      "src/view-runtime/generic-ui/work-view-workspace.tsx",
+    ];
+    for (const file of genericSurfaces) {
+      const contents = source(file);
+      expect(contents, file).not.toMatch(/method:\s*["'](?:POST|PUT|PATCH|DELETE)/);
+      expect(contents, file).not.toMatch(
+        /runViewCommand|setDimension|setSlot|setRelatedObjects|createCard|deleteCard|Raw Graph/i,
+      );
+    }
+  });
+
+  it("keeps specialized Presentations away from Card Graph persistence", () => {
+    const presentationFiles = installedPluginSources().flatMap((plugin) =>
+      plugin.files.filter((file) => file.includes("/presentation/"))
+    );
+    expect(presentationFiles.length).toBeGreaterThan(0);
+    for (const file of presentationFiles) {
+      const contents = readFileSync(file, "utf8");
+      expect(contents, displayPath(file)).not.toMatch(
+        /@\/db|@\/generated\/prisma|@\/view-runtime\/persistence|PrismaCardGraphTransaction/,
+      );
+      expect(contents, displayPath(file)).not.toMatch(
+        /\.viewCard\.(?:create|update|delete)|\.viewDimensionValue\.|\.viewSlotBinding\./,
+      );
+      if (/method:\s*["'](?:POST|PUT|PATCH|DELETE)/.test(contents)) {
+        expect(contents, displayPath(file)).toMatch(/useEchoCommand|\/commands\//);
+      }
+    }
+  });
+
+  it("contains only the current View persistence model", () => {
     const schema = source("prisma/schema.prisma");
     expect(schema).not.toMatch(/model SemanticCard\b/);
     expect(schema).not.toContain("SemanticContentDimension");

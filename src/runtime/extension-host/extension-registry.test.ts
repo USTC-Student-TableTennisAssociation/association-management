@@ -31,7 +31,6 @@ function view(key = "test_view"): ViewModule {
     commands: [],
     invariants: [],
     events: [],
-    projections: [],
   };
 }
 
@@ -62,7 +61,6 @@ describe("ExtensionRegistry", () => {
             schemaVersion: "1",
             mode: "read",
           }],
-          knowledge: [],
           requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
         }],
         tools: [{ id: "echo.test.provider", version: "1.0.0", implementations: [] }],
@@ -114,7 +112,6 @@ describe("ExtensionRegistry", () => {
             mode: "write",
             commands: ["test.missing"],
           }],
-          knowledge: [],
           requiresCapabilities: [],
         }],
       },

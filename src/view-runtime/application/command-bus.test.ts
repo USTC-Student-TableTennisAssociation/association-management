@@ -11,9 +11,27 @@ function runtimeFixture(
   transactionStateVersion = 3,
   proposalConflictPolicy: "exact" | "revalidate_latest" = "exact",
   allowedInitiators: readonly ("human" | "ai" | "system")[] = ["human", "ai"],
+  simulateGraphChange = true,
 ) {
   const proposalActorId = "00000000-0000-4000-8000-000000000001";
-  const execute = vi.fn(async () => ({ summary: { accepted: true } }));
+  const businessState = { value: "initial" };
+  const execute = vi.fn(async (_context: unknown, input: { value: string }) => {
+    businessState.value = input.value;
+    return { summary: { accepted: true } };
+  });
+  const testCard = {
+    id: "00000000-0000-4000-8000-000000000010",
+    viewKey: "test_view",
+    cardTypeKey: "TestCard",
+    dimensions: [],
+    outgoingSlots: [],
+    relatedObjects: [],
+  };
+  let graphReadCount = 0;
+  const findViewCards = vi.fn(async () => {
+    graphReadCount += 1;
+    return simulateGraphChange && graphReadCount % 2 === 0 ? [testCard] : [];
+  });
   const viewModule: ViewModule = {
     manifest: {
       key: "test_view",
@@ -22,7 +40,17 @@ function runtimeFixture(
       description: "Test",
       defaultSettings: { aiWritePolicy: policy },
     },
-    schema: { viewKey: "test_view", schemaVersion: "1", cardTypes: [] },
+    schema: {
+      viewKey: "test_view",
+      schemaVersion: "1",
+      cardTypes: [{
+        key: "TestCard",
+        label: "Test Card",
+        description: "Test Card",
+        dimensions: [],
+        slots: [],
+      }],
+    },
     commands: [{
       key: "test.accept",
       version: "1",
@@ -35,7 +63,6 @@ function runtimeFixture(
     }],
     invariants: [],
     events: [],
-    projections: [],
   };
   const plugin: EchoPluginManifest = {
     id: "echo.test",
@@ -69,7 +96,7 @@ function runtimeFixture(
       create: vi.fn().mockResolvedValue({ id: "execution-1" }),
     },
     domainEventOutbox: { create: vi.fn() },
-    viewCard: { findMany: vi.fn().mockResolvedValue([]) },
+    viewCard: { findMany: findViewCards },
   };
   const database = {
     installedView: {
@@ -90,12 +117,20 @@ function runtimeFixture(
       }),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
     },
-    $transaction: vi.fn(async (callback: (tx: typeof transaction) => Promise<unknown>) =>
-      callback(transaction)),
+    $transaction: vi.fn(async (callback: (tx: typeof transaction) => Promise<unknown>) => {
+      const valueBefore = businessState.value;
+      try {
+        return await callback(transaction);
+      } catch (error) {
+        businessState.value = valueBefore;
+        throw error;
+      }
+    }),
   };
   const installedViews = { synchronize: vi.fn().mockResolvedValue(undefined) };
   return {
     bus: new ViewCommandBus(database as never, registry, installedViews as never),
+    businessState,
     database,
     execute,
     installedViews,
@@ -105,6 +140,109 @@ function runtimeFixture(
 }
 
 describe("ViewCommandBus", () => {
+  it("applies one Command's business semantics for human, AI, approved AI, and system paths", async () => {
+    const executeDirectly = async (initiator: "human" | "ai" | "system") => {
+      const fixture = runtimeFixture(
+        "auto_execute",
+        3,
+        "exact",
+        ["human", "ai", "system"],
+      );
+      await fixture.bus.dispatch({
+        viewKey: "test_view",
+        commandKey: "test.accept",
+        commandVersion: "1",
+        input: { value: "committed" },
+        actor: { permissions: ["view.write"] },
+        initiator,
+        expectedStateVersion: "3",
+      });
+      return fixture.businessState.value;
+    };
+
+    const approved = runtimeFixture(
+      "approval_required",
+      3,
+      "exact",
+      ["human", "ai", "system"],
+    );
+    approved.database.viewCommandProposal.findUnique.mockResolvedValueOnce({
+      id: "proposal-1",
+      viewKey: "test_view",
+      commandKey: "test.accept",
+      commandVersion: "1",
+      inputJson: { value: "committed" },
+      expectedStateVersion: BigInt(3),
+      proposedByActorId: approved.proposalActorId,
+      skillId: null,
+      status: "pending",
+    });
+    await approved.bus.dispatch({
+      viewKey: "test_view",
+      commandKey: "test.accept",
+      commandVersion: "1",
+      input: { value: "committed" },
+      actor: { actorId: approved.proposalActorId, permissions: ["view.write"] },
+      initiator: "ai",
+      expectedStateVersion: "3",
+    });
+    expect(approved.businessState.value).toBe("initial");
+    await approved.bus.decideProposal({
+      proposalId: "proposal-1",
+      decision: "approve",
+      actor: { actorId: approved.proposalActorId, permissions: ["view.write"] },
+    });
+
+    await expect(Promise.all([
+      executeDirectly("human"),
+      executeDirectly("ai"),
+      executeDirectly("system"),
+    ])).resolves.toEqual(["committed", "committed", "committed"]);
+    expect(approved.businessState.value).toBe("committed");
+  });
+
+  it("keeps a Proposal non-mutating until approval commits the Command", async () => {
+    const fixture = runtimeFixture("approval_required");
+
+    await fixture.bus.dispatch({
+      viewKey: "test_view",
+      commandKey: "test.accept",
+      commandVersion: "1",
+      input: { value: "committed" },
+      actor: { actorId: fixture.proposalActorId, permissions: ["view.write"] },
+      initiator: "ai",
+      expectedStateVersion: "3",
+    });
+
+    expect(fixture.businessState.value).toBe("initial");
+    expect(fixture.database.viewCommandProposal.create).toHaveBeenCalledOnce();
+    expect(fixture.transaction.viewCommandExecution.create).not.toHaveBeenCalled();
+
+    fixture.database.viewCommandProposal.findUnique.mockResolvedValueOnce({
+      id: "proposal-1",
+      viewKey: "test_view",
+      commandKey: "test.accept",
+      commandVersion: "1",
+      inputJson: { value: "committed" },
+      expectedStateVersion: BigInt(3),
+      proposedByActorId: fixture.proposalActorId,
+      skillId: null,
+      status: "pending",
+    });
+    await fixture.bus.decideProposal({
+      proposalId: "proposal-1",
+      decision: "approve",
+      actor: { actorId: fixture.proposalActorId, permissions: ["view.write"] },
+    });
+
+    expect(fixture.businessState.value).toBe("committed");
+    expect(fixture.transaction.viewCommandExecution.create).toHaveBeenCalledOnce();
+    expect(fixture.transaction.viewCommandProposal.update).toHaveBeenCalledWith({
+      where: { id: "proposal-1" },
+      data: { status: "applied", decidedAt: expect.any(Date), appliedAt: expect.any(Date) },
+    });
+  });
+
   it("rejects an AI caller for a system-only Command", async () => {
     const fixture = runtimeFixture("auto_execute", 3, "exact", ["system"]);
     await expect(fixture.bus.dispatch({
@@ -231,7 +369,45 @@ describe("ViewCommandBus", () => {
     });
     expect(fixture.transaction.viewCommandExecution.create).toHaveBeenCalledOnce();
     expect(fixture.transaction.viewCommandExecution.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ changeSetJson: [] }),
+      data: expect.objectContaining({
+        changeSetJson: [expect.objectContaining({ kind: "card_created" })],
+      }),
+      select: { id: true },
+    });
+  });
+
+  it("records a no-op Command without advancing the View stateVersion", async () => {
+    const fixture = runtimeFixture(
+      "auto_execute",
+      3,
+      "exact",
+      ["human", "ai", "system"],
+      false,
+    );
+
+    await expect(fixture.bus.dispatch({
+      viewKey: "test_view",
+      commandKey: "test.accept",
+      commandVersion: "1",
+      input: { value: "unchanged" },
+      actor: { permissions: ["view.write"] },
+      initiator: "system",
+      expectedStateVersion: "3",
+    })).resolves.toMatchObject({
+      kind: "executed",
+      stateVersion: "3",
+    });
+
+    expect(fixture.transaction.installedView.updateMany).toHaveBeenCalledWith({
+      where: { viewKey: "test_view", stateVersion: BigInt(3) },
+      data: { stateVersion: BigInt(3) },
+    });
+    expect(fixture.transaction.viewCommandExecution.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        stateVersionBefore: BigInt(3),
+        stateVersionAfter: BigInt(3),
+        changeSetJson: [],
+      }),
       select: { id: true },
     });
   });

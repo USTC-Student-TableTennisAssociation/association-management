@@ -7,6 +7,7 @@ import {
   inspectObjectIdentity,
   ObjectManagementValidationError,
 } from "@/memory/object-management-service";
+import { objectChangePayloadSchema } from "@/memory/object-management-types";
 
 vi.mock("@/db", () => ({ getDatabase: vi.fn() }));
 
@@ -103,6 +104,32 @@ describe("Object management service", () => {
       kind: "assertion",
       statement: "项目负责人负责统筹。",
     })]);
+  });
+
+  it("accepts exactly the Reference ids returned by Object identity inspection", async () => {
+    mockDatabase();
+    const inspection = await inspectObjectIdentity(objectId);
+    const referenceId = inspection.references[0].id;
+    const payload = {
+      reason: "把 Assertion 引用移动到拆出的身份。",
+      changes: [{
+        type: "SPLIT_OBJECT" as const,
+        sourceObjectId: objectId,
+        sourceCanonicalName: "项目负责人",
+        newCanonicalName: "负责人",
+        moveSurfaceIds: [inspection.surfaces[0].id],
+        moveReferenceIds: [referenceId],
+      }],
+    };
+
+    expect(objectChangePayloadSchema.safeParse(payload).success).toBe(true);
+    expect(objectChangePayloadSchema.safeParse({
+      ...payload,
+      changes: [{
+        ...payload.changes[0],
+        moveReferenceIds: [`semantic:${assertionId}`],
+      }],
+    }).success).toBe(false);
   });
 
   it("creates a pending exact Surface correction without mutating the Object", async () => {

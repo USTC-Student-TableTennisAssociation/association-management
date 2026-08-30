@@ -1,7 +1,7 @@
 import { z } from "zod";
 import semver from "semver";
 
-export const ECHO_PLUGIN_API_VERSION = "0.1.0-alpha.6";
+export const ECHO_PLUGIN_API_VERSION = "0.1.0-alpha.7";
 export const ECHO_PLUGIN_DESCRIPTOR_SCHEMA_VERSION = 1;
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
@@ -325,18 +325,12 @@ export interface DomainEventDefinition {
   reaction?: ViewChangePolicy;
 }
 
-export interface KnowledgeProjectionDefinition {
-  key: string;
-  targetCardType: CardTypeKey;
-}
-
 export interface ViewModule {
   manifest: ViewManifest;
   schema: ViewSchema;
   commands: readonly CommandDefinition[];
   invariants: readonly BusinessInvariant[];
   events: readonly DomainEventDefinition[];
-  projections: readonly KnowledgeProjectionDefinition[];
 }
 
 export interface ViewReadSnapshot {
@@ -407,11 +401,6 @@ export interface ToolProviderExtension {
   implementations: readonly ToolCapabilityImplementation[];
 }
 
-export type SkillKnowledgeSource =
-  | "shared_brain"
-  | "library"
-  | "source_documents";
-
 export type SkillViewAccess =
   | {
       viewKey: ViewKey;
@@ -428,9 +417,10 @@ export type SkillViewAccess =
 /**
  * A prompt-driven, tool-using workflow that the Echo chat Runtime can activate.
  *
- * Skills do not mutate state directly. They constrain the views and commands
- * available to the model, declare the knowledge layers and external
- * capabilities the workflow needs, and supply workflow-specific instructions.
+ * Skills do not mutate state directly. The Runtime enforces their View and
+ * Command access, checks that required external capabilities are available at
+ * activation time, and supplies workflow-specific instructions. Skills do not
+ * restrict the Runtime's general cognition tools or bind a specific provider.
  */
 export interface SkillExtension<Input = unknown> {
   id: string;
@@ -440,7 +430,7 @@ export interface SkillExtension<Input = unknown> {
   inputSchema: ContractSchema<Input>;
   instructions: string;
   viewAccess: readonly SkillViewAccess[];
-  knowledge: readonly SkillKnowledgeSource[];
+  /** Activation fails unless a compatible Contract and Provider are installed. */
   requiresCapabilities: readonly ToolCapabilityRequirement[];
 }
 

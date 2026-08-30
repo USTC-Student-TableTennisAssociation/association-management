@@ -19,7 +19,6 @@ export type {
   DimensionKey,
   DimensionType,
   DomainEventDefinition,
-  KnowledgeProjectionDefinition,
   ObjectId,
   ProposalApprovalConflictPolicy,
   ViewCommandInitiator,

@@ -8,7 +8,6 @@ export const capabilityGatewayToolNames = [
 ] as const;
 
 export const businessContextToolNames = [
-  "readSemanticView",
   "expandEvidence",
   "followObject",
   "readSourceDocument",

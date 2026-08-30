@@ -6,7 +6,7 @@ export const objectSurfaceIdSchema = z.string().trim().regex(
 );
 
 export const objectReferenceIdSchema = z.string().trim().regex(
-  /^(?:fragment:[0-9a-f-]{36}:\d+|literal:.+|semantic:[0-9a-f-]{36})$/i,
+  /^(?:assertion|coverage):[0-9a-f-]{36}$/i,
   "Reference id 必须来自 inspectObjectIdentity",
 );
 

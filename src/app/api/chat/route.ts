@@ -667,7 +667,6 @@ export async function POST(request: Request) {
         version: activation.extension.version,
         input: activation.input,
         viewAccess: activation.extension.viewAccess,
-        knowledge: activation.extension.knowledge,
       });
     } catch (error) {
       await debugTrace.appendError("Skill 预激活失败", error);
@@ -822,7 +821,6 @@ export async function POST(request: Request) {
             version: activation.extension.version,
             input: activation.input,
             viewAccess: activation.extension.viewAccess,
-            knowledge: activation.extension.knowledge,
           });
         },
       });

@@ -31,6 +31,5 @@ export const competitionSeriesCuratorSkill: SkillExtension = {
     },
     { viewKey: "society_information", schemaVersion: "5", mode: "read" },
   ],
-  knowledge: ["shared_brain", "library", "source_documents"],
   requiresCapabilities: [],
 };
