@@ -97,6 +97,16 @@ describe("Echo plugin architecture boundaries", () => {
     expect(presentationHost).toContain("installedPresentationComponents");
   });
 
+  it("keeps Command post-commit orchestration inside the View Runtime", () => {
+    const commandRoute = source(
+      "src/app/api/views/[viewKey]/commands/[commandKey]/route.ts",
+    );
+    const commandBus = source("src/view-runtime/application/command-bus.ts");
+    expect(commandRoute).not.toContain("viewChangeCoordinator");
+    expect(commandRoute).not.toContain("reaction.enqueue");
+    expect(commandBus).toContain("this.postCommit.enqueue");
+  });
+
   it("keeps every installed Plugin behind the public SDK boundary", () => {
     expect(pluginBoundaryViolations().map((violation) => violation.message)).toEqual([]);
   });

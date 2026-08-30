@@ -159,7 +159,7 @@ describe("View change reaction coordinator", () => {
       reconcile: () => reconciliation,
     });
 
-    await expect(coordinator.enqueue({ reactionId, actorId })).resolves.toBe(true);
+    await expect(coordinator.enqueue({ reactionId })).resolves.toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => expect(evaluate).toHaveBeenCalledTimes(1));
 
@@ -185,7 +185,7 @@ describe("View change reaction coordinator", () => {
   it("keeps a deleted card's former Object in both worker contexts", async () => {
     const { coordinator, evaluate, reconcileHigherMemory } = fixture({ deleted: true });
 
-    await coordinator.enqueue({ reactionId, actorId });
+    await coordinator.enqueue({ reactionId });
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => expect(reconcileHigherMemory).toHaveBeenCalledTimes(1));
 
@@ -206,7 +206,7 @@ describe("View change reaction coordinator", () => {
   it("resumes durable queued reactions when the View reconnects", async () => {
     const { coordinator } = fixture();
 
-    await expect(coordinator.resumePending({ actorId, viewKey: "society_information" }))
+    await expect(coordinator.resumePending({ viewKey: "society_information" }))
       .resolves.toBe(1);
     await vi.advanceTimersByTimeAsync(1_000);
     coordinator.dispose();
@@ -215,7 +215,7 @@ describe("View change reaction coordinator", () => {
   it("does not let a superseded reconciliation overwrite a newer View state", async () => {
     const { coordinator, reconcileHigherMemory, reaction } = fixture({ superseded: true });
 
-    await coordinator.enqueue({ reactionId, actorId });
+    await coordinator.enqueue({ reactionId });
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => expect(reaction.knowledgeStatus).toBe("completed"));
 

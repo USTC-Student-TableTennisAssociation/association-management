@@ -19,11 +19,6 @@ export function createInstalledExtensionRegistry(): ExtensionRegistry {
 export const extensionRegistry = createInstalledExtensionRegistry();
 const database = getDatabase();
 export const installedViewService = new InstalledViewService(database, extensionRegistry);
-export const viewCommandBus = new ViewCommandBus(
-  database,
-  extensionRegistry,
-  installedViewService,
-);
 export const viewReadPort = new PrismaViewReadPort(
   extensionRegistry,
   installedViewService,
@@ -36,6 +31,12 @@ export const viewChangeCoordinator = new ViewChangeCoordinator({
   evaluate: observeViewChanges,
   reconcileHigherMemory: reconcileViewHigherMemory,
 });
+export const viewCommandBus = new ViewCommandBus(
+  database,
+  extensionRegistry,
+  installedViewService,
+  viewChangeCoordinator,
+);
 
 export function createToolRuntime(): ToolRuntime {
   const runtime = new ToolRuntime();

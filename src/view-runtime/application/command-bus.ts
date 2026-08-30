@@ -19,7 +19,7 @@ import {
 } from "@/view-runtime/domain/errors";
 import { diffViewCards } from "@/view-runtime/application/view-change-set";
 import {
-  resolveViewChangeReaction,
+  resolveViewPostCommitReaction,
   targetsForViewChanges,
 } from "@/view-runtime/application/view-change-policy";
 import {
@@ -61,6 +61,10 @@ export type ViewCommandProposalDecisionResult =
   | ViewCommandDispatchResult
   | { kind: "rejected"; proposalId: string }
   | { kind: "already_applied"; proposalId: string; viewKey: string };
+
+export type ViewPostCommitScheduler = {
+  enqueue(input: { reactionId: string }): Promise<boolean>;
+};
 
 class ProposalPreflightRollback extends Error {}
 
@@ -174,6 +178,7 @@ export class ViewCommandBus {
     private readonly database: PrismaClient,
     private readonly registry: ExtensionRegistry,
     private readonly installedViews: InstalledViewService,
+    private readonly postCommit: ViewPostCommitScheduler,
   ) {}
 
   async dispatch(input: DispatchViewCommandInput): Promise<ViewCommandDispatchResult> {
@@ -377,7 +382,7 @@ export class ViewCommandBus {
       ? undefined
       : BigInt(input.expectedStateVersion);
 
-    return this.database.$transaction(async (transaction) => {
+    const result: ViewCommandDispatchResult = await this.database.$transaction(async (transaction) => {
       const installed = await transaction.installedView.findUnique({
         where: { viewKey: input.viewKey },
       });
@@ -466,15 +471,21 @@ export class ViewCommandBus {
       if (options.proposalId) {
         await transaction.viewCommandProposal.update({
           where: { id: options.proposalId },
-          data: { status: "applied", decidedAt: new Date(), appliedAt: new Date() },
+          data: {
+            status: "applied",
+            executionId: execution.id,
+            decidedAt: new Date(),
+            appliedAt: new Date(),
+          },
         });
       }
       let reaction: EchoViewReaction | undefined;
-      if (input.initiator === "human" && changeSet.length) {
-        const resolved = resolveViewChangeReaction({
+      if (changeSet.length) {
+        const resolved = resolveViewPostCommitReaction({
           viewModule,
           changes: changeSet,
           eventDefinitions,
+          initiator: input.initiator,
         });
         if (resolved.attention !== "never" || resolved.knowledge !== "none") {
           const objectIds = relatedObjectIdsForChanges(changeSet, cardsBefore, cardsAfter);
@@ -526,5 +537,13 @@ export class ViewCommandBus {
         ...(reaction ? { reaction } : {}),
       };
     });
+    if (result.kind === "executed" && result.reaction) {
+      try {
+        await this.postCommit.enqueue({ reactionId: result.reaction.id });
+      } catch (error) {
+        console.error("[view.post-commit.enqueue]", error);
+      }
+    }
+    return result;
   }
 }
