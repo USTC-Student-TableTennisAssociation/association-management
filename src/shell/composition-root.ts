@@ -8,7 +8,8 @@ import { ViewCommandBus } from "@/view-runtime/application/command-bus";
 import { PrismaViewReadPort } from "@/view-runtime/application/view-read-port";
 import { ViewChangeCoordinator } from "@/view-runtime/application/view-change-coordinator";
 import { observeViewChanges } from "@/ai/view-change-observer";
-import { reconcileViewHigherMemory } from "@/memory/view-higher-memory-reconciliation";
+import { reconcileObjectHigherMemoryFromViewChange } from "@/memory/object-higher-memory-reconciliation";
+import { reconcileViewHigherMemoryFromViewChange } from "@/memory/view-higher-memory-reconciliation";
 
 export function createInstalledExtensionRegistry(): ExtensionRegistry {
   const registry = new ExtensionRegistry();
@@ -29,7 +30,8 @@ export const viewChangeCoordinator = new ViewChangeCoordinator({
   registry: extensionRegistry,
   readPort: viewReadPort,
   evaluate: observeViewChanges,
-  reconcileHigherMemory: reconcileViewHigherMemory,
+  reconcileObjectHigherMemory: reconcileObjectHigherMemoryFromViewChange,
+  reconcileViewHigherMemory: reconcileViewHigherMemoryFromViewChange,
 });
 export const viewCommandBus = new ViewCommandBus(
   database,

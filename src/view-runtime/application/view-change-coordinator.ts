@@ -24,13 +24,21 @@ export type ViewAttentionEvaluator = (input: {
   reactionGuidance: readonly string[];
 }) => Promise<ViewChangeAttentionDecision>;
 
-export type ViewHigherMemoryReconciler = (input: {
+type ViewKnowledgeReconciliationInput = {
   viewModule: NonNullable<ReturnType<ExtensionRegistry["getView"]>>;
   snapshot: Awaited<ReturnType<ViewReadPort["query"]>>;
   executions: readonly ViewChangeExecution[];
   events: readonly ViewChangeEvent[];
   objects: readonly ViewRelatedObject[];
-}) => Promise<number>;
+};
+
+export type ObjectHigherMemoryReconciler = (
+  input: ViewKnowledgeReconciliationInput,
+) => Promise<number>;
+
+export type ViewHigherMemoryReconciler = (
+  input: ViewKnowledgeReconciliationInput,
+) => Promise<number>;
 
 function storedChanges(value: Prisma.JsonValue): ViewChange[] {
   return Array.isArray(value) ? value as ViewChange[] : [];
@@ -86,7 +94,8 @@ export class ViewChangeCoordinator {
     registry: ExtensionRegistry;
     readPort: ViewReadPort;
     evaluate: ViewAttentionEvaluator;
-    reconcileHigherMemory: ViewHigherMemoryReconciler;
+    reconcileObjectHigherMemory: ObjectHigherMemoryReconciler;
+    reconcileViewHigherMemory: ViewHigherMemoryReconciler;
   }) {}
 
   async enqueue(input: { reactionId: string }): Promise<boolean> {
@@ -266,13 +275,22 @@ export class ViewChangeCoordinator {
               }));
               return;
             }
-            const maintained = await this.dependencies.reconcileHigherMemory({
-              viewModule,
-              snapshot: reactionSnapshot,
-              executions: [execution],
-              events,
-              objects: priorObjects,
-            });
+            const [objectMemories, viewMemories] = await Promise.all([
+              this.dependencies.reconcileObjectHigherMemory({
+                viewModule,
+                snapshot: reactionSnapshot,
+                executions: [execution],
+                events,
+                objects: priorObjects,
+              }),
+              this.dependencies.reconcileViewHigherMemory({
+                viewModule,
+                snapshot,
+                executions: [execution],
+                events,
+                objects: priorObjects,
+              }),
+            ]);
             await database.viewChangeReaction.update({
               where: { id: reaction.id },
               data: { knowledgeStatus: "completed", knowledgeCompletedAt: new Date() },
@@ -280,7 +298,8 @@ export class ViewChangeCoordinator {
             console.info("[view.reaction.knowledge]", JSON.stringify({
               viewKey: reaction.viewKey,
               reactionId: reaction.id,
-              maintained,
+              objectMemories,
+              viewMemories,
             }));
           } catch (error) {
             await database.viewChangeReaction.update({
