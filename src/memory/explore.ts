@@ -149,7 +149,7 @@ function safeSources(sources: MemorySourceReference[]): MemorySourceReference[] 
           ordinal: source.ordinal,
         }
       : {
-          ...(source.kind ? { kind: source.kind } : {}),
+          kind: "document" as const,
           sourceDocumentId: source.sourceDocumentId,
           sourceTitle: source.sourceTitle,
           sourceSha256: source.sourceSha256,
@@ -410,7 +410,9 @@ async function operationalIndexAssertionIds(input: {
         where: {
           OR: [
             ...(sourceNodeIds.length ? [{ sourceNodeId: { in: sourceNodeIds } }] : []),
-            ...(sourceTitles.length ? [{ sourceTitle: { in: sourceTitles } }] : []),
+            ...(sourceTitles.length
+              ? [{ sourceDocument: { title: { in: sourceTitles } } }]
+              : []),
           ],
         },
         select: {
@@ -928,11 +930,15 @@ async function loadFollowAssertions(assertionIds: string[]) {
       contextDependent: true,
       sourceRegion: {
         select: {
-          publicationRunId: true,
           sourceNodeId: true,
           label: true,
-          sourceTitle: true,
-          sourceSha256: true,
+          sourceDocument: {
+            select: {
+              id: true,
+              title: true,
+              sourceBlob: { select: { sha256: true } },
+            },
+          },
         },
       },
       chatEvidenceLinks: {
@@ -977,7 +983,7 @@ async function loadFollowAssertions(assertionIds: string[]) {
           ordinal: true,
           sourceBlock: {
             select: {
-              publicationRunId: true,
+              sourceDocumentId: true,
               sourceBlockId: true,
               sourcePages: true,
             },
@@ -1025,9 +1031,9 @@ function assertionSources(assertion: FollowAssertionRecord): MemorySourceReferen
   if (assertion.sourceRegion) {
     return assertion.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
       kind: "document",
-      sourceDocumentId: sourceBlock.publicationRunId,
-      sourceTitle: assertion.sourceRegion!.sourceTitle,
-      sourceSha256: assertion.sourceRegion!.sourceSha256,
+      sourceDocumentId: sourceBlock.sourceDocumentId,
+      sourceTitle: assertion.sourceRegion!.sourceDocument.title,
+      sourceSha256: assertion.sourceRegion!.sourceDocument.sourceBlob.sha256,
       sourceNodeId: assertion.sourceRegion!.sourceNodeId,
       sourceRegionLabel: assertion.sourceRegion!.label,
       sourceBlockId: sourceBlock.sourceBlockId,

@@ -35,7 +35,7 @@ describe("GET /api/source-documents/[documentId]/excerpt", () => {
 
     expect(response.status).toBe(200);
     expect(sourceState.read).toHaveBeenCalledWith({
-      publicationRunId: "doc-1",
+      sourceDocumentId: "doc-1",
       startBlockId: "block-1",
       endBlockId: "block-3",
     });

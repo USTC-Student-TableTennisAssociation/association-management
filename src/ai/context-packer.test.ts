@@ -41,7 +41,8 @@ function memory(id: string, content: string): MemoryAssertionSeed {
     matchedFacets: [],
     sources: [
       {
-        sourceDocumentId: "run-test",
+        kind: "document",
+        sourceDocumentId: "document-test",
         sourceTitle: "测试来源",
         sourceSha256: "sha",
         sourceNodeId: "region-test",

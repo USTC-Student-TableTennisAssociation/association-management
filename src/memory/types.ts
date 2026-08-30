@@ -42,8 +42,8 @@ export type MemorySourceTime = {
 };
 
 export type MemoryDocumentSourceReference = {
-  kind?: "document";
-  /** Internal publication-run anchor used to reopen the exact source document. */
+  kind: "document";
+  /** Internal document-version anchor used to reopen the exact source document. */
   sourceDocumentId: string;
   sourceTitle: string;
   sourceSha256: string;

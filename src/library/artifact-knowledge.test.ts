@@ -52,11 +52,13 @@ beforeEach(() => {
     publishedObjectCount: 5,
   });
   databaseState.sourceRegionFindMany.mockResolvedValue([{
-    publicationRunId: "run-1",
     sourceNodeId: "region-1",
     label: "活动行政",
-    sourceTitle: "生存手册",
-    sourceSha256: "sha-1",
+    sourceDocument: {
+      id: "document-1",
+      title: "生存手册",
+      sourceBlob: { sha256: "sha-1" },
+    },
     assertions: [
       assertion("a1", "o1", "需要提前申请体育馆并提交场地材料。"),
       assertion("a2", "o2", "负责赛事宣传和新闻稿。"),

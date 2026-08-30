@@ -196,10 +196,10 @@ CREATE TABLE "library_catalog_assessments" (
 -- CreateTable
 CREATE TABLE "library_source_documents" (
     "id" UUID NOT NULL,
-    "processing_run_id" UUID NOT NULL,
+    "processing_run_id" UUID,
+    "source_blob_id" UUID NOT NULL,
     "title" TEXT NOT NULL,
     "parser" TEXT NOT NULL,
-    "structure_metadata" JSONB NOT NULL DEFAULT '{}',
     "block_count" INTEGER NOT NULL DEFAULT 0,
     "created_at" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -223,7 +223,7 @@ CREATE TABLE "library_plans" (
 -- CreateTable
 CREATE TABLE "memory_source_regions" (
     "id" UUID NOT NULL,
-    "publication_run_id" UUID NOT NULL,
+    "source_document_id" UUID NOT NULL,
     "source_node_id" TEXT NOT NULL,
     "schema_version" TEXT NOT NULL,
     "label" TEXT NOT NULL,
@@ -236,10 +236,6 @@ CREATE TABLE "memory_source_regions" (
     "review_addition_count" INTEGER NOT NULL,
     "model_calls" INTEGER NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL,
-    "source_path" TEXT,
-    "source_title" TEXT NOT NULL,
-    "source_sha256" TEXT NOT NULL,
-    "source_parser" TEXT,
 
     CONSTRAINT "memory_source_regions_pkey" PRIMARY KEY ("id")
 );
@@ -247,7 +243,7 @@ CREATE TABLE "memory_source_regions" (
 -- CreateTable
 CREATE TABLE "memory_source_blocks" (
     "id" UUID NOT NULL,
-    "publication_run_id" UUID NOT NULL,
+    "source_document_id" UUID NOT NULL,
     "source_block_id" TEXT NOT NULL,
     "order" INTEGER NOT NULL,
     "block_type" TEXT NOT NULL,
@@ -762,28 +758,28 @@ CREATE INDEX "library_catalog_assessments_source_blob_id_idx" ON "library_catalo
 CREATE UNIQUE INDEX "library_source_documents_processing_run_id_key" ON "library_source_documents"("processing_run_id");
 
 -- CreateIndex
+CREATE INDEX "library_source_documents_source_blob_id_idx" ON "library_source_documents"("source_blob_id");
+
+-- CreateIndex
 CREATE INDEX "library_plans_status_created_at_idx" ON "library_plans"("status", "created_at");
 
 -- CreateIndex
-CREATE INDEX "memory_source_regions_publication_run_id_idx" ON "memory_source_regions"("publication_run_id");
+CREATE INDEX "memory_source_regions_source_document_id_idx" ON "memory_source_regions"("source_document_id");
 
 -- CreateIndex
 CREATE INDEX "memory_source_regions_label_idx" ON "memory_source_regions"("label");
 
 -- CreateIndex
-CREATE INDEX "memory_source_regions_source_sha256_idx" ON "memory_source_regions"("source_sha256");
+CREATE UNIQUE INDEX "memory_source_regions_source_document_id_source_node_id_key" ON "memory_source_regions"("source_document_id", "source_node_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "memory_source_regions_publication_run_id_source_node_id_key" ON "memory_source_regions"("publication_run_id", "source_node_id");
+CREATE INDEX "memory_source_blocks_source_document_id_idx" ON "memory_source_blocks"("source_document_id");
 
 -- CreateIndex
-CREATE INDEX "memory_source_blocks_publication_run_id_idx" ON "memory_source_blocks"("publication_run_id");
+CREATE UNIQUE INDEX "memory_source_blocks_source_document_id_source_block_id_key" ON "memory_source_blocks"("source_document_id", "source_block_id");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "memory_source_blocks_publication_run_id_source_block_id_key" ON "memory_source_blocks"("publication_run_id", "source_block_id");
-
--- CreateIndex
-CREATE UNIQUE INDEX "memory_source_blocks_publication_run_id_order_key" ON "memory_source_blocks"("publication_run_id", "order");
+CREATE UNIQUE INDEX "memory_source_blocks_source_document_id_order_key" ON "memory_source_blocks"("source_document_id", "order");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "memory_source_object_fragments_source_region_id_source_frag_key" ON "memory_source_object_fragments"("source_region_id", "source_fragment_id");
@@ -978,13 +974,16 @@ ALTER TABLE "library_catalog_assessments" ADD CONSTRAINT "library_catalog_assess
 ALTER TABLE "library_catalog_assessments" ADD CONSTRAINT "library_catalog_assessments_representative_node_id_fkey" FOREIGN KEY ("representative_node_id") REFERENCES "library_nodes"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "library_source_documents" ADD CONSTRAINT "library_source_documents_processing_run_id_fkey" FOREIGN KEY ("processing_run_id") REFERENCES "library_source_processing_runs"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "library_source_documents" ADD CONSTRAINT "library_source_documents_processing_run_id_fkey" FOREIGN KEY ("processing_run_id") REFERENCES "library_source_processing_runs"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "memory_source_regions" ADD CONSTRAINT "memory_source_regions_publication_run_id_fkey" FOREIGN KEY ("publication_run_id") REFERENCES "library_source_processing_runs"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "library_source_documents" ADD CONSTRAINT "library_source_documents_source_blob_id_fkey" FOREIGN KEY ("source_blob_id") REFERENCES "library_source_blobs"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "memory_source_blocks" ADD CONSTRAINT "memory_source_blocks_publication_run_id_fkey" FOREIGN KEY ("publication_run_id") REFERENCES "library_source_processing_runs"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+ALTER TABLE "memory_source_regions" ADD CONSTRAINT "memory_source_regions_source_document_id_fkey" FOREIGN KEY ("source_document_id") REFERENCES "library_source_documents"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "memory_source_blocks" ADD CONSTRAINT "memory_source_blocks_source_document_id_fkey" FOREIGN KEY ("source_document_id") REFERENCES "library_source_documents"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "memory_source_object_fragments" ADD CONSTRAINT "memory_source_object_fragments_source_region_id_fkey" FOREIGN KEY ("source_region_id") REFERENCES "memory_source_regions"("id") ON DELETE CASCADE ON UPDATE CASCADE;

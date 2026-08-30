@@ -146,17 +146,19 @@ function sourceRows() {
   return ["assertion-1", "assertion-2", "assertion-3"].map((id, index) => ({
     id,
     sourceRegion: {
-      publicationRunId: "00000000-0000-4000-8000-000000000090",
       sourceNodeId: "region-1",
       label: `区域 ${index + 1}`,
-      sourceTitle: "GlobalObject test source",
-      sourceSha256: "test-sha256",
+      sourceDocument: {
+        id: "00000000-0000-4000-8000-000000000090",
+        title: "GlobalObject test source",
+        sourceBlob: { sha256: "test-sha256" },
+      },
     },
     sourceBlockLinks: [
       {
         ordinal: 0,
         sourceBlock: {
-          publicationRunId: "00000000-0000-4000-8000-000000000090",
+          sourceDocumentId: "00000000-0000-4000-8000-000000000090",
           sourceBlockId: `source-block-${index + 1}`,
           sourcePages: [index + 1],
           markdown: "SOURCEBLOCK_MARKDOWN_MUST_NOT_ENTER_LOCATE",
@@ -340,16 +342,18 @@ describe("GlobalObject-backed Locate", () => {
       sources: [{
         id: "assertion-reference",
         sourceRegion: {
-          publicationRunId: "00000000-0000-4000-8000-000000000090",
           sourceNodeId: "region-reference",
           label: "人员分工",
-          sourceTitle: "GlobalObject test source",
-          sourceSha256: "test-sha256",
+          sourceDocument: {
+            id: "00000000-0000-4000-8000-000000000090",
+            title: "GlobalObject test source",
+            sourceBlob: { sha256: "test-sha256" },
+          },
         },
         sourceBlockLinks: [{
           ordinal: 0,
           sourceBlock: {
-            publicationRunId: "00000000-0000-4000-8000-000000000090",
+            sourceDocumentId: "00000000-0000-4000-8000-000000000090",
             sourceBlockId: "table-personnel",
             sourcePages: [6],
           },

@@ -83,7 +83,10 @@ function loadAssertionRows() {
       globalStatementTemplateMarkdown: true,
       chatCaptureId: true,
       sourceRegion: {
-        select: { label: true, sourceTitle: true },
+        select: {
+          label: true,
+          sourceDocument: { select: { title: true } },
+        },
       },
       objectLinks: {
         orderBy: { globalObjectId: "asc" },
@@ -230,7 +233,7 @@ export async function loadKnowledgeGraph(
     kind: row.kind,
     contextDependent: row.contextDependent,
     objectIds: visibleObjects.map((object) => object.globalObjectId),
-    sourceLabel: row.sourceRegion?.sourceTitle ?? row.sourceRegion?.label ??
+    sourceLabel: row.sourceRegion?.sourceDocument.title ?? row.sourceRegion?.label ??
       (row.chatCaptureId ? "聊天记忆" : "组织记忆"),
   }));
   const edges = assertions.flatMap((assertion) =>

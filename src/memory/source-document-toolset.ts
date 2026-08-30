@@ -100,7 +100,7 @@ type SourceReadInput = z.infer<typeof sourceReadVariantSchema>;
 
 type Continuation = {
   assertionRef: string;
-  publicationRunId: string;
+  sourceDocumentId: string;
   selection: SourceDocumentSelection;
   startOrder: number;
   maxCharacters?: number;
@@ -173,11 +173,11 @@ export function createSourceDocumentToolset(input: {
       throw new ChatEvidenceIsNotDocumentError(assertionRef);
     }
     const sourceBlockId = source?.sourceBlockId;
-    const publicationRunId = source?.sourceDocumentId;
-    if (!sourceBlockId || !publicationRunId) {
+    const sourceDocumentId = source?.sourceDocumentId;
+    if (!sourceBlockId || !sourceDocumentId) {
       throw new UnknownSourceAssertionError(assertionRef);
     }
-    return { publicationRunId, sourceBlockId };
+    return { sourceDocumentId, sourceBlockId };
   }
 
   async function executeRead(rawArgs: z.infer<typeof sourceReadInputSchema>) {
@@ -190,7 +190,7 @@ export function createSourceDocumentToolset(input: {
 
     let continuation: Continuation | undefined;
     let assertionRef: string;
-    let publicationRunId: string;
+    let sourceDocumentId: string;
     let selection: SourceDocumentSelection;
     let startOrder: number | undefined;
     let maxCharacters: number | undefined;
@@ -199,12 +199,12 @@ export function createSourceDocumentToolset(input: {
       continuation = continuations.get(args.continuationCursor);
       if (!continuation) throw new UnknownSourceContinuationError();
       continuations.delete(args.continuationCursor);
-      ({ assertionRef, publicationRunId, selection, startOrder } = continuation);
+      ({ assertionRef, sourceDocumentId, selection, startOrder } = continuation);
       maxCharacters = args.maxCharacters ?? continuation.maxCharacters;
     } else {
       assertionRef = args.assertionRef;
       const sourceAnchor = anchor(assertionRef);
-      publicationRunId = sourceAnchor.publicationRunId;
+      sourceDocumentId = sourceAnchor.sourceDocumentId;
       maxCharacters = "maxCharacters" in args ? args.maxCharacters : undefined;
       switch (args.mode) {
         case "outline":
@@ -223,7 +223,7 @@ export function createSourceDocumentToolset(input: {
             mode: "section",
             headingBlockId: args.headingBlockId ??
               await containingSectionHeadingBlockId(
-                publicationRunId,
+                sourceDocumentId,
                 sourceAnchor.sourceBlockId,
               ),
           };
@@ -242,7 +242,7 @@ export function createSourceDocumentToolset(input: {
     }
 
     const result = await readSourceDocumentSelection({
-      publicationRunId,
+      sourceDocumentId,
       selection,
       ...(maxCharacters === undefined ? {} : { maxCharacters }),
       ...(startOrder === undefined ? {} : { startOrder }),
@@ -256,7 +256,7 @@ export function createSourceDocumentToolset(input: {
       continuationCursor = `source-${nextContinuation++}`;
       continuations.set(continuationCursor, {
         assertionRef,
-        publicationRunId,
+        sourceDocumentId,
         selection,
         startOrder: nextStartOrder,
         maxCharacters,

@@ -142,7 +142,7 @@ export async function getArtifactPublishedKnowledge(input: {
       originalRelativePath: true,
       processingProfile: true,
       processingStatus: true,
-      blob: { select: { id: true, sha256: true } },
+      blob: { select: { id: true } },
     },
   });
   if (!node || node.kind !== "file" || !node.blob) {
@@ -160,15 +160,21 @@ export async function getArtifactPublishedKnowledge(input: {
     });
   const regions = await database.memorySourceRegion.findMany({
     where: {
-      sourceSha256: node.blob.sha256,
+      sourceDocument: {
+        sourceBlobId: node.blob.id,
+      },
     },
     orderBy: [{ sourceNodeId: "asc" }, { id: "asc" }],
     select: {
-      publicationRunId: true,
       sourceNodeId: true,
       label: true,
-      sourceTitle: true,
-      sourceSha256: true,
+      sourceDocument: {
+        select: {
+          id: true,
+          title: true,
+          sourceBlob: { select: { sha256: true } },
+        },
+      },
       assertions: {
         orderBy: [{ sourceClaimId: "asc" }, { id: "asc" }],
         select: {
@@ -236,7 +242,7 @@ export async function getArtifactPublishedKnowledge(input: {
       item.assertion.globalStatementTemplateMarkdown,
       item.assertion.sourceClaimId,
       item.region.label,
-      item.region.sourceTitle ?? node.name,
+      item.region.sourceDocument.title,
       ...objectNames,
     ].join(" "));
     const score = queryTerms.reduce(
@@ -286,9 +292,10 @@ export async function getArtifactPublishedKnowledge(input: {
       }),
       contextDependent: assertion.contextDependent,
       sources: assertion.sourceBlockLinks.map((link) => ({
-        sourceDocumentId: region.publicationRunId,
-        sourceTitle: region.sourceTitle ?? node.name,
-        sourceSha256: region.sourceSha256 ?? node.blob!.sha256,
+        kind: "document" as const,
+        sourceDocumentId: region.sourceDocument.id,
+        sourceTitle: region.sourceDocument.title,
+        sourceSha256: region.sourceDocument.sourceBlob.sha256,
         sourceNodeId: region.sourceNodeId,
         sourceRegionLabel: region.label,
         sourceBlockId: link.sourceBlock.sourceBlockId,

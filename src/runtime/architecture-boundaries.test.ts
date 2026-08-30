@@ -163,6 +163,22 @@ describe("Sydaris plugin architecture boundaries", () => {
     const schema = source("prisma/schema.prisma");
     expect(schema).not.toMatch(/model MemoryCompilation\b|\bcompilationId\b/);
 
+    const sourceDocument = schema.match(/model LibrarySourceDocument \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(sourceDocument).toContain("sourceRegions MemorySourceRegion[]");
+    expect(sourceDocument).toContain("sourceBlocks  MemorySourceBlock[]");
+    expect(sourceDocument).toContain("sourceBlobId");
+    expect(sourceDocument).toMatch(/processingRunId\s+String\?/);
+    expect(sourceDocument).toContain("onDelete: SetNull");
+    expect(sourceDocument).not.toContain("structureMetadata");
+    for (const modelName of ["MemorySourceRegion", "MemorySourceBlock"]) {
+      const model = schema.match(new RegExp(`model ${modelName} \\{[\\s\\S]*?\\n\\}`))?.[0] ?? "";
+      expect(model, modelName).toContain("sourceDocumentId");
+      expect(model, modelName).not.toMatch(/publicationRunId|sourceTitle|sourceSha256|sourceParser/);
+    }
+    expect(source("src/memory/types.ts")).toMatch(
+      /type MemoryDocumentSourceReference = \{\s*kind: "document";/,
+    );
+
     const runtimeFiles = [
       ...typescriptSources(resolve(process.cwd(), "src/library")),
       ...typescriptSources(resolve(process.cwd(), "src/memory")),

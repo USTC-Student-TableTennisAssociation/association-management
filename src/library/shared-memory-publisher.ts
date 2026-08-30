@@ -43,10 +43,6 @@ type PreparedRegion = {
   reviewAdditionCount: number;
   modelCalls: number;
   createdAt: Date;
-  sourcePath: string | null;
-  sourceTitle: string;
-  sourceSha256: string;
-  sourceParser: string | null;
 };
 
 type PreparedFragment = {
@@ -69,9 +65,12 @@ type PreparedAssertion = {
 type PreparedPublication = {
   runId: string;
   sourceBlobId: string;
-  sourceSha256: string;
   prefix: string;
   profile: "catalog" | "coarse" | "deep";
+  document: {
+    title: string;
+    parser: string;
+  };
   objects: Array<{ id: string; canonicalName: string }>;
   regions: PreparedRegion[];
   blocks: PreparedBlock[];
@@ -274,7 +273,7 @@ type PublicationRun = {
   artifactLocation: string | null;
   completedAt: Date | null;
   sourceBlob: { sha256: string } | null;
-  libraryNode: { name: string; originalRelativePath: string | null };
+  libraryNode: { name: string };
   assessment: null | {
     referenceCandidates: Prisma.JsonValue;
     assertionCandidates: Prisma.JsonValue;
@@ -294,7 +293,7 @@ async function loadRuns(jobId: string) {
     include: {
       sourceBlob: true,
       libraryNode: {
-        select: { name: true, originalRelativePath: true },
+        select: { name: true },
       },
       assessment: true,
     },
@@ -309,10 +308,6 @@ function commonObjects(
     id: objectId(draft),
     canonicalName: draft.canonicalLabel,
   }));
-}
-
-function sourcePathForRun(run: PublicationRun): string | null {
-  return run.libraryNode.originalRelativePath ?? run.libraryNode.name;
 }
 
 export function prepareSemanticPublication(
@@ -428,9 +423,12 @@ export function prepareSemanticPublication(
   return {
     runId: run.id,
     sourceBlobId: run.sourceBlobId,
-    sourceSha256: run.sourceBlob.sha256,
     prefix,
     profile: run.profile,
+    document: {
+      title: run.libraryNode.name,
+      parser: run.parserKey ?? "library-assessment",
+    },
     objects: commonObjects(run.id, resolvedObjects),
     regions: [{
       id: sourceRegionId,
@@ -446,10 +444,6 @@ export function prepareSemanticPublication(
       reviewAdditionCount: 0,
       modelCalls: 1,
       createdAt: run.completedAt ?? new Date(),
-      sourcePath: sourcePathForRun(run),
-      sourceTitle: run.libraryNode.name,
-      sourceSha256: run.sourceBlob.sha256,
-      sourceParser: run.parserKey,
     }],
     blocks,
     fragments,
@@ -570,10 +564,6 @@ export async function prepareDeepPublication(
       reviewAdditionCount: source.review_addition_count,
       modelCalls: source.model_calls,
       createdAt: new Date(source.created_at),
-      sourcePath: sourcePathForRun(run),
-      sourceTitle: run.libraryNode.name,
-      sourceSha256: run.sourceBlob.sha256,
-      sourceParser: snapshot.source.parser,
     });
     for (const fragment of source.object_fragments) {
       const preparedFragment: PreparedFragment = {
@@ -640,9 +630,12 @@ export async function prepareDeepPublication(
   return {
     runId: run.id,
     sourceBlobId: run.sourceBlobId,
-    sourceSha256: run.sourceBlob.sha256,
     prefix,
     profile: "deep",
+    document: {
+      title: run.libraryNode.name,
+      parser: snapshot.source.parser,
+    },
     objects: commonObjects(run.id, resolvedObjects),
     regions,
     blocks,
@@ -665,10 +658,7 @@ async function commitPublications(
     for (const publication of publications) {
       await transaction.memorySourceRegion.deleteMany({
         where: {
-          OR: [
-            { sourceNodeId: { startsWith: publication.prefix } },
-            { sourceSha256: publication.sourceSha256 },
-          ],
+          sourceNodeId: { startsWith: publication.prefix },
         },
       });
       await transaction.memorySourceBlock.deleteMany({
@@ -700,11 +690,38 @@ async function commitPublications(
       });
     }
 
+    const sourceDocumentIdByRun = new Map<string, string>();
+    for (const publication of publications) {
+      const document = await transaction.librarySourceDocument.upsert({
+        where: { processingRunId: publication.runId },
+        create: {
+          processingRunId: publication.runId,
+          sourceBlobId: publication.sourceBlobId,
+          title: publication.document.title,
+          parser: publication.document.parser,
+          blockCount: publication.blocks.length,
+        },
+        update: {
+          sourceBlobId: publication.sourceBlobId,
+          title: publication.document.title,
+          parser: publication.document.parser,
+          blockCount: publication.blocks.length,
+        },
+        select: { id: true },
+      });
+      sourceDocumentIdByRun.set(publication.runId, document.id);
+    }
     const regions = publications.flatMap((item) =>
-      item.regions.map((region) => ({ ...region, publicationRunId: item.runId }))
+      item.regions.map((region) => ({
+        ...region,
+        sourceDocumentId: sourceDocumentIdByRun.get(item.runId)!,
+      }))
     );
     const blocks = publications.flatMap((item) =>
-      item.blocks.map((block) => ({ ...block, publicationRunId: item.runId }))
+      item.blocks.map((block) => ({
+        ...block,
+        sourceDocumentId: sourceDocumentIdByRun.get(item.runId)!,
+      }))
     );
     const fragments = publications.flatMap((item) => item.fragments);
     const assertions = publications.flatMap((item) => item.assertions);
@@ -718,7 +735,7 @@ async function commitPublications(
     if (blocks.length) await transaction.memorySourceBlock.createMany({
       data: blocks.map((block) => ({
         id: block.id,
-        publicationRunId: block.publicationRunId,
+        sourceDocumentId: block.sourceDocumentId,
         sourceBlockId: block.sourceBlockId,
         order: block.localOrder,
         blockType: block.blockType,
@@ -760,6 +777,13 @@ async function commitPublications(
       // 内容已变更后不对外声称旧向量索引仍然完整；事务提交后会尝试全量重建。
       await transaction.memoryAssertionEmbeddingIndex.deleteMany();
     }
+
+    await transaction.librarySourceDocument.deleteMany({
+      where: {
+        sourceRegions: { none: {} },
+        sourceBlocks: { none: {} },
+      },
+    });
 
     await transaction.memoryGlobalObject.deleteMany({
       where: {

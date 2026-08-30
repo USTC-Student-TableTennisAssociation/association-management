@@ -26,7 +26,8 @@ function retrieval(): MemoryRetrievalResult {
         matchedBy: [],
         matchedFacets: [],
         sources: [{
-          sourceDocumentId: "run-1",
+          kind: "document",
+          sourceDocumentId: "document-1",
           sourceTitle: "Source",
           sourceSha256: "sha",
           sourceNodeId: `region-${index + 1}`,
