@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cold_start.document.models import ParsedDocument
+from cold_start.document.models import ParsedBlock, ParsedDocument
 from cold_start.global_exploration.models import GlobalExplorationSnapshot
 from cold_start.region_tree.models import RegionNode
 
@@ -120,6 +120,23 @@ def write_exploration_artifacts(
     )
     paths.region_tree_markdown.write_text(_tree(snapshot), encoding="utf-8")
     return paths
+
+
+def load_exploration_inputs(
+    run_directory: Path,
+) -> tuple[GlobalExplorationSnapshot, tuple[ParsedBlock, ...]]:
+    directory = run_directory.expanduser().resolve()
+    paths = _artifact_paths(directory)
+    if not paths.snapshot_json.is_file() or not paths.parsed_blocks_json.is_file():
+        raise ValueError("运行目录缺少 global-exploration.json 或 parsed-blocks.json")
+    exploration = GlobalExplorationSnapshot.model_validate_json(
+        paths.snapshot_json.read_text(encoding="utf-8")
+    )
+    raw_blocks = json.loads(paths.parsed_blocks_json.read_text(encoding="utf-8"))
+    blocks = tuple(ParsedBlock.model_validate(item) for item in raw_blocks)
+    if len(blocks) != exploration.source.block_count:
+        raise ValueError("parsed-blocks.json 与全局勘探快照的块数量不一致")
+    return exploration, blocks
 
 
 def _report(snapshot: GlobalExplorationSnapshot) -> str:

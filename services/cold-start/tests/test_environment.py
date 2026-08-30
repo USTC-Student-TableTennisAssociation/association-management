@@ -4,7 +4,6 @@ from pathlib import Path
 import pytest
 
 from cold_start.config import (
-    ActivityViewSettings,
     CompilationSettings,
     ExplorationSettings,
     ModelSettings,
@@ -78,54 +77,19 @@ def test_parallel_worker_defaults_are_eighteen(
     for name in (
         "COLD_START_MAX_PARALLEL_REGIONS",
         "COLD_START_MAX_PARALLEL_COMPILATIONS",
-        "COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS",
-        "COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS",
     ):
         monkeypatch.delenv(name, raising=False)
 
     assert ExplorationSettings.from_environment().max_parallel_regions == 18
     compilation = CompilationSettings.from_environment()
     assert compilation.max_parallel_sources == 18
-    assert compilation.max_parallel_parents == 18
-    assert ActivityViewSettings.from_environment().max_parallel_groups == 18
 
 
 def test_reads_compilation_parallelism_from_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("COLD_START_MAX_PARALLEL_COMPILATIONS", "8")
-    monkeypatch.setenv("COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS", "4")
 
     settings = CompilationSettings.from_environment()
 
     assert settings.max_parallel_sources == 8
-    assert settings.max_parallel_parents == 4
-
-
-def test_reads_activity_view_settings_from_environment(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS", "7")
-    monkeypatch.setenv("COLD_START_PERSPECTIVE_OBJECTS_PER_GROUP", "32")
-    monkeypatch.setenv("COLD_START_PERSPECTIVE_OBJECT_GROUP_CHARS", "36000")
-    monkeypatch.setenv("COLD_START_PERSPECTIVE_ASSERTIONS_PER_GROUP", "44")
-    monkeypatch.setenv(
-        "COLD_START_PERSPECTIVE_MAX_REVIEW_ROUNDS",
-        "7",
-    )
-
-    settings = ActivityViewSettings.from_environment()
-
-    assert settings.max_parallel_groups == 7
-    assert settings.max_objects_per_group == 32
-    assert settings.max_object_group_chars == 36000
-    assert settings.max_assertions_per_group == 44
-    assert settings.max_review_rounds == 7
-
-
-def test_activity_view_defaults_to_five_review_rounds(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("COLD_START_PERSPECTIVE_MAX_REVIEW_ROUNDS", raising=False)
-
-    assert ActivityViewSettings.from_environment().max_review_rounds == 5

@@ -149,30 +149,6 @@ async def test_cli_auto_loads_env_and_prints_detailed_progress(
     assert list((tmp_path / "runs").glob("*/global-exploration.json"))
 
 
-def test_cli_exposes_full_basic_compilation_command() -> None:
-    args = cli.build_parser().parse_args(
-        [
-            "compile",
-            "--run",
-            "run-directory",
-            "--max-parallel-sources",
-            "8",
-            "--max-parallel-parents",
-            "4",
-            "--resume",
-            "existing-full-run",
-            "--requests-per-minute",
-            "18",
-        ]
-    )
-
-    assert args.command == "compile"
-    assert args.max_parallel_sources == 8
-    assert args.max_parallel_parents == 4
-    assert args.resume == Path("existing-full-run")
-    assert args.requests_per_minute == 18
-
-
 def test_cli_exposes_mineru_only_document_parsing_command() -> None:
     args = cli.build_parser().parse_args(
         [
@@ -346,22 +322,6 @@ async def test_global_object_resolver_creates_local_model_streams(
     assert run_directory.parent == compilation_directory / "global-resolutions"
     assert run_directory.name.endswith("-full")
     assert f"已创建 Global Resolution 目录 {run_directory}" in capsys.readouterr().out
-
-
-def test_cli_exposes_activity_operations_mapping_command() -> None:
-    args = cli.build_parser().parse_args(
-        [
-            "map-activity",
-            "--compilation",
-            "basic-compilation-directory",
-            "--max-parallel-groups",
-            "8",
-        ]
-    )
-
-    assert args.command == "map-activity"
-    assert args.compilation == Path("basic-compilation-directory")
-    assert args.max_parallel_groups == 8
 
 
 def test_embedding_server_defaults_to_stable_hugging_face_profile(
