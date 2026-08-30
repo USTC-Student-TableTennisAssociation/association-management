@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  EchoPluginCliError,
+  PluginCliError,
   generatePluginRegistries,
   installPackagePlugin,
   installPlugin,
@@ -12,7 +12,7 @@ import {
   purgeViewData,
   readPluginConfig,
   removePlugin,
-} from "./echo-plugin.mjs";
+} from "./sydaris-plugin.mjs";
 
 const temporaryDirectories = [];
 
@@ -23,7 +23,7 @@ afterEach(async () => {
 });
 
 async function fixtureProject() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "echo-plugin-test-"));
+  const root = await mkdtemp(path.join(os.tmpdir(), "sydaris-plugin-test-"));
   temporaryDirectories.push(root);
   await mkdir(path.join(root, "plugins", "test", "presentation"), { recursive: true });
   await writeFile(
@@ -31,74 +31,74 @@ async function fixtureProject() {
     '{"name":"fixture","version":"0.1.0","type":"module"}\n',
   );
   await writeFile(
-    path.join(root, "echo.plugins.json"),
+    path.join(root, "sydaris.plugins.json"),
     '{"schemaVersion":1,"plugins":[]}\n',
   );
   await writeFile(
     path.join(root, "plugins", "test", "server.ts"),
-    "export const testPlugin = { id: 'echo.test', version: '1.0.0', contributes: {} };\n",
+    "export const testPlugin = { id: 'sydaris.test', version: '1.0.0', contributes: {} };\n",
   );
   await writeFile(
     path.join(root, "plugins", "test", "presentation", "workspace.tsx"),
     "export function TestWorkspace() { return null; }\n",
   );
   await writeFile(
-    path.join(root, "plugins", "test", "echo.plugin.json"),
+    path.join(root, "plugins", "test", "sydaris.plugin.json"),
     `${JSON.stringify({
       schemaVersion: 1,
-      id: "echo.test",
+      id: "sydaris.test",
       version: "1.0.0",
-      engines: { echo: ">=0.1.0-alpha.1 <0.2.0-0" },
+      engines: { sydaris: ">=0.1.0-alpha.1 <0.2.0-0" },
       server: { entry: "./server.ts", export: "testPlugin" },
       contributes: {
         views: ["test_view"],
         presentations: [{
-          loader: "echo.test/workspace",
+          loader: "sydaris.test/workspace",
           entry: "./presentation/workspace.tsx",
           export: "TestWorkspace",
         }],
-        skills: ["echo.test.skill"],
-        tools: ["echo.test.provider"],
+        skills: ["sydaris.test.skill"],
+        tools: ["sydaris.test.provider"],
       },
     }, null, 2)}\n`,
   );
   return root;
 }
 
-describe("Echo local plugin CLI", () => {
+describe("Sydaris local plugin CLI", () => {
   it("validates the package descriptor contract", () => {
-    expect(() => parsePluginPackageDescriptor({ schemaVersion: 1 })).toThrow(EchoPluginCliError);
+    expect(() => parsePluginPackageDescriptor({ schemaVersion: 1 })).toThrow(PluginCliError);
     expect(() => parsePluginPackageDescriptor({
       schemaVersion: 1,
-      id: "Echo Bad",
+      id: "Sydaris Bad",
       version: "latest",
-      engines: { echo: ">=0.1.0-alpha.1 <0.2.0-0" },
+      engines: { sydaris: ">=0.1.0-alpha.1 <0.2.0-0" },
       server: { entry: "./server.ts", export: "testPlugin" },
       contributes: {},
     })).toThrow(/id|标识/u);
   });
 
-  it("rejects a Plugin that is incompatible with the current Echo version", async () => {
+  it("rejects a Plugin that is incompatible with the current Sydaris version", async () => {
     const root = await fixtureProject();
-    const descriptorPath = path.join(root, "plugins", "test", "echo.plugin.json");
+    const descriptorPath = path.join(root, "plugins", "test", "sydaris.plugin.json");
     const descriptor = JSON.parse(await readFile(descriptorPath, "utf8"));
-    descriptor.engines.echo = ">=0.2.0 <0.3.0";
+    descriptor.engines.sydaris = ">=0.2.0 <0.3.0";
     await writeFile(descriptorPath, JSON.stringify(descriptor));
 
     await expect(installPlugin(root, "plugins/test")).rejects.toThrow(
-      /requires Echo|\u9700\u8981 Echo/u,
+      /requires Sydaris|\u9700\u8981 Sydaris/u,
     );
   });
 
   it("installs a local plugin and generates server and client registries", async () => {
     const root = await fixtureProject();
     const result = await installPlugin(root, "plugins/test");
-    expect(result).toMatchObject({ id: "echo.test", version: "1.0.0", alreadyInstalled: false });
+    expect(result).toMatchObject({ id: "sydaris.test", version: "1.0.0", alreadyInstalled: false });
     expect(await readPluginConfig(root)).toEqual({
       schemaVersion: 1,
       plugins: [{
         source: "local",
-        manifest: "plugins/test/echo.plugin.json",
+        manifest: "plugins/test/sydaris.plugin.json",
       }],
     });
 
@@ -112,7 +112,7 @@ describe("Echo local plugin CLI", () => {
     );
     expect(serverRegistry).toContain('from "../../plugins/test/server"');
     expect(serverRegistry).toContain("installedPlugin0");
-    expect(presentationRegistry).toContain('"echo.test/workspace": installedPresentation0');
+    expect(presentationRegistry).toContain('"sydaris.test/workspace": installedPresentation0');
     await expect(generatePluginRegistries(root, { check: true })).resolves.toHaveLength(1);
   });
 
@@ -120,7 +120,7 @@ describe("Echo local plugin CLI", () => {
     const root = await fixtureProject();
     await installPlugin(root, "plugins/test");
     const purgeData = vi.fn(async () => ({ statements: 9, deletedRows: 12 }));
-    const result = await removePlugin(root, "echo.test", { purge: true, purgeData });
+    const result = await removePlugin(root, "sydaris.test", { purge: true, purgeData });
 
     expect(purgeData).toHaveBeenCalledWith(["test_view"]);
     expect(result.purgeResult.deletedRows).toBe(12);
@@ -135,14 +135,14 @@ describe("Echo local plugin CLI", () => {
   it("refuses destructive removal without --purge", async () => {
     const root = await fixtureProject();
     await installPlugin(root, "plugins/test");
-    await expect(removePlugin(root, "echo.test")).rejects.toThrow(/--purge/u);
+    await expect(removePlugin(root, "sydaris.test")).rejects.toThrow(/--purge/u);
     expect((await readPluginConfig(root)).plugins).toHaveLength(1);
   });
 
   it("keeps a Plugin installed when database purge fails", async () => {
     const root = await fixtureProject();
     await installPlugin(root, "plugins/test");
-    await expect(removePlugin(root, "echo.test", {
+    await expect(removePlugin(root, "sydaris.test", {
       purge: true,
       purgeData: async () => {
         throw new Error("database unavailable");
@@ -151,36 +151,36 @@ describe("Echo local plugin CLI", () => {
     expect((await readPluginConfig(root)).plugins).toEqual([
       {
         source: "local",
-        manifest: "plugins/test/echo.plugin.json",
+        manifest: "plugins/test/sydaris.plugin.json",
       },
     ]);
     await expect(generatePluginRegistries(root, { check: true })).resolves.toHaveLength(1);
   });
 
   it.each([
-    "@echo/online-plugin@1.2.3",
-    "./echo-online-plugin-1.2.3.tgz",
+    "@sydaris/online-plugin@1.2.3",
+    "./sydaris-online-plugin-1.2.3.tgz",
   ])("installs and removes an npm-distributed Plugin from %s", async (specifier) => {
     const root = await fixtureProject();
-    const packageDirectory = path.join(root, "node_modules", "@echo", "online-plugin");
+    const packageDirectory = path.join(root, "node_modules", "@sydaris", "online-plugin");
     await mkdir(path.join(packageDirectory, "dist"), { recursive: true });
     await writeFile(path.join(packageDirectory, "package.json"), JSON.stringify({
-      name: "@echo/online-plugin",
+      name: "@sydaris/online-plugin",
       version: "1.2.3",
-      echoPlugin: "./echo.plugin.json",
+      sydarisPlugin: "./sydaris.plugin.json",
     }));
     await writeFile(path.join(packageDirectory, "dist", "server.js"), "export const onlinePlugin = {};\n");
     await writeFile(path.join(packageDirectory, "dist", "presentation.js"), "export function OnlineWorkspace() {}\n");
-    await writeFile(path.join(packageDirectory, "echo.plugin.json"), JSON.stringify({
+    await writeFile(path.join(packageDirectory, "sydaris.plugin.json"), JSON.stringify({
       schemaVersion: 1,
-      id: "echo.online",
+      id: "sydaris.online",
       version: "1.2.3",
-      engines: { echo: ">=0.1.0-alpha.1 <0.2.0-0" },
+      engines: { sydaris: ">=0.1.0-alpha.1 <0.2.0-0" },
       server: { entry: "./dist/server.js", export: "onlinePlugin" },
       contributes: {
         views: ["online_view"],
         presentations: [{
-          loader: "echo.online/workspace",
+          loader: "sydaris.online/workspace",
           entry: "./dist/presentation.js",
           export: "OnlineWorkspace",
         }],
@@ -193,7 +193,7 @@ describe("Echo local plugin CLI", () => {
       const packageJson = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
       packageJson.devDependencies = {
         ...(packageJson.devDependencies ?? {}),
-        "@echo/online-plugin": specifier,
+        "@sydaris/online-plugin": specifier,
       };
       await writeFile(path.join(root, "package.json"), JSON.stringify(packageJson));
     });
@@ -208,22 +208,22 @@ describe("Echo local plugin CLI", () => {
       specifier,
     ]);
     expect(installed).toMatchObject({
-      id: "echo.online",
-      package: "@echo/online-plugin",
+      id: "sydaris.online",
+      package: "@sydaris/online-plugin",
       alreadyInstalled: false,
     });
     expect(await readPluginConfig(root)).toEqual({
       schemaVersion: 1,
       plugins: [{
         source: "npm",
-        package: "@echo/online-plugin",
-        manifest: "node_modules/@echo/online-plugin/echo.plugin.json",
+        package: "@sydaris/online-plugin",
+        manifest: "node_modules/@sydaris/online-plugin/sydaris.plugin.json",
       }],
     });
     const generated = await readFile(path.join(root, "src/generated/installed-plugins.ts"), "utf8");
-    expect(generated).toContain('../../node_modules/@echo/online-plugin/dist/server');
+    expect(generated).toContain('../../node_modules/@sydaris/online-plugin/dist/server');
 
-    await expect(removePlugin(root, "echo.online", {
+    await expect(removePlugin(root, "sydaris.online", {
       purge: true,
       purgeData: async () => ({ statements: 8, deletedRows: 0 }),
       removePackage: async () => {
@@ -233,12 +233,12 @@ describe("Echo local plugin CLI", () => {
     expect((await readPluginConfig(root)).plugins).toHaveLength(1);
 
     const removePackage = vi.fn(async () => undefined);
-    await removePlugin(root, "echo.online", {
+    await removePlugin(root, "sydaris.online", {
       purge: true,
       purgeData: async () => ({ statements: 9, deletedRows: 0 }),
       removePackage,
     });
-    expect(removePackage).toHaveBeenCalledWith("@echo/online-plugin");
+    expect(removePackage).toHaveBeenCalledWith("@sydaris/online-plugin");
     expect((await readPluginConfig(root)).plugins).toEqual([]);
   });
 });

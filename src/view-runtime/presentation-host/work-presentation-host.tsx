@@ -2,7 +2,7 @@
 
 import { installedPresentationComponents } from "@/generated/installed-presentations";
 import { WorkViewWorkspace } from "@/view-runtime/generic-ui/work-view-workspace";
-import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
+import type { AIInvocation } from "@sydaris/plugin-sdk";
 
 export type WorkPresentationProps = {
   viewKey: string;
@@ -11,7 +11,7 @@ export type WorkPresentationProps = {
   focusCardId?: string;
   activeConversationId?: string;
   onOpenInspector: () => void;
-  onInvokeAI: (invocation: EchoAIInvocation) => void;
+  onInvokeAI: (invocation: AIInvocation) => void;
 };
 
 export function WorkPresentationHost(props: WorkPresentationProps) {

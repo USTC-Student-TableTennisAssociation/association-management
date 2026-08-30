@@ -10,7 +10,7 @@ import { societyInformationPlugin } from "@/plugins/society-information/dist/man
 import { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
 
-const skillId = "echo.competition-records.curate-series";
+const skillId = "sydaris.competition-records.curate-series";
 
 function fixture() {
   const registry = new ExtensionRegistry();

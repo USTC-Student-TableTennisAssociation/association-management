@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
-import type { EchoPluginManifest, ViewModule } from "@/contracts";
+import type { PluginManifest, ViewModule } from "@/contracts";
 import { zodContractSchema } from "@/contracts";
 import {
   ExtensionRegistrationError,
@@ -37,20 +37,20 @@ function view(key = "test_view"): ViewModule {
 describe("ExtensionRegistry", () => {
   it("registers independently activatable extensions from one physical plugin", () => {
     const viewModule = view();
-    const plugin: EchoPluginManifest = {
-      id: "echo.test",
+    const plugin: PluginManifest = {
+      id: "sydaris.test",
       version: "1.0.0",
       contributes: {
         views: [viewModule],
         presentations: [{
-          id: "echo.test.board",
+          id: "sydaris.test.board",
           version: "1.0.0",
           targetView: viewModule.manifest.key,
           schemaVersion: "1",
           presentations: [{ key: "board", label: "Board", loader: "test/board" }],
         }],
         skills: [{
-          id: "echo.test.plan",
+          id: "sydaris.test.plan",
           version: "1.0.0",
           label: "制定计划",
           description: "根据日历为测试 View 制定计划。",
@@ -63,7 +63,7 @@ describe("ExtensionRegistry", () => {
           }],
           requiresCapabilities: [{ key: "calendar.read", versions: "^1.0.0" }],
         }],
-        tools: [{ id: "echo.test.provider", version: "1.0.0", implementations: [] }],
+        tools: [{ id: "sydaris.test.provider", version: "1.0.0", implementations: [] }],
       },
     };
     const registry = new ExtensionRegistry();
@@ -74,7 +74,7 @@ describe("ExtensionRegistry", () => {
     expect(registry.listSkills()).toHaveLength(1);
     expect(registry.listToolProviders()).toHaveLength(1);
 
-    registry.setEnabled("presentation", "echo.test.board", false);
+    registry.setEnabled("presentation", "sydaris.test.board", false);
     expect(registry.listPresentations()).toEqual([]);
     expect(registry.listPresentations({ includeDisabled: true })).toHaveLength(1);
     expect(registry.getView("test_view")).toBe(viewModule);
@@ -82,25 +82,25 @@ describe("ExtensionRegistry", () => {
 
   it("rejects duplicate extension identities atomically", () => {
     const registry = new ExtensionRegistry();
-    registry.registerPlugin({ id: "echo.one", version: "1.0.0", contributes: { views: [view()] } });
+    registry.registerPlugin({ id: "sydaris.one", version: "1.0.0", contributes: { views: [view()] } });
     expect(() => registry.registerPlugin({
-      id: "echo.two",
+      id: "sydaris.two",
       version: "1.0.0",
       contributes: { views: [view()] },
     })).toThrow(ExtensionRegistrationError);
-    expect(registry.listPlugins().map((plugin) => plugin.id)).toEqual(["echo.one"]);
+    expect(registry.listPlugins().map((plugin) => plugin.id)).toEqual(["sydaris.one"]);
   });
 
   it("rejects a Skill that requests an unknown View Command", () => {
     const viewModule = view();
     const registry = new ExtensionRegistry();
     expect(() => registry.registerPlugin({
-      id: "echo.bad-skill",
+      id: "sydaris.bad-skill",
       version: "1.0.0",
       contributes: {
         views: [viewModule],
         skills: [{
-          id: "echo.bad-skill.run",
+          id: "sydaris.bad-skill.run",
           version: "1.0.0",
           label: "Bad Skill",
           description: "Requests a command outside its target View.",
@@ -129,7 +129,7 @@ describe("ExtensionRegistry", () => {
     }];
     const registry = new ExtensionRegistry();
     expect(() => registry.registerPlugin({
-      id: "echo.invalid",
+      id: "sydaris.invalid",
       version: "1.0.0",
       contributes: { views: [viewModule] },
     })).toThrow(/undeclared|\u672a声明/i);
@@ -143,7 +143,7 @@ describe("ExtensionRegistry", () => {
     const registry = new ExtensionRegistry();
 
     expect(() => registry.registerPlugin({
-      id: "echo.invalid-policy",
+      id: "sydaris.invalid-policy",
       version: "1.0.0",
       contributes: { views: [viewModule] },
     })).toThrow(/changePolicy\.attention/);

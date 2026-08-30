@@ -1,11 +1,11 @@
-import type { EchoViewReaction, ViewReactionTarget } from "@sydaris/plugin-sdk";
+import type { ViewReaction, ViewReactionTarget } from "@sydaris/plugin-sdk";
 import type { Prisma, ViewChangeReaction } from "@/generated/prisma/client";
 
 function targets(value: Prisma.JsonValue): ViewReactionTarget[] {
   return Array.isArray(value) ? value as ViewReactionTarget[] : [];
 }
 
-export function presentViewChangeReaction(row: ViewChangeReaction): EchoViewReaction {
+export function presentViewChangeReaction(row: ViewChangeReaction): ViewReaction {
   return {
     id: row.id,
     executionId: row.executionId,
@@ -13,7 +13,7 @@ export function presentViewChangeReaction(row: ViewChangeReaction): EchoViewReac
     stateVersion: row.stateVersion.toString(),
     targets: targets(row.targetsJson),
     attention: {
-      policy: row.attentionPolicy as EchoViewReaction["attention"]["policy"],
+      policy: row.attentionPolicy as ViewReaction["attention"]["policy"],
       status: row.attentionStatus,
       ...(row.message ? { message: row.message } : {}),
       ...(row.reason ? { reason: row.reason } : {}),
@@ -22,7 +22,7 @@ export function presentViewChangeReaction(row: ViewChangeReaction): EchoViewReac
         : {}),
     },
     knowledge: {
-      policy: row.knowledgePolicy as EchoViewReaction["knowledge"]["policy"],
+      policy: row.knowledgePolicy as ViewReaction["knowledge"]["policy"],
       status: row.knowledgeStatus,
       ...(row.knowledgeCompletedAt
         ? { completedAt: row.knowledgeCompletedAt.toISOString() }

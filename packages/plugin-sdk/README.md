@@ -1,6 +1,6 @@
 # `@sydaris/plugin-sdk`
 
-Echo Plugin 的公开 TypeScript 合同、描述文件 Schema 和 React hooks。
+Sydaris Plugin 的公开 TypeScript 合同、描述文件 Schema 和 React hooks。
 
 > 当前是 `0.1.0-alpha.7` 预发布版，API 可能在后续 alpha 版调整。
 
@@ -15,7 +15,7 @@ Plugin 应将 SDK、React 和 Zod 声明为 peer dependencies，避免将宿主�
 ## Plugin 服务端入口
 
 ```ts
-import { defineEchoPlugin, defineView } from "@sydaris/plugin-sdk";
+import { definePlugin, defineView } from "@sydaris/plugin-sdk";
 
 const notesView = defineView({
   manifest: {
@@ -31,8 +31,8 @@ const notesView = defineView({
   events: [],
 });
 
-export const notesPlugin = defineEchoPlugin({
-  id: "echo.notes",
+export const notesPlugin = definePlugin({
+  id: "sydaris.notes",
   version: "0.1.0",
   contributes: { views: [notesView] },
 });
@@ -47,7 +47,7 @@ Skill 不会限制 Runtime 的通用认知工具，也不会绑定某个具体 C
 
 ```ts
 const dailyPlanner: SkillExtension = {
-  id: "echo.notes.daily-planner",
+  id: "sydaris.notes.daily-planner",
   version: "1.0.0",
   label: "每日计划",
   description: "结合日历整理当日计划。",
@@ -65,7 +65,7 @@ const dailyPlanner: SkillExtension = {
 
 `mode: "write"` 同时允许读取目标 View，但只能执行 `commands` 中显式列出的
 Domain Command。跨 Plugin 读取 View 时，提供 Skill 的 Plugin 还应通过
-`EchoPluginManifest.requires` 声明对应 Plugin 版本依赖。
+`PluginManifest.requires` 声明对应 Plugin 版本依赖。
 
 ## Tool 调用方边界
 
@@ -97,7 +97,7 @@ AI Actions，普通人工 Command API 也无法执行。
 ## View 修改语义与 AI 反应
 
 Dimension、Slot、Related Objects 和 Card Type 可以声明 `changePolicy`。Plugin 只声明
-业务语义和反应策略；Echo Runtime 负责事务前后差异记录、上下文脱敏、模型调用和
+业务语义和反应策略；Sydaris Runtime 负责事务前后差异记录、上下文脱敏、模型调用和
 Higher Memory 对账。
 
 ```ts
@@ -121,24 +121,24 @@ Higher Memory 对账。
 Presentation 可以通过无头 Hook 读取持久化 Reaction：
 
 ```tsx
-const { reactions, markSeen } = useEchoViewReactions(viewKey);
+const { reactions, markSeen } = useViewReactions(viewKey);
 ```
 
 Hook 只返回变更目标、`attention` / `knowledge` 状态、消息与时间戳，
 不规定标签、颜色、弹窗或布局。Specialized Presentation 可以自由设计呈现；
-Echo 的 Generic View 只提供一个可替换的默认呈现。
+Sydaris 的 Generic View 只提供一个可替换的默认呈现。
 
-## `echo.plugin.json`
+## `sydaris.plugin.json`
 
-发布的 Plugin 包需要携带一份描述文件，并在 `package.json#echoPlugin`
-中指向它。`engines.echo` 是宿主安装时使用的 SemVer 兼容范围。
+发布的 Plugin 包需要携带一份描述文件，并在 `package.json#sydarisPlugin`
+中指向它。`engines.sydaris` 是宿主安装时使用的 SemVer 兼容范围。
 
 ```json
 {
   "schemaVersion": 1,
-  "id": "echo.notes",
+  "id": "sydaris.notes",
   "version": "0.1.0",
-  "engines": { "echo": ">=0.1.0-alpha.1 <0.2.0-0" },
+  "engines": { "sydaris": ">=0.1.0-alpha.1 <0.2.0-0" },
   "server": { "entry": "./dist/server.js", "export": "notesPlugin" },
   "contributes": {
     "views": ["notes"],
@@ -150,17 +150,17 @@ Echo 的 Generic View 只提供一个可替换的默认呈现。
 }
 ```
 
-SDK 导出 `parseEchoPluginPackageDescriptor`、
-`echoPluginPackageDescriptorContract` 和 `isEchoVersionCompatible`，Echo CLI 与第三方工具
+SDK 导出 `parsePluginPackageDescriptor`、
+`pluginPackageDescriptorContract` 和 `isHostVersionCompatible`，Sydaris CLI 与第三方工具
 使用同一份规范。
 
 ## 专属 UI
 
 ```ts
-import { useEchoCommand, useEchoView } from "@sydaris/plugin-sdk/react";
+import { useViewCommand, useView } from "@sydaris/plugin-sdk/react";
 ```
 
-UI 只通过 Echo 的 View API 读取状态和执行 Domain Command。
+UI 只通过 Sydaris 的 View API 读取状态和执行 Domain Command。
 
 Presentation 通过结构化 Invocation 触发 AI，而不得在按钮中内嵌长提示词：
 
@@ -169,7 +169,7 @@ props.onInvokeAI({
   actionId: "notes.plan-today",
   message: "帮我整理今日计划",
   skill: {
-    id: "echo.notes.daily-planner",
+    id: "sydaris.notes.daily-planner",
     input: { focus: "today" },
   },
 });

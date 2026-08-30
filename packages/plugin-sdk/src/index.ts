@@ -1,8 +1,8 @@
 import { z } from "zod";
 import semver from "semver";
 
-export const ECHO_PLUGIN_API_VERSION = "0.1.0-alpha.7";
-export const ECHO_PLUGIN_DESCRIPTOR_SCHEMA_VERSION = 1;
+export const PLUGIN_API_VERSION = "0.1.0-alpha.7";
+export const PLUGIN_DESCRIPTOR_SCHEMA_VERSION = 1;
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
@@ -33,7 +33,7 @@ export type ViewReactionKnowledgePolicy = "none" | "reconcile";
 export type ViewReactionTiming = "immediate" | "after_settle";
 
 export interface ViewChangePolicy {
-  /** Whether Echo should evaluate the change and whether the result must be visible. */
+  /** Whether the host Runtime should evaluate the change and whether the result must be visible. */
   attention: ViewReactionAttentionPolicy;
   /** Whether related Object Higher Memory should be reconciled in the background. */
   knowledge?: ViewReactionKnowledgePolicy;
@@ -77,7 +77,7 @@ export type ViewReactionTarget =
     }
   | { kind: "related_objects"; cardId: CardId; cardTypeKey: CardTypeKey };
 
-export interface EchoViewReaction {
+export interface ViewReaction {
   id: string;
   executionId: string;
   viewKey: ViewKey;
@@ -100,7 +100,7 @@ export interface EchoViewReaction {
   updatedAt: string;
 }
 
-export type EchoViewCommandResult =
+export type ViewCommandResult =
   | {
       kind: "proposed";
       proposalId: string;
@@ -114,7 +114,7 @@ export type EchoViewCommandResult =
       stateVersion: string;
       summary?: unknown;
       reaction?: Pick<
-        EchoViewReaction,
+        ViewReaction,
         "id" | "executionId" | "viewKey" | "stateVersion" | "targets" | "attention" | "knowledge" | "createdAt" | "updatedAt"
       >;
     };
@@ -415,7 +415,7 @@ export type SkillViewAccess =
     };
 
 /**
- * A prompt-driven, tool-using workflow that the Echo chat Runtime can activate.
+ * A prompt-driven, tool-using workflow that the host chat Runtime can activate.
  *
  * Skills do not mutate state directly. The Runtime enforces their View and
  * Command access, checks that required external capabilities are available at
@@ -434,7 +434,7 @@ export interface SkillExtension<Input = unknown> {
   requiresCapabilities: readonly ToolCapabilityRequirement[];
 }
 
-export interface EchoPluginManifest {
+export interface PluginManifest {
   id: string;
   version: string;
   requires?: ReadonlyArray<{ pluginId: string; versions: string }>;
@@ -464,12 +464,12 @@ const uniqueIdentifierArraySchema = z.array(stableIdentifierSchema).default([]).
   "must not contain duplicates",
 );
 
-export const echoPluginPackageDescriptorSchema = z.object({
-  schemaVersion: z.literal(ECHO_PLUGIN_DESCRIPTOR_SCHEMA_VERSION),
+export const pluginPackageDescriptorSchema = z.object({
+  schemaVersion: z.literal(PLUGIN_DESCRIPTOR_SCHEMA_VERSION),
   id: stableIdentifierSchema,
   version: semverSchema,
   engines: z.object({
-    echo: z.string().trim().min(1).refine(
+    sydaris: z.string().trim().min(1).refine(
       (range) => semver.validRange(range, { includePrerelease: true }) !== null,
       "must be a valid SemVer range",
     ),
@@ -500,15 +500,15 @@ export const echoPluginPackageDescriptorSchema = z.object({
   }
 });
 
-/** The package-level contract stored in every published Plugin as echo.plugin.json. */
-export type EchoPluginPackageDescriptor = z.infer<typeof echoPluginPackageDescriptorSchema>;
+/** The package-level contract stored in every published Plugin as sydaris.plugin.json. */
+export type PluginPackageDescriptor = z.infer<typeof pluginPackageDescriptorSchema>;
 
-export const echoPluginPackageDescriptorContract = zodContractSchema(
-  echoPluginPackageDescriptorSchema,
+export const pluginPackageDescriptorContract = zodContractSchema(
+  pluginPackageDescriptorSchema,
 );
 
-export function parseEchoPluginPackageDescriptor(value: unknown): EchoPluginPackageDescriptor {
-  return echoPluginPackageDescriptorSchema.parse(value);
+export function parsePluginPackageDescriptor(value: unknown): PluginPackageDescriptor {
+  return pluginPackageDescriptorSchema.parse(value);
 }
 
 export function isVersionCompatible(version: string, requiredRange: string): boolean {
@@ -517,8 +517,8 @@ export function isVersionCompatible(version: string, requiredRange: string): boo
     && semver.satisfies(version, requiredRange, { includePrerelease: true });
 }
 
-export function isEchoVersionCompatible(echoVersion: string, requiredRange: string): boolean {
-  return isVersionCompatible(echoVersion, requiredRange);
+export function isHostVersionCompatible(hostVersion: string, requiredRange: string): boolean {
+  return isVersionCompatible(hostVersion, requiredRange);
 }
 
 /**
@@ -528,7 +528,7 @@ export function isEchoVersionCompatible(echoVersion: string, requiredRange: stri
  * Workflow instructions stay in the registered Skill; Presentations must not
  * smuggle hidden system prompts through this contract.
  */
-export interface EchoAIInvocation {
+export interface AIInvocation {
   actionId: string;
   message: string;
   skill?: {
@@ -537,17 +537,17 @@ export interface EchoAIInvocation {
   };
 }
 
-export interface EchoPresentationProps {
+export interface PresentationProps {
   viewKey: string;
   refreshRevision?: number;
   presentationLoader?: string;
   focusCardId?: string;
   activeConversationId?: string;
   onOpenInspector: () => void;
-  onInvokeAI: (invocation: EchoAIInvocation) => void;
+  onInvokeAI: (invocation: AIInvocation) => void;
 }
 
-export function defineEchoPlugin<const Plugin extends EchoPluginManifest>(plugin: Plugin): Plugin {
+export function definePlugin<const Plugin extends PluginManifest>(plugin: Plugin): Plugin {
   return plugin;
 }
 

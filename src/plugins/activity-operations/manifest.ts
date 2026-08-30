@@ -1,4 +1,4 @@
-import { defineEchoPlugin } from "@sydaris/plugin-sdk";
+import { definePlugin } from "@sydaris/plugin-sdk";
 
 import { activityOperationsPresentation } from "./presentation/extension.js";
 import {
@@ -7,8 +7,8 @@ import {
 } from "./skill.js";
 import { activityOperationsViewModule } from "./view/schema.js";
 
-export const activityOperationsPlugin = defineEchoPlugin({
-  id: "echo.activity-operations",
+export const activityOperationsPlugin = definePlugin({
+  id: "sydaris.activity-operations",
   version: "1.3.0",
   contributes: {
     views: [activityOperationsViewModule],

@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
+import type { AIInvocation } from "@sydaris/plugin-sdk";
 
 import type {
   LibraryDeleteResult,
@@ -127,7 +127,7 @@ export function LibraryWorkspace({
   initialFolderId?: string;
   onFolderChange?: (folderId: string) => void;
   onOpenProcessing: () => void;
-  onInvokeAI: (invocation: EchoAIInvocation) => void;
+  onInvokeAI: (invocation: AIInvocation) => void;
   onOpenAI: () => void;
 }) {
   const [listing, setListing] = useState<LibraryListing>();

@@ -4,12 +4,12 @@ import type { FormEvent } from "react";
 import { useEffect, useMemo, useState } from "react";
 
 import type {
-  EchoPresentationProps,
-  EchoViewCommandResult,
+  PresentationProps,
+  ViewCommandResult,
 } from "@sydaris/plugin-sdk";
 import {
-  useEchoCommand,
-  useEchoView,
+  useViewCommand,
+  useView,
 } from "@sydaris/plugin-sdk/react";
 
 import {
@@ -456,12 +456,12 @@ export function CompetitionRecordsWorkspace({
   refreshRevision = 0,
   focusCardId,
   onInvokeAI,
-}: EchoPresentationProps) {
-  const { snapshot, error: loadError, loading, refresh } = useEchoView(
+}: PresentationProps) {
+  const { snapshot, error: loadError, loading, refresh } = useView(
     viewKey,
     refreshRevision,
   );
-  const executeCommand = useEchoCommand(viewKey);
+  const executeCommand = useViewCommand(viewKey);
   const model = useMemo(
     () => buildCompetitionRecordsModel(snapshot?.cards ?? []),
     [snapshot?.cards],
@@ -557,7 +557,7 @@ export function CompetitionRecordsWorkspace({
         ? `帮我核对并完善赛事系列“${selectedSeries.name}”。`
         : "帮我整理尚未归类的比赛届次。",
       skill: {
-        id: "echo.competition-records.curate-series",
+        id: "sydaris.competition-records.curate-series",
         input: {
           ...(selectedSeries ? { seriesHint: selectedSeries.name } : {}),
           editionHints,
@@ -592,7 +592,7 @@ export function CompetitionRecordsWorkspace({
     setSavingSeries(true);
     setEditorError(undefined);
     try {
-      const result = await executeCommand<EchoViewCommandResult>(
+      const result = await executeCommand<ViewCommandResult>(
         "competition.organize_series",
         {
           mode: "update",

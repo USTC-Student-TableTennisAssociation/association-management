@@ -19,7 +19,7 @@ import {
 } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
+import type { AIInvocation } from "@sydaris/plugin-sdk";
 
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import type { ArtifactReference } from "@/library/artifact-references";
@@ -1162,7 +1162,7 @@ export default function Home() {
     ).finally(() => void refreshConversations());
   }
 
-  function invokeAI(invocation: EchoAIInvocation) {
+  function invokeAI(invocation: AIInvocation) {
     const message = invocation.message.trim();
     if (!message || !activeConversationId || isSending || historyState !== "ready") return;
     clearError();

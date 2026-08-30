@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import {
-  defineEchoPlugin,
+  definePlugin,
   defineView,
   zodContractSchema,
   type CommandDefinition,
@@ -78,19 +78,19 @@ const exampleNotesView = defineView({
 });
 
 const examplePresentation: PresentationExtension = {
-  id: "echo.example-notes.presentation",
+  id: "sydaris.example-notes.presentation",
   version: "0.1.0",
   targetView: VIEW_KEY,
   schemaVersion: "1",
   presentations: [{
     key: "workspace",
     label: "示例笔记工作区",
-    loader: "echo.example-notes/workspace",
+    loader: "sydaris.example-notes/workspace",
   }],
 };
 
 const exampleSkill: SkillExtension = {
-  id: "echo.example-notes.daily-planner",
+  id: "sydaris.example-notes.daily-planner",
   version: "0.1.0",
   label: "每日计划",
   description: "结合日历为当天创建一则计划笔记。",
@@ -106,7 +106,7 @@ const exampleSkill: SkillExtension = {
 };
 
 const exampleToolProvider: ToolProviderExtension = {
-  id: "echo.example-calendar",
+  id: "sydaris.example-calendar",
   version: "0.1.0",
   implementations: [{
     capability: { key: "calendar.read", version: "1.0.0" },
@@ -124,8 +124,8 @@ const exampleToolProvider: ToolProviderExtension = {
   }],
 };
 
-export const exampleNotesPlugin = defineEchoPlugin({
-  id: "echo.example-notes",
+export const exampleNotesPlugin = definePlugin({
+  id: "sydaris.example-notes",
   version: "0.1.0-alpha.1",
   contributes: {
     views: [exampleNotesView],

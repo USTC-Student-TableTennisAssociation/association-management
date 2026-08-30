@@ -1,9 +1,9 @@
 {
   "name": "@sydaris/plugin-sdk",
   "version": "0.1.0-alpha.7",
-  "description": "Public contracts and React helpers for Echo plugins",
+  "description": "Public contracts and React helpers for Sydaris plugins",
   "keywords": [
-    "echo",
+    "sydaris",
     "plugin",
     "sdk",
     "view"

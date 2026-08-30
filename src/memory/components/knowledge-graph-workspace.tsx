@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
+import type { AIInvocation } from "@sydaris/plugin-sdk";
 
 import type {
   KnowledgeGraphAssertionNode,
@@ -151,7 +151,7 @@ export function KnowledgeGraphWorkspace({
   onInvokeAI,
   assistantOpen,
 }: {
-  onInvokeAI: (invocation: EchoAIInvocation) => void;
+  onInvokeAI: (invocation: AIInvocation) => void;
   assistantOpen: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);

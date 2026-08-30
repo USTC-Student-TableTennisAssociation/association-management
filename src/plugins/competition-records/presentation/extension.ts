@@ -1,7 +1,7 @@
 import type { PresentationExtension } from "@sydaris/plugin-sdk";
 
 export const competitionRecordsPresentation: PresentationExtension = {
-  id: "echo.competition-records.presentation",
+  id: "sydaris.competition-records.presentation",
   version: "0.1.0",
   targetView: "competition_records",
   schemaVersion: "1",

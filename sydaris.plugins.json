@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "plugins": [
+    {
+      "source": "local",
+      "manifest": "src/plugins/activity-operations/sydaris.plugin.json"
+    },
+    {
+      "source": "local",
+      "manifest": "src/plugins/society-information/sydaris.plugin.json"
+    },
+    {
+      "source": "local",
+      "manifest": "src/plugins/competition-records/sydaris.plugin.json"
+    }
+  ]
+}

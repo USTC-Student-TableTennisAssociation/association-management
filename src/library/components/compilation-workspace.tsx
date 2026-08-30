@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
+import type { AIInvocation } from "@sydaris/plugin-sdk";
 
 import type {
   LibraryCompilationCandidate,
@@ -141,7 +141,7 @@ export function CompilationWorkspace({
   onInvokeAI,
 }: {
   onOpenLibrary: () => void;
-  onInvokeAI: (invocation: EchoAIInvocation) => void;
+  onInvokeAI: (invocation: AIInvocation) => void;
 }) {
   const [overview, setOverview] = useState<LibraryCompilationOverview>();
   const [loading, setLoading] = useState(true);

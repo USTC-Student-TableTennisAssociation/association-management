@@ -3,14 +3,14 @@
 import { useCallback, useEffect, useState } from "react";
 
 import type {
-  EchoViewCommandResult,
-  EchoViewReaction,
+  ViewCommandResult,
+  ViewReaction,
   ViewCardState,
   ViewManifest,
   ViewSchema,
 } from "./index.js";
 
-export interface EchoViewSnapshot {
+export interface ViewSnapshot {
   viewKey: string;
   pluginVersion: string;
   schemaVersion: string;
@@ -23,22 +23,22 @@ export interface EchoViewSnapshot {
   objects?: readonly { id: string; canonicalName: string }[];
 }
 
-interface EchoViewLoadState {
+interface ViewLoadState {
   requestKey: string;
   viewKey: string;
-  snapshot?: EchoViewSnapshot;
+  snapshot?: ViewSnapshot;
   error?: string;
 }
 
 async function responseJson<Response>(response: globalThis.Response): Promise<Response> {
   const body = await response.json() as Response & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? `Echo API 请求失败：${response.status}`);
+  if (!response.ok) throw new Error(body.error ?? `Sydaris API 请求失败：${response.status}`);
   return body;
 }
 
-export function useEchoView(viewKey: string, refreshRevision = 0) {
+export function useView(viewKey: string, refreshRevision = 0) {
   const [reloadSequence, setReloadSequence] = useState(0);
-  const [loadState, setLoadState] = useState<EchoViewLoadState>();
+  const [loadState, setLoadState] = useState<ViewLoadState>();
   const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
 
   useEffect(() => {
@@ -46,7 +46,7 @@ export function useEchoView(viewKey: string, refreshRevision = 0) {
     void fetch(`/api/views/${encodeURIComponent(viewKey)}`, {
       cache: "no-store",
       signal: controller.signal,
-    }).then(responseJson<EchoViewSnapshot>)
+    }).then(responseJson<ViewSnapshot>)
       .then((snapshot) => setLoadState({ requestKey, viewKey, snapshot }))
       .catch((cause: unknown) => {
         if (!controller.signal.aborted) {
@@ -70,8 +70,8 @@ export function useEchoView(viewKey: string, refreshRevision = 0) {
   };
 }
 
-export function useEchoCommand(viewKey: string) {
-  return useCallback(async <Result = EchoViewCommandResult>(
+export function useViewCommand(viewKey: string) {
+  return useCallback(async <Result = ViewCommandResult>(
     commandKey: string,
     input: unknown,
     expectedStateVersion?: string,
@@ -88,12 +88,12 @@ export function useEchoCommand(viewKey: string) {
   }, [viewKey]);
 }
 
-export function useEchoViewReactions(
+export function useViewReactions(
   viewKey: string,
   options: { limit?: number; pollIntervalMs?: number; enabled?: boolean } = {},
 ) {
   const { limit = 20, pollIntervalMs = 2_000, enabled = true } = options;
-  const [reactions, setReactions] = useState<readonly EchoViewReaction[]>([]);
+  const [reactions, setReactions] = useState<readonly ViewReaction[]>([]);
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(enabled);
   const [reloadSequence, setReloadSequence] = useState(0);
@@ -108,7 +108,7 @@ export function useEchoViewReactions(
           `/api/views/${encodeURIComponent(viewKey)}/reactions?limit=${limit}`,
           { cache: "no-store", signal: controller.signal },
         );
-        const body = await responseJson<{ reactions: readonly EchoViewReaction[] }>(response);
+        const body = await responseJson<{ reactions: readonly ViewReaction[] }>(response);
         setReactions(body.reactions);
         setError(undefined);
         setLoading(false);
@@ -139,7 +139,7 @@ export function useEchoViewReactions(
       `/api/views/${encodeURIComponent(viewKey)}/reactions/${encodeURIComponent(reactionId)}/seen`,
       { method: "POST" },
     );
-    const body = await responseJson<{ reaction: EchoViewReaction }>(response);
+    const body = await responseJson<{ reaction: ViewReaction }>(response);
     setReactions((current) => current.map((reaction) =>
       reaction.id === body.reaction.id ? body.reaction : reaction
     ));

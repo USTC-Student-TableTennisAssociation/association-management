@@ -5,7 +5,7 @@
   "type": "module",
   "files": [
     "dist",
-    "echo.plugin.json",
+    "sydaris.plugin.json",
     "README.md"
   ],
   "exports": {
@@ -21,9 +21,9 @@
       "types": "./dist/tools/contracts.d.ts",
       "import": "./dist/tools/contracts.js"
     },
-    "./echo.plugin.json": "./echo.plugin.json"
+    "./sydaris.plugin.json": "./sydaris.plugin.json"
   },
-  "echoPlugin": "./echo.plugin.json",
+  "sydarisPlugin": "./sydaris.plugin.json",
   "sideEffects": [
     "**/*.css"
   ],

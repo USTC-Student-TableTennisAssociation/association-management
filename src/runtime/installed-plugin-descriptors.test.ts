@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { EchoPluginManifest } from "@/contracts";
-import activityDescriptor from "@/plugins/activity-operations/echo.plugin.json";
+import type { PluginManifest } from "@/contracts";
+import activityDescriptor from "@/plugins/activity-operations/sydaris.plugin.json";
 import { activityOperationsPlugin } from "@/plugins/activity-operations/dist/manifest";
-import competitionDescriptor from "@/plugins/competition-records/echo.plugin.json";
+import competitionDescriptor from "@/plugins/competition-records/sydaris.plugin.json";
 import { competitionRecordsPlugin } from "@/plugins/competition-records/manifest";
-import societyDescriptor from "@/plugins/society-information/echo.plugin.json";
+import societyDescriptor from "@/plugins/society-information/sydaris.plugin.json";
 import { societyInformationPlugin } from "@/plugins/society-information/dist/manifest";
 
 type Descriptor = {
@@ -24,7 +24,7 @@ describe.each([
   [activityDescriptor, activityOperationsPlugin],
   [competitionDescriptor, competitionRecordsPlugin],
   [societyDescriptor, societyInformationPlugin],
-] as readonly (readonly [Descriptor, EchoPluginManifest])[])("installed Plugin descriptor", (descriptor, plugin) => {
+] as readonly (readonly [Descriptor, PluginManifest])[])("installed Plugin descriptor", (descriptor, plugin) => {
   it(`${plugin.id} keeps purge ownership and runtime contributions aligned`, () => {
     expect(descriptor.id).toBe(plugin.id);
     expect(descriptor.version).toBe(plugin.version);

@@ -4,7 +4,7 @@ import { SOCIETY_OVERVIEW_LOADER } from "./constants.js";
 import { SOCIETY_INFORMATION_VIEW_KEY } from "../view/schema.js";
 
 export const societyOverviewPresentation: PresentationExtension = {
-  id: "echo.society-information.overview",
+  id: "sydaris.society-information.overview",
   version: "1.4.0",
   targetView: SOCIETY_INFORMATION_VIEW_KEY,
   schemaVersion: "5",

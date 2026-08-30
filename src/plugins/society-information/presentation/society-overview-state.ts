@@ -1,4 +1,4 @@
-import type { EchoViewReaction } from "@sydaris/plugin-sdk";
+import type { ViewReaction } from "@sydaris/plugin-sdk";
 
 export type SocietyReactionTone =
   | "checking"
@@ -13,7 +13,7 @@ export type SocietyReactionPresentation = {
 };
 
 export function presentSocietyReaction(
-  reaction: EchoViewReaction | undefined,
+  reaction: ViewReaction | undefined,
 ): SocietyReactionPresentation | undefined {
   if (!reaction) return undefined;
   const active = reaction.attention.status === "queued" ||
@@ -42,7 +42,7 @@ export function presentSocietyReaction(
   return undefined;
 }
 
-function reactionPriority(reaction: EchoViewReaction): number {
+function reactionPriority(reaction: ViewReaction): number {
   const presentation = presentSocietyReaction(reaction);
   const tonePriority = presentation?.tone === "attention"
     ? 5
@@ -59,9 +59,9 @@ function reactionPriority(reaction: EchoViewReaction): number {
 }
 
 export function reactionsByCard(
-  reactions: readonly EchoViewReaction[],
-): ReadonlyMap<string, EchoViewReaction> {
-  const byCard = new Map<string, EchoViewReaction>();
+  reactions: readonly ViewReaction[],
+): ReadonlyMap<string, ViewReaction> {
+  const byCard = new Map<string, ViewReaction>();
   for (const reaction of reactions) {
     for (const target of reaction.targets) {
       const current = byCard.get(target.cardId);

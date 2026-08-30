@@ -2,8 +2,8 @@
 
 import { type CSSProperties, type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { EchoPresentationProps, EchoViewCommandResult, ViewCardState } from "@sydaris/plugin-sdk";
-import { useEchoCommand, useEchoView } from "@sydaris/plugin-sdk/react";
+import type { PresentationProps, ViewCommandResult, ViewCardState } from "@sydaris/plugin-sdk";
+import { useViewCommand, useView } from "@sydaris/plugin-sdk/react";
 
 import {
   type ActivityStudioModel,
@@ -17,7 +17,7 @@ import {
 } from "./activity-workspace-state.js";
 import styles from "./activity-operations.module.css";
 
-type WorkspaceProps = EchoPresentationProps;
+type WorkspaceProps = PresentationProps;
 type StudioMode = "method" | "map";
 type EditorTarget =
   | { kind: "activity"; card?: ViewCardState }
@@ -300,8 +300,8 @@ export function ActivityOperationsWorkspace({ viewKey, refreshRevision = 0, focu
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const { snapshot, loading, error, refresh } = useEchoView(viewKey, refreshRevision + localRevision);
-  const executeCommand = useEchoCommand(viewKey);
+  const { snapshot, loading, error, refresh } = useView(viewKey, refreshRevision + localRevision);
+  const executeCommand = useViewCommand(viewKey);
   const model = useMemo(() => snapshot ? buildActivityStudio(snapshot, { selectedActivityId, selectedPlaybookId, selectedCardId, focusCardId }) : undefined, [focusCardId, selectedActivityId, selectedCardId, selectedPlaybookId, snapshot]);
   const objectNames = useMemo(() => new Map(snapshot?.objects?.map((object) => [object.id, object.canonicalName]) ?? []), [snapshot]);
   const lastFocusRef = useRef<string | undefined>(undefined);
@@ -323,7 +323,7 @@ export function ActivityOperationsWorkspace({ viewKey, refreshRevision = 0, focu
 
   const run = useCallback(async (key: string, input: unknown, success: string) => {
     if (!snapshot) throw new Error("正式 View 尚未载入");
-    const result = await executeCommand<EchoViewCommandResult>(key, input, snapshot.stateVersion);
+    const result = await executeCommand<ViewCommandResult>(key, input, snapshot.stateVersion);
     if (result.kind !== "executed") throw new Error("命令未执行");
     setNotice(success);
     setLocalRevision((value) => value + 1);
@@ -375,7 +375,7 @@ export function ActivityOperationsWorkspace({ viewKey, refreshRevision = 0, focu
     actionId: "activity.design-playbook",
     message: "帮我从协会已有经验中整理一份活动组织方法，先讨论结构。",
     skill: {
-      id: "echo.activity-operations.design-playbook",
+      id: "sydaris.activity-operations.design-playbook",
       input: { operation: "design", phase: "discuss" },
     },
   });
@@ -385,7 +385,7 @@ export function ActivityOperationsWorkspace({ viewKey, refreshRevision = 0, focu
       ? `帮我检查并完善“${text(activity, "name") ?? "当前活动"}”的任务版图。`
       : "帮我规划第一次真实活动，先确认必要信息和任务结构。",
     skill: {
-      id: "echo.activity-operations.plan-task-map",
+      id: "sydaris.activity-operations.plan-task-map",
       input: {
         operation: activity ? "review" : "create",
         phase: "discuss",
@@ -400,7 +400,7 @@ export function ActivityOperationsWorkspace({ viewKey, refreshRevision = 0, focu
         actionId: "activity.refine-playbook-item",
         message: `帮我完善组织方法中的“${name}”。`,
         skill: {
-          id: "echo.activity-operations.design-playbook",
+          id: "sydaris.activity-operations.design-playbook",
           input: {
             operation: "refine",
             phase: "discuss",
@@ -415,7 +415,7 @@ export function ActivityOperationsWorkspace({ viewKey, refreshRevision = 0, focu
       actionId: "activity.review-work-item",
       message: `帮我检查活动工作项“${name}”。`,
       skill: {
-        id: "echo.activity-operations.plan-task-map",
+        id: "sydaris.activity-operations.plan-task-map",
         input: {
           operation: "review",
           phase: "discuss",

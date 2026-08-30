@@ -65,7 +65,7 @@ View Module 的本体是 Card Schema 与业务运行规则。
 
 ### Tool Provider
 
-- Capability Contract 由 Echo 定义 key、version、input/output schema、语义和权限。
+- Capability Contract 由 Sydaris 定义 key、version、input/output schema、语义和权限。
 - Provider 只提供 `execute` 实现，不得重新声明同名 Contract Schema。
 - Tool Provider 不得直接修改 View State。Tool 结果需要进入业务状态时，应再调用 Domain Command。
 
@@ -78,8 +78,8 @@ View Module 的本体是 Card Schema 与业务运行规则。
 1. 在 `src/plugins/<plugin-id>/view/` 定义 Schema、Commands 和 Events。
 2. 为 Card Type 选择稳定 key，并明确每个 Dimension、Slot 与 Related Object Policy。
 3. 只暴露业务语义的 Domain Commands，不暴露 `createCard` / `setSlot` 等原语。
-4. 通过 `EchoPluginManifest` 贡献 View。
-5. 为 Plugin 添加 `echo.plugin.json`，运行 `pnpm echo:plugin install <目录>` 生成静态注册表。
+4. 通过 `PluginManifest` 贡献 View。
+5. 为 Plugin 添加 `sydaris.plugin.json`，运行 `pnpm sydaris:plugin install <目录>` 生成静态注册表。
 6. 添加 Registry、Command、Invariant 和架构边界测试。
 
 View Core 必须能在没有专属 Presentation 和 Skill 的情况下通过 Generic Inspector 与 Command API 独立运行。
@@ -87,9 +87,9 @@ View Core 必须能在没有专属 Presentation 和 Skill 的情况下通过 Gen
 ## 可发布 Plugin
 
 仓库外 Plugin 应依赖 `@sydaris/plugin-sdk`，并在 npm 包中包含编译后的 `dist/`、
-`echo.plugin.json` 和 `package.json#echoPlugin`。不要让 Echo 安装时再编译源码；React 专属 UI
-和服务端 Manifest 都应在 `prepack` 前构建完成。`echo.plugin.json`
-必须包含 `engines.echo` SemVer 范围。
+`sydaris.plugin.json` 和 `package.json#sydarisPlugin`。不要让 Sydaris 安装时再编译源码；React 专属 UI
+和服务端 Manifest 都应在 `prepack` 前构建完成。`sydaris.plugin.json`
+必须包含 `engines.sydaris` SemVer 范围。
 
 `packages/example-plugin` 是可复制的最小完整示例。发布前应改用自己拥有的 npm scope，
 先发布 SDK，再发布 Plugin，并用 tarball 做一次不依赖 registry 的发布前测试：
@@ -98,9 +98,9 @@ View Core 必须能在没有专属 Presentation 和 Skill 的情况下通过 Gen
 pnpm plugins:build
 pnpm plugins:pack:sdk
 pnpm --filter @sydaris/example-plugin pack
-pnpm echo:plugin install ./sydaris-example-plugin-0.1.0-alpha.1.tgz
+pnpm sydaris:plugin install ./sydaris-example-plugin-0.1.0-alpha.1.tgz
 pnpm build
-pnpm echo:plugin remove echo.example-notes --purge
+pnpm sydaris:plugin remove sydaris.example-notes --purge
 ```
 
 `src/plugins/society-information` 是真实业务 Plugin 的可发布参考：它直接依赖公共 SDK，

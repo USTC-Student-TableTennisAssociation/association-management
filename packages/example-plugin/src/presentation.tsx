@@ -2,15 +2,15 @@
 
 import { useState } from "react";
 
-import type { EchoPresentationProps } from "@sydaris/plugin-sdk";
-import { useEchoCommand, useEchoView } from "@sydaris/plugin-sdk/react";
+import type { PresentationProps } from "@sydaris/plugin-sdk";
+import { useViewCommand, useView } from "@sydaris/plugin-sdk/react";
 
-export function ExampleNotesWorkspace(props: EchoPresentationProps) {
-  const { snapshot, loading, error, refresh } = useEchoView(
+export function ExampleNotesWorkspace(props: PresentationProps) {
+  const { snapshot, loading, error, refresh } = useView(
     props.viewKey,
     props.refreshRevision,
   );
-  const runCommand = useEchoCommand(props.viewKey);
+  const runCommand = useViewCommand(props.viewKey);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [status, setStatus] = useState<string>();

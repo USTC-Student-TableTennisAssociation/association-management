@@ -8,14 +8,14 @@ describe("Echo AI Invocation", () => {
       actionId: "activity.design-playbook",
       message: "帮我整理第一份活动组织方法。",
       skill: {
-        id: "echo.activity-operations.design-playbook",
+        id: "sydaris.activity-operations.design-playbook",
         input: { operation: "design", phase: "discuss" },
       },
     })).toEqual({
       actionId: "activity.design-playbook",
       message: "帮我整理第一份活动组织方法。",
       skill: {
-        id: "echo.activity-operations.design-playbook",
+        id: "sydaris.activity-operations.design-playbook",
         input: { operation: "design", phase: "discuss" },
       },
     });

@@ -1,11 +1,11 @@
 {
   "name": "@sydaris/example-plugin",
   "version": "0.1.0-alpha.1",
-  "description": "Publishable example View plugin for Echo",
+  "description": "Publishable example View plugin for Sydaris",
   "type": "module",
   "files": [
     "dist",
-    "echo.plugin.json",
+    "sydaris.plugin.json",
     "README.md"
   ],
   "exports": {
@@ -17,9 +17,9 @@
       "types": "./dist/presentation.d.ts",
       "import": "./dist/presentation.js"
     },
-    "./echo.plugin.json": "./echo.plugin.json"
+    "./sydaris.plugin.json": "./sydaris.plugin.json"
   },
-  "echoPlugin": "./echo.plugin.json",
+  "sydarisPlugin": "./sydaris.plugin.json",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "prepack": "pnpm build"

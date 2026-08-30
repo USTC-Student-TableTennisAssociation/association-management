@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { describe, expect, it, vi } from "vitest";
 
-import type { EchoPluginManifest, ViewModule } from "@/contracts";
+import type { PluginManifest, ViewModule } from "@/contracts";
 import { zodContractSchema } from "@/contracts";
 import { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import { ViewCommandBus } from "@/view-runtime/application/command-bus";
@@ -78,8 +78,8 @@ function runtimeFixture(
       payloadSchema: zodContractSchema(z.object({ value: z.string() })),
     }],
   };
-  const plugin: EchoPluginManifest = {
-    id: "echo.test",
+  const plugin: PluginManifest = {
+    id: "sydaris.test",
     version: "1.0.0",
     contributes: { views: [viewModule] },
   };
@@ -87,7 +87,7 @@ function runtimeFixture(
   registry.registerPlugin(plugin);
   const installed = {
     viewKey: "test_view",
-    moduleId: "echo.test",
+    moduleId: "sydaris.test",
     pluginVersion: "1.0.0",
     schemaVersion: "1",
     stateVersion: BigInt(3),
@@ -376,7 +376,7 @@ describe("ViewCommandBus", () => {
     const fixture = runtimeFixture("auto_execute");
     fixture.database.installedView.findUnique.mockResolvedValueOnce({
       viewKey: "test_view",
-      moduleId: "echo.test",
+      moduleId: "sydaris.test",
       pluginVersion: "0.8.0",
       schemaVersion: "1",
       stateVersion: BigInt(3),
@@ -399,7 +399,7 @@ describe("ViewCommandBus", () => {
     const fixture = runtimeFixture("auto_execute");
     fixture.database.installedView.findUnique.mockResolvedValueOnce({
       viewKey: "test_view",
-      moduleId: "echo.test",
+      moduleId: "sydaris.test",
       pluginVersion: "1.0.0",
       schemaVersion: "0",
       stateVersion: BigInt(3),

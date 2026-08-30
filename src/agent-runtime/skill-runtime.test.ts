@@ -6,17 +6,17 @@ import {
   createAgentSkillToolset,
   SkillRuntimeError,
 } from "@/agent-runtime/skill-runtime";
-import { zodContractSchema, type EchoPluginManifest } from "@/contracts";
+import { zodContractSchema, type PluginManifest } from "@/contracts";
 import { activityOperationsPlugin } from "@/plugins/activity-operations/manifest";
 import { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
 
-const skillId = "echo.test.activity-curator";
+const skillId = "sydaris.test.activity-curator";
 
-const skillPlugin: EchoPluginManifest = {
-  id: "echo.test-skills",
+const skillPlugin: PluginManifest = {
+  id: "sydaris.test-skills",
   version: "1.0.0",
-  requires: [{ pluginId: "echo.activity-operations", versions: "^1.0.0" }],
+  requires: [{ pluginId: "sydaris.activity-operations", versions: "^1.0.0" }],
   contributes: {
     skills: [{
       id: skillId,
@@ -101,12 +101,12 @@ describe("Agent Skill Runtime", () => {
   });
 
   it("treats Capability requirements as activation-time availability checks", () => {
-    const requiredSkillId = "echo.test.requires-calendar";
+    const requiredSkillId = "sydaris.test.requires-calendar";
     const registry = new ExtensionRegistry();
     registry.registerPlugin(activityOperationsPlugin);
     registry.registerPlugin({
       ...skillPlugin,
-      id: "echo.test-capability-skill",
+      id: "sydaris.test-capability-skill",
       contributes: {
         skills: [{
           ...skillPlugin.contributes.skills![0],

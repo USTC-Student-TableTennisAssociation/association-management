@@ -15,14 +15,14 @@ import {
 } from "react";
 
 import type {
-  EchoPresentationProps,
-  EchoViewCommandResult,
-  EchoViewReaction,
+  PresentationProps,
+  ViewCommandResult,
+  ViewReaction,
   ViewCardState,
 } from "@sydaris/plugin-sdk";
 import {
-  type EchoViewSnapshot,
-  useEchoViewReactions,
+  type ViewSnapshot,
+  useViewReactions,
 } from "@sydaris/plugin-sdk/react";
 
 import {
@@ -46,8 +46,8 @@ import heroImage from "./assets/hero-evening-hall.png";
 import wordmarkImage from "./assets/ustctta-wordmark.svg";
 import styles from "./society-overview.module.css";
 
-type SocietyOverviewSnapshot = EchoViewSnapshot;
-type WorkspaceProps = EchoPresentationProps;
+type SocietyOverviewSnapshot = ViewSnapshot;
+type WorkspaceProps = PresentationProps;
 
 type EmptySlotProps = {
   eyebrow: string;
@@ -273,7 +273,7 @@ function ReactionNotice({
   onToggle,
   compact = false,
 }: {
-  reaction?: EchoViewReaction;
+  reaction?: ViewReaction;
   expanded: boolean;
   onToggle: () => void;
   compact?: boolean;
@@ -331,7 +331,7 @@ export function SocietyOverviewWorkspace({
     reactions,
     refresh: refreshReactions,
     markSeen: markReactionSeen,
-  } = useEchoViewReactions(viewKey);
+  } = useViewReactions(viewKey);
   const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
   const heroScrollRef = useRef<HTMLElement>(null);
   const heroStageRef = useRef<HTMLDivElement>(null);
@@ -427,7 +427,7 @@ export function SocietyOverviewWorkspace({
     return presentation && presentation.tone !== "verified";
   }), [reactions]);
 
-  const toggleReaction = useCallback((reaction: EchoViewReaction) => {
+  const toggleReaction = useCallback((reaction: ViewReaction) => {
     setExpandedReactionId((current) => current === reaction.id ? undefined : reaction.id);
     if (!reaction.seenAt) void markReactionSeen(reaction.id);
   }, [markReactionSeen]);
@@ -604,7 +604,7 @@ export function SocietyOverviewWorkspace({
         }),
       },
     );
-    const body = await response.json() as EchoViewCommandResult & { error?: string };
+    const body = await response.json() as ViewCommandResult & { error?: string };
     if (!response.ok) throw new Error(body.error ?? "无法保存 View 修改");
     refreshReactions();
     return body;
@@ -1028,7 +1028,7 @@ export function SocietyOverviewWorkspace({
     actionId: "society.fill-overview-topic",
     message: `帮我补充社团概览中的${topic}。`,
     skill: {
-      id: "echo.society-information.maintain-overview",
+      id: "sydaris.society-information.maintain-overview",
       input: { operation: "fill-topic", phase: "propose", topic },
     },
   });
@@ -1036,7 +1036,7 @@ export function SocietyOverviewWorkspace({
     actionId: society ? "society.complete-overview" : "society.create-overview",
     message: society ? "帮我完善社团概览。" : "帮我建立社团概览。",
     skill: {
-      id: "echo.society-information.maintain-overview",
+      id: "sydaris.society-information.maintain-overview",
       input: { operation: "complete", phase: "propose" },
     },
   });
@@ -1224,7 +1224,7 @@ export function SocietyOverviewWorkspace({
                             actionId: "society.refine-long-term-activity",
                             message: `帮我检查并完善长期活动“${activityName}”。`,
                             skill: {
-                              id: "echo.society-information.maintain-overview",
+                              id: "sydaris.society-information.maintain-overview",
                               input: { operation: "refine-card", phase: "discuss", cardId: activity.id },
                             },
                           })}

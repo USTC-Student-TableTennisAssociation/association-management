@@ -1,11 +1,11 @@
 {
-  "name": "echo-society-information-plugin",
+  "name": "@sydaris/society-information-plugin",
   "version": "1.11.0",
-  "description": "Publishable Society Information View plugin for Echo",
+  "description": "Publishable Society Information View plugin for Sydaris",
   "type": "module",
   "files": [
     "dist",
-    "echo.plugin.json",
+    "sydaris.plugin.json",
     "README.md"
   ],
   "exports": {
@@ -17,9 +17,9 @@
       "types": "./dist/presentation/society-overview-workspace.d.ts",
       "import": "./dist/presentation/society-overview-workspace.js"
     },
-    "./echo.plugin.json": "./echo.plugin.json"
+    "./sydaris.plugin.json": "./sydaris.plugin.json"
   },
-  "echoPlugin": "./echo.plugin.json",
+  "sydarisPlugin": "./sydaris.plugin.json",
   "sideEffects": [
     "**/*.css"
   ],

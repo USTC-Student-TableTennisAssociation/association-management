@@ -1,5 +1,5 @@
-import type { EchoViewReaction, ViewCardState } from "@sydaris/plugin-sdk";
-import type { EchoViewSnapshot } from "@sydaris/plugin-sdk/react";
+import type { ViewReaction, ViewCardState } from "@sydaris/plugin-sdk";
+import type { ViewSnapshot } from "@sydaris/plugin-sdk/react";
 
 export type MethodEdge = {
   id: string;
@@ -81,7 +81,7 @@ function edgesFor(node: ViewCardState): MethodEdge[] {
   ];
 }
 
-function playbookModels(snapshot: EchoViewSnapshot, cardsById: ReadonlyMap<string, ViewCardState>): PlaybookModel[] {
+function playbookModels(snapshot: ViewSnapshot, cardsById: ReadonlyMap<string, ViewCardState>): PlaybookModel[] {
   const nestedPlaybookIds = new Set(
     snapshot.cards
       .filter((card) => card.cardTypeKey === "GuideNodeCard")
@@ -151,7 +151,7 @@ function isActive(card: ViewCardState): boolean {
   return status !== "COMPLETED" && status !== "CANCELLED";
 }
 
-export function buildActivityStudio(snapshot: EchoViewSnapshot, options: {
+export function buildActivityStudio(snapshot: ViewSnapshot, options: {
   selectedActivityId?: string;
   selectedPlaybookId?: string;
   selectedCardId?: string;
@@ -206,7 +206,7 @@ export function ownerNames(assignments: readonly ViewCardState[], objectNames: R
 
 export type ActivityReactionTone = "checking" | "attention" | "inform" | "failed" | "verified";
 
-export function reactionTone(reaction: EchoViewReaction | undefined): ActivityReactionTone | undefined {
+export function reactionTone(reaction: ViewReaction | undefined): ActivityReactionTone | undefined {
   if (!reaction) return undefined;
   if (reaction.attention.status === "queued" || reaction.attention.status === "running" || reaction.knowledge.status === "queued" || reaction.knowledge.status === "running") return "checking";
   if (reaction.attention.status === "failed" || reaction.knowledge.status === "failed") return "failed";
@@ -216,14 +216,14 @@ export function reactionTone(reaction: EchoViewReaction | undefined): ActivityRe
   return undefined;
 }
 
-function reactionPriority(reaction: EchoViewReaction): number {
+function reactionPriority(reaction: ViewReaction): number {
   const tone = reactionTone(reaction);
   const priority = tone === "attention" ? 5 : tone === "failed" ? 4 : tone === "inform" ? 3 : tone === "checking" ? 2 : 1;
   return (reaction.seenAt ? 0 : 10) + priority;
 }
 
-export function reactionsByCard(reactions: readonly EchoViewReaction[]): ReadonlyMap<string, EchoViewReaction> {
-  const byCard = new Map<string, EchoViewReaction>();
+export function reactionsByCard(reactions: readonly ViewReaction[]): ReadonlyMap<string, ViewReaction> {
+  const byCard = new Map<string, ViewReaction>();
   for (const reaction of reactions) {
     for (const target of reaction.targets) {
       const current = byCard.get(target.cardId);

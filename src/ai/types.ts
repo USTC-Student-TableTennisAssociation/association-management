@@ -1,5 +1,5 @@
 import type { UIMessage } from "ai";
-import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
+import type { AIInvocation } from "@sydaris/plugin-sdk";
 
 import type { ChatStreamStatus } from "@/ai/chat-stream-status";
 import type { MemorySearchBundle } from "@/memory/types";
@@ -24,7 +24,7 @@ export type ChatPageContext = {
 export type ClubChatMessage = UIMessage<
   never,
   {
-    aiInvocation: EchoAIInvocation;
+    aiInvocation: AIInvocation;
     memorySearch: MemorySearchBundle;
     sourceReferences: SourceDocumentReferenceBundle;
     artifactReferences: ArtifactReferenceBundle;

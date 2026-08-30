@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
+import type { AIInvocation } from "@sydaris/plugin-sdk";
 
 import type { ViewInspectorSnapshot } from "@/view-runtime/application/view-read-port";
 
@@ -24,7 +24,7 @@ export function GenericViewInspector({
   focusCardId?: string;
   onClose?: () => void;
   onOpenAI?: () => void;
-  onInvokeAI?: (invocation: EchoAIInvocation) => void;
+  onInvokeAI?: (invocation: AIInvocation) => void;
 }) {
   const [reloadSequence, setReloadSequence] = useState(0);
   const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
@@ -123,7 +123,7 @@ export function GenericViewInspector({
       <section className="mt-6">
         <div className="flex items-center justify-between">
           <h2 className="text-xl font-semibold text-zinc-950">Cards</h2>
-          {onInvokeAI ? <button type="button" onClick={() => onInvokeAI({ actionId: "echo.inspect-view", message: `请解读 ${viewKey} 的当前正式状态。` })} className="text-sm text-emerald-800 hover:underline">让 AI 解读</button> : null}
+          {onInvokeAI ? <button type="button" onClick={() => onInvokeAI({ actionId: "sydaris.inspect-view", message: `请解读 ${viewKey} 的当前正式状态。` })} className="text-sm text-emerald-800 hover:underline">让 AI 解读</button> : null}
         </div>
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
           {snapshot.cards.map((card) => {

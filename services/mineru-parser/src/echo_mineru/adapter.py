@@ -77,7 +77,7 @@ def normalize_mineru_output(
     )
 
     document = {
-        "schema_version": "echo.mineru.document.v1",
+        "schema_version": "sydaris.mineru.document.v1",
         "source": {
             "path": str(source_pdf.resolve()),
             "title": source_pdf.stem,
