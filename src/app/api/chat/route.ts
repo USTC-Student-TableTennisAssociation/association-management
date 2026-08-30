@@ -50,8 +50,10 @@ import { createModelProfile } from "@/ai/model-profile";
 import { getChatModel } from "@/ai/provider";
 import {
   chatStreamStatusSchema,
+  classifyChatStreamFailureCode,
   classifyChatStreamStatus,
   createModelCallAttemptTracker,
+  summarizeChatStreamError,
   type ChatStreamObservation,
 } from "@/ai/chat-stream-status";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
@@ -133,7 +135,6 @@ import {
 } from "@/memory/actor-higher-memory-queue";
 import { createActorHigherMemoryWriteToolset } from "@/memory/actor-higher-memory-write";
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
-import { operationalMemoryIndexSchema } from "@/memory/higher-memory-document";
 import {
   addObjectTargetsToQueueDecision,
   createHigherMemoryQueueTool,
@@ -143,6 +144,7 @@ import { createObjectManagementToolset } from "@/memory/object-management-toolse
 import { objectChangeProposalPresentationSchema } from "@/memory/object-management-types";
 import { createSourceDocumentToolset } from "@/memory/source-document-toolset";
 import { sourceDocumentReferenceBundleSchema } from "@/memory/source-document-ui-schema";
+import { memorySearchBundleSchema } from "@/memory/ui-schema";
 import type {
   EvidenceCoverageByLayer,
   MemoryRetrievalResult,
@@ -233,200 +235,8 @@ function authenticatedUserInstruction(user: Awaited<ReturnType<typeof currentAut
   ].join("\n");
 }
 
-const facetSchema = z.object({
-  id: z.string(),
-  text: z.string(),
-  source: z.enum(["query", "ai"]),
-});
-
-const matchSchema = z.object({
-  facetId: z.string(),
-  channel: z.enum(["object-lexical", "assertion-lexical", "assertion-vector"]),
-  method: z.enum(["exact", "normalized-exact", "alias", "contains", "fuzzy", "vector"]),
-  rank: z.number().int(),
-  score: z.number(),
-  distance: z.number().optional(),
-});
-
-const documentSourceSchema = z.object({
-  kind: z.literal("document"),
-  sourceDocumentId: z.string(),
-  sourceTitle: z.string(),
-  sourceSha256: z.string(),
-  sourceNodeId: z.string(),
-  sourceRegionLabel: z.string(),
-  sourceBlockId: z.string(),
-  ordinal: z.number().int(),
-  pages: z.array(z.number()),
-  excerpt: z.string().optional(),
-});
-
-const chatSourceSchema = z.object({
-  kind: z.literal("chat"),
-  evidenceId: z.string(),
-  actorId: z.string(),
-  actorDisplayName: z.string(),
-  submittedAt: z.string(),
-  timezone: z.string(),
-  ordinal: z.number().int(),
-  excerpt: z.string().optional(),
-});
-
-const sourceSchema = z.union([documentSourceSchema, chatSourceSchema]);
-
-const seedMapSchema = z.object({
-  facets: z.array(facetSchema),
-  objects: z.array(z.object({
-    ref: z.string(),
-    id: z.string(),
-    globalObjectKey: z.string(),
-    canonicalName: z.string(),
-    surfaceForms: z.array(z.string()),
-    matchedBy: z.array(matchSchema),
-    matchedFacets: z.array(z.string()),
-    supportingAssertions: z.array(z.string()),
-    lexicalMatch: z.boolean(),
-    semanticMatch: z.boolean(),
-  })),
-  higherMemories: z.array(z.object({
-    ref: z.string(),
-    id: z.string(),
-    globalObjectId: z.string(),
-    contentMarkdown: z.string(),
-    operationalIndex: operationalMemoryIndexSchema,
-    maintainedAt: z.string(),
-  })).optional(),
-  assertions: z.array(z.object({
-    ref: z.string(),
-    id: z.string().optional(),
-    kind: z.enum(["grounded", "reference"]),
-    dereferenceRequired: z.boolean(),
-    sourceNodeId: z.string().optional(),
-    sourceClaimId: z.string(),
-    renderedStatement: z.string(),
-    contextDependent: z.boolean(),
-    matchedBy: z.array(matchSchema),
-    matchedFacets: z.array(z.string()),
-    sources: z.array(sourceSchema),
-  })),
-  connections: z.array(z.object({
-    assertionRef: z.string(),
-    objectRef: z.string(),
-  })),
-});
-
-const traceHitSchema = z.object({
-  facetId: z.string(),
-  targetRef: z.string(),
-  label: z.string(),
-  method: z.enum(["exact", "normalized-exact", "alias", "contains", "fuzzy", "vector"]),
-  rank: z.number().int(),
-  score: z.number(),
-  distance: z.number().optional(),
-  selected: z.boolean(),
-});
-
-const channelTraceSchema = z.object({
-  facetId: z.string(),
-  facetText: z.string(),
-  hits: z.array(traceHitSchema),
-});
-
-const traceSchema = z.object({
-  version: z.literal("structured-seed-map.v1"),
-  query: z.string(),
-  snapshot: z.object({
-    indexedAt: z.string().nullable(),
-    embeddingModel: z.string().nullable(),
-    embeddingRevision: z.string().nullable(),
-    embeddingDimension: z.number().int().nullable(),
-    embeddingAssertionCount: z.number().int(),
-    globalObjectCount: z.number().int(),
-    objectFragmentCount: z.number().int(),
-    surfaceFormCount: z.number().int(),
-    fragmentReferenceCount: z.number().int(),
-    assertionCount: z.number().int(),
-  }),
-  facets: z.array(facetSchema),
-  objectLexical: z.array(channelTraceSchema),
-  assertionLexical: z.array(channelTraceSchema),
-  assertionVector: z.array(channelTraceSchema),
-  semanticDerivedObjects: z.array(z.object({
-    objectRef: z.string(),
-    canonicalName: z.string(),
-    supportingAssertions: z.array(z.string()),
-    matchedFacets: z.array(z.string()),
-  })),
-  finalSeedMap: z.object({
-    objectRefs: z.array(z.string()),
-    assertionRefs: z.array(z.string()),
-    connections: z.number().int(),
-  }),
-  answerUsedAssertionRefs: z.array(z.string()),
-  budget: z.object({
-    facetLimit: z.number().int(),
-    objectHitsPerFacet: z.number().int(),
-    assertionLexicalHitsPerFacet: z.number().int(),
-    assertionVectorHitsPerFacet: z.number().int(),
-    assertionSeeds: z.number().int(),
-  }),
-  durationMs: z.number().int(),
-  warnings: z.array(z.string()),
-});
-
-const evidenceCoverageSchema = z.object({
-  level: z.enum(["complete", "partial", "insufficient"]),
-  missingAspects: z.array(z.string()),
-  observationComplete: z.boolean().optional(),
-  contentPresence: z.enum(["present", "absent", "unknown"]).optional(),
-});
-
-const memorySearchSchema = z.object({
-  mode: z.enum(["disabled", "fixture", "object-assertion"]),
-  seedMap: seedMapSchema,
-  answerUsedAssertionRefs: z.array(z.string()).optional(),
-  answerUsedHigherMemoryRefs: z.array(z.string()).optional(),
-  coverage: evidenceCoverageSchema.optional(),
-  coverageByLayer: z.object({
-    business_view: evidenceCoverageSchema.optional(),
-    library: evidenceCoverageSchema.optional(),
-    shared_brain: evidenceCoverageSchema.optional(),
-    source_document: evidenceCoverageSchema.optional(),
-  }).optional(),
-  trace: traceSchema.optional(),
-});
-
 function jsonError(error: string, status: number) {
   return Response.json({ error }, { status });
-}
-
-function safeStreamErrorSummary(error: unknown) {
-  const record = typeof error === "object" && error !== null
-    ? error as Record<string, unknown>
-    : undefined;
-  const rawMessage = error instanceof Error ? error.message : "Unknown stream error";
-  return {
-    name: error instanceof Error ? error.name : "UnknownError",
-    message: rawMessage.replace(/\s+/g, " ").slice(0, 1_000),
-    ...(typeof record?.statusCode === "number"
-      ? { statusCode: record.statusCode }
-      : {}),
-  };
-}
-
-function classifyStreamFailureCode(
-  error: unknown,
-): ChatStreamObservation["failureCode"] {
-  const summary = safeStreamErrorSummary(error);
-  const name = summary.name.toLowerCase();
-  const message = summary.message.toLowerCase();
-  if (name.includes("abort") || message.includes("aborted") || message.includes("abort")) {
-    return "stream_aborted";
-  }
-  if (name.includes("timeout") || message.includes("timeout") || message.includes("timed out")) {
-    return "timeout";
-  }
-  return "upstream_error";
 }
 
 function actualSeedTrace(result: MemoryRetrievalResult) {
@@ -597,7 +407,7 @@ export async function POST(request: Request) {
   const validation = await safeValidateUIMessages<ClubChatMessage>({
     messages: messagesInput,
     dataSchemas: {
-      memorySearch: zodSchema(memorySearchSchema),
+      memorySearch: zodSchema(memorySearchBundleSchema),
       aiInvocation: zodSchema(aiInvocationSchema),
       sourceReferences: zodSchema(sourceDocumentReferenceBundleSchema),
       artifactReferences: zodSchema(artifactReferenceBundleSchema),
@@ -1479,14 +1289,14 @@ export async function POST(request: Request) {
               streamObservation.toolCallCount += 1;
               break;
             case "error":
-              streamObservation.error = safeStreamErrorSummary(chunk.error);
-              streamObservation.failureCode = classifyStreamFailureCode(chunk.error);
+              streamObservation.error = summarizeChatStreamError(chunk.error);
+              streamObservation.failureCode = classifyChatStreamFailureCode(chunk.error);
               streamObservation.contentChars = lastCompletedStepTextChars || currentStepTextChars;
               break;
             case "abort":
               streamObservation.streamEnded = false;
               streamObservation.failureCode = chunk.reason
-                ? classifyStreamFailureCode(new Error(chunk.reason))
+                ? classifyChatStreamFailureCode(new Error(chunk.reason))
                 : "stream_aborted";
               streamObservation.contentChars = lastCompletedStepTextChars || currentStepTextChars;
               writeStreamStatus();
@@ -2081,13 +1891,13 @@ export async function POST(request: Request) {
       const modelUIStream = result.toUIMessageStream({
         sendReasoning: true,
         onError: (error) => {
-          streamObservation.error = safeStreamErrorSummary(error);
-          streamObservation.failureCode = classifyStreamFailureCode(error);
+          streamObservation.error = summarizeChatStreamError(error);
+          streamObservation.failureCode = classifyChatStreamFailureCode(error);
           streamObservation.streamEnded = false;
           streamObservation.contentChars = lastCompletedStepTextChars || currentStepTextChars;
           console.error(
             "[chat.model-stream]",
-            JSON.stringify(safeStreamErrorSummary(error)),
+            JSON.stringify(summarizeChatStreamError(error)),
           );
           void debugTrace.appendError("主回答流错误事件（可能由后续步骤恢复）", error);
           return "AI 服务响应失败，请稍后重试。";
@@ -2120,7 +1930,7 @@ export async function POST(request: Request) {
     onError: (error) => {
       console.error(
         "[chat.ui-stream]",
-        JSON.stringify(safeStreamErrorSummary(error)),
+        JSON.stringify(summarizeChatStreamError(error)),
       );
       void debugTrace.appendError("Chat UI 流失败", error);
       memoryMaintenance.cancel("主回答流失败，因此后台记忆线路未启动。");
