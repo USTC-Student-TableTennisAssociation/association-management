@@ -1,8 +1,3 @@
-from cold_start.compilation.leaf import (
-    BASIC_MEMORY_PROTOCOL_PROMPT,
-    COVERAGE_REVIEW_SYSTEM_PROMPT,
-    LEAF_COMPILATION_SYSTEM_PROMPT,
-)
 from cold_start.compilation.source_semantics import (
     CLAIM_EXTRACTION_SYSTEM_PROMPT,
     CONSERVATIVE_ATOMIC_FALLBACK_SYSTEM_PROMPT,
@@ -16,9 +11,6 @@ from cold_start.global_resolution.prompts import GLOBAL_IDENTITY_SYSTEM_PROMPT
 def test_generic_compiler_prompts_do_not_assume_the_ping_pong_association_domain() -> None:
     generic_prompts = (
         DOCUMENT_CONTEXT_SYSTEM_PROMPT,
-        BASIC_MEMORY_PROTOCOL_PROMPT,
-        LEAF_COMPILATION_SYSTEM_PROMPT,
-        COVERAGE_REVIEW_SYSTEM_PROMPT,
         CLAIM_EXTRACTION_SYSTEM_PROMPT,
         CONSERVATIVE_ATOMIC_FALLBACK_SYSTEM_PROMPT,
         MISSING_CLAIMS_SYSTEM_PROMPT,

@@ -136,17 +136,15 @@ class ExplorationSettings:
 
 @dataclass(frozen=True)
 class CompilationSettings:
-    """整棵区域树基础编译的并发边界。"""
+    """区域树来源语义编译的并发边界。"""
 
     max_parallel_sources: int = 18
-    max_parallel_parents: int = 18
 
     @classmethod
     def from_environment(
         cls,
         *,
         max_parallel_sources: int | None = None,
-        max_parallel_parents: int | None = None,
     ) -> CompilationSettings:
         return cls(
             max_parallel_sources=_environment_int(
@@ -154,74 +152,11 @@ class CompilationSettings:
                 explicit=max_parallel_sources,
                 default=18,
             ),
-            max_parallel_parents=_environment_int(
-                "COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS",
-                explicit=max_parallel_parents,
-                default=18,
-            ),
         )
 
     def __post_init__(self) -> None:
         if self.max_parallel_sources < 1:
             raise ValueError("max_parallel_sources 必须大于 0")
-        if self.max_parallel_parents < 1:
-            raise ValueError("max_parallel_parents 必须大于 0")
-
-
-@dataclass(frozen=True)
-class ActivityViewSettings:
-    """活动运营视角的父级语义分组与并发边界。"""
-
-    max_parallel_groups: int = 18
-    max_objects_per_group: int = 40
-    max_object_group_chars: int = 50_000
-    max_assertions_per_group: int = 12
-    max_review_rounds: int = 5
-
-    @classmethod
-    def from_environment(
-        cls,
-        *,
-        max_parallel_groups: int | None = None,
-    ) -> ActivityViewSettings:
-        return cls(
-            max_parallel_groups=_environment_int(
-                "COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS",
-                explicit=max_parallel_groups,
-                default=18,
-            ),
-            max_objects_per_group=_environment_int(
-                "COLD_START_PERSPECTIVE_OBJECTS_PER_GROUP",
-                explicit=None,
-                default=40,
-            ),
-            max_object_group_chars=_environment_int(
-                "COLD_START_PERSPECTIVE_OBJECT_GROUP_CHARS",
-                explicit=None,
-                default=50_000,
-            ),
-            max_assertions_per_group=_environment_int(
-                "COLD_START_PERSPECTIVE_ASSERTIONS_PER_GROUP",
-                explicit=None,
-                default=12,
-            ),
-            max_review_rounds=_environment_int(
-                "COLD_START_PERSPECTIVE_MAX_REVIEW_ROUNDS",
-                explicit=None,
-                default=5,
-            ),
-        )
-
-    def __post_init__(self) -> None:
-        positive = {
-            "max_parallel_groups": self.max_parallel_groups,
-            "max_objects_per_group": self.max_objects_per_group,
-            "max_object_group_chars": self.max_object_group_chars,
-            "max_assertions_per_group": self.max_assertions_per_group,
-            "max_review_rounds": self.max_review_rounds,
-        }
-        if any(value < 1 for value in positive.values()):
-            raise ValueError("活动运营视角的并发和分组设置必须大于 0")
 
 
 def _environment_float(

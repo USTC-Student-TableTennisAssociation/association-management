@@ -178,4 +178,19 @@ describe("Echo plugin architecture boundaries", () => {
       .toBe(false);
     expect(source("package.json")).not.toContain("memory:import-cold-start");
   });
+
+  it("keeps the cold-start worker on the current Source Semantics pipeline", () => {
+    const cli = source("services/cold-start/src/cold_start/cli.py");
+    expect(cli).not.toMatch(/map-activity|compile-leaf|FullBasicCompilation|LeafBasicCompiler/);
+    expect(existsSync(resolve(
+      process.cwd(),
+      "services/cold-start/src/cold_start/activity_view/runtime.py",
+    ))).toBe(false);
+    for (const file of ["leaf.py", "models.py", "operations.py", "tree.py"]) {
+      expect(
+        existsSync(resolve(process.cwd(), "services/cold-start/src/cold_start/compilation", file)),
+        file,
+      ).toBe(false);
+    }
+  });
 });

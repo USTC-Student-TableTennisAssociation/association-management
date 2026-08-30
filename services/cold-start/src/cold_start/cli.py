@@ -8,21 +8,6 @@ import os
 import sys
 from pathlib import Path
 
-from cold_start.activity_view import (
-    ActivityPerspectiveRunner,
-    create_activity_view_paths,
-    load_activity_view_inputs,
-    open_activity_view_paths,
-)
-from cold_start.compilation import (
-    FullBasicCompilationRunner,
-    LeafBasicCompiler,
-    create_full_artifact_paths,
-    create_leaf_artifact_paths,
-    load_exploration_inputs,
-    open_full_artifact_paths,
-    write_leaf_artifact,
-)
 from cold_start.compilation.source_semantics import (
     FullSourceSemanticRunner,
     FullSourceSemanticSnapshot,
@@ -32,12 +17,7 @@ from cold_start.compilation.source_semantics import (
     open_full_source_semantic_paths,
     open_source_semantic_paths,
 )
-from cold_start.config import (
-    ActivityViewSettings,
-    CompilationSettings,
-    ExplorationSettings,
-    ModelSettings,
-)
+from cold_start.config import CompilationSettings, ExplorationSettings, ModelSettings
 from cold_start.document import MinerUPdfLoader
 from cold_start.document.parse_cache import parse_document_to_cache
 from cold_start.embedding_server import (
@@ -48,6 +28,7 @@ from cold_start.environment import load_environment_file
 from cold_start.global_exploration import (
     GlobalExplorationRunner,
     create_exploration_run_directory,
+    load_exploration_inputs,
     write_exploration_artifacts,
     write_parsing_artifacts,
 )
@@ -139,50 +120,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="显式指定环境文件；不指定时从当前目录向上查找 .env",
     )
-
-    compile_leaf = subparsers.add_parser(
-        "compile-leaf",
-        help="完整提取一个内容叶子的对象、叙述和依据",
-    )
-    compile_leaf.add_argument(
-        "--run",
-        type=Path,
-        required=True,
-        help="包含 global-exploration.json 的勘探运行目录",
-    )
-    compile_leaf.add_argument(
-        "--leaf-id",
-        required=True,
-        help="需要编译的内容叶子节点 ID，例如 region-0063",
-    )
-    _add_model_arguments(compile_leaf)
-
-    compile_full = subparsers.add_parser(
-        "compile",
-        help="从全部内容来源节点逐层编译到区域树根节点",
-    )
-    compile_full.add_argument(
-        "--run",
-        type=Path,
-        required=True,
-        help="包含 global-exploration.json 的勘探运行目录",
-    )
-    compile_full.add_argument(
-        "--max-parallel-sources",
-        type=int,
-        help="覆盖 COLD_START_MAX_PARALLEL_COMPILATIONS",
-    )
-    compile_full.add_argument(
-        "--resume",
-        type=Path,
-        help="继续已有的未完成完整基础编译目录，复用已写入 sources 的结果",
-    )
-    compile_full.add_argument(
-        "--max-parallel-parents",
-        type=int,
-        help="覆盖 COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS",
-    )
-    _add_model_arguments(compile_full)
 
     compile_source = subparsers.add_parser(
         "compile-source",
@@ -305,28 +242,6 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="已完成的 Global Resolution 目录或 global-resolution.json",
     )
-
-    map_activity = subparsers.add_parser(
-        "map-activity",
-        help="把完整基础编译映射为隔离的活动运营视角草稿",
-    )
-    map_activity.add_argument(
-        "--compilation",
-        type=Path,
-        required=True,
-        help="完整基础编译目录或其中的 basic-compilation.json",
-    )
-    map_activity.add_argument(
-        "--max-parallel-groups",
-        type=int,
-        help="覆盖 COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS",
-    )
-    map_activity.add_argument(
-        "--resume",
-        type=Path,
-        help="继续未完成的活动视角草稿目录，复用已校验通过的分组结果",
-    )
-    _add_model_arguments(map_activity)
 
     embedding_server = subparsers.add_parser(
         "serve-embeddings",
@@ -480,108 +395,6 @@ def _run_parse_document(args: argparse.Namespace) -> int:
         "完成",
         f"{state}；{result.parser_name}；{result.parsed_document_markdown}",
     )
-    return 0
-
-
-async def _run_compile_leaf(args: argparse.Namespace) -> int:
-    progress = ConsoleProgressReporter()
-    _report_environment(args, progress)
-    model_settings = ModelSettings.from_environment(
-        model=args.model,
-        api_base_url=args.api_base_url,
-        api_key=args.api_key,
-        read_timeout_seconds=args.read_timeout_seconds,
-        max_retries=args.max_model_retries,
-        requests_per_minute=args.requests_per_minute,
-    )
-    exploration, blocks = load_exploration_inputs(args.run)
-    paths = create_leaf_artifact_paths(args.run, args.leaf_id)
-    progress.report(
-        "模型",
-        (
-            f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
-            f"全局 RPM {model_settings.requests_per_minute}；"
-            "提取、覆盖复核和校验修复均启用思考并返回正文 JSON"
-        ),
-    )
-    progress.report("产物", f"已创建单叶子编译目录 {paths.directory}")
-    progress.report("模型", f"模型输入、正文和思考将实时保存到 {paths.model_streams}")
-    model = OpenAICompatibleChatModel(
-        model_settings,
-        progress=progress,
-        trace_directory=paths.model_streams,
-        show_model_stream=args.show_model_stream,
-    )
-    try:
-        artifact = await LeafBasicCompiler(
-            model=model,
-            exploration=exploration,
-            blocks=blocks,
-            progress=progress,
-        ).compile(args.leaf_id)
-    finally:
-        await model.aclose()
-    write_leaf_artifact(paths, artifact, blocks)
-    progress.report("完成", f"基础编译产物：{paths.directory}")
-    return 0
-
-
-async def _run_compile_full(args: argparse.Namespace) -> int:
-    progress = ConsoleProgressReporter()
-    _report_environment(args, progress)
-    model_settings = ModelSettings.from_environment(
-        model=args.model,
-        api_base_url=args.api_base_url,
-        api_key=args.api_key,
-        read_timeout_seconds=args.read_timeout_seconds,
-        max_retries=args.max_model_retries,
-        requests_per_minute=args.requests_per_minute,
-    )
-    compilation_settings = CompilationSettings.from_environment(
-        max_parallel_sources=args.max_parallel_sources,
-        max_parallel_parents=args.max_parallel_parents,
-    )
-    exploration, blocks = load_exploration_inputs(args.run)
-    paths = (
-        open_full_artifact_paths(args.resume)
-        if args.resume
-        else create_full_artifact_paths(args.run)
-    )
-    progress.report(
-        "模型",
-        (
-            f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
-            f"全局 RPM {model_settings.requests_per_minute}；"
-            "来源提取、覆盖复核、父节点整合和校验修复均启用思考并返回正文 JSON"
-        ),
-    )
-    progress.report(
-        "产物",
-        (
-            f"继续完整基础编译目录 {paths.directory}"
-            if args.resume
-            else f"已创建完整基础编译目录 {paths.directory}"
-        ),
-    )
-    progress.report("模型", f"模型输入、正文和思考将实时保存到 {paths.model_streams}")
-    model = OpenAICompatibleChatModel(
-        model_settings,
-        progress=progress,
-        trace_directory=paths.model_streams,
-        show_model_stream=args.show_model_stream,
-    )
-    try:
-        await FullBasicCompilationRunner(
-            model=model,
-            exploration=exploration,
-            blocks=blocks,
-            paths=paths,
-            settings=compilation_settings,
-            progress=progress,
-        ).run()
-    finally:
-        await model.aclose()
-    progress.report("完成", f"完整基础编译产物：{paths.directory}")
     return 0
 
 
@@ -802,77 +615,6 @@ async def _run_compile_sources(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _run_map_activity(args: argparse.Namespace) -> int:
-    progress = ConsoleProgressReporter()
-    _report_environment(args, progress)
-    model_settings = ModelSettings.from_environment(
-        model=args.model,
-        api_base_url=args.api_base_url,
-        api_key=args.api_key,
-        read_timeout_seconds=args.read_timeout_seconds,
-        max_retries=args.max_model_retries,
-        requests_per_minute=args.requests_per_minute,
-    )
-    view_settings = ActivityViewSettings.from_environment(
-        max_parallel_groups=args.max_parallel_groups,
-    )
-    source_path, compilation, exploration, blocks = load_activity_view_inputs(args.compilation)
-    paths = (
-        open_activity_view_paths(args.resume)
-        if args.resume
-        else create_activity_view_paths(args.compilation)
-    )
-    progress.report(
-        "模型",
-        (
-            f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
-            f"全局 RPM {model_settings.requests_per_minute}；"
-            f"父级语义分组并发上限 {view_settings.max_parallel_groups}；"
-            "全部业务判断和协议修复启用思考"
-        ),
-    )
-    progress.report(
-        "视角",
-        (
-            "先规划全局语义边界，再做局部 Assertion 高召回投影与 Object 二次校正；"
-            "对象三态确定后由父节点恢复跨孩子关系，四条线路全局复核，"
-            f"并最多进行 {view_settings.max_review_rounds} 轮定向修复；"
-            "Object 可成为视角卡、支撑引用或视角外对象；"
-            "本阶段不重新读取原文，也不使用 BGE-M3 补造关系"
-        ),
-    )
-    progress.report(
-        "产物",
-        (
-            f"继续活动运营视角草稿目录 {paths.directory}"
-            if args.resume
-            else f"已创建活动运营视角草稿目录 {paths.directory}"
-        ),
-    )
-    progress.report("模型", f"模型输入、正文和思考将实时保存到 {paths.model_streams}")
-    model = OpenAICompatibleChatModel(
-        model_settings,
-        progress=progress,
-        trace_directory=paths.model_streams,
-        show_model_stream=args.show_model_stream,
-    )
-    try:
-        await ActivityPerspectiveRunner(
-            model=model,
-            source_compilation_path=source_path,
-            compilation=compilation,
-            exploration=exploration,
-            blocks=blocks,
-            paths=paths,
-            settings=view_settings,
-            progress=progress,
-        ).run()
-    finally:
-        await model.aclose()
-    progress.report("完成", f"活动运营视角草稿：{paths.directory}")
-    return 0
-
-
 async def _run_resolve_objects(args: argparse.Namespace) -> int:
     progress = ConsoleProgressReporter()
     _report_environment(args, progress)
@@ -992,10 +734,6 @@ def main() -> None:
             raise SystemExit(asyncio.run(_run_explore(args)))
         if args.command == "parse-document":
             raise SystemExit(_run_parse_document(args))
-        if args.command == "compile-leaf":
-            raise SystemExit(asyncio.run(_run_compile_leaf(args)))
-        if args.command == "compile":
-            raise SystemExit(asyncio.run(_run_compile_full(args)))
         if args.command == "compile-source":
             raise SystemExit(asyncio.run(_run_compile_source(args)))
         if args.command == "compile-sources":
@@ -1004,8 +742,6 @@ def main() -> None:
             raise SystemExit(asyncio.run(_run_resolve_objects(args)))
         if args.command == "finalize-assertions":
             raise SystemExit(_run_finalize_assertions(args))
-        if args.command == "map-activity":
-            raise SystemExit(asyncio.run(_run_map_activity(args)))
     except KeyboardInterrupt:
         print("任务已取消。", file=sys.stderr)
         raise SystemExit(130) from None

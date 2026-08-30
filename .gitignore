@@ -52,7 +52,6 @@ next-env.d.ts
 /src/generated/prisma
 /.prisma-cold-start-build
 /.prisma-basic-memory-build
-/.prisma-source-semantics-build
 /.prisma-assertion-index-build
 
 # Python cold-start worker

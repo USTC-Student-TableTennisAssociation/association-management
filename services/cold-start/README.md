@@ -1,6 +1,6 @@
 # Cold-start Worker
 
-Cold-start Worker 将来源文档编译为可发布到 Echo Cognitive Runtime 的 Object–Assertion–Evidence 结构，并提供线上检索共用的 BGE-M3 embedding 服务。
+Cold-start Worker 将来源文档编译为可发布到 Sydaris Shared Brain 的 Object–Assertion–Evidence 结构，并提供线上检索共用的 BGE-M3 embedding 服务。
 
 ## 输出边界
 
@@ -12,7 +12,7 @@ source document
   → Object Fragments + Assertions + Evidence
   → Global Object Resolution
   → Global Assertions
-  → Cognitive Compilation
+  → Shared Brain publication
 ```
 
 Worker 只编译认知：
@@ -55,13 +55,10 @@ CLI 会从当前目录向上查找 `.env`，也可通过 `--env-file` 显式指�
 ```text
 explore              单 PDF 全局勘探与连续区域树
 parse-document       只执行来源解析并写入可复用缓存
-compile-leaf         调试单个内容叶子
-compile              从全部内容来源逐层编译至根节点
 compile-source       编译单个 Source Region
 compile-sources      并行编译全部 Source Region
 resolve-objects      归并 Global Object
 finalize-assertions  物化只引用 Global Object 的 Assertion
-map-activity         生成隔离的 activity_operations 语义草稿
 serve-embeddings     启动 BGE-M3 HTTP 服务
 ```
 
@@ -149,40 +146,15 @@ uv run cold-start finalize-assertions \
 
 最终 Assertion 使用 Global Object ID 作为模板引用，因此 Object 规范名称的更正不需要改写所有 Assertion 正文。
 
-## 4. 验证与导入 Cognitive Runtime
+## 4. 发布到 Shared Brain
 
-回到仓库根目录，先验证输入：
+正式入口是 Sydaris Library。Runtime 会为来源创建处理记录、调用本 Worker 完成
+Source Semantics 与 Global Object Resolution，再由 Shared Brain publisher 原子发布结果。
 
-```bash
-pnpm memory:import-cold-start -- \
-  --input "/absolute/path/to/finalized-resolution" \
-  --validate-only
-```
+Worker 不提供另一条直接写数据库的 importer，也不把认知结果投影成任何具体 Business View。
+View 需要的业务状态只能通过该 View 声明的正式 Command 建立或更新。
 
-发布 Cognitive Compilation：
-
-```bash
-pnpm memory:import-cold-start -- \
-  --input "/absolute/path/to/finalized-resolution"
-```
-
-导入完成后，Global Resolution 目录会保存 `database-import.json`，记录已写入的认知实体数量。
-
-## 5. Activity Operations 语义草稿
-
-`map-activity` 是一个显式可选的领域投影，不参与通用 Object–Assertion 编译。它用于将
-完整认知编译映射为隔离的 `activity_operations` 分析草稿：
-
-```bash
-uv run cold-start map-activity \
-  --compilation "/absolute/path/to/basic-compilation"
-```
-
-它会生成语义边界、Object Card 分类、Attribute / Relation Projection、父节点关系恢复、线路复核与人类可读报告。
-
-该产物是离线分析草稿，不是 Echo View Runtime 的正式 Card Graph。如果要将其中的结构进入 `activity_operations` View，需要映射为该 View 已声明的 Domain Command。
-
-## 6. BGE-M3 服务
+## 5. BGE-M3 服务
 
 在仓库根目录启动：
 
@@ -223,8 +195,6 @@ COLD_START_EMBEDDING_MODEL_REVISION
 COLD_START_EMBEDDING_DEVICE
 COLD_START_MAX_PARALLEL_COMPILATIONS
 COLD_START_MAX_PARALLEL_REGIONS
-COLD_START_MAX_PARALLEL_PARENT_INTEGRATIONS
-COLD_START_MAX_PARALLEL_PERSPECTIVE_GROUPS
 COLD_START_MODEL_MAX_IN_FLIGHT
 ```
 
