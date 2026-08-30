@@ -141,7 +141,6 @@ const syncEditions: CommandDefinition<z.infer<typeof syncEditionsSchema>> = {
   allowedInitiators: ["system"],
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(syncEditionsSchema),
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const existing = await context.transaction.queryCards({
       cardTypeKey: "CompetitionEditionCard",

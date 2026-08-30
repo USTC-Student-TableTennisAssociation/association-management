@@ -781,10 +781,6 @@ export async function decideObjectChangeProposal(
       await validateObjectChange(transaction, payload, {
         rejectBusinessViewDependencies: true,
       });
-      await transaction.memoryObjectChangeProposal.update({
-        where: { id: proposal.id },
-        data: { status: "approved", decidedAt: new Date() },
-      });
 
       for (const change of payload.changes) {
         if (change.type === "REMOVE_SURFACE") {
@@ -803,14 +799,14 @@ export async function decideObjectChangeProposal(
 
       await transaction.memoryObjectChangeProposal.update({
         where: { id: proposal.id },
-        data: { status: "applied", appliedAt: new Date() },
+        data: { status: "applied", decidedAt: new Date(), appliedAt: new Date() },
       });
     }, { maxWait: 30_000, timeout: 180_000 });
   } catch (error) {
     const failureReason = errorMessage(error);
     const failed = await database.memoryObjectChangeProposal.updateMany({
       where: { id: proposal.id, status: "pending" },
-      data: { status: "failed", failureReason },
+      data: { status: "failed", decidedAt: new Date(), failureReason },
     });
     if (failed.count === 0) {
       const concurrentlyProcessed = await database.memoryObjectChangeProposal.findUnique({

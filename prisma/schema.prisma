@@ -15,7 +15,6 @@ enum MemoryAssertionKind {
 
 enum ProposalStatus {
   pending
-  approved
   rejected
   applied
   failed
@@ -108,7 +107,6 @@ enum LibraryProcessingStatus {
 
 enum LibraryPlanStatus {
   pending
-  approved
   rejected
   applied
   failed

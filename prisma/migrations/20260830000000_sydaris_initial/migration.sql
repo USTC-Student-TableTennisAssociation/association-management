@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS "vector";
 CREATE TYPE "MemoryAssertionKind" AS ENUM ('grounded', 'reference');
 
 -- CreateEnum
-CREATE TYPE "ProposalStatus" AS ENUM ('pending', 'approved', 'rejected', 'applied', 'failed');
+CREATE TYPE "ProposalStatus" AS ENUM ('pending', 'rejected', 'applied', 'failed');
 
 -- CreateEnum
 CREATE TYPE "InstalledViewStatus" AS ENUM ('enabled', 'disabled', 'incompatible');
@@ -50,7 +50,7 @@ CREATE TYPE "LibraryProcessingProfile" AS ENUM ('catalog', 'coarse', 'deep');
 CREATE TYPE "LibraryProcessingStatus" AS ENUM ('idle', 'queued', 'running', 'ready', 'failed');
 
 -- CreateEnum
-CREATE TYPE "LibraryPlanStatus" AS ENUM ('pending', 'approved', 'rejected', 'applied', 'failed');
+CREATE TYPE "LibraryPlanStatus" AS ENUM ('pending', 'rejected', 'applied', 'failed');
 
 -- CreateEnum
 CREATE TYPE "LibraryCompilationJobStatus" AS ENUM ('queued', 'running', 'paused', 'completed', 'failed');

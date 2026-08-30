@@ -12,7 +12,6 @@ import { parseViewSettings } from "@/view-runtime/application/installed-views";
 import type { InstalledViewService } from "@/view-runtime/application/installed-views";
 import type { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import {
-  ViewCommandValidationError,
   ViewConflictError,
   ViewNotFoundError,
   ViewRuntimeError,
@@ -65,8 +64,6 @@ export type ViewCommandProposalDecisionResult =
 export type ViewPostCommitScheduler = {
   enqueue(input: { reactionId: string }): Promise<boolean>;
 };
-
-class ProposalPreflightRollback extends Error {}
 
 function json(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
@@ -198,12 +195,6 @@ export class ViewCommandBus {
       (input.initiator === "ai") &&
       settings.aiWritePolicy === "approval_required"
     ) {
-      await this.preflightProposal({
-        ...input,
-        input: parsedInput,
-        commandVersion: command.version,
-        expectedStateVersion: expected.toString(),
-      });
       const proposal = await this.database.viewCommandProposal.create({
         data: {
           viewKey: input.viewKey,
@@ -317,54 +308,6 @@ export class ViewCommandBus {
         },
       });
       throw error;
-    }
-  }
-
-  private async preflightProposal(
-    input: DispatchViewCommandInput & { commandVersion: string },
-  ): Promise<void> {
-    const viewModule = this.registry.getView(input.viewKey);
-    if (!viewModule) throw new ViewNotFoundError(input.viewKey);
-    const command = commandFor(viewModule, input.commandKey, input.commandVersion);
-    const parsedInput = command.inputSchema.parse(input.input);
-    const expectedStateVersion = input.expectedStateVersion === undefined
-      ? undefined
-      : BigInt(input.expectedStateVersion);
-    const rollback = new ProposalPreflightRollback();
-
-    try {
-      await this.database.$transaction(async (transaction) => {
-        const installed = await transaction.installedView.findUnique({
-          where: { viewKey: input.viewKey },
-        });
-        if (!installed || installed.status !== "enabled") throw new ViewNotFoundError(input.viewKey);
-        if (
-          expectedStateVersion !== undefined &&
-          installed.stateVersion !== expectedStateVersion
-        ) {
-          throw new ViewConflictError();
-        }
-        const graph = new PrismaCardGraphTransaction(transaction, viewModule);
-        try {
-          await command.execute({
-            viewKey: input.viewKey,
-            actor: input.actor,
-            initiator: input.initiator,
-            ...(input.skillId ? { skillId: input.skillId } : {}),
-            expectedStateVersion: installed.stateVersion.toString(),
-            transaction: graph,
-          }, parsedInput);
-          for (const invariant of viewModule.invariants) await invariant.validate(graph);
-        } catch (error) {
-          if (error instanceof ViewRuntimeError) throw error;
-          throw new ViewCommandValidationError(
-            error instanceof Error ? error.message : String(error),
-          );
-        }
-        throw rollback;
-      });
-    } catch (error) {
-      if (!(error instanceof ProposalPreflightRollback)) throw error;
     }
   }
 

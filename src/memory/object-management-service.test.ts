@@ -273,6 +273,7 @@ describe("Object management service", () => {
       where: { id: proposalRecord.id, status: "pending" },
       data: {
         status: "failed",
+        decidedAt: expect.any(Date),
         failureReason: "Proposal 已被其他请求处理",
       },
     });

@@ -124,7 +124,7 @@ export type LibraryPlanOperation = z.infer<typeof libraryPlanOperationSchema>;
 
 export type LibraryPlanPresentation = {
   id: string;
-  status: "pending" | "approved" | "rejected" | "applied" | "failed";
+  status: "pending" | "rejected" | "applied" | "failed";
   reason: string;
   createdAt: string;
   failureReason?: string;

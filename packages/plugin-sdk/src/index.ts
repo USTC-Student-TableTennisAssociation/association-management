@@ -307,6 +307,7 @@ export interface CommandDefinition<Input = unknown> {
   requiredPermissions?: readonly string[];
   inputSchema: ContractSchema<Input>;
   inputReferences?: readonly CommandInputReferenceDefinition[];
+  /** Opt in only when applying the Proposal to a newer View state is inherently safe. */
   proposalApprovalConflictPolicy?(input: Input): ProposalApprovalConflictPolicy;
   execute(context: ViewCommandContext, input: Input): Promise<CommandOutcome>;
 }
