@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 
-import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { DebugTrace } from "@/ai/debug-trace";
 import { getDatabase } from "@/db";
 import {
   actorHigherMemoryQualityIssue,
@@ -49,7 +49,7 @@ export function createActorHigherMemoryWriteToolset(input: {
   actorId: string;
   currentMessageId: string;
   currentUserMessage: string;
-  trace?: EchoDebugTrace;
+  trace?: DebugTrace;
   onCommitted?: (summary: ActorHigherMemoryWriteSummary) => void;
 }) {
   let commitSummary: ActorHigherMemoryWriteSummary = {

@@ -30,7 +30,7 @@ describe("society overview presentation state", () => {
       id: "running",
       attention: { policy: "evaluate", status: "running" },
       knowledge: { policy: "reconcile", status: "running" },
-    }))).toEqual({ label: "Echo 正在核对", tone: "checking" });
+    }))).toEqual({ label: "Sydaris 正在核对", tone: "checking" });
     expect(presentSocietyReaction(reaction({
       id: "confirm",
       attention: { policy: "always", status: "needs_confirmation", message: "请确认" },

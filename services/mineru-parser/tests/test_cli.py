@@ -1,7 +1,7 @@
 from argparse import Namespace
 from pathlib import Path
 
-from echo_mineru.cli import _mineru_command
+from sydaris_mineru.cli import _mineru_command
 
 
 def test_builds_explicit_mineru_command() -> None:

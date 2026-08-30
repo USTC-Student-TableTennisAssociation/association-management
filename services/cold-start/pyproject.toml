@@ -1,5 +1,5 @@
 [project]
-name = "echo-cold-start"
+name = "sydaris-cold-start"
 version = "0.1.0"
 description = "将来源文档编译为 Object–Assertion 认知结构的通用冷启动工作流"
 readme = "README.md"

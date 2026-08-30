@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 
-import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { DebugTrace } from "@/ai/debug-trace";
 
 export const ambientHigherMemoryScopes = ["identity", "narrative", "working_set"] as const;
 
@@ -79,7 +79,7 @@ export function addObjectTargetsToQueueDecision(input: {
 }
 
 export function createHigherMemoryQueueTool(input: {
-  trace?: EchoDebugTrace;
+  trace?: DebugTrace;
   hasObject?: (globalObjectId: string) => boolean;
   canQueueAmbient?: () => boolean;
 }) {
@@ -87,13 +87,13 @@ export function createHigherMemoryQueueTool(input: {
 
   const queueTool = tool({
     description: [
-      "仅当本轮真实互动使 Echo 对环境身份、组织叙事、共同工作集或少数重要 GlobalObject 形成了值得延续的高层理解时调用。",
-      "identity 表示已被证据确认的环境类型、边界与 Echo 的长期职责；narrative 表示跨短期任务仍成立的使命、历史脉络、文化和共同意义；working_set 表示近期共同工作的阶段、重点、风险和未结方向。",
+      "仅当本轮真实互动使 Sydaris 对环境身份、组织叙事、共同工作集或少数重要 GlobalObject 形成了值得延续的高层理解时调用。",
+      "identity 表示已被证据确认的环境类型、边界与 Sydaris 的长期职责；narrative 表示跨短期任务仍成立的使命、历史脉络、文化和共同意义；working_set 表示近期共同工作的阶段、重点、风险和未结方向。",
       "具体 Object 的事实属于 Object–Assertion 图及相应 Object Higher Memory，不得仅因本轮提及就提升为 ambient scope。",
       "object 目标必须原样使用本轮工具实际返回的 GlobalObject database id。",
       "这只登记静默维护意图；后台会在 Chat Assertion 阶段完整结束后取得主对话的完整语义上下文并开始维护。",
       "普通检索命中、顺带提及、问候、一次性细节或没有形成新的高层理解时不要调用。",
-      "Echo 的昵称、语气、亲密称呼和单个用户的私人偏好不属于共享 Ambient scope；不要用本工具伪造 Actor 私有记忆或改变产品品牌。",
+      "Sydaris 的昵称、语气、亲密称呼和单个用户的私人偏好不属于共享 Ambient scope；不要用本工具伪造 Actor 私有记忆或改变产品品牌。",
       "首次实质性讨论可以创建缺失的 identity/narrative/working_set Higher Memory。每轮至多调用一次，不要向用户宣称维护已经完成。",
     ].join(""),
     inputSchema: z.object({

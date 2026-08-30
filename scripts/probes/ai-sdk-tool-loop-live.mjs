@@ -4,9 +4,9 @@
  * This script intentionally does not load `.env` and does not read AI_API_KEY.
  * Supply a fresh, probe-only credential explicitly:
  *
- * ECHO_TOOL_PROBE_BASE_URL=https://example.com/v1 \
- * ECHO_TOOL_PROBE_MODEL=model-id \
- * ECHO_TOOL_PROBE_API_KEY=fresh-key \
+ * SYDARIS_TOOL_PROBE_BASE_URL=https://example.com/v1 \
+ * SYDARIS_TOOL_PROBE_MODEL=model-id \
+ * SYDARIS_TOOL_PROBE_API_KEY=fresh-key \
  * node scripts/probes/ai-sdk-tool-loop-live.mjs
  */
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -14,9 +14,9 @@ import { stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
 
 const requiredEnvironment = [
-  "ECHO_TOOL_PROBE_BASE_URL",
-  "ECHO_TOOL_PROBE_MODEL",
-  "ECHO_TOOL_PROBE_API_KEY",
+  "SYDARIS_TOOL_PROBE_BASE_URL",
+  "SYDARIS_TOOL_PROBE_MODEL",
+  "SYDARIS_TOOL_PROBE_API_KEY",
 ];
 const missing = requiredEnvironment.filter(
   (name) => !process.env[name]?.trim(),
@@ -28,24 +28,24 @@ if (missing.length > 0) {
   );
   process.exitCode = 2;
 } else {
-  const baseURLValue = new URL(process.env.ECHO_TOOL_PROBE_BASE_URL.trim());
+  const baseURLValue = new URL(process.env.SYDARIS_TOOL_PROBE_BASE_URL.trim());
   baseURLValue.pathname = baseURLValue.pathname
     .replace(/\/{2,}/g, "/")
     .replace(/\/+$/, "");
   const baseURL = baseURLValue.toString().replace(/\/$/, "");
-  const modelId = process.env.ECHO_TOOL_PROBE_MODEL.trim();
-  const apiKey = process.env.ECHO_TOOL_PROBE_API_KEY.trim();
-  const marker = `echo-tool-probe-${Date.now()}`;
+  const modelId = process.env.SYDARIS_TOOL_PROBE_MODEL.trim();
+  const apiKey = process.env.SYDARIS_TOOL_PROBE_API_KEY.trim();
+  const marker = `sydaris-tool-probe-${Date.now()}`;
   const executions = [];
 
   const provider = createOpenAICompatible({
-    name: "echo-tool-probe",
+    name: "sydaris-tool-probe",
     baseURL,
     apiKey,
     includeUsage: true,
   });
   const tools = {
-    echoProbe: tool({
+    probeTool: tool({
       description: "Return the exact marker supplied by the caller.",
       inputSchema: z.object({ marker: z.string() }),
       execute: async ({ marker: receivedMarker }) => {
@@ -63,7 +63,7 @@ if (missing.length > 0) {
     model: provider(modelId),
     tools,
     prompt:
-      `Call echoProbe exactly once with marker ${JSON.stringify(marker)}. ` +
+      `Call probeTool exactly once with marker ${JSON.stringify(marker)}. ` +
       "After receiving its result, answer with only that marker.",
     stopWhen: stepCountIs(2),
     prepareStep: ({ stepNumber }) => ({

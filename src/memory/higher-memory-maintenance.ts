@@ -1,4 +1,4 @@
-import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { DebugTrace } from "@/ai/debug-trace";
 import { maintainAmbientHigherMemories } from "@/memory/ambient-higher-memory";
 import type { ChatAssertionSemanticContext } from "@/memory/chat-assertion";
 import {
@@ -47,7 +47,7 @@ function isTimeoutFailure(error: unknown, seen = new Set<unknown>()): boolean {
 async function runWithOneTimeoutRetry<T>(
   label: string,
   operation: () => Promise<T>,
-  trace?: EchoDebugTrace,
+  trace?: DebugTrace,
 ): Promise<T> {
   try {
     return await operation();
@@ -63,7 +63,7 @@ async function runWithOneTimeoutRetry<T>(
 
 export async function maintainHigherMemories(
   input: HigherMemoryMaintenanceInput,
-  trace?: EchoDebugTrace,
+  trace?: DebugTrace,
 ): Promise<HigherMemoryMaintenanceResult> {
   const objectDecision = objectHigherMemoryQueueDecision(input.queueDecision);
   const ambientScopes = ambientScopesFromQueueDecision(input.queueDecision);

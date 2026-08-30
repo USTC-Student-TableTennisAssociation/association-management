@@ -144,11 +144,11 @@ export function WorkViewWorkspace({
                       reaction.knowledge.status === "queued" ||
                       reaction.knowledge.status === "running";
                     const label = active
-                      ? "Echo 正在核对"
+                      ? "Sydaris 正在核对"
                       : reaction.attention.status === "needs_confirmation"
                       ? "需要确认"
                       : reaction.attention.status === "inform"
-                      ? "Echo 有一条说明"
+                      ? "Sydaris 有一条说明"
                       : reaction.attention.status === "failed" || reaction.knowledge.status === "failed"
                       ? "核对暂不可用"
                       : undefined;
@@ -183,7 +183,7 @@ export function WorkViewWorkspace({
         {!snapshot.cards.length ? (
           <div className="rounded-xl border border-dashed border-zinc-300 bg-white p-10 text-center">
             <p className="text-sm font-medium text-zinc-700">当前 Work View 还没有正式条目</p>
-            <p className="mt-1 text-xs leading-5 text-zinc-400">可在 AI Pane 中描述工作内容，由 Echo 通过现有 Proposal / Command 流程协助建立。</p>
+            <p className="mt-1 text-xs leading-5 text-zinc-400">可在 AI Pane 中描述工作内容，由 Sydaris 通过现有 Proposal / Command 流程协助建立。</p>
           </div>
         ) : null}
       </div>

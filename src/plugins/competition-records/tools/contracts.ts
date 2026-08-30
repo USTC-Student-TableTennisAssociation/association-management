@@ -99,7 +99,7 @@ export const competitionToolCapabilityContracts: readonly ToolCapabilityContract
       "只读取比赛级数据，不返回选手姓名、邮箱、学号或其他个人信息。",
       "参赛人数由 Provider 根据单打、双打和团体赛的源系统报名口径确定性计算。",
       "返回值覆盖请求范围在 sourceSnapshotAt 对应数据库快照中的全部比赛；内部批大小不得截断结果。",
-      "不创建或修改 Echo Card。",
+      "不创建或修改 Sydaris Card。",
     ].join("\n"),
     inputSchema: zodContractSchema(competitionSourceReadInputSchema),
     outputSchema: zodContractSchema(competitionSourceBatchSchema),

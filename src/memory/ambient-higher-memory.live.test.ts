@@ -3,7 +3,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { getDatabase } from "@/db";
 import { maintainAmbientHigherMemories } from "@/memory/ambient-higher-memory";
 
-const runLive = process.env.ECHO_LIVE_AMBIENT_TEST === "1";
+const runLive = process.env.SYDARIS_LIVE_AMBIENT_TEST === "1";
 
 describe.runIf(runLive)("ambient Higher Memory live time travel", () => {
   afterAll(async () => {
@@ -24,10 +24,10 @@ describe.runIf(runLive)("ambient Higher Memory live time travel", () => {
         conversation: [{
           messageId: "ambient-live-time-travel-maintenance-001",
           role: "user",
-          text: "跟你同步一件最近最重要的事：三天后，也就是2026年8月15日上午10点，我们要办一场「Echo时旅验收会」。目前还没确认会议室，演示也没准备完，参与者还没全部通知。先记着，之后我们继续推进。",
+          text: "跟你同步一件最近最重要的事：三天后，也就是2026年8月15日上午10点，我们要办一场「Sydaris时旅验收会」。目前还没确认会议室，演示也没准备完，参与者还没全部通知。先记着，之后我们继续推进。",
           submittedAt: "2026-08-12T00:00:00.000Z",
         }],
-        systemInstruction: "你是 Echo，本轮时间为 2026-08-12，组织时区为 Asia/Shanghai。",
+        systemInstruction: "你是 Sydaris，本轮时间为 2026-08-12，组织时区为 Asia/Shanghai。",
         modelCalls: [],
         toolExecutions: [],
         finalAnswer: "明白，之后继续推进。",
@@ -43,7 +43,7 @@ describe.runIf(runLive)("ambient Higher Memory live time travel", () => {
     const recent = await database.memoryAmbientHigherMemory.findUniqueOrThrow({
       where: { scope: "working_set" },
     });
-    expect(recent.contentMarkdown).toMatch(/Echo\s*时旅验收会/);
+    expect(recent.contentMarkdown).toMatch(/Sydaris\s*时旅验收会/);
     expect(recent.contentMarkdown.length).toBeGreaterThanOrEqual(80);
 
     await database.memoryAmbientHigherMemory.update({
@@ -70,7 +70,7 @@ describe.runIf(runLive)("ambient Higher Memory live time travel", () => {
           text: "进展更新：会议室已经确认在东区201，演示也全部准备完了，参与者都通知到了。现在三项都已完成。",
           submittedAt: "2026-08-15T00:05:00.000Z",
         }],
-        systemInstruction: "你是 Echo，本轮时间为 2026-08-15 08:05，组织时区为 Asia/Shanghai。",
+        systemInstruction: "你是 Sydaris，本轮时间为 2026-08-15 08:05，组织时区为 Asia/Shanghai。",
         modelCalls: [],
         toolExecutions: [],
         finalAnswer: "收到，三项准备均已完成。",

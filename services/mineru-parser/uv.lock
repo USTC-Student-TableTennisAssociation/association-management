@@ -273,7 +273,7 @@ wheels = [
 ]
 
 [[package]]
-name = "echo-mineru-parser"
+name = "sydaris-mineru-parser"
 version = "0.1.0"
 source = { editable = "." }
 

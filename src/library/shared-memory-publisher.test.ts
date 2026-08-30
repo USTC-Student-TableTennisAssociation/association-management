@@ -36,11 +36,11 @@ function resolvedObject(key: string, label = "继往开来杯"): GlobalObjectDra
 
 describe("library Shared Brain publication preparation", () => {
   const temporaryRoots: string[] = [];
-  const originalOutputRoot = process.env.ECHO_COLD_START_OUTPUT_ROOT;
+  const originalOutputRoot = process.env.SYDARIS_COLD_START_OUTPUT_ROOT;
 
   afterEach(async () => {
-    if (originalOutputRoot === undefined) delete process.env.ECHO_COLD_START_OUTPUT_ROOT;
-    else process.env.ECHO_COLD_START_OUTPUT_ROOT = originalOutputRoot;
+    if (originalOutputRoot === undefined) delete process.env.SYDARIS_COLD_START_OUTPUT_ROOT;
+    else process.env.SYDARIS_COLD_START_OUTPUT_ROOT = originalOutputRoot;
     await Promise.all(temporaryRoots.splice(0).map((root) =>
       rm(root, { recursive: true, force: true })
     ));
@@ -184,9 +184,9 @@ describe("library Shared Brain publication preparation", () => {
   });
 
   it("merges a deep package into plain Shared Brain assertions and shared objects", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "echo-shared-publisher-"));
+    const root = await mkdtemp(path.join(tmpdir(), "sydaris-shared-publisher-"));
     temporaryRoots.push(root);
-    process.env.ECHO_COLD_START_OUTPUT_ROOT = root;
+    process.env.SYDARIS_COLD_START_OUTPUT_ROOT = root;
     const compilationDirectory = path.join(root, "run", "source-semantic-compilations", "comp");
     const resolutionDirectory = path.join(compilationDirectory, "global-resolutions", "resolution");
     await mkdir(resolutionDirectory, { recursive: true });

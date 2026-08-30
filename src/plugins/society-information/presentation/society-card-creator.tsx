@@ -263,7 +263,7 @@ export function SocietyCardCreator({
                       </button>
                     ))}
                     {!searching && !objects.length ? (
-                      <p>没有匹配的稳定 Object；如需建立新对象，请先让 Echo 根据证据创建。</p>
+                      <p>没有匹配的稳定 Object；如需建立新对象，请先让 Sydaris 根据证据创建。</p>
                     ) : null}
                     {searching ? <p>正在搜索…</p> : null}
                   </div>

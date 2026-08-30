@@ -6,14 +6,14 @@ import { getDatabase } from "@/db";
 import { syncCompetitionEditions } from "@/integrations/competition-records/sync-service";
 import { toolRuntime, viewCommandBus, viewReadPort } from "@/shell/composition-root";
 
-const runLive = process.env.ECHO_LIVE_COMPETITION_SYNC_TEST === "1";
+const runLive = process.env.SYDARIS_LIVE_COMPETITION_SYNC_TEST === "1";
 
 describe.runIf(runLive)("competition records sync live", () => {
   afterAll(async () => {
     await getDatabase().$disconnect();
   });
 
-  it("moves one complete real source snapshot into Echo idempotently", async () => {
+  it("moves one complete real source snapshot into Sydaris idempotently", async () => {
     const request = {
       source: { includeQuickMatches: false },
       caller: { kind: "automation" as const, jobKey: "competition-live-test" },

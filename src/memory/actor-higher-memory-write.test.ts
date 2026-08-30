@@ -43,7 +43,7 @@ describe("synchronous natural-language Actor Higher Memory writes", () => {
       revisions: [{
         action: "replace",
         scope: "interaction",
-        contentMarkdown: "方案审阅中，当前用户负责提出取舍，Echo 负责整理理由；该协作约定需要跨会话延续。",
+        contentMarkdown: "方案审阅中，当前用户负责提出取舍，Sydaris 负责整理理由；该协作约定需要跨会话延续。",
         evidenceQuote: "方案审阅由我提出取舍，你负责整理理由",
       }],
     }, toolOptions);
@@ -68,7 +68,7 @@ describe("synchronous natural-language Actor Higher Memory writes", () => {
         triggerMessageId: "message-current",
       }),
       update: expect.objectContaining({
-        contentMarkdown: expect.stringContaining("Echo 负责整理理由"),
+        contentMarkdown: expect.stringContaining("Sydaris 负责整理理由"),
       }),
     });
   });
@@ -84,7 +84,7 @@ describe("synchronous natural-language Actor Higher Memory writes", () => {
       revisions: [{
         action: "replace",
         scope: "interaction",
-        contentMarkdown: "方案审阅中，当前用户负责提出取舍，Echo 负责整理理由；该协作约定需要跨会话延续。",
+        contentMarkdown: "方案审阅中，当前用户负责提出取舍，Sydaris 负责整理理由；该协作约定需要跨会话延续。",
         evidenceQuote: "方案审阅由我提出取舍，你负责整理理由",
       }],
     }, toolOptions)).resolves.toMatchObject({ committed: false });

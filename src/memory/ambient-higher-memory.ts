@@ -6,7 +6,7 @@ import {
   debugJson,
   renderDebugMessages,
   renderDebugModelOutput,
-  type EchoDebugTrace,
+  type DebugTrace,
 } from "@/ai/debug-trace";
 import { getChatModel } from "@/ai/provider";
 import {
@@ -104,11 +104,11 @@ export function buildAmbientHigherMemoryContext(
     ].join("\n");
   });
   return [
-    "## Echo 自动加载的 Ambient Higher Memory",
+    "## Sydaris 自动加载的 Ambient Higher Memory",
     memories.length
       ? `运行状态：本轮已加载 ${memories.length} 个 Ambient scope（${memories.map((memory) => memory.scope).join("、")}）。`
-      : "运行状态：本轮没有加载到 identity、narrative 或 working_set 内容。这只表示当前没有可用于本轮的 Ambient Higher Memory，不代表 Higher Memory 架构不存在，也不代表 Echo 只拥有 Object Higher Memory。",
-    "以下内容是 Echo 在过去真实互动和正式证据中形成的高层环境理解，本轮无需先搜索即可用于进入状态。已存在的 Environment Identity 是有来源的环境默认值，不应在每轮重新退回‘环境类型未知’；只有权威新证据冲突时才修正。",
+      : "运行状态：本轮没有加载到 identity、narrative 或 working_set 内容。这只表示当前没有可用于本轮的 Ambient Higher Memory，不代表 Higher Memory 架构不存在，也不代表 Sydaris 只拥有 Object Higher Memory。",
+    "以下内容是 Sydaris 在过去真实互动和正式证据中形成的高层环境理解，本轮无需先搜索即可用于进入状态。已存在的 Environment Identity 是有来源的环境默认值，不应在每轮重新退回‘环境类型未知’；只有权威新证据冲突时才修正。",
     "它不是精确业务状态的权威来源，也不代表下列内容截至今天仍全部有效。用户询问精确当前状态、要求来源或准备执行动作时，应读取正式 Business View 或按需检索。",
     "Ambient scope 描述跨单一 Object 的共享环境认知。具体 Object 的事实及关系留在 Object–Assertion 图和 Object Higher Memory 中，不得仅因被讨论就提升为 Ambient。",
     "Ambient Higher Memory 没有 H# 引用标记，不得伪造引用。",
@@ -118,9 +118,9 @@ export function buildAmbientHigherMemoryContext(
 
 function maintenancePrompt(input: AmbientHigherMemoryMaintenanceInput, oldMemories: AmbientHigherMemorySnapshot[]): string {
   return [
-    "你负责维护 Echo 的 Ambient Higher Memory。它是每轮主对话自动读取的高层环境认知，目标是让 Echo 高效进入状态，不是复制精确业务数据。",
+    "你负责维护 Sydaris 的 Ambient Higher Memory。它是每轮主对话自动读取的高层环境认知，目标是让 Sydaris 高效进入状态，不是复制精确业务数据。",
     "本轮 scope 由主回答模型显式选择。只能输出这些 scope，不要自行扩大维护范围。",
-    "identity 回答：这个已被证据确认的工作环境是什么、边界在哪里、Echo 在其中长期承担什么职责。冷启动且证据不足时不得猜；一旦由正式证据建立，就应作为稳定的环境默认值延续，不能因为通用系统提示又退回未知。",
+    "identity 回答：这个已被证据确认的工作环境是什么、边界在哪里、Sydaris 在其中长期承担什么职责。冷启动且证据不足时不得猜；一旦由正式证据建立，就应作为稳定的环境默认值延续，不能因为通用系统提示又退回未知。",
     "narrative 回答：这个环境为何存在、经历过怎样的重要脉络、珍视什么文化与共同意义。它保留跨短期任务的叙事连续性，但不美化或虚构历史。",
     "working_set 回答：近期共同工作的主要焦点、所处阶段、重要风险、未结方向和值得下轮继续关注的事项。保留明确时效边界，不把阶段性状态写成永久事实。",
     "Object 边界：凡是只描述某个具体 Object 或 Object 之间关系的内容，都保留在 Object–Assertion 图和对应 Object Higher Memory 中。只有跨对象、确实属于共享环境层的认知才能进入 Ambient。",
@@ -145,7 +145,7 @@ function maintenancePrompt(input: AmbientHigherMemoryMaintenanceInput, oldMemori
 
 export async function maintainAmbientHigherMemories(
   input: AmbientHigherMemoryMaintenanceInput,
-  trace?: EchoDebugTrace,
+  trace?: DebugTrace,
 ): Promise<number> {
   const targetScopes = [...new Set(input.scopes)];
   if (!targetScopes.length) return 0;

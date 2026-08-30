@@ -40,7 +40,7 @@ class BgeM3EmbeddingService:
 
 def _handler(service: BgeM3EmbeddingService) -> type[BaseHTTPRequestHandler]:
     class EmbeddingHandler(BaseHTTPRequestHandler):
-        server_version = "EchoBgeM3/1"
+        server_version = "SydarisBgeM3/1"
 
         def do_GET(self) -> None:
             if self.path != "/health":

@@ -34,12 +34,12 @@ import {
   detailedToolNames,
   TURN_KERNEL_INSTRUCTIONS,
 } from "@/ai/capability-gates";
-import { echoAIInvocationSchema } from "@/ai/ai-invocation";
+import { aiInvocationSchema } from "@/ai/ai-invocation";
 import { buildCapabilityInstructions } from "@/ai/capability-instructions";
 import { ContextPackingError, packContext } from "@/ai/context-packer";
 import { buildCurrentTimeInstruction } from "@/ai/current-time-context";
 import {
-  createEchoDebugTrace,
+  createDebugTrace,
   debugCodeBlock,
   debugJson,
   renderDebugMessages,
@@ -594,7 +594,7 @@ export async function POST(request: Request) {
     messages: messagesInput,
     dataSchemas: {
       memorySearch: zodSchema(memorySearchSchema),
-      aiInvocation: zodSchema(echoAIInvocationSchema),
+      aiInvocation: zodSchema(aiInvocationSchema),
       sourceReferences: zodSchema(sourceDocumentReferenceBundleSchema),
       artifactReferences: zodSchema(artifactReferenceBundleSchema),
       viewReferences: zodSchema(viewReferenceBundleSchema),
@@ -628,7 +628,7 @@ export async function POST(request: Request) {
     console.error("[chat.time-context.config]", error);
     return jsonError("环境时区或 Actor 配置无效，请联系管理员。", 500);
   }
-  const debugTrace = createEchoDebugTrace({
+  const debugTrace = createDebugTrace({
     clientMessageId: latestUserMessage?.id ?? "unknown-message",
     submittedAt,
     timezone: requestTimezone,

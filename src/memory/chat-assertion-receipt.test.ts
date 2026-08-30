@@ -249,7 +249,7 @@ describe("Chat Assertion processing receipts", () => {
       conversationMessages: [
         {
           messageId: "message-previous",
-          text: "Echo 人工测试由测试成员执行。",
+          text: "Sydaris 人工测试由测试成员执行。",
         },
         {
           messageId: "message-current",
@@ -269,7 +269,7 @@ describe("Chat Assertion processing receipts", () => {
       },
       targetMessage: {
         clientMessageId: "message-previous",
-        text: "Echo 人工测试由测试成员执行。",
+        text: "Sydaris 人工测试由测试成员执行。",
       },
       targetIsCurrentMessage: false,
       receipts: [expect.objectContaining({ clientMessageId: "message-previous" })],
@@ -295,7 +295,7 @@ describe("Chat Assertion processing receipts", () => {
       conversationMessages: [
         {
           messageId: "message-previous",
-          text: "Echo 人工测试由测试成员执行。",
+          text: "Sydaris 人工测试由测试成员执行。",
         },
         {
           messageId: "message-current",
@@ -330,7 +330,7 @@ describe("Chat Assertion processing receipts", () => {
       conversationMessages: [
         {
           messageId: "message-previous",
-          text: "Echo 人工测试由测试成员执行。",
+          text: "Sydaris 人工测试由测试成员执行。",
         },
         {
           messageId: "message-current",

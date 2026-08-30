@@ -57,7 +57,7 @@ export default function SetupPage() {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-[#eef2ef] px-5 py-10 text-zinc-950">
       <section className="w-full max-w-lg rounded-2xl border border-emerald-950/10 bg-white p-8 shadow-xl shadow-emerald-950/10">
-        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">Echo 首次配置</p>
+        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">Sydaris 首次配置</p>
         <h1 className="mt-3 text-3xl font-semibold">创建第一个管理员</h1>
         <p className="mt-2 text-sm leading-6 text-zinc-600">该账号会同时建立 Actor 身份，并关联同名 Actor Object。后续可以由此账号创建其他成员。</p>
         <form className="mt-7 grid gap-5" onSubmit={submit}>
@@ -79,7 +79,7 @@ export default function SetupPage() {
           </label>
           {error ? <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
           <button type="submit" disabled={submitting || !displayName.trim() || !loginName.trim() || password.length < 8} className="h-11 rounded-lg bg-emerald-800 font-medium text-white hover:bg-emerald-700 disabled:bg-zinc-300">
-            {submitting ? "正在初始化…" : "创建管理员并进入 Echo"}
+            {submitting ? "正在初始化…" : "创建管理员并进入 Sydaris"}
           </button>
         </form>
       </section>

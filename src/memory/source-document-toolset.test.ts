@@ -265,9 +265,9 @@ describe("createSourceDocumentToolset", () => {
     sourceState.read.mockResolvedValue(readResult({
       document: {
         id: "00000000-0000-4000-8000-000000000020",
-        title: "Echo Shared Brain",
+        title: "Sydaris Shared Brain",
         sha256: "sha",
-        parser: "echo-library-publisher",
+        parser: "sydaris-library-publisher",
         pageCount: 2,
         blockCount: 4,
       },

@@ -67,7 +67,7 @@ function normalizeName(name) {
 
 function storageRoot() {
   return path.resolve(
-    process.env.ECHO_LIBRARY_STORAGE_ROOT?.trim() || path.join(projectDirectory, ".echo-library"),
+    process.env.SYDARIS_LIBRARY_STORAGE_ROOT?.trim() || path.join(projectDirectory, ".sydaris-library"),
   );
 }
 

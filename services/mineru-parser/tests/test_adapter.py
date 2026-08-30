@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from echo_mineru.adapter import normalize_mineru_output
+from sydaris_mineru.adapter import normalize_mineru_output
 
 
 def test_normalizes_stable_content_list(tmp_path: Path) -> None:
@@ -57,4 +57,4 @@ def test_normalizes_stable_content_list(tmp_path: Path) -> None:
     assert document["pages"][1]["blocks"][1]["block_type"] == "table"
     parsed_markdown = (tmp_path / "run" / "parsed-document.md").read_text(encoding="utf-8")
     assert "mineru-raw/手册/hybrid/images/example.png" in parsed_markdown
-    assert (tmp_path / "run" / "echo-document.json").is_file()
+    assert (tmp_path / "run" / "sydaris-document.json").is_file()

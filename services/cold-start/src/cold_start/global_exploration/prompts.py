@@ -5,7 +5,7 @@ from __future__ import annotations
 from cold_start.global_exploration.units import ReadingUnit
 
 DOCUMENT_CONTEXT_SYSTEM_PROMPT = """
-你正在帮助 Echo 识别一份来源文档。这个阶段只形成后续 AI 都能复用的“文档身份
+你正在帮助 Sydaris 识别一份来源文档。这个阶段只形成后续 AI 都能复用的“文档身份
 背景”，不提取记忆，不分析概念，不划分区域，也不设计知识图谱。
 
 请从文档开头向后阅读，并持续修正当前背景。原文证据优先；旧背景只是可修改草稿。

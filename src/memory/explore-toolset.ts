@@ -220,7 +220,7 @@ export function createMemoryExploreToolset(input: {
   return {
     searchMemory: tool({
       description:
-        "在 Echo 的 GlobalObject–Assertion 记忆中执行一次聚焦 Locate。" +
+        "在 Sydaris 的 GlobalObject–Assertion 记忆中执行一次聚焦 Locate。" +
         "把唯一主体实体的原话放进 targetHints，把成员、子项、活动、平台等想了解的相关实体和信息放进 query；不要把相关实体并列成主目标。" +
         "必须按任务形状选择 taskShape：单一明确事实使用 fact；完整理解、名单/表格、多字段 View 填充或资料梳理使用 synthesis。" +
         "一次 query 只表达一个内聚的信息需求；多字段 synthesis 对未覆盖字段分别窄查。partial/truncated、‘等’或一个完整章节都不代表完整集合已穷尽。" +

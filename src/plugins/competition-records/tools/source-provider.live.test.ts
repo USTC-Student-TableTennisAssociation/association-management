@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { readUstcttaCompetitionData } from "@/plugins/competition-records/tools/source-provider";
 
-const runLive = process.env.ECHO_LIVE_USTCTTA_COMPETITION_SOURCE_TEST === "1";
+const runLive = process.env.SYDARIS_LIVE_USTCTTA_COMPETITION_SOURCE_TEST === "1";
 
 describe.runIf(runLive)("USTCTTA competition source live", () => {
   it("reads the complete formal-competition scope from one database snapshot", async () => {

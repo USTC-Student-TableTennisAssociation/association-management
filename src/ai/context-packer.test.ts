@@ -191,8 +191,8 @@ describe("packContext", () => {
     expect(result.system).not.toContain("资料不足");
     expect(result.report.estimatedTokens.memory).toBe(0);
     expect(result.system).toContain("本轮没有加载到 identity、narrative 或 working_set");
-    expect(result.system).toContain("没有一个关于 Echo 自身的 Object Higher Memory");
-    expect(result.system).toContain("不等于“Echo 没有 Higher Memory”");
+    expect(result.system).toContain("没有一个关于 Sydaris 自身的 Object Higher Memory");
+    expect(result.system).toContain("不等于“Sydaris 没有 Higher Memory”");
   });
 
   it("always includes environment identity and working set before any search", () => {
@@ -203,7 +203,7 @@ describe("packContext", () => {
       memoryState: "not-searched",
       ambientHigherMemories: [{
         scope: "identity",
-        contentMarkdown: "Echo 当前正在帮助一个团队延续共同工作。",
+        contentMarkdown: "Sydaris 当前正在帮助一个团队延续共同工作。",
         maintainedAt: "2026-08-15T00:00:00.000Z",
       }, {
         scope: "working_set",
@@ -227,14 +227,14 @@ describe("packContext", () => {
       actorPrivateMemory: {
         higherMemories: [{
           scope: "interaction",
-          contentMarkdown: "当前用户希望 Echo 在回答不确定问题时先说明证据边界。",
+          contentMarkdown: "当前用户希望 Sydaris 在回答不确定问题时先说明证据边界。",
           maintainedAt: "2026-08-27T00:00:00.000Z",
         }],
       },
     });
 
     expect(result.system).toContain("当前 Actor 的私有长期记忆");
-    expect(result.system).toContain("当前用户希望 Echo 在回答不确定问题时先说明证据边界");
+    expect(result.system).toContain("当前用户希望 Sydaris 在回答不确定问题时先说明证据边界");
     expect(result.system).toContain("不得向其他 Actor 暴露");
     expect(result.system).toContain("Interaction Context");
   });

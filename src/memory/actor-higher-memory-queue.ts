@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 
-import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { DebugTrace } from "@/ai/debug-trace";
 
 export const actorHigherMemoryScopes = [
   "interaction",
@@ -30,7 +30,7 @@ export function addActorHigherMemoryScopes(input: {
 }
 
 export function createActorHigherMemoryQueueTool(input: {
-  trace?: EchoDebugTrace;
+  trace?: DebugTrace;
 }) {
   let decision: ActorHigherMemoryQueueDecision | undefined;
   const queueTool = tool({

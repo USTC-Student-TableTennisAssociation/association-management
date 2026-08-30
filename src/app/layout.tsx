@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Echo",
+  title: "Sydaris",
   description: "以组织记忆支持真实工作的智能协作系统",
 };
 

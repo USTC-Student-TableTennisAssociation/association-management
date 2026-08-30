@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { DebugTrace } from "@/ai/debug-trace";
 import { createChatAssertionQueueTool } from "@/memory/chat-assertion-queue";
 
 const executionOptions = {
@@ -17,7 +17,7 @@ function mockTrace() {
     appendJsonSection: vi.fn().mockResolvedValue(undefined),
     appendError: vi.fn().mockResolvedValue(undefined),
     flush: vi.fn().mockResolvedValue(undefined),
-  } satisfies EchoDebugTrace;
+  } satisfies DebugTrace;
 }
 
 describe("queueChatAssertionCapture", () => {

@@ -121,7 +121,7 @@ describe("chat model request retries", () => {
                 type: "tool-call" as const,
                 toolCallId: "search-1",
                 toolName: "search",
-                input: JSON.stringify({ query: "Echo" }),
+                input: JSON.stringify({ query: "Sydaris" }),
               },
               {
                 type: "finish" as const,

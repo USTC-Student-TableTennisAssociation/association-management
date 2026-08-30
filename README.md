@@ -1,13 +1,13 @@
-# Echo
+# Sydaris
 
-> **Echo is a runtime for software where humans and AI work together.**
+> **Sydaris is a runtime for software where humans and AI work together.**
 > **Organizational state and knowledge persist across people, agents, and time.**
 
-Echo 是面向人类与 AI 协同工作的软件 Runtime。
+Sydaris 是面向人类与 AI 协同工作的软件 Runtime。
 
 组织的业务状态与长期认知独立于具体成员、Agent 和会话持续存在。
 
-> Echo is under active development.
+> Sydaris is under active development.
 
 ## Architecture
 
@@ -40,7 +40,7 @@ Echo 是面向人类与 AI 协同工作的软件 Runtime。
 Cognitive Runtime 保存组织长期认知：
 
 * `Evidence`：原始来源与可追溯内容
-* `Object`：人、组织、活动、场地等稳定对象
+* `Object`：信息与业务内容的稳定锚点，不承担统一业务 ontology
 * `Assertion`：带来源与时间背景的事实
 * `Higher Memory`：面向 AI 的高层认知入口
 

@@ -2,14 +2,14 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 export function libraryStorageRoot(): string {
-  const configured = process.env.ECHO_LIBRARY_STORAGE_ROOT?.trim();
+  const configured = process.env.SYDARIS_LIBRARY_STORAGE_ROOT?.trim();
   if (configured) {
     if (!path.isAbsolute(configured)) {
-      throw new Error("ECHO_LIBRARY_STORAGE_ROOT 必须是绝对路径");
+      throw new Error("SYDARIS_LIBRARY_STORAGE_ROOT 必须是绝对路径");
     }
     return path.normalize(/* turbopackIgnore: true */ configured);
   }
-  return path.join(/* turbopackIgnore: true */ process.cwd(), ".echo-library");
+  return path.join(/* turbopackIgnore: true */ process.cwd(), ".sydaris-library");
 }
 
 export function blobStorageKey(sha256: string): string {

@@ -185,7 +185,7 @@ function DownArrowIcon() {
   );
 }
 
-function EchoIcon() {
+function SydarisIcon() {
   return (
     <svg viewBox="0 0 20 20" aria-hidden="true">
       <path d="M10 2.75 11.4 7l4.35 1.25-4.35 1.4L10 14l-1.4-4.35-4.35-1.4L8.6 7 10 2.75Z" />
@@ -249,7 +249,7 @@ function EmptySlot({
   title,
   onActivate,
   compact = false,
-  actionLabel = "用 Echo 补充",
+  actionLabel = "用 Sydaris 补充",
 }: EmptySlotProps) {
   return (
     <button
@@ -260,7 +260,7 @@ function EmptySlot({
       <span>{eyebrow}</span>
       <strong>{title}</strong>
       <span className={styles.emptySlotAction}>
-        {actionLabel === "用 Echo 补充" ? <EchoIcon /> : <PlusIcon />}
+        {actionLabel === "用 Sydaris 补充" ? <SydarisIcon /> : <PlusIcon />}
         {actionLabel}
       </span>
     </button>
@@ -290,7 +290,7 @@ function ReactionNotice({
         disabled={!reaction.attention.message}
         onClick={onToggle}
       >
-        <EchoIcon />
+        <SydarisIcon />
         {presentation.label}
       </button>
       {expanded && reaction.attention.message ? (
@@ -1113,7 +1113,7 @@ export function SocietyOverviewWorkspace({
             </div>
             {attentionReactions.length ? (
               <button type="button" className={styles.reactionInbox} onClick={openFirstAttentionReaction}>
-                <EchoIcon />
+                <SydarisIcon />
                 {attentionReactions.length} 项待查看
               </button>
             ) : null}
@@ -1219,7 +1219,7 @@ export function SocietyOverviewWorkspace({
                         <button
                           type="button"
                           className={styles.labeledCardAction}
-                          aria-label={`用 Echo 更新${activityName}`}
+                          aria-label={`用 Sydaris 更新${activityName}`}
                           onClick={() => onInvokeAI({
                             actionId: "society.refine-long-term-activity",
                             message: `帮我检查并完善长期活动“${activityName}”。`,
@@ -1229,8 +1229,8 @@ export function SocietyOverviewWorkspace({
                             },
                           })}
                         >
-                          <EchoIcon />
-                          Echo
+                          <SydarisIcon />
+                          Sydaris
                         </button>
                       </div>
                     </div>
@@ -1240,7 +1240,7 @@ export function SocietyOverviewWorkspace({
                 <EmptySlot
                   eyebrow="活动卡片"
                   title="长期活动待补充"
-                  actionLabel={society ? "直接新增" : "用 Echo 补充"}
+                  actionLabel={society ? "直接新增" : "用 Sydaris 补充"}
                   onActivate={() => society
                     ? openCreator({
                         kind: "activity",
@@ -1324,7 +1324,7 @@ export function SocietyOverviewWorkspace({
                     compact
                     eyebrow="指导老师"
                     title="指导老师待补充"
-                    actionLabel={society ? "直接新增" : "用 Echo 补充"}
+                    actionLabel={society ? "直接新增" : "用 Sydaris 补充"}
                     onActivate={() => society
                       ? openCreator({
                           kind: "advisor",
@@ -1397,7 +1397,7 @@ export function SocietyOverviewWorkspace({
                     compact
                     eyebrow="干事队伍"
                     title="干事成员待补充"
-                    actionLabel={society ? "直接新增" : "用 Echo 补充"}
+                    actionLabel={society ? "直接新增" : "用 Sydaris 补充"}
                     onActivate={() => society
                       ? openCreator({
                           kind: "team",
@@ -1485,7 +1485,7 @@ export function SocietyOverviewWorkspace({
               <EmptySlot
                 eyebrow="平台信息"
                 title="加入方式与平台待补充"
-                actionLabel={society ? "直接新增" : "用 Echo 补充"}
+                actionLabel={society ? "直接新增" : "用 Sydaris 补充"}
                 onActivate={() => society
                   ? openCreator({
                       kind: "platform",
@@ -1500,8 +1500,8 @@ export function SocietyOverviewWorkspace({
 
           <div className={styles.joinActions}>
             <button type="button" onClick={askToImprove} className={styles.primaryButton}>
-              <EchoIcon />
-              {society ? "用 Echo 更新" : "建立社团概览"}
+              <SydarisIcon />
+              {society ? "用 Sydaris 更新" : "建立社团概览"}
             </button>
             <button type="button" onClick={onOpenInspector} className={styles.secondaryButton}>高级视图</button>
           </div>

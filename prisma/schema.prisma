@@ -166,7 +166,7 @@ model LibrarySourceBlob {
   @@map("library_source_blobs")
 }
 
-/// Echo 资料库中的虚拟文件或文件夹。移动和重命名只改变树位置，不改变 Blob 或来源身份。
+/// Sydaris 资料库中的虚拟文件或文件夹。移动和重命名只改变树位置，不改变 Blob 或来源身份。
 model LibraryNode {
   id                   String                   @id @default(uuid()) @db.Uuid
   kind                 LibraryNodeKind
@@ -729,9 +729,9 @@ model MemoryObjectHigherMemory {
   @@map("memory_object_higher_memories")
 }
 
-/// Echo 对 Workspace 身份、长期叙事与当前工作集的高层认知；每轮对话自动读取，
+/// Sydaris 对 Workspace 身份、长期叙事与当前工作集的高层认知；每轮对话自动读取，
 /// 但不是精确业务状态的权威来源。
-/// 它不绑定 Compilation 或 GlobalObject，因此来源重编译不会使 Echo 丧失已从真实互动中形成的环境理解。
+/// 它不绑定 Compilation 或 GlobalObject，因此来源重编译不会使 Sydaris 丧失已从真实互动中形成的环境理解。
 model MemoryAmbientHigherMemory {
   id                String                         @id @default(uuid()) @db.Uuid
   scope             MemoryAmbientHigherMemoryScope @unique
