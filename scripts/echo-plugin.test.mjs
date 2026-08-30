@@ -225,7 +225,7 @@ describe("Echo local plugin CLI", () => {
 
     await expect(removePlugin(root, "echo.online", {
       purge: true,
-      purgeData: async () => ({ statements: 9, deletedRows: 0 }),
+      purgeData: async () => ({ statements: 8, deletedRows: 0 }),
       removePackage: async () => {
         throw new Error("package manager unavailable");
       },
@@ -247,7 +247,7 @@ describe("plugin View data purge", () => {
   it("deletes all View-owned rows in one transaction", async () => {
     const query = vi.fn(async () => ({ rowCount: 1 }));
     const result = await purgeViewData({ query }, ["test_view"]);
-    expect(result).toEqual({ statements: 9, deletedRows: 9 });
+    expect(result).toEqual({ statements: 8, deletedRows: 8 });
     expect(query.mock.calls[0]).toEqual(["BEGIN"]);
     expect(query.mock.calls.at(-1)).toEqual(["COMMIT"]);
     expect(query.mock.calls.slice(1, -1).every((call) =>

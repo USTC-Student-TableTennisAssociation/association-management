@@ -458,7 +458,6 @@ export async function purgeViewData(client, viewKeys) {
     `DELETE FROM "view_cards" WHERE "view_key" = ANY($1::text[])`,
     `DELETE FROM "view_command_proposals" WHERE "view_key" = ANY($1::text[])`,
     `DELETE FROM "view_command_executions" WHERE "view_key" = ANY($1::text[])`,
-    `DELETE FROM "domain_event_outbox" WHERE "view_key" = ANY($1::text[])`,
     `DELETE FROM "view_higher_memories" WHERE "view_key" = ANY($1::text[])`,
     `DELETE FROM "installed_views" WHERE "view_key" = ANY($1::text[])`,
   ];

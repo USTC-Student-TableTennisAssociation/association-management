@@ -50,6 +50,11 @@ function fixture(options: {
     stateVersionBefore: BigInt(1),
     stateVersionAfter: BigInt(2),
     changeSetJson: changes,
+    eventsJson: [{
+      type: "society.profile_updated",
+      version: "1",
+      payload: { cardId: societyCardId, changedDimensions: ["rating"] },
+    }],
     createdAt: new Date(),
   };
   const reaction = {
@@ -99,15 +104,6 @@ function fixture(options: {
   };
   const database = {
     viewChangeReaction,
-    domainEventOutbox: {
-      findMany: vi.fn().mockResolvedValue([{
-        eventType: "society.profile_updated",
-        eventVersion: "1",
-        payloadJson: { cardId: societyCardId, changedDimensions: ["rating"] },
-        stateVersion: BigInt(2),
-        occurredAt: new Date(),
-      }]),
-    },
   };
   const readPort = {
     query: vi.fn().mockResolvedValue({
@@ -167,6 +163,12 @@ describe("View change reaction coordinator", () => {
     expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({
       attentionPolicy: "evaluate",
       reactionGuidance: ["星级是正式评定结果。"],
+      events: [{
+        type: "society.profile_updated",
+        version: "1",
+        payload: { cardId: societyCardId, changedDimensions: ["rating"] },
+        stateVersion: "2",
+      }],
       objects: [expect.objectContaining({
         cognitiveMemory: { narrative: "历史资料只记录为三星级社团。" },
       })],

@@ -16,7 +16,13 @@ function runtimeFixture(
 ) {
   const proposalActorId = "00000000-0000-4000-8000-000000000001";
   const businessState = { value: "initial" };
-  const execute = vi.fn(async (_context: unknown, input: { value: string }) => {
+  const execute = vi.fn(async (
+    _context: unknown,
+    input: { value: string },
+  ): Promise<{
+    summary: { accepted: boolean };
+    events?: Array<{ type: string; version: string; payload: { value: string } }>;
+  }> => {
     businessState.value = input.value;
     return { summary: { accepted: true } };
   });
@@ -66,7 +72,11 @@ function runtimeFixture(
       execute,
     }],
     invariants: [],
-    events: [],
+    events: [{
+      key: "test.accepted",
+      version: "1",
+      payloadSchema: zodContractSchema(z.object({ value: z.string() })),
+    }],
   };
   const plugin: EchoPluginManifest = {
     id: "echo.test",
@@ -99,7 +109,6 @@ function runtimeFixture(
     viewCommandExecution: {
       create: vi.fn().mockResolvedValue({ id: "execution-1" }),
     },
-    domainEventOutbox: { create: vi.fn() },
     viewChangeReaction: {
       create: vi.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) =>
         Promise.resolve({
@@ -477,6 +486,36 @@ describe("ViewCommandBus", () => {
     expect(fixture.transaction.viewCommandExecution.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         changeSetJson: [expect.objectContaining({ kind: "card_created" })],
+        eventsJson: [],
+      }),
+      select: { id: true },
+    });
+  });
+
+  it("stores validated Domain Events on their Command Execution", async () => {
+    const fixture = runtimeFixture("auto_execute");
+    fixture.execute.mockResolvedValueOnce({
+      summary: { accepted: true },
+      events: [{ type: "test.accepted", version: "1", payload: { value: "hello" } }],
+    });
+
+    await fixture.bus.dispatch({
+      viewKey: "test_view",
+      commandKey: "test.accept",
+      commandVersion: "1",
+      input: { value: "hello" },
+      actor: { permissions: ["view.write"] },
+      initiator: "ai",
+      expectedStateVersion: "3",
+    });
+
+    expect(fixture.transaction.viewCommandExecution.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        eventsJson: [{
+          type: "test.accepted",
+          version: "1",
+          payload: { value: "hello" },
+        }],
       }),
       select: { id: true },
     });

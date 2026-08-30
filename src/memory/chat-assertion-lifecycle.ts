@@ -68,7 +68,7 @@ export function createChatMemoryMaintenanceScheduler(
           "后台对话记忆线路开始",
           [
             "主回答已经结束。以下处理在后台执行，不影响本轮回答是否成功。",
-            "固定顺序：Assertion 发布 → Knowledge Consolidation → Object/Ambient Higher Memory → Actor 私有 Higher Memory。View Higher Memory 由 Domain Event Outbox 消费者维护。",
+            "固定顺序：Assertion 发布 → Knowledge Consolidation → Object/Ambient Higher Memory → Actor 私有 Higher Memory。View Higher Memory 由正式 View 的 post-commit 事件链维护。",
           ].join("\n"),
         );
         let captureResult: ChatAssertionCaptureResult = input.completedAssertion?.result ?? {

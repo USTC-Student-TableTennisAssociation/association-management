@@ -94,17 +94,6 @@ describe.runIf(runLive)("View Proposal approval rebase", () => {
         if (executionIds.length) {
           await transaction.viewCommandExecution.deleteMany({ where: { id: { in: executionIds } } });
         }
-        if (cardIds.length) {
-          await transaction.domainEventOutbox.deleteMany({
-            where: {
-              viewKey,
-              eventType: "activity.activity_created",
-              OR: cardIds.map((cardId) => ({
-                payloadJson: { path: ["cardId"], equals: cardId },
-              })),
-            },
-          });
-        }
       });
     }
   });
