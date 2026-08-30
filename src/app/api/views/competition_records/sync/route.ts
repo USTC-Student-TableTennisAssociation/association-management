@@ -1,7 +1,7 @@
 import { currentAuthUser } from "@/auth/session";
-import { competitionSourceReadInputSchema } from "@/plugins/competition-records/tools/contracts";
-import { syncCompetitionEditions } from "@/plugins/competition-records/sync-service";
+import { syncCompetitionEditions } from "@/integrations/competition-records/sync-service";
 import { toolRuntime, viewCommandBus } from "@/shell/composition-root";
+import { competitionSourceReadInputSchema } from "@sydaris/competition-records-plugin/sync-contracts";
 
 export async function POST(request: Request) {
   const user = await currentAuthUser();

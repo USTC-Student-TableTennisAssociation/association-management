@@ -1,20 +1,21 @@
-import type { EchoPluginManifest } from "@/contracts";
-import { competitionRecordsPresentation } from "@/plugins/competition-records/presentation/extension";
-import { competitionSeriesCuratorSkill } from "@/plugins/competition-records/skill";
+import { defineEchoPlugin } from "@sydaris/plugin-sdk";
+
+import { competitionRecordsPresentation } from "./presentation/extension.js";
+import { competitionSeriesCuratorSkill } from "./skill.js";
 import {
   competitionToolCapabilityContracts,
-} from "@/plugins/competition-records/tools/contracts";
+} from "./tools/contracts.js";
 import {
   competitionEditionProjectionProvider,
-} from "@/plugins/competition-records/tools/edition-provider";
+} from "./tools/edition-provider.js";
 import {
   ustcttaCompetitionSourceProvider,
-} from "@/plugins/competition-records/tools/source-provider";
-import { competitionRecordsViewModule } from "@/plugins/competition-records/view/schema";
+} from "./tools/source-provider.js";
+import { competitionRecordsViewModule } from "./view/schema.js";
 
-export const competitionRecordsPlugin: EchoPluginManifest = {
+export const competitionRecordsPlugin = defineEchoPlugin({
   id: "echo.competition-records",
-  version: "0.2.0",
+  version: "0.3.0",
   requires: [{
     pluginId: "echo.society-information",
     versions: "^1.10.0",
@@ -26,4 +27,4 @@ export const competitionRecordsPlugin: EchoPluginManifest = {
     toolCapabilities: competitionToolCapabilityContracts,
     tools: [ustcttaCompetitionSourceProvider, competitionEditionProjectionProvider],
   },
-};
+});

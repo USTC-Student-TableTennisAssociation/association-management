@@ -1,7 +1,9 @@
 import { z } from "zod";
 
-import type { ToolCapabilityContract } from "@/contracts";
-import { zodContractSchema } from "@/contracts";
+import {
+  type ToolCapabilityContract,
+  zodContractSchema,
+} from "@sydaris/plugin-sdk";
 
 export const USTCTTA_SOURCE_SYSTEM = "USTCTTA-site";
 export const COMPETITION_SOURCE_READ_CAPABILITY = "competition.source.read";

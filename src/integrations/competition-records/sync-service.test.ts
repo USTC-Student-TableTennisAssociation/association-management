@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { syncCompetitionEditions } from "@/plugins/competition-records/sync-service";
+import { syncCompetitionEditions } from "@/integrations/competition-records/sync-service";
 import type { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
 import type { ViewCommandBus } from "@/view-runtime/application/command-bus";
 

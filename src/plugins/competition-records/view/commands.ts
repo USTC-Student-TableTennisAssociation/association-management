@@ -4,11 +4,11 @@ import type {
   CommandDefinition,
   ViewCardState,
   ViewTransaction,
-} from "@/contracts";
-import { zodContractSchema } from "@/contracts";
+} from "@sydaris/plugin-sdk";
+import { zodContractSchema } from "@sydaris/plugin-sdk";
 import {
   competitionEditionProjectOutputSchema,
-} from "@/plugins/competition-records/tools/contracts";
+} from "../tools/contracts.js";
 
 const uuid = z.string().uuid();
 const name = z.string().trim().min(1).max(300);

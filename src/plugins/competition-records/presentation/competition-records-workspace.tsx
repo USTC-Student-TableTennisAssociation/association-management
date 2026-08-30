@@ -17,8 +17,8 @@ import {
   type CompetitionEditionItem,
   type CompetitionSeriesItem,
   type CompetitionYearStat,
-} from "@/plugins/competition-records/presentation/competition-records-state";
-import styles from "@/plugins/competition-records/presentation/competition-records.module.css";
+} from "./competition-records-state.js";
+import styles from "./competition-records.module.css";
 
 const UNASSIGNED_SCOPE = "__unassigned__";
 

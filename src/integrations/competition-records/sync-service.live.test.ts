@@ -3,7 +3,7 @@ import "dotenv/config";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { getDatabase } from "@/db";
-import { syncCompetitionEditions } from "@/plugins/competition-records/sync-service";
+import { syncCompetitionEditions } from "@/integrations/competition-records/sync-service";
 import { toolRuntime, viewCommandBus, viewReadPort } from "@/shell/composition-root";
 
 const runLive = process.env.ECHO_LIVE_COMPETITION_SYNC_TEST === "1";

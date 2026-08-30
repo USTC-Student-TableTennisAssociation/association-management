@@ -2,10 +2,10 @@ import type {
   CardTypeDefinition,
   ViewChangePolicy,
   ViewModule,
-} from "@/contracts";
+} from "@sydaris/plugin-sdk";
 
-import { competitionRecordsCommands } from "@/plugins/competition-records/view/commands";
-import { competitionRecordsEvents } from "@/plugins/competition-records/view/events";
+import { competitionRecordsCommands } from "./commands.js";
+import { competitionRecordsEvents } from "./events.js";
 
 export const COMPETITION_RECORDS_VIEW_KEY = "competition_records";
 
