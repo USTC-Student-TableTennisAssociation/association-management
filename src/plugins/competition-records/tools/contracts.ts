@@ -11,7 +11,7 @@ export const COMPETITION_EDITION_PROJECT_CAPABILITY = "competition.edition.proje
 export const COMPETITION_TOOL_CAPABILITY_VERSION = "2.0.0";
 export const USTCTTA_SOURCE_PROVIDER_ID = "ustctta.competition-source";
 export const COMPETITION_EDITION_PROJECTION_PROVIDER_ID =
-  "echo.competition-edition-projection";
+  "sydaris.competition-edition-projection";
 
 export const competitionSourceReadInputSchema = z.object({
   sourceIds: z.array(z.string().trim().min(1).max(300)).optional(),

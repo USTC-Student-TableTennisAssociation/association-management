@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "echo.activity-operations",
+  "id": "sydaris.activity-operations",
   "version": "1.3.0",
   "engines": {
-    "echo": ">=0.1.0-alpha.3 <0.2.0-0"
+    "sydaris": ">=0.1.0-alpha.3 <0.2.0-0"
   },
   "server": {
     "entry": "./dist/manifest.js",
@@ -21,8 +21,8 @@
       }
     ],
     "skills": [
-      "echo.activity-operations.design-playbook",
-      "echo.activity-operations.plan-task-map"
+      "sydaris.activity-operations.design-playbook",
+      "sydaris.activity-operations.plan-task-map"
     ],
     "toolCapabilities": [],
     "tools": []

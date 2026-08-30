@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { afterAll, describe, expect, it } from "vitest";
 
-import { purgeViewData } from "./echo-plugin.mjs";
+import { purgeViewData } from "./sydaris-plugin.mjs";
 
 const runLive = process.env.ECHO_LIVE_PLUGIN_PURGE_TEST === "1";
 const pool = runLive ? new pg.Pool({ connectionString: process.env.DATABASE_URL }) : undefined;
@@ -24,7 +24,7 @@ describe.runIf(runLive)("Plugin --purge database cleanup", () => {
         `INSERT INTO "installed_views"
           ("view_key", "module_id", "module_version", "schema_version", "settings_json",
            "created_at", "updated_at")
-         VALUES ($1, 'echo.test-purge', '1.0.0', '1', '{"aiWritePolicy":"approval_required"}'::jsonb,
+         VALUES ($1, 'sydaris.test-purge', '1.0.0', '1', '{"aiWritePolicy":"approval_required"}'::jsonb,
            now(), now())`,
         [viewKey],
       );

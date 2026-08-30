@@ -6,7 +6,7 @@ import {
 } from "@sydaris/plugin-sdk";
 
 export const societyOverviewMaintainerSkill: SkillExtension = {
-  id: "echo.society-information.maintain-overview",
+  id: "sydaris.society-information.maintain-overview",
   version: "1.0.0",
   label: "维护社团概览",
   description:

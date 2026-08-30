@@ -7,19 +7,19 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import {
-  isEchoVersionCompatible,
-  parseEchoPluginPackageDescriptor,
+  isHostVersionCompatible,
+  parsePluginPackageDescriptor as parseDescriptorContract,
 } from "@sydaris/plugin-sdk";
 
-const CONFIG_FILE = "echo.plugins.json";
+const CONFIG_FILE = "sydaris.plugins.json";
 const SERVER_REGISTRY_FILE = "src/generated/installed-plugins.ts";
 const PRESENTATION_REGISTRY_FILE = "src/generated/installed-presentations.tsx";
-const descriptorName = "echo.plugin.json";
+const descriptorName = "sydaris.plugin.json";
 
-export class EchoPluginCliError extends Error {
+export class PluginCliError extends Error {
   constructor(message) {
     super(message);
-    this.name = "EchoPluginCliError";
+    this.name = "PluginCliError";
   }
 }
 
@@ -29,7 +29,7 @@ function isRecord(value) {
 
 function requireString(value, label) {
   if (typeof value !== "string" || !value.trim()) {
-    throw new EchoPluginCliError(`${label} 必须是非空字符串`);
+    throw new PluginCliError(`${label} 必须是非空字符串`);
   }
   return value.trim();
 }
@@ -40,7 +40,7 @@ function parseInstalledPlugin(value, index) {
     return { source: "local", manifest: requireString(value, label) };
   }
   if (!isRecord(value) || (value.source !== "local" && value.source !== "npm")) {
-    throw new EchoPluginCliError(`${label} 必须声明 source: local 或 source: npm`);
+    throw new PluginCliError(`${label} 必须声明 source: local 或 source: npm`);
   }
   const manifest = requireString(value.manifest, `${label}.manifest`);
   if (value.source === "local") return { source: "local", manifest };
@@ -53,7 +53,7 @@ function parseInstalledPlugin(value, index) {
 
 export function parsePluginPackageDescriptor(value, source = descriptorName) {
   try {
-    return parseEchoPluginPackageDescriptor(value);
+    return parseDescriptorContract(value);
   } catch (error) {
     const issue = Array.isArray(error?.issues) ? error.issues[0] : undefined;
     const issuePath = issue?.path?.reduce((result, segment) =>
@@ -61,11 +61,11 @@ export function parsePluginPackageDescriptor(value, source = descriptorName) {
         ? `${result}[${segment}]`
         : `${result}${result ? "." : ""}${String(segment)}`, "");
     const location = issuePath ? `${source}.${issuePath}` : source;
-    throw new EchoPluginCliError(`${location} 格式无效：${issue?.message ?? String(error)}`);
+    throw new PluginCliError(`${location} 格式无效：${issue?.message ?? String(error)}`);
   }
 }
 
-async function readEchoHostVersion(projectRoot) {
+async function readHostVersion(projectRoot) {
   const packageJson = await readJson(path.join(projectRoot, "package.json"), "package.json");
   return requireString(packageJson.version, "package.json.version");
 }
@@ -85,7 +85,7 @@ export async function findProjectRoot(start = process.cwd()) {
     if (await exists(path.join(current, "package.json"))) return current;
     const parent = path.dirname(current);
     if (parent === current) {
-      throw new EchoPluginCliError("找不到 Echo 项目根目录（缺少 package.json）");
+      throw new PluginCliError("找不到 Sydaris 项目根目录（缺少 package.json）");
     }
     current = parent;
   }
@@ -94,7 +94,7 @@ export async function findProjectRoot(start = process.cwd()) {
 function projectRelative(projectRoot, absolutePath, label) {
   const relative = path.relative(projectRoot, absolutePath);
   if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new EchoPluginCliError(`${label} 必须位于 Echo 项目目录内：${absolutePath}`);
+    throw new PluginCliError(`${label} 必须位于 Sydaris 项目目录内：${absolutePath}`);
   }
   return relative.split(path.sep).join("/");
 }
@@ -104,7 +104,7 @@ async function readJson(file, label) {
     return JSON.parse(await readFile(file, "utf8"));
   } catch (error) {
     if (error instanceof SyntaxError) {
-      throw new EchoPluginCliError(`${label} 不是合法 JSON：${error.message}`);
+      throw new PluginCliError(`${label} 不是合法 JSON：${error.message}`);
     }
     throw error;
   }
@@ -116,17 +116,17 @@ export async function resolveDescriptor(projectRoot, input) {
     ? candidate
     : path.join(candidate, descriptorName);
   if (!await exists(descriptorPath)) {
-    throw new EchoPluginCliError(`找不到插件描述文件：${descriptorPath}`);
+    throw new PluginCliError(`找不到插件描述文件：${descriptorPath}`);
   }
   const relativePath = projectRelative(projectRoot, descriptorPath, "插件描述文件");
   const descriptor = parsePluginPackageDescriptor(
     await readJson(descriptorPath, relativePath),
     relativePath,
   );
-  const echoVersion = await readEchoHostVersion(projectRoot);
-  if (!isEchoVersionCompatible(echoVersion, descriptor.engines.echo)) {
-    throw new EchoPluginCliError(
-      `${descriptor.id}@${descriptor.version} 需要 Echo ${descriptor.engines.echo}，当前为 ${echoVersion}`,
+  const hostVersion = await readHostVersion(projectRoot);
+  if (!isHostVersionCompatible(hostVersion, descriptor.engines.sydaris)) {
+    throw new PluginCliError(
+      `${descriptor.id}@${descriptor.version} 需要 Sydaris ${descriptor.engines.sydaris}，当前为 ${hostVersion}`,
     );
   }
   const descriptorDirectory = path.dirname(descriptorPath);
@@ -141,7 +141,7 @@ export async function resolveDescriptor(projectRoot, input) {
     const entryPath = path.resolve(descriptorDirectory, entry);
     projectRelative(projectRoot, entryPath, label);
     if (!await exists(entryPath)) {
-      throw new EchoPluginCliError(`${relativePath} 引用的 ${label} 不存在：${entry}`);
+      throw new PluginCliError(`${relativePath} 引用的 ${label} 不存在：${entry}`);
     }
   }
   return { descriptor, descriptorPath, relativePath };
@@ -152,13 +152,13 @@ export async function readPluginConfig(projectRoot) {
   if (!await exists(configPath)) return { schemaVersion: 1, plugins: [] };
   const value = await readJson(configPath, CONFIG_FILE);
   if (!isRecord(value) || value.schemaVersion !== 1) {
-    throw new EchoPluginCliError(`${CONFIG_FILE} 必须使用 schemaVersion: 1`);
+    throw new PluginCliError(`${CONFIG_FILE} 必须使用 schemaVersion: 1`);
   }
   return {
     schemaVersion: 1,
     plugins: Array.isArray(value.plugins)
       ? value.plugins.map(parseInstalledPlugin)
-      : (() => { throw new EchoPluginCliError(`${CONFIG_FILE}.plugins 必须是数组`); })(),
+      : (() => { throw new PluginCliError(`${CONFIG_FILE}.plugins 必须是数组`); })(),
   };
 }
 
@@ -200,7 +200,7 @@ async function installedDescriptors(projectRoot, config) {
   const duplicate = (values, label) => {
     const seen = new Set();
     for (const value of values) {
-      if (seen.has(value)) throw new EchoPluginCliError(`已安装插件存在重复的 ${label}：${value}`);
+      if (seen.has(value)) throw new PluginCliError(`已安装插件存在重复的 ${label}：${value}`);
       seen.add(value);
     }
   };
@@ -225,11 +225,11 @@ function generatedServerRegistry(projectRoot, installed) {
   });
   const values = installed.map((_, index) => `  installedPlugin${index},`);
   return [
-    "/* This file is generated by `pnpm echo:plugin generate`. Do not edit manually. */",
-    'import type { EchoPluginManifest } from "@/contracts";',
+    "/* This file is generated by `pnpm sydaris:plugin generate`. Do not edit manually. */",
+    'import type { PluginManifest } from "@/contracts";',
     ...imports,
     "",
-    "export const installedPluginManifests: readonly EchoPluginManifest[] = [",
+    "export const installedPluginManifests: readonly PluginManifest[] = [",
     ...values,
     "];",
     "",
@@ -254,7 +254,7 @@ function generatedPresentationRegistry(projectRoot, installed) {
     `  ${JSON.stringify(presentation.loader)}: installedPresentation${index},`
   );
   return [
-    "/* This file is generated by `pnpm echo:plugin generate`. Do not edit manually. */",
+    "/* This file is generated by `pnpm sydaris:plugin generate`. Do not edit manually. */",
     '"use client";',
     "",
     'import type { ComponentType } from "react";',
@@ -282,7 +282,7 @@ export async function generatePluginRegistries(projectRoot, options = {}) {
     if (options.check) {
       const current = await exists(file) ? await readFile(file, "utf8") : "";
       if (current !== content) {
-        throw new EchoPluginCliError(`${relativePath} 不是最新生成结果，请运行 pnpm echo:plugin generate`);
+        throw new PluginCliError(`${relativePath} 不是最新生成结果，请运行 pnpm sydaris:plugin generate`);
       }
     } else {
       await writeAtomic(file, content);
@@ -306,14 +306,14 @@ export async function installPlugin(projectRoot, input, options = {}) {
       await generatePluginRegistries(projectRoot);
       return { ...candidate.descriptor, alreadyInstalled: true };
     }
-    throw new EchoPluginCliError(
+    throw new PluginCliError(
       `Plugin ${candidate.descriptor.id} 已从 ${sameId.relativePath} 安装；第一版不支持升级或替换`,
     );
   }
   const occupiedViews = new Set(installed.flatMap(({ descriptor }) => descriptor.contributes.views));
   const duplicateView = candidate.descriptor.contributes.views.find((viewKey) => occupiedViews.has(viewKey));
   if (duplicateView) {
-    throw new EchoPluginCliError(`View ${duplicateView} 已由其他 Plugin 安装`);
+    throw new PluginCliError(`View ${duplicateView} 已由其他 Plugin 安装`);
   }
   await writePluginConfig(projectRoot, {
     schemaVersion: 1,
@@ -366,7 +366,7 @@ export async function runPnpm(projectRoot, args) {
     child.once("error", reject);
     child.once("exit", (code, signal) => {
       if (code === 0) resolve();
-      else reject(new EchoPluginCliError(
+      else reject(new PluginCliError(
         `pnpm ${args.join(" ")} 失败${signal ? `（signal ${signal}）` : `（exit ${code}）`}`,
       ));
     });
@@ -377,15 +377,15 @@ async function installedPackageDescriptor(projectRoot, packageName) {
   const packageDirectory = path.join(projectRoot, "node_modules", ...packageName.split("/"));
   const packageJsonPath = path.join(packageDirectory, "package.json");
   if (!await exists(packageJsonPath)) {
-    throw new EchoPluginCliError(`pnpm 已完成，但找不到 ${packageName}/package.json`);
+    throw new PluginCliError(`pnpm 已完成，但找不到 ${packageName}/package.json`);
   }
   const packageJson = await readJson(packageJsonPath, `${packageName}/package.json`);
   const declaredName = requireString(packageJson.name, `${packageName}/package.json.name`);
   if (declaredName !== packageName) {
-    throw new EchoPluginCliError(`安装包名称不一致：期望 ${packageName}，实际 ${declaredName}`);
+    throw new PluginCliError(`安装包名称不一致：期望 ${packageName}，实际 ${declaredName}`);
   }
-  const descriptor = typeof packageJson.echoPlugin === "string"
-    ? packageJson.echoPlugin
+  const descriptor = typeof packageJson.sydarisPlugin === "string"
+    ? packageJson.sydarisPlugin
     : `./${descriptorName}`;
   const descriptorPath = path.resolve(packageDirectory, descriptor);
   return resolveDescriptor(projectRoot, descriptorPath);
@@ -421,7 +421,7 @@ export async function installPackagePlugin(projectRoot, specifier, options = {})
         beforeDependencies[name] !== afterDependencies[name]
       );
       if (changed.length !== 1) {
-        throw new EchoPluginCliError(
+        throw new PluginCliError(
           `无法从 ${specifier} 唯一确定安装包名称；依赖变化：${changed.join("、") || "无"}`,
         );
       }
@@ -481,7 +481,7 @@ export async function purgeInstalledPluginData(viewKeys, options = {}) {
   await import("dotenv/config");
   const databaseUrl = options.databaseUrl ?? process.env.DATABASE_URL?.trim();
   if (!databaseUrl) {
-    throw new EchoPluginCliError("--purge 需要配置 DATABASE_URL 才能清理 View 数据");
+    throw new PluginCliError("--purge 需要配置 DATABASE_URL 才能清理 View 数据");
   }
   const { default: pg } = await import("pg");
   const pool = new pg.Pool({ connectionString: databaseUrl });
@@ -496,12 +496,12 @@ export async function purgeInstalledPluginData(viewKeys, options = {}) {
 
 export async function removePlugin(projectRoot, pluginId, options = {}) {
   if (!options.purge) {
-    throw new EchoPluginCliError("删除 Plugin 必须显式传入 --purge；该操作会永久删除插件的全部 View 数据");
+    throw new PluginCliError("删除 Plugin 必须显式传入 --purge；该操作会永久删除插件的全部 View 数据");
   }
   const config = await readPluginConfig(projectRoot);
   const installed = await installedDescriptors(projectRoot, config);
   const target = installed.find(({ descriptor }) => descriptor.id === pluginId);
-  if (!target) throw new EchoPluginCliError(`Plugin 未安装：${pluginId}`);
+  if (!target) throw new PluginCliError(`Plugin 未安装：${pluginId}`);
   const purge = options.purgeData ?? purgeInstalledPluginData;
   const purgeResult = await purge(target.descriptor.contributes.views);
   if (target.installation.source === "npm") {
@@ -525,13 +525,13 @@ export async function removePlugin(projectRoot, pluginId, options = {}) {
 
 function usage() {
   return [
-    "Echo 本地插件管理",
+    "Sydaris 本地插件管理",
     "",
     "用法：",
-    "  pnpm echo:plugin list",
-    "  pnpm echo:plugin install <本地插件目录、tgz 或 npm-package@version>",
-    "  pnpm echo:plugin remove <plugin-id> --purge",
-    "  pnpm echo:plugin generate [--check]",
+    "  pnpm sydaris:plugin list",
+    "  pnpm sydaris:plugin install <本地插件目录、tgz 或 npm-package@version>",
+    "  pnpm sydaris:plugin remove <plugin-id> --purge",
+    "  pnpm sydaris:plugin generate [--check]",
   ].join("\n");
 }
 
@@ -557,7 +557,7 @@ async function main(argv) {
     return;
   }
   if (command === "install") {
-    if (args.length !== 1) throw new EchoPluginCliError("install 需要一个本地插件目录、tgz 或 npm package");
+    if (args.length !== 1) throw new PluginCliError("install 需要一个本地插件目录、tgz 或 npm package");
     const input = args[0];
     const localPath = path.resolve(projectRoot, input);
     const isDescriptorSource = !input.endsWith(".tgz") && await exists(localPath);
@@ -567,20 +567,20 @@ async function main(argv) {
     console.log(
       result.alreadyInstalled
         ? `Plugin 已安装并已重新生成 Registry：${result.id}@${result.version}`
-        : `Plugin 安装完成：${result.id}@${result.version}；重新启动 Echo 后生效`,
+        : `Plugin 安装完成：${result.id}@${result.version}；重新启动 Sydaris 后生效`,
     );
     return;
   }
   if (command === "remove" || command === "uninstall") {
     const pluginId = args.find((value) => !value.startsWith("-"));
-    if (!pluginId) throw new EchoPluginCliError("remove 需要 plugin-id");
+    if (!pluginId) throw new PluginCliError("remove 需要 plugin-id");
     const result = await removePlugin(projectRoot, pluginId, { purge: args.includes("--purge") });
     console.log(
       `Plugin 已删除：${result.id}；清理 ${result.views.length} 个 View，删除 ${result.purgeResult.deletedRows} 行数据`,
     );
     return;
   }
-  throw new EchoPluginCliError(`未知命令：${command}\n\n${usage()}`);
+  throw new PluginCliError(`未知命令：${command}\n\n${usage()}`);
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : undefined;

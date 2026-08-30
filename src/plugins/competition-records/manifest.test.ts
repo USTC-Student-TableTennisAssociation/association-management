@@ -16,8 +16,8 @@ describe("competition records Plugin", () => {
       "competition.organize_series",
     ]);
     expect(registry.listSkills().map((skill) => skill.id)).toEqual([
-      "echo.society-information.maintain-overview",
-      "echo.competition-records.curate-series",
+      "sydaris.society-information.maintain-overview",
+      "sydaris.competition-records.curate-series",
     ]);
     expect(registry.listToolCapabilityContracts().map((contract) => contract.key)).toEqual([
       "competition.source.read",
@@ -27,7 +27,7 @@ describe("competition records Plugin", () => {
       .toEqual(["2.0.0", "2.0.0"]);
     expect(registry.listToolProviders().map((provider) => provider.id)).toEqual([
       "ustctta.competition-source",
-      "echo.competition-edition-projection",
+      "sydaris.competition-edition-projection",
     ]);
     expect(registry.listToolProviders().map((provider) => provider.version))
       .toEqual(["2.0.0", "2.0.0"]);

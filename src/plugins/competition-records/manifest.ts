@@ -1,4 +1,4 @@
-import { defineEchoPlugin } from "@sydaris/plugin-sdk";
+import { definePlugin } from "@sydaris/plugin-sdk";
 
 import { competitionRecordsPresentation } from "./presentation/extension.js";
 import { competitionSeriesCuratorSkill } from "./skill.js";
@@ -13,11 +13,11 @@ import {
 } from "./tools/source-provider.js";
 import { competitionRecordsViewModule } from "./view/schema.js";
 
-export const competitionRecordsPlugin = defineEchoPlugin({
-  id: "echo.competition-records",
+export const competitionRecordsPlugin = definePlugin({
+  id: "sydaris.competition-records",
   version: "0.3.0",
   requires: [{
-    pluginId: "echo.society-information",
+    pluginId: "sydaris.society-information",
     versions: "^1.10.0",
   }],
   contributes: {

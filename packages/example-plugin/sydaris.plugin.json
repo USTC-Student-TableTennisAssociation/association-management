@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "echo.example-notes",
+  "id": "sydaris.example-notes",
   "version": "0.1.0-alpha.1",
   "engines": {
-    "echo": ">=0.1.0-alpha.1 <0.2.0-0"
+    "sydaris": ">=0.1.0-alpha.1 <0.2.0-0"
   },
   "server": {
     "entry": "./dist/server.js",
@@ -15,17 +15,17 @@
     ],
     "presentations": [
       {
-        "loader": "echo.example-notes/workspace",
+        "loader": "sydaris.example-notes/workspace",
         "entry": "./dist/presentation.js",
         "export": "ExampleNotesWorkspace"
       }
     ],
     "skills": [
-      "echo.example-notes.daily-planner"
+      "sydaris.example-notes.daily-planner"
     ],
     "toolCapabilities": [],
     "tools": [
-      "echo.example-calendar"
+      "sydaris.example-calendar"
     ]
   }
 }

@@ -15,15 +15,15 @@ describe("Activity Operations Skills", () => {
   it("registers separate method-design and execution-map workflows", () => {
     const session = fixture();
     expect(session.list().map((skill) => skill.id)).toEqual([
-      "echo.activity-operations.design-playbook",
-      "echo.activity-operations.plan-task-map",
+      "sydaris.activity-operations.design-playbook",
+      "sydaris.activity-operations.plan-task-map",
     ]);
   });
 
   it("keeps discussion-only playbook work inside method commands", () => {
     const session = fixture();
     const activation = session.activate(
-      "echo.activity-operations.design-playbook",
+      "sydaris.activity-operations.design-playbook",
       { operation: "design", phase: "discuss" },
     );
 
@@ -37,7 +37,7 @@ describe("Activity Operations Skills", () => {
 
   it("allows execution planning without granting Playbook editing", () => {
     const session = fixture();
-    session.activate("echo.activity-operations.plan-task-map", {
+    session.activate("sydaris.activity-operations.plan-task-map", {
       operation: "plan",
       phase: "propose",
     });

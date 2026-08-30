@@ -1,5 +1,5 @@
 import type {
-  EchoPluginManifest,
+  PluginManifest,
   ExtensionActivation,
   ExtensionKind,
   PresentationExtension,
@@ -270,7 +270,7 @@ type Registered<T> = {
 };
 
 export class ExtensionRegistry {
-  private readonly plugins = new Map<string, EchoPluginManifest>();
+  private readonly plugins = new Map<string, PluginManifest>();
   private readonly views = new Map<string, Registered<ViewModule>>();
   private readonly presentations = new Map<string, Registered<PresentationExtension>>();
   private readonly skills = new Map<string, Registered<SkillExtension>>();
@@ -278,7 +278,7 @@ export class ExtensionRegistry {
   private readonly tools = new Map<string, Registered<ToolProviderExtension>>();
   private readonly activations = new Map<string, ExtensionActivation>();
 
-  registerPlugin(plugin: EchoPluginManifest): void {
+  registerPlugin(plugin: PluginManifest): void {
     requireIdentifier("Plugin id", plugin.id);
     requireSemver(`Plugin ${plugin.id} version`, plugin.version);
     if (this.plugins.has(plugin.id)) {
@@ -386,7 +386,7 @@ export class ExtensionRegistry {
     }
   }
 
-  listPlugins(): readonly EchoPluginManifest[] {
+  listPlugins(): readonly PluginManifest[] {
     return [...this.plugins.values()];
   }
 

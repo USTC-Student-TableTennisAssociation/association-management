@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { EchoViewReaction } from "@sydaris/plugin-sdk";
+import type { ViewReaction } from "@sydaris/plugin-sdk";
 
 import {
   galleryEdges,
@@ -9,7 +9,7 @@ import {
   reactionsByCard,
 } from "./society-overview-state";
 
-function reaction(input: Partial<EchoViewReaction> & Pick<EchoViewReaction, "id">): EchoViewReaction {
+function reaction(input: Partial<ViewReaction> & Pick<ViewReaction, "id">): ViewReaction {
   return {
     id: input.id,
     executionId: input.executionId ?? `execution-${input.id}`,

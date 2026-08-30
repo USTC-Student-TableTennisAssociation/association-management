@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { EchoAIInvocation } from "@sydaris/plugin-sdk";
-import { useEchoViewReactions } from "@sydaris/plugin-sdk/react";
+import type { AIInvocation } from "@sydaris/plugin-sdk";
+import { useViewReactions } from "@sydaris/plugin-sdk/react";
 
 import type { ViewInspectorSnapshot } from "@/view-runtime/application/view-read-port";
 
@@ -23,10 +23,10 @@ export function WorkViewWorkspace({
   refreshRevision?: number;
   focusCardId?: string;
   onOpenInspector: () => void;
-  onInvokeAI: (invocation: EchoAIInvocation) => void;
+  onInvokeAI: (invocation: AIInvocation) => void;
 }) {
   const [reloadSequence, setReloadSequence] = useState(0);
-  const { reactions } = useEchoViewReactions(viewKey);
+  const { reactions } = useViewReactions(viewKey);
   const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
   const [result, setResult] = useState<{
     requestKey: string;
@@ -103,7 +103,7 @@ export function WorkViewWorkspace({
             <button
               type="button"
               onClick={() => onInvokeAI({
-                actionId: "echo.inspect-view",
+                actionId: "sydaris.inspect-view",
                 message: `请解读 ${viewKey} 的当前正式状态。`,
               })}
               className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-100"

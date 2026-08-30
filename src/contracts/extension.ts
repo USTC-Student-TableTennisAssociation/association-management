@@ -1,4 +1,4 @@
-export type { EchoPluginManifest } from "@sydaris/plugin-sdk";
+export type { PluginManifest } from "@sydaris/plugin-sdk";
 
 export type ExtensionKind = "view" | "presentation" | "skill" | "tool";
 

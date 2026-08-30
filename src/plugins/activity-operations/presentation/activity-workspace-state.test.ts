@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ViewCardState } from "@sydaris/plugin-sdk";
-import type { EchoViewSnapshot } from "@sydaris/plugin-sdk/react";
+import type { ViewSnapshot } from "@sydaris/plugin-sdk/react";
 
 import { buildActivityStudio, ownerNames } from "./activity-workspace-state";
 
@@ -17,7 +17,7 @@ function card(cardTypeKey: string, dimensions: Record<string, unknown> = {}, slo
   };
 }
 
-function snapshot(cards: readonly ViewCardState[]): EchoViewSnapshot {
+function snapshot(cards: readonly ViewCardState[]): ViewSnapshot {
   return {
     viewKey: "activity_operations",
     pluginVersion: "1.3.0",

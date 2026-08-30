@@ -24,7 +24,7 @@ function typescriptSources(root: string): string[] {
 }
 
 function installedPluginSources(): InstalledPluginSource[] {
-  const installation = JSON.parse(source("echo.plugins.json")) as {
+  const installation = JSON.parse(source("sydaris.plugins.json")) as {
     plugins: Array<{ source: string; manifest: string }>;
   };
   return installation.plugins.flatMap((plugin) => {
@@ -68,7 +68,7 @@ describe("Echo plugin architecture boundaries", () => {
       expect(source(file), file).toContain('from "@sydaris/plugin-sdk"');
     }
     expect(source("src/contracts/view.ts")).not.toContain("interface ViewModule");
-    expect(source("src/contracts/extension.ts")).not.toContain("interface EchoPluginManifest");
+    expect(source("src/contracts/extension.ts")).not.toContain("interface PluginManifest");
   });
 
   it("keeps concrete business identifiers out of Contracts and View Runtime", () => {
@@ -139,7 +139,7 @@ describe("Echo plugin architecture boundaries", () => {
         /\.viewCard\.(?:create|update|delete)|\.viewDimensionValue\.|\.viewSlotBinding\./,
       );
       if (/method:\s*["'](?:POST|PUT|PATCH|DELETE)/.test(contents)) {
-        expect(contents, displayPath(file)).toMatch(/useEchoCommand|\/commands\//);
+        expect(contents, displayPath(file)).toMatch(/useViewCommand|\/commands\//);
       }
     }
   });

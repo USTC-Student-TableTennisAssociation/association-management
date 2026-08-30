@@ -5,7 +5,7 @@ import { createAgentViewToolset } from "@/agent-runtime/view-toolset";
 import { activityOperationsPlugin } from "@/plugins/activity-operations/manifest";
 import { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 
-const skillId = "echo.test.activity-curator";
+const skillId = "sydaris.test.activity-curator";
 
 function skillSession(allowedCommand: string): AgentSkillSession {
   return {

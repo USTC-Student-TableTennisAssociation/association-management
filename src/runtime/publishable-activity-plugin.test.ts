@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import descriptor from "@/plugins/activity-operations/echo.plugin.json";
+import descriptor from "@/plugins/activity-operations/sydaris.plugin.json";
 import { activityOperationsPlugin } from "@/plugins/activity-operations/dist/manifest";
 import packageJson from "@/plugins/activity-operations/package.json";
 
@@ -11,9 +11,9 @@ const pluginRoot = resolve(process.cwd(), "src/plugins/activity-operations");
 
 describe("publishable Activity Operations Plugin", () => {
   it("publishes compiled server and presentation entrypoints", () => {
-    expect(packageJson.name).toBe("echo-activity-operations-plugin");
+    expect(packageJson.name).toBe("@sydaris/activity-operations-plugin");
     expect(packageJson.version).toBe(activityOperationsPlugin.version);
-    expect(packageJson.echoPlugin).toBe("./echo.plugin.json");
+    expect(packageJson.sydarisPlugin).toBe("./sydaris.plugin.json");
     expect(descriptor.server.entry).toBe("./dist/manifest.js");
     expect(descriptor.contributes.presentations[0].entry).toBe(
       "./dist/presentation/activity-operations-workspace.js",

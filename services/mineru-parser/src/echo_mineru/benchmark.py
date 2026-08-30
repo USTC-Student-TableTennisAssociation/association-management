@@ -30,7 +30,7 @@ def run_benchmark(
         checks.extend(_profile_checks(profile, pages, blocks, markdown))
 
     report = {
-        "schema_version": "echo.mineru.benchmark.v1",
+        "schema_version": "sydaris.mineru.benchmark.v1",
         "profile": profile.get("name") if profile else None,
         "summary": {
             "page_count": len(pages),

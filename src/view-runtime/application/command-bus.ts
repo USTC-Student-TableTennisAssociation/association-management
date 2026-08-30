@@ -7,7 +7,7 @@ import type {
   ViewChange,
   ViewModule,
 } from "@/contracts";
-import type { EchoViewReaction } from "@sydaris/plugin-sdk";
+import type { ViewReaction } from "@sydaris/plugin-sdk";
 import { parseViewSettings } from "@/view-runtime/application/installed-views";
 import type { InstalledViewService } from "@/view-runtime/application/installed-views";
 import type { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
@@ -54,7 +54,7 @@ export type ViewCommandDispatchResult =
       viewKey: string;
       stateVersion: string;
       summary?: unknown;
-      reaction?: EchoViewReaction;
+      reaction?: ViewReaction;
     };
 
 export type ViewCommandProposalDecisionResult =
@@ -471,7 +471,7 @@ export class ViewCommandBus {
           },
         });
       }
-      let reaction: EchoViewReaction | undefined;
+      let reaction: ViewReaction | undefined;
       if (changeSet.length) {
         const resolved = resolveViewPostCommitReaction({
           viewModule,

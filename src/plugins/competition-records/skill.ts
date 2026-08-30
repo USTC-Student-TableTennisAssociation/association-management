@@ -6,7 +6,7 @@ import {
 } from "@sydaris/plugin-sdk";
 
 export const competitionSeriesCuratorSkill: SkillExtension = {
-  id: "echo.competition-records.curate-series",
+  id: "sydaris.competition-records.curate-series",
   version: "0.1.0",
   label: "整理赛事系列",
   description:

@@ -1,11 +1,11 @@
 {
-  "name": "echo-activity-operations-plugin",
+  "name": "@sydaris/activity-operations-plugin",
   "version": "1.3.0",
-  "description": "Reusable activity methods and execution maps for Echo",
+  "description": "Reusable activity methods and execution maps for Sydaris",
   "type": "module",
   "files": [
     "dist",
-    "echo.plugin.json",
+    "sydaris.plugin.json",
     "README.md"
   ],
   "exports": {
@@ -17,9 +17,9 @@
       "types": "./dist/presentation/activity-operations-workspace.d.ts",
       "import": "./dist/presentation/activity-operations-workspace.js"
     },
-    "./echo.plugin.json": "./echo.plugin.json"
+    "./sydaris.plugin.json": "./sydaris.plugin.json"
   },
-  "echoPlugin": "./echo.plugin.json",
+  "sydarisPlugin": "./sydaris.plugin.json",
   "sideEffects": [
     "**/*.css"
   ],

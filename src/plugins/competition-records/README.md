@@ -18,4 +18,4 @@ pnpm pack
 ```
 
 生成的 tarball 包含编译后的 server、Presentation、CSS、同步 contracts 与
-`echo.plugin.json`。
+`sydaris.plugin.json`。

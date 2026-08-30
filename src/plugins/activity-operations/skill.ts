@@ -9,7 +9,7 @@ const uuid = z.string().uuid();
 const phase = z.enum(["discuss", "propose"]).default("discuss");
 
 export const activityPlaybookDesignerSkill: SkillExtension = {
-  id: "echo.activity-operations.design-playbook",
+  id: "sydaris.activity-operations.design-playbook",
   version: "1.0.0",
   label: "设计活动组织方法",
   description:
@@ -47,7 +47,7 @@ export const activityPlaybookDesignerSkill: SkillExtension = {
 };
 
 export const activityTaskMapPlannerSkill: SkillExtension = {
-  id: "echo.activity-operations.plan-task-map",
+  id: "sydaris.activity-operations.plan-task-map",
   version: "1.0.0",
   label: "规划活动任务版图",
   description:

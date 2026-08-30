@@ -11,7 +11,7 @@ describe("Society Information Skill", () => {
     registry.registerPlugin(societyInformationPlugin);
     const session = new AgentSkillSession(registry, new ToolRuntime());
     const activation = session.activate(
-      "echo.society-information.maintain-overview",
+      "sydaris.society-information.maintain-overview",
       { operation: "fill-topic", topic: "指导老师" },
     );
 

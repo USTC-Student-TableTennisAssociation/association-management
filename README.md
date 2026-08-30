@@ -82,7 +82,7 @@ auto_execute      → Execute
 
 ## Plugins
 
-Plugin 是 Echo 的业务扩展单元。
+Plugin 是 Sydaris 的业务扩展单元。
 
 | Extension               | 定义                              |
 | ----------------------- | ------------------------------- |
@@ -119,26 +119,26 @@ Commands
 └── project.close
 ```
 
-注册后的 View 使用 Echo 提供的持久化、读取、权限、Proposal、并发控制、Events、Generic Inspector 与 AI Tools。
+注册后的 View 使用 Sydaris 提供的持久化、读取、权限、Proposal、并发控制、Events、Generic Inspector 与 AI Tools。
 
 Presentation、Skill 和 Tool Provider 通过独立 Extension 提供。
 
 ### Plugin 安装
 
 Plugin 使用静态注册和正常的 Next.js 编译，不在运行中的服务内执行刚下载的远程代码。
-根目录的 `echo.plugins.json` 是已安装清单；`src/generated/installed-plugins.ts` 和
+根目录的 `sydaris.plugins.json` 是已安装清单；`src/generated/installed-plugins.ts` 和
 `src/generated/installed-presentations.tsx` 由 CLI 生成，不能手工修改。
 
-每个 Plugin 需要提供 `echo.plugin.json`，其中声明服务端 Manifest export、所拥有的
+每个 Plugin 需要提供 `sydaris.plugin.json`，其中声明服务端 Manifest export、所拥有的
 View keys，以及可选的专属 React Presentation。CLI 支持仓库内目录、本地 `.tgz` 和 npm
-包名；npm 安装会禁用包的 install scripts。安装后重新启动 Echo 即可生效：
+包名；npm 安装会禁用包的 install scripts。安装后重新启动 Sydaris 即可生效：
 
 ```bash
-pnpm echo:plugin install src/plugins/activity-operations
-pnpm echo:plugin install ./my-echo-plugin-1.0.0.tgz
-pnpm echo:plugin install @your-scope/my-echo-plugin@1.0.0
-pnpm echo:plugin list
-pnpm echo:plugin generate --check
+pnpm sydaris:plugin install src/plugins/activity-operations
+pnpm sydaris:plugin install ./my-sydaris-plugin-1.0.0.tgz
+pnpm sydaris:plugin install @your-scope/my-sydaris-plugin@1.0.0
+pnpm sydaris:plugin list
+pnpm sydaris:plugin generate --check
 ```
 
 删除是不可恢复操作，必须显式使用 `--purge`。CLI 会先在一个数据库事务中删除该 Plugin
@@ -146,16 +146,16 @@ pnpm echo:plugin generate --check
 Installed View 状态，成功后才从安装清单移除 Plugin：
 
 ```bash
-pnpm echo:plugin remove echo.activity-operations --purge
+pnpm sydaris:plugin remove sydaris.activity-operations --purge
 ```
 
 当前版本只面向可信包，不提供代码沙箱、签名校验、升级、迁移或回滚。在线安装实际是
 `pnpm add` 下载到 `node_modules`，随后读取包内描述文件并生成静态 Registry；专属 UI 因此
-可以使用普通 React/TypeScript，在 Echo 下次启动或构建时一起编译。
+可以使用普通 React/TypeScript，在 Sydaris 下次启动或构建时一起编译。
 
 ### 开发与发布 Plugin
 
-`packages/plugin-sdk` 提供可发布 Plugin 使用的公共合同、`echo.plugin.json`
+`packages/plugin-sdk` 提供可发布 Plugin 使用的公共合同、`sydaris.plugin.json`
 描述文件 Schema 和 React hooks；
 `packages/example-plugin` 是包含 View、Command、Skill、专属 UI 和全局只读 Tool Provider
 的最小完整示例。现有的 `src/plugins/society-information` 也已经是可发布 workspace 包，
@@ -169,9 +169,8 @@ mkdir -p artifacts
 pnpm plugins:pack:society --pack-destination ./artifacts
 ```
 
-`echo-society-information-plugin` 暂时使用无 scope 名称；在正式发布前需要确认名称可用，
-或统一改成 `@sydaris` scope。它通过 `@sydaris/plugin-sdk` peer dependency 使用宿主合同，
-不包含 Echo 数据库实现或 `@/` 内部路径。
+`@sydaris/society-information-plugin` 通过 `@sydaris/plugin-sdk` peer dependency 使用宿主合同，
+不包含 Sydaris 数据库实现或 `@/` 内部路径。
 
 发布到 npm 时先发布 SDK，再发布 Plugin。当前 SDK 为 alpha 预发布版，
 `publishConfig` 会默认发到 `next` tag：
@@ -181,7 +180,7 @@ pnpm --filter @sydaris/plugin-sdk publish
 pnpm --filter @sydaris/example-plugin publish --tag next --access public
 ```
 
-每个 Plugin 必须通过 `engines.echo` 声明兼容的 Echo 版本，不匹配时 CLI 会拒绝安装。
+每个 Plugin 必须通过 `engines.sydaris` 声明兼容的 Sydaris 版本，不匹配时 CLI 会拒绝安装。
 实际发布需要 `@sydaris` npm scope 权限；本仓库不会保存发布凭据。
 当前可发布的 SDK 与 Plugin 包使用 Apache-2.0 许可证。
 
@@ -190,7 +189,7 @@ Tool，具有外部副作用的 Tool 在增加人工审批 UI 前不会暴露给
 
 ## Tool Capabilities
 
-外部工具通过 Capability Contract 接入 Echo。
+外部工具通过 Capability Contract 接入 Sydaris。
 
 ```text
 Skill
@@ -209,10 +208,10 @@ Skill 声明 Capability 依赖。Tool Provider 实现对应的 Capability Contra
 
 ## Built-in Plugins
 
-`echo.society-information`
+`sydaris.society-information`
 组织身份、人物、学年职位、长期活动与平台入口。
 
-`echo.activity-operations`
+`sydaris.activity-operations`
 Activity 的任务、分工、预算、采购、报销、材料、审批、结果与复盘。
 
 ## Repository
