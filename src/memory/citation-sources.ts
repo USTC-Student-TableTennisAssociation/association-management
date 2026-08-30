@@ -73,11 +73,8 @@ export async function hydrateCitedSourceExcerpts(
     .flatMap((assertion) => assertion.id ? [assertion.id] : []);
   if (!assertionIds.length) return attachCitedSourceExcerpts(result, [], []);
 
-  const compilationId = result.compilationId ?? result.trace?.snapshot.id;
-  if (!compilationId) return attachCitedSourceExcerpts(result, [], []);
-
   const rows = await getDatabase().memoryAssertion.findMany({
-    where: { compilationId, id: { in: assertionIds } },
+    where: { id: { in: assertionIds } },
     select: {
       id: true,
       sourceRegion: { select: { sourceNodeId: true } },

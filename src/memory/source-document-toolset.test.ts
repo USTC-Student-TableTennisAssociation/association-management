@@ -37,7 +37,6 @@ function retrieval(): MemoryRetrievalResult {
   return {
     query: "test",
     mode: "object-assertion",
-    compilationId: "00000000-0000-4000-8000-000000000020",
     seedMap: {
       facets: [],
       objects: [],
@@ -53,6 +52,7 @@ function retrieval(): MemoryRetrievalResult {
         matchedBy: [],
         matchedFacets: [],
         sources: [{
+          sourceDocumentId: "00000000-0000-4000-8000-000000000020",
           sourceTitle: "测试原文",
           sourceSha256: "sha",
           sourceNodeId: "region-1",
@@ -159,7 +159,7 @@ describe("createSourceDocumentToolset", () => {
     );
 
     expect(sourceState.read).toHaveBeenCalledWith({
-      compilationId: "00000000-0000-4000-8000-000000000020",
+      publicationRunId: "00000000-0000-4000-8000-000000000020",
       selection: { mode: "full" },
       maxCharacters: 10_000,
     });
@@ -335,7 +335,7 @@ describe("createSourceDocumentToolset", () => {
       executionOptions,
     );
     expect(sourceState.read).toHaveBeenLastCalledWith({
-      compilationId: "00000000-0000-4000-8000-000000000020",
+      publicationRunId: "00000000-0000-4000-8000-000000000020",
       selection: { mode: "full" },
       maxCharacters: 2_000,
       startOrder: 2,

@@ -159,9 +159,8 @@ function renderAssertion(assertion: AssertionRecord): string {
   });
 }
 
-async function loadObjects(compilationId: string) {
+async function loadObjects() {
   const rows = await getDatabase().memoryGlobalObject.findMany({
-    where: { compilationId },
     select: {
       id: true,
       globalObjectKey: true,
@@ -204,9 +203,8 @@ async function loadObjects(compilationId: string) {
   });
 }
 
-async function loadAssertions(compilationId: string) {
+async function loadAssertions() {
   const rows = await getDatabase().memoryAssertion.findMany({
-    where: { compilationId },
     select: {
       id: true,
       sourceClaimId: true,
@@ -312,7 +310,6 @@ function rankAssertionLexical(
 }
 
 async function rankAssertionVectors(input: {
-  compilationId: string;
   facets: NonNullable<MemoryQuery["facets"]>;
   vectors: number[][];
   assertionsById: Map<string, AssertionRecord>;
@@ -328,8 +325,6 @@ async function rankAssertionVectors(input: {
           (e."embedding" <=> ${literal}::vector)::float8 AS "distance",
           (1 - (e."embedding" <=> ${literal}::vector))::float8 AS "score"
         FROM "memory_assertion_embeddings" e
-        JOIN "memory_assertions" a ON a."id" = e."assertion_id"
-        WHERE a."compilation_id" = ${input.compilationId}::uuid
         ORDER BY e."embedding" <=> ${literal}::vector, e."assertion_id"
         LIMIT ${ASSERTION_VECTOR_HITS_PER_FACET}
       `;
@@ -401,9 +396,9 @@ async function loadSources(
     where: { id: { in: assertionIds } },
     select: {
       id: true,
-      compilation: { select: { sourceTitle: true, sourceSha256: true } },
       sourceRegion: {
         select: {
+          publicationRunId: true,
           sourceNodeId: true,
           label: true,
           sourceTitle: true,
@@ -430,6 +425,7 @@ async function loadSources(
           ordinal: true,
           sourceBlock: {
             select: {
+              publicationRunId: true,
               sourceBlockId: true,
               sourcePages: true,
             },
@@ -443,8 +439,9 @@ async function loadSources(
       const sources: MemorySourceReference[] = row.sourceRegion
         ? row.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
             kind: "document",
-            sourceTitle: row.sourceRegion!.sourceTitle ?? row.compilation.sourceTitle,
-            sourceSha256: row.sourceRegion!.sourceSha256 ?? row.compilation.sourceSha256,
+            sourceDocumentId: sourceBlock.publicationRunId,
+            sourceTitle: row.sourceRegion!.sourceTitle,
+            sourceSha256: row.sourceRegion!.sourceSha256,
             sourceNodeId: row.sourceRegion!.sourceNodeId,
             sourceRegionLabel: row.sourceRegion!.label,
             sourceBlockId: sourceBlock.sourceBlockId,
@@ -493,52 +490,15 @@ function channelTrace<T extends RankedObjectHit | RankedAssertionHit>(input: {
 export async function locateObjectAssertions(input: MemoryQuery): Promise<MemoryRetrievalResult> {
   const started = Date.now();
   const database = getDatabase();
-  const snapshot = await database.memoryCompilation.findFirst({
-    orderBy: { importedAt: "desc" },
-    select: {
-      id: true,
-      sourceTitle: true,
-      sourceSha256: true,
-      sourceTimeText: true,
-      sourceTimeSupportingBlockIds: true,
-      compiledAt: true,
-      objectFragmentCount: true,
-      surfaceFormCount: true,
-      fragmentReferenceCount: true,
-      assertionEmbeddingIndex: {
-        select: {
-          modelKey: true,
-          modelRevision: true,
-          dimension: true,
-          indexedAssertionCount: true,
-        },
-      },
-      _count: { select: { globalObjects: true, assertions: true } },
-    },
-  });
-  if (!snapshot) throw new Error("数据库中没有来源语义 Compilation");
-  const sourceTimeBlocks = snapshot.sourceTimeSupportingBlockIds.length
-    ? await database.memorySourceBlock.findMany({
-        where: {
-          compilationId: snapshot.id,
-          sourceBlockId: { in: snapshot.sourceTimeSupportingBlockIds },
-        },
-        select: { sourceBlockId: true, sourcePages: true },
-      })
-    : [];
-  const sourceTimeBlockById = new Map(
-    sourceTimeBlocks.map((item) => [item.sourceBlockId, item]),
-  );
-  const sourceTime = {
-    sourceTitle: snapshot.sourceTitle,
-    sourceSha256: snapshot.sourceSha256,
-    text: snapshot.sourceTimeText,
-    supportingBlocks: snapshot.sourceTimeSupportingBlockIds.map((sourceBlockId) => {
-      const block = sourceTimeBlockById.get(sourceBlockId);
-      if (!block) throw new Error(`Source Time evidence block 不存在：${sourceBlockId}`);
-      return { sourceBlockId, pages: block.sourcePages };
-    }),
-  };
+  const [embeddingIndex, globalObjectCount, objectFragmentCount, surfaceFormCount,
+    fragmentReferenceCount, assertionCount] = await Promise.all([
+    database.memoryAssertionEmbeddingIndex.findUnique({ where: { id: "shared" } }),
+    database.memoryGlobalObject.count(),
+    database.memorySourceObjectFragment.count(),
+    database.memoryGlobalObjectSurfaceMembership.count(),
+    database.memoryAssertionFragmentReference.count(),
+    database.memoryAssertion.count(),
+  ]);
 
   const facets = (input.facets?.length
     ? input.facets
@@ -550,8 +510,8 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
   const minimumVectorScore = environmentScore("MEMORY_MIN_VECTOR_SCORE", 0.35);
 
   const [objects, assertions] = await Promise.all([
-    loadObjects(snapshot.id),
-    loadAssertions(snapshot.id),
+    loadObjects(),
+    loadAssertions(),
   ]);
   const assertionsById = new Map(assertions.map((item) => [item.id, item]));
   const objectLexicalHits = rankObjectLexical(objectFacets, objects, minimumLexicalScore);
@@ -559,13 +519,12 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
 
   let assertionVectorHits: RankedAssertionHit[] = [];
   try {
-    const embeddingIndex = snapshot.assertionEmbeddingIndex;
     if (!embeddingIndex) {
-      throw new Error("当前 Compilation 尚未建立 Assertion embedding index");
+      throw new Error("Shared Brain 尚未建立 Assertion embedding index");
     }
-    if (embeddingIndex.indexedAssertionCount !== snapshot._count.assertions) {
+    if (embeddingIndex.indexedAssertionCount !== assertionCount) {
       throw new Error(
-        `Assertion embedding index 不完整：${embeddingIndex.indexedAssertionCount}/${snapshot._count.assertions}`,
+        `Assertion embedding index 不完整：${embeddingIndex.indexedAssertionCount}/${assertionCount}`,
       );
     }
     const embedding = await embedMemoryQueries(facets.map((facet) => facet.text), {
@@ -582,7 +541,6 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
       );
     }
     assertionVectorHits = await rankAssertionVectors({
-      compilationId: snapshot.id,
       facets,
       vectors: embedding.vectors,
       assertionsById,
@@ -737,19 +695,16 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     version: "structured-seed-map.v1",
     query: input.query,
     snapshot: {
-      id: snapshot.id,
-      sourceTitle: snapshot.sourceTitle,
-      sourceSha256: snapshot.sourceSha256,
-      compiledAt: snapshot.compiledAt.toISOString(),
-      embeddingModel: snapshot.assertionEmbeddingIndex?.modelKey ?? null,
-      embeddingRevision: snapshot.assertionEmbeddingIndex?.modelRevision ?? null,
-      embeddingDimension: snapshot.assertionEmbeddingIndex?.dimension ?? null,
-      embeddingAssertionCount: snapshot.assertionEmbeddingIndex?.indexedAssertionCount ?? 0,
-      globalObjectCount: snapshot._count.globalObjects,
-      objectFragmentCount: snapshot.objectFragmentCount,
-      surfaceFormCount: snapshot.surfaceFormCount,
-      fragmentReferenceCount: snapshot.fragmentReferenceCount,
-      assertionCount: snapshot._count.assertions,
+      indexedAt: embeddingIndex?.indexedAt.toISOString() ?? null,
+      embeddingModel: embeddingIndex?.modelKey ?? null,
+      embeddingRevision: embeddingIndex?.modelRevision ?? null,
+      embeddingDimension: embeddingIndex?.dimension ?? null,
+      embeddingAssertionCount: embeddingIndex?.indexedAssertionCount ?? 0,
+      globalObjectCount,
+      objectFragmentCount,
+      surfaceFormCount,
+      fragmentReferenceCount,
+      assertionCount,
     },
     facets,
     objectLexical: channelTrace({
@@ -803,7 +758,6 @@ export async function locateObjectAssertions(input: MemoryQuery): Promise<Memory
     mode: "object-assertion",
     seedMap: {
       facets,
-      sourceTime,
       objects: objectSeeds,
       assertions: assertionSeeds,
       connections,

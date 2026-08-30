@@ -55,11 +55,10 @@ function semanticContext(input: {
   };
 }
 
-function emptyRetrieval(compilationId: string, query: string): MemoryRetrievalResult {
+function emptyRetrieval(query: string): MemoryRetrievalResult {
   return {
     query,
     mode: "object-assertion",
-    compilationId,
     seedMap: { facets: [], objects: [], assertions: [], connections: [] },
   };
 }
@@ -78,7 +77,7 @@ async function locate(input: {
   return { result, retrieval };
 }
 
-async function cleanupClosedLoopData(compilationId: string): Promise<void> {
+async function cleanupClosedLoopData(): Promise<void> {
   const database = getDatabase();
   const evidences = await database.memoryChatEvidence.findMany({
     where: { clientMessageId: { in: testMessageIds } },
@@ -117,11 +116,9 @@ async function cleanupClosedLoopData(compilationId: string): Promise<void> {
     await transaction.memoryChatEvidence.deleteMany({
       where: { clientMessageId: { in: testMessageIds } },
     });
-    const assertionCount = await transaction.memoryAssertion.count({
-      where: { compilationId },
-    });
+    const assertionCount = await transaction.memoryAssertion.count();
     await transaction.memoryAssertionEmbeddingIndex.update({
-      where: { compilationId },
+      where: { id: "shared" },
       data: { indexedAssertionCount: assertionCount, indexedAt: new Date() },
     });
   }, { maxWait: 30_000, timeout: 120_000 });
@@ -134,23 +131,10 @@ describe.runIf(runLive)("real memory closed loop", () => {
 
   it("creates, retrieves, raises, invalidates, and refreshes an activity memory", async () => {
     const database = getDatabase();
-    const compilation = await database.memoryCompilation.findFirstOrThrow({
-      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-      select: {
-        id: true,
-        assertionEmbeddingIndex: { select: { indexedAssertionCount: true } },
-      },
-    });
-    if (!compilation.assertionEmbeddingIndex) {
-      throw new Error("当前 Compilation 没有 Assertion embedding index");
-    }
-    await cleanupClosedLoopData(compilation.id);
-    const baselineAssertionCount = await database.memoryAssertion.count({
-      where: { compilationId: compilation.id },
-    });
-    const baselineProposalCount = await database.memoryObjectChangeProposal.count({
-      where: { compilationId: compilation.id },
-    });
+    await database.memoryAssertionEmbeddingIndex.findUniqueOrThrow({ where: { id: "shared" } });
+    await cleanupClosedLoopData();
+    const baselineAssertionCount = await database.memoryAssertion.count();
+    const baselineProposalCount = await database.memoryObjectChangeProposal.count();
     const traceTitles: string[] = [];
     let firstCapture: ChatAssertionCaptureResult | undefined;
     let secondCapture: ChatAssertionCaptureResult | undefined;
@@ -169,7 +153,7 @@ describe.runIf(runLive)("real memory closed loop", () => {
         submittedAt: "2026-08-15T02:00:00.000Z",
         timezone: "Asia/Shanghai",
         semanticContext: firstContext,
-        retrieval: emptyRetrieval(compilation.id, eventName),
+        retrieval: emptyRetrieval(eventName),
         queueDecision: { reason: "用户给出了新活动的明确时间、地点和准备重点" },
       }, traceRecorder(traceTitles));
 
@@ -285,17 +269,13 @@ describe.runIf(runLive)("real memory closed loop", () => {
 
       expect(traceTitles).toContain("后台 Assertion Agent · Schema 校验后的输出");
       expect(traceTitles).toContain("后台 Higher Memory Agent · Schema 校验后的输出");
-      const proposalCount = await database.memoryObjectChangeProposal.count({
-        where: { compilationId: compilation.id },
-      });
+      const proposalCount = await database.memoryObjectChangeProposal.count();
       expect(proposalCount).toBe(baselineProposalCount);
     } finally {
-      await cleanupClosedLoopData(compilation.id);
-      const finalAssertionCount = await database.memoryAssertion.count({
-        where: { compilationId: compilation.id },
-      });
+      await cleanupClosedLoopData();
+      const finalAssertionCount = await database.memoryAssertion.count();
       const finalIndex = await database.memoryAssertionEmbeddingIndex.findUniqueOrThrow({
-        where: { compilationId: compilation.id },
+        where: { id: "shared" },
       });
       expect(finalAssertionCount).toBe(baselineAssertionCount);
       expect(finalIndex.indexedAssertionCount).toBe(baselineAssertionCount);

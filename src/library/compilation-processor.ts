@@ -275,13 +275,7 @@ async function updateRun(
 }
 
 async function existingObjectCandidates(searchText: string) {
-  const compilation = await getDatabase().memoryCompilation.findFirst({
-    orderBy: { importedAt: "desc" },
-    select: { id: true },
-  });
-  if (!compilation) return [];
   const objects = await getDatabase().memoryGlobalObject.findMany({
-    where: { compilationId: compilation.id },
     select: { id: true, canonicalName: true },
     take: 2_000,
   });
@@ -819,50 +813,10 @@ async function persistAssessment(
 async function processDeep(run: ProcessingRun): Promise<void> {
   let checkpoint = loadRunCheckpoint(run);
   await updateRun(run.id, {
-    stage: "resolving",
-    progressCurrent: 2,
-    statusMessage: "查找可复用的完整冷启动 Compilation",
+    stage: "parsing",
+    progressCurrent: 0,
+    statusMessage: "准备深度冷启动",
   });
-  const compilation = await getDatabase().memoryCompilation.findFirst({
-    where: {
-      OR: [
-        { sourceSha256: run.sourceBlob.sha256 },
-        { sourceRegions: { some: { sourceSha256: run.sourceBlob.sha256 } } },
-      ],
-    },
-    orderBy: { importedAt: "desc" },
-    select: { id: true, sourceTitle: true, assertionCount: true, sourceNodeCount: true },
-  });
-  if (compilation) {
-    const preview = await extractLibraryPreview({
-      storageKey: run.sourceBlob.storageKey,
-      sha256: run.sourceBlob.sha256,
-      mimeType: run.sourceBlob.mimeType,
-      parserKey: run.parserKey,
-    });
-    await updateRun(run.id, {
-      stage: "staging",
-      progressCurrent: 4,
-      artifactLocation: `memory-compilation:${compilation.id}`,
-      statusMessage: "复用已完成的 Object–Assertion 冷启动产物",
-    });
-    await persistAssessment(run, preview, {
-      summary: `已复用“${compilation.sourceTitle}”的完整冷启动结果：${compilation.sourceNodeCount} 个来源节点，${compilation.assertionCount} 条 Assertion。`,
-      referenceCandidates: [],
-      assertionCandidates: [],
-      objectCandidates: [],
-    });
-    await updateRun(run.id, {
-      status: "ready",
-      stage: "ready",
-      progressCurrent: 5,
-      statusMessage: "深度冷启动产物已复用",
-      resultSummary: `复用 Compilation ${compilation.id}`,
-      errorMessage: null,
-      completedAt: new Date(),
-    });
-    return;
-  }
   if (run.sourceBlob.mimeType === "application/pdf") {
     const result = await runDeepColdStart({
       runId: run.id,

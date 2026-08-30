@@ -46,6 +46,7 @@ function withoutExcerpt(source: MemorySourceReference): MemorySourceReference {
   }
   return {
     ...(source.kind ? { kind: source.kind } : {}),
+    sourceDocumentId: source.sourceDocumentId,
     sourceTitle: source.sourceTitle,
     sourceSha256: source.sourceSha256,
     sourceNodeId: source.sourceNodeId,
@@ -68,13 +69,6 @@ function mergeUnique<T>(left: T[], right: T[], key: (item: T) => string): T[] {
   return result;
 }
 
-export class MemoryExploreSnapshotError extends Error {
-  constructor(expected: string, actual: string) {
-    super(`Explore 结果来自不同 Compilation：${expected} != ${actual}`);
-    this.name = "MemoryExploreSnapshotError";
-  }
-}
-
 /**
  * Request-local ref registry. It only unifies evidence discovered during one
  * answer so every tool result and the final citation pass share one A#/O#
@@ -92,7 +86,6 @@ export class MemoryEvidenceAccumulator {
   private nextObjectNumber: number;
   private nextAssertionNumber: number;
   private nextHigherMemoryNumber: number;
-  private compilationId?: string;
 
   constructor(private readonly initial: MemoryRetrievalResult) {
     this.objects = initial.seedMap.objects.map((item) => ({
@@ -138,7 +131,6 @@ export class MemoryEvidenceAccumulator {
       Math.max(0, ...this.assertions.map((item) => numberedRef(item.ref, "A"))) + 1;
     this.nextHigherMemoryNumber =
       Math.max(0, ...this.higherMemories.map((item) => numberedRef(item.ref, "H"))) + 1;
-    this.compilationId = initial.compilationId ?? initial.trace?.snapshot.id;
     this.refreshObjectSupport();
   }
 
@@ -199,13 +191,6 @@ export class MemoryEvidenceAccumulator {
   }
 
   merge(result: MemoryExploreResult): MemoryExploreResult {
-    if (result.compilationId) {
-      if (this.compilationId && this.compilationId !== result.compilationId) {
-        throw new MemoryExploreSnapshotError(this.compilationId, result.compilationId);
-      }
-      this.compilationId ??= result.compilationId;
-    }
-
     const localObjectRefs = new Map<string, string>();
     const mappedObjects = result.objects.map((item) => {
       let ref = this.objectRefById.get(item.id);
@@ -343,7 +328,6 @@ export class MemoryEvidenceAccumulator {
   snapshot(): MemoryRetrievalResult {
     return {
       ...this.initial,
-      ...(this.compilationId ? { compilationId: this.compilationId } : {}),
       seedMap: {
         facets: this.initial.seedMap.facets.map((item) => ({ ...item })),
         ...(this.initial.seedMap.sourceTime

@@ -6,7 +6,7 @@
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
     "rootDir": "..",
-    "outDir": "../.prisma-source-semantics-build",
+    "outDir": "../.prisma-assertion-index-build",
     "declaration": false,
     "sourceMap": false,
     "skipLibCheck": true,
@@ -15,8 +15,6 @@
     "types": ["node"]
   },
   "include": [
-    "./business-view-import-protection.ts",
-    "./import-source-semantics.ts",
     "./index-assertions.ts",
     "../src/memory/embedding-client.ts",
     "../src/memory/resolved-assertion.ts",

@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const databaseState = vi.hoisted(() => ({
   libraryNodeFindUnique: vi.fn(),
-  compilationFindFirst: vi.fn(),
   processingRunFindFirst: vi.fn(),
   sourceRegionFindMany: vi.fn(),
   globalObjectFindMany: vi.fn(),
@@ -11,7 +10,6 @@ const databaseState = vi.hoisted(() => ({
 vi.mock("@/db", () => ({
   getDatabase: () => ({
     libraryNode: { findUnique: databaseState.libraryNodeFindUnique },
-    memoryCompilation: { findFirst: databaseState.compilationFindFirst },
     librarySourceProcessingRun: { findFirst: databaseState.processingRunFindFirst },
     memorySourceRegion: { findMany: databaseState.sourceRegionFindMany },
     memoryGlobalObject: { findMany: databaseState.globalObjectFindMany },
@@ -47,13 +45,14 @@ beforeEach(() => {
     processingStatus: "ready",
     blob: { id: "blob-1", sha256: "sha-1" },
   });
-  databaseState.compilationFindFirst.mockResolvedValue({ id: "compilation-1" });
   databaseState.processingRunFindFirst.mockResolvedValue({
+    id: "run-1",
     publishedAt: new Date("2026-08-18T00:00:00.000Z"),
     publishedAssertionCount: 3,
     publishedObjectCount: 5,
   });
   databaseState.sourceRegionFindMany.mockResolvedValue([{
+    publicationRunId: "run-1",
     sourceNodeId: "region-1",
     label: "活动行政",
     sourceTitle: "生存手册",

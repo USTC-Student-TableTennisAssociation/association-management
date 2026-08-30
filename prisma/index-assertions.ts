@@ -60,18 +60,7 @@ async function main(): Promise<void> {
   const database = new PrismaClient({ adapter: new PrismaPg(pool) });
 
   try {
-    const compilation = await database.memoryCompilation.findFirst({
-      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-      select: {
-        id: true,
-        sourceTitle: true,
-        sourceSha256: true,
-      },
-    });
-    if (!compilation) throw new Error("数据库中没有可索引的 MemoryCompilation");
-
     const assertions = await database.memoryAssertion.findMany({
-      where: { compilationId: compilation.id },
       orderBy: { id: "asc" },
       select: {
         id: true,
@@ -86,7 +75,7 @@ async function main(): Promise<void> {
         },
       },
     });
-    if (assertions.length === 0) throw new Error("当前 Compilation 没有 Assertion，无法建立向量索引");
+    if (assertions.length === 0) throw new Error("Shared Brain 没有 Assertion，无法建立向量索引");
 
     const prepared: PreparedAssertion[] = assertions.map((assertion) => {
       const references = assertion.objectLinks.map(({ globalObject }) => ({
@@ -105,10 +94,7 @@ async function main(): Promise<void> {
       };
     });
 
-    console.log(
-      `准备索引 ${prepared.length} 条 Assertion：${compilation.sourceTitle} ` +
-        `(${compilation.sourceSha256.slice(0, 12)})`,
-    );
+    console.log(`准备索引 Shared Brain 的 ${prepared.length} 条 Assertion`);
     let profile: EmbeddingBatch | undefined;
     const indexed: IndexedAssertion[] = [];
     for (let start = 0; start < prepared.length; start += batchSize) {
@@ -135,24 +121,13 @@ async function main(): Promise<void> {
 
     await database.$transaction(
       async (transaction) => {
-        const current = await transaction.memoryCompilation.findFirst({
-          orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-          select: { id: true, _count: { select: { assertions: true } } },
-        });
-        if (
-          !current ||
-          current.id !== compilation.id ||
-          current._count.assertions !== indexed.length
-        ) {
-          throw new Error("生成 embedding 期间当前 Compilation 已改变，拒绝写入过期索引");
+        const currentAssertionCount = await transaction.memoryAssertion.count();
+        if (currentAssertionCount !== indexed.length) {
+          throw new Error("生成 embedding 期间 Shared Brain Assertion 已改变，拒绝写入过期索引");
         }
 
-        await transaction.memoryAssertionEmbedding.deleteMany({
-          where: { assertion: { compilationId: compilation.id } },
-        });
-        await transaction.memoryAssertionEmbeddingIndex.deleteMany({
-          where: { compilationId: compilation.id },
-        });
+        await transaction.memoryAssertionEmbedding.deleteMany();
+        await transaction.memoryAssertionEmbeddingIndex.deleteMany();
         for (let start = 0; start < indexed.length; start += 64) {
           const values = indexed.slice(start, start + 64).map((item) =>
             Prisma.sql`(${item.assertionId}::uuid, ${item.contentHash}, ${vectorLiteral(item.vector)}::vector)`,
@@ -164,7 +139,7 @@ async function main(): Promise<void> {
         }
         await transaction.memoryAssertionEmbeddingIndex.create({
           data: {
-            compilationId: compilation.id,
+            id: "shared",
             modelKey: profile.model,
             modelRevision: profile.modelRevision,
             dimension: profile.dimension,

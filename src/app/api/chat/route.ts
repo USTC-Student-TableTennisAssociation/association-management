@@ -246,6 +246,7 @@ const matchSchema = z.object({
 
 const documentSourceSchema = z.object({
   kind: z.literal("document").optional(),
+  sourceDocumentId: z.string(),
   sourceTitle: z.string(),
   sourceSha256: z.string(),
   sourceNodeId: z.string(),
@@ -271,15 +272,6 @@ const sourceSchema = z.union([documentSourceSchema, chatSourceSchema]);
 
 const seedMapSchema = z.object({
   facets: z.array(facetSchema),
-  sourceTime: z.object({
-    sourceTitle: z.string(),
-    sourceSha256: z.string(),
-    text: z.string().nullable(),
-    supportingBlocks: z.array(z.object({
-      sourceBlockId: z.string(),
-      pages: z.array(z.number()),
-    })),
-  }).optional(),
   objects: z.array(z.object({
     ref: z.string(),
     id: z.string(),
@@ -340,10 +332,7 @@ const traceSchema = z.object({
   version: z.literal("structured-seed-map.v1"),
   query: z.string(),
   snapshot: z.object({
-    id: z.string(),
-    sourceTitle: z.string(),
-    sourceSha256: z.string(),
-    compiledAt: z.string(),
+    indexedAt: z.string().nullable(),
     embeddingModel: z.string().nullable(),
     embeddingRevision: z.string().nullable(),
     embeddingDimension: z.number().int().nullable(),
@@ -955,14 +944,8 @@ export async function POST(request: Request) {
         commandBus: viewCommandBus,
         skillSession,
         findExistingObjectsByCanonicalName: async (canonicalName) => {
-          const compilation = await getDatabase().memoryCompilation.findFirst({
-            orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-            select: { id: true },
-          });
-          if (!compilation) return [];
           return getDatabase().memoryGlobalObject.findMany({
             where: {
-              compilationId: compilation.id,
               OR: [
                 { canonicalName },
                 {

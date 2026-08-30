@@ -40,18 +40,16 @@ function traceRecorder(titles: string[], sections?: string[]): EchoDebugTrace {
   };
 }
 
-async function latestCompilation() {
-  return getDatabase().memoryCompilation.findFirstOrThrow({
-    orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    select: { id: true },
+async function requireSharedBrainIndex() {
+  return getDatabase().memoryAssertionEmbeddingIndex.findUniqueOrThrow({
+    where: { id: "shared" },
   });
 }
 
-function emptyRetrieval(compilationId: string, query: string): MemoryRetrievalResult {
+function emptyRetrieval(query: string): MemoryRetrievalResult {
   return {
     query,
     mode: "object-assertion",
-    compilationId,
     seedMap: { facets: [], objects: [], assertions: [], connections: [] },
   };
 }
@@ -71,7 +69,6 @@ async function cleanupChatCapture(
     },
     select: {
       id: true,
-      compilationId: true,
       assertions: {
         select: {
           id: true,
@@ -113,7 +110,7 @@ async function cleanupChatCapture(
     }
     if (capture?.assertions.length) {
       await transaction.memoryAssertionEmbeddingIndex.update({
-        where: { compilationId: capture.compilationId },
+        where: { id: "shared" },
         data: { indexedAssertionCount: { decrement: capture.assertions.length } },
       });
     }
@@ -131,7 +128,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
   });
 
   it("lets Chat Assertion explicitly submit an empty extraction", async () => {
-    const compilation = await latestCompilation();
+    await requireSharedBrainIndex();
     const titles: string[] = [];
     let result: ChatAssertionCaptureResult | undefined;
     try {
@@ -151,7 +148,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
           toolExecutions: [],
           finalAnswer: "可以改成：欢迎参加。",
         },
-        retrieval: emptyRetrieval(compilation.id, "普通改写任务"),
+        retrieval: emptyRetrieval("普通改写任务"),
         queueDecision: { reason: "兼容性测试故意触发提取，模型应判断没有组织事实" },
       }, traceRecorder(titles));
 
@@ -164,7 +161,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
 
   it("does not publish an explicitly labeled hypothetical scenario", async () => {
     const database = getDatabase();
-    const compilation = await latestCompilation();
+    await requireSharedBrainIndex();
     const titles: string[] = [];
     let result: ChatAssertionCaptureResult | undefined;
     try {
@@ -184,7 +181,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
           toolExecutions: [],
           finalAnswer: "明白，这是测试假设，不代表真实安排。",
         },
-        retrieval: emptyRetrieval(compilation.id, "明确标注的测试假设"),
+        retrieval: emptyRetrieval("明确标注的测试假设"),
         queueDecision: { reason: "负例验收：明确假设必须由 Assertion Agent 拒绝" },
       }, traceRecorder(titles));
 
@@ -193,7 +190,6 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
       expect(titles).toContain("后台 Assertion Agent · Schema 校验后的输出");
       await expect(database.memoryGlobalObject.count({
         where: {
-          compilationId: compilation.id,
           canonicalName: "Echo人工验收赛-20260821-C1",
         },
       })).resolves.toBe(0);
@@ -204,7 +200,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
 
   it("does not publish a proposition that the user only asked as a question", async () => {
     const database = getDatabase();
-    const compilation = await latestCompilation();
+    await requireSharedBrainIndex();
     const titles: string[] = [];
     let result: ChatAssertionCaptureResult | undefined;
     try {
@@ -224,7 +220,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
           toolExecutions: [],
           finalAnswer: "目前没有足够证据确认该活动的时间和地点。",
         },
-        retrieval: emptyRetrieval(compilation.id, "未得到事实答案的活动时间地点提问"),
+        retrieval: emptyRetrieval("未得到事实答案的活动时间地点提问"),
         queueDecision: { reason: "负例验收：疑问句中的命题必须由 Assertion Agent 拒绝" },
       }, traceRecorder(titles));
 
@@ -233,7 +229,6 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
       expect(titles).toContain("后台 Assertion Agent · Schema 校验后的输出");
       await expect(database.memoryGlobalObject.count({
         where: {
-          compilationId: compilation.id,
           canonicalName: "Echo人工验收赛-20260821-C2",
         },
       })).resolves.toBe(0);
@@ -244,7 +239,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
 
   it("does not publish a factual detail introduced only by the Assistant", async () => {
     const database = getDatabase();
-    const compilation = await latestCompilation();
+    await requireSharedBrainIndex();
     const titles: string[] = [];
     let result: ChatAssertionCaptureResult | undefined;
     try {
@@ -264,7 +259,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
           toolExecutions: [],
           finalAnswer: "Echo人工验收赛-20260821-C3将于2026年8月28日在南区馆举行。",
         },
-        retrieval: emptyRetrieval(compilation.id, "Assistant 单方面给出的活动信息"),
+        retrieval: emptyRetrieval("Assistant 单方面给出的活动信息"),
         queueDecision: { reason: "负例验收：只有 Assistant 提供的事实必须被 Assertion Agent 拒绝" },
       }, traceRecorder(titles));
 
@@ -273,7 +268,6 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
       expect(titles).toContain("后台 Assertion Agent · Schema 校验后的输出");
       await expect(database.memoryGlobalObject.count({
         where: {
-          compilationId: compilation.id,
           canonicalName: "Echo人工验收赛-20260821-C3",
         },
       })).resolves.toBe(0);
@@ -284,13 +278,13 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
 
   it("preserves relayed sources and handles an identical retry idempotently", async () => {
     const database = getDatabase();
-    const compilation = await latestCompilation();
+    await requireSharedBrainIndex();
     const titles: string[] = [];
     const testObjectName = "Echo人工验收赛-20260821-C4";
     const userMessage =
       `我问了一下验收员王明，他说${testObjectName}可能在2026年8月29日举行，地点还没确定。`;
     const staleObject = await database.memoryGlobalObject.findFirst({
-      where: { compilationId: compilation.id, canonicalName: testObjectName },
+      where: { canonicalName: testObjectName },
       select: { id: true, canonicalName: true },
     });
     await cleanupChatCapture(relayedFactMessageId, staleObject ? {
@@ -315,7 +309,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
         toolExecutions: [],
         finalAnswer: "收到，我会把它作为验收员王明提供、且时间和地点尚未完全确定的信息处理。",
       },
-      retrieval: emptyRetrieval(compilation.id, "带明确来源和不确定性的活动安排"),
+      retrieval: emptyRetrieval("带明确来源和不确定性的活动安排"),
       queueDecision: { reason: "正例验收：转述事实应保留来源后发布" },
     };
     let result: ChatAssertionCaptureResult | undefined;
@@ -381,7 +375,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
         },
       })).resolves.toBe(1);
       await expect(database.memoryGlobalObject.count({
-        where: { compilationId: compilation.id, canonicalName: testObjectName },
+        where: { canonicalName: testObjectName },
       })).resolves.toBe(1);
     } finally {
       await cleanupChatCapture(relayedFactMessageId, result);
@@ -390,14 +384,13 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
 
   it("publishes multiple propositions, Objects, and cross-message Evidence", async () => {
     const database = getDatabase();
-    const compilation = await latestCompilation();
+    await requireSharedBrainIndex();
     const titles: string[] = [];
     const sections: string[] = [];
     const eventName = "Echo人工验收赛-20260821-C5";
     const groupName = "Echo-C5验收组";
     const staleObjects = await database.memoryGlobalObject.findMany({
       where: {
-        compilationId: compilation.id,
         canonicalName: { in: [eventName, groupName] },
       },
       select: { id: true, canonicalName: true },
@@ -437,7 +430,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
           toolExecutions: [],
           finalAnswer: "收到，负责人安排不变，并已补充活动时间、地点和报名截止时间。",
         },
-        retrieval: emptyRetrieval(compilation.id, "活动负责人和多项安排"),
+        retrieval: emptyRetrieval("活动负责人和多项安排"),
         queueDecision: { reason: "综合正例验收：多命题、多对象和多 Evidence" },
       }, traceRecorder(titles, sections));
 
@@ -494,10 +487,9 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
 
   it("uses the searchable Object Higher Memory agent and restores its test target", async () => {
     const database = getDatabase();
-    const compilation = await latestCompilation();
+    await requireSharedBrainIndex();
     const target = await database.memoryGlobalObject.findFirstOrThrow({
       where: {
-        compilationId: compilation.id,
         assertionLinks: { some: {} },
       },
       orderBy: { canonicalName: "asc" },
@@ -527,7 +519,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
           finalAnswer: "我会基于已有记忆整理。",
         },
         retrieval: {
-          ...emptyRetrieval(compilation.id, target.canonicalName),
+          ...emptyRetrieval(target.canonicalName),
           seedMap: {
             facets: [],
             objects: [{

@@ -150,7 +150,6 @@ describe("createMemoryExploreToolset", () => {
   it("does not expose storage IDs in main-model search results", async () => {
     exploreMocks.searchMemory.mockResolvedValue({
       ...explored(),
-      compilationId: "compilation-secret",
       objects: [{
         ref: "O7",
         id: "database-object-id",
@@ -179,7 +178,6 @@ describe("createMemoryExploreToolset", () => {
     }));
     expect(JSON.stringify(result)).not.toContain("database-object-id");
     expect(JSON.stringify(result)).not.toContain("database-object-key");
-    expect(JSON.stringify(result)).not.toContain("compilation-secret");
   });
 
   it("presents grounded facts separately from source References", async () => {

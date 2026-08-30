@@ -20,14 +20,12 @@ import {
 } from "@/memory/object-higher-memory";
 import type { MemoryRetrievalResult } from "@/memory/types";
 
-const compilationId = "00000000-0000-4000-8000-000000000010";
 const objectId = "00000000-0000-4000-8000-000000000020";
 
 function retrieval(): MemoryRetrievalResult {
   return {
     query: "测试社团",
     mode: "object-assertion",
-    compilationId,
     seedMap: {
       facets: [],
       objects: [{
@@ -77,12 +75,10 @@ beforeEach(() => {
   const upsert = vi.fn().mockResolvedValue({ id: "memory-row" });
   const update = vi.fn().mockResolvedValue({ id: "memory-row" });
   const transaction = {
-    memoryCompilation: { findFirst: vi.fn().mockResolvedValue({ id: compilationId }) },
     memoryGlobalObject: { count: vi.fn().mockResolvedValue(1) },
     memoryObjectHigherMemory: { upsert, update },
   };
   databaseState.database = {
-    memoryCompilation: { findFirst: vi.fn().mockResolvedValue({ id: compilationId }) },
     memoryGlobalObject: {
       findMany: vi.fn().mockResolvedValue([{
         id: objectId,
@@ -99,7 +95,6 @@ beforeEach(() => {
   exploreState.followObject.mockResolvedValue({
     kind: "follow-object",
     mode: "object-assertion",
-    compilationId,
     globalObjectId: objectId,
     objects: [],
     assertions: [],
@@ -169,7 +164,6 @@ describe("maintainObjectHigherMemories", () => {
     expect(transaction.memoryObjectHigherMemory.upsert).toHaveBeenCalledWith({
       where: { globalObjectId: objectId },
       create: expect.objectContaining({
-        compilationId,
         globalObjectId: objectId,
         cognitiveMemory: expect.objectContaining({
           identityAndBoundaries: expect.stringContaining("测试社团"),
@@ -292,7 +286,6 @@ describe("findExistingHigherMemoryObjectIds", () => {
 
     await expect(findExistingHigherMemoryObjectIds({
       objectIds: [objectId, otherObjectId, "00000000-0000-4000-8000-000000000022"],
-      compilationId,
     })).resolves.toEqual([objectId, otherObjectId]);
   });
 });

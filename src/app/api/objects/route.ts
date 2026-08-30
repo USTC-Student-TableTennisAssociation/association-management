@@ -13,16 +13,8 @@ export async function GET(request: Request) {
       ? Math.min(30, Math.max(1, requestedLimit))
       : 20;
     const database = getDatabase();
-    const compilation = await database.memoryCompilation.findFirst({
-      orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-      select: { id: true },
-    });
-    if (!compilation) {
-      return Response.json({ objects: [] }, { headers: { "Cache-Control": "no-store" } });
-    }
     const objects = await database.memoryGlobalObject.findMany({
       where: {
-        compilationId: compilation.id,
         ...(query
           ? { canonicalName: { contains: query, mode: "insensitive" as const } }
           : {}),

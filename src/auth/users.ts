@@ -28,40 +28,24 @@ function cleanName(value: string, label: string): string {
   return cleaned;
 }
 
-async function currentCompilation(database: Prisma.TransactionClient) {
-  const compilation = await database.memoryCompilation.findFirst({
-    orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    select: { id: true },
-  });
-  if (!compilation) {
-    throw new AuthUserValidationError(
-      "当前尚无 Shared Brain Compilation，无法为登录账号建立 Actor Object。",
-      "NO_COMPILATION",
-    );
-  }
-  return compilation;
-}
-
 async function resolveActorObject(input: {
   database: Prisma.TransactionClient;
-  compilationId: string;
   displayName: string;
   actorObjectId?: string;
 }) {
   if (input.actorObjectId) {
     const selected = await input.database.memoryGlobalObject.findFirst({
-      where: { id: input.actorObjectId, compilationId: input.compilationId },
+      where: { id: input.actorObjectId },
       select: { id: true, canonicalName: true },
     });
     if (!selected) {
-      throw new AuthUserValidationError("选择的 Actor Object 不存在于当前 Compilation。");
+      throw new AuthUserValidationError("选择的 Actor Object 不存在于 Shared Brain。");
     }
     return selected;
   }
 
   const candidates = await input.database.memoryGlobalObject.findMany({
     where: {
-      compilationId: input.compilationId,
       canonicalName: { equals: input.displayName, mode: "insensitive" },
     },
     orderBy: { id: "asc" },
@@ -82,7 +66,6 @@ async function resolveActorObject(input: {
   return input.database.memoryGlobalObject.create({
     data: {
       id,
-      compilationId: input.compilationId,
       globalObjectKey: `account-actor:${id}`,
       canonicalName: input.displayName,
     },
@@ -98,13 +81,11 @@ async function createUserInTransaction(
   const loginName = cleanName(input.loginName, "登录名");
   const displayName = cleanName(input.displayName, "真实姓名");
   const normalizedLoginName = normalizeLoginName(loginName);
-  const compilation = await currentCompilation(database);
   await database.$queryRaw(transactionAdvisoryLockQuery(
-    `auth-actor-object-provision:${compilation.id}:${displayName.normalize("NFKC").toLocaleLowerCase("zh-CN")}`,
+    `auth-actor-object-provision:${displayName.normalize("NFKC").toLocaleLowerCase("zh-CN")}`,
   ));
   const actorObject = await resolveActorObject({
     database,
-    compilationId: compilation.id,
     displayName,
     actorObjectId: input.actorObjectId,
   });

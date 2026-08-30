@@ -68,7 +68,6 @@ export type ObjectIdentityReference = {
 };
 
 export type ObjectIdentityInspection = {
-  compilationId: string;
   object: {
     id: string;
     canonicalName: string;

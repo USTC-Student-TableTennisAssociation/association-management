@@ -32,16 +32,14 @@ function sameProfile(left: EmbeddingBatch, right: EmbeddingBatch): boolean {
 }
 
 /**
- * 重建指定 Shared Brain 快照的完整 Assertion 索引。
+ * 重建 Shared Brain 的完整 Assertion 索引。
  * 资料库发布先原子替换来源记忆，再调用本函数；索引失败不会回滚已发布的可读 Assertion。
  */
 export async function rebuildMemoryAssertionIndex(input: {
-  compilationId: string;
   onProgress?: (completed: number, total: number) => Promise<void> | void;
 }): Promise<{ indexedAssertionCount: number; profile?: EmbeddingBatch }> {
   const database = getDatabase();
   const assertions = await database.memoryAssertion.findMany({
-    where: { compilationId: input.compilationId },
     orderBy: { id: "asc" },
     select: {
       id: true,
@@ -57,11 +55,9 @@ export async function rebuildMemoryAssertionIndex(input: {
   if (!assertions.length) {
     await database.$transaction([
       database.memoryAssertionEmbedding.deleteMany({
-        where: { assertion: { compilationId: input.compilationId } },
+        where: {},
       }),
-      database.memoryAssertionEmbeddingIndex.deleteMany({
-        where: { compilationId: input.compilationId },
-      }),
+      database.memoryAssertionEmbeddingIndex.deleteMany(),
     ]);
     return { indexedAssertionCount: 0 };
   }
@@ -108,18 +104,12 @@ export async function rebuildMemoryAssertionIndex(input: {
   }
 
   await database.$transaction(async (transaction) => {
-    const currentCount = await transaction.memoryAssertion.count({
-      where: { compilationId: input.compilationId },
-    });
+    const currentCount = await transaction.memoryAssertion.count();
     if (currentCount !== indexed.length) {
       throw new Error("生成 embedding 期间 Shared Brain Assertion 已改变");
     }
-    await transaction.memoryAssertionEmbedding.deleteMany({
-      where: { assertion: { compilationId: input.compilationId } },
-    });
-    await transaction.memoryAssertionEmbeddingIndex.deleteMany({
-      where: { compilationId: input.compilationId },
-    });
+    await transaction.memoryAssertionEmbedding.deleteMany();
+    await transaction.memoryAssertionEmbeddingIndex.deleteMany();
     for (let start = 0; start < indexed.length; start += 64) {
       const values = indexed.slice(start, start + 64).map((item) =>
         Prisma.sql`(${item.assertionId}::uuid, ${item.contentHash}, ${vectorLiteral(item.vector)}::vector)`
@@ -131,7 +121,7 @@ export async function rebuildMemoryAssertionIndex(input: {
     }
     await transaction.memoryAssertionEmbeddingIndex.create({
       data: {
-        compilationId: input.compilationId,
+        id: "shared",
         modelKey: profile.model,
         modelRevision: profile.modelRevision,
         dimension: profile.dimension,

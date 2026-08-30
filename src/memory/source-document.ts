@@ -80,12 +80,12 @@ function sourceBlock(row: {
 }
 
 async function blockAt(
-  compilationId: string,
+  publicationRunId: string,
   sourceBlockId: string,
 ) {
   const block = await getDatabase().memorySourceBlock.findUnique({
     where: {
-      compilationId_sourceBlockId: { compilationId, sourceBlockId },
+      publicationRunId_sourceBlockId: { publicationRunId, sourceBlockId },
     },
     select: {
       sourceBlockId: true,
@@ -104,14 +104,14 @@ async function blockAt(
 }
 
 export async function containingSectionHeadingBlockId(
-  compilationId: string,
+  publicationRunId: string,
   sourceBlockId: string,
 ): Promise<string> {
-  const anchor = await blockAt(compilationId, sourceBlockId);
+  const anchor = await blockAt(publicationRunId, sourceBlockId);
   if (anchor.headingLevel !== null) return anchor.sourceBlockId;
   const heading = await getDatabase().memorySourceBlock.findFirst({
     where: {
-      compilationId,
+      publicationRunId,
       order: { lte: anchor.order },
       headingLevel: { not: null },
     },
@@ -127,11 +127,11 @@ export async function containingSectionHeadingBlockId(
 }
 
 async function selectionBounds(
-  compilationId: string,
+  publicationRunId: string,
   selection: ContentSelection,
 ): Promise<{ startOrder: number; endOrder: number; label: string }> {
   if (selection.mode === "around") {
-    const anchor = await blockAt(compilationId, selection.sourceBlockId);
+    const anchor = await blockAt(publicationRunId, selection.sourceBlockId);
     return {
       startOrder: Math.max(0, anchor.order - selection.beforeBlocks),
       endOrder: anchor.order + selection.afterBlocks,
@@ -141,8 +141,8 @@ async function selectionBounds(
 
   if (selection.mode === "range") {
     const [start, end] = await Promise.all([
-      blockAt(compilationId, selection.startBlockId),
-      blockAt(compilationId, selection.endBlockId),
+      blockAt(publicationRunId, selection.startBlockId),
+      blockAt(publicationRunId, selection.endBlockId),
     ]);
     if (start.order > end.order) {
       throw new SourceDocumentReadError("原文范围的起始 Block 必须早于结束 Block");
@@ -155,7 +155,7 @@ async function selectionBounds(
   }
 
   const finalBlock = await getDatabase().memorySourceBlock.findFirst({
-    where: { compilationId },
+    where: { publicationRunId },
     orderBy: { order: "desc" },
     select: { order: true },
   });
@@ -163,7 +163,7 @@ async function selectionBounds(
 
   if (selection.mode === "full") {
     const firstBlock = await getDatabase().memorySourceBlock.findFirst({
-      where: { compilationId },
+      where: { publicationRunId },
       orderBy: { order: "asc" },
       select: { order: true },
     });
@@ -175,7 +175,7 @@ async function selectionBounds(
     };
   }
 
-  const heading = await blockAt(compilationId, selection.headingBlockId);
+  const heading = await blockAt(publicationRunId, selection.headingBlockId);
   if (heading.headingLevel === null) {
     throw new SourceDocumentReadError(
       `SourceBlock ${selection.headingBlockId} 不是章节标题，请先读取 outline`,
@@ -183,7 +183,7 @@ async function selectionBounds(
   }
   const nextHeading = await getDatabase().memorySourceBlock.findFirst({
     where: {
-      compilationId,
+      publicationRunId,
       order: { gt: heading.order },
       headingLevel: { not: null, lte: heading.headingLevel },
     },
@@ -198,25 +198,34 @@ async function selectionBounds(
 }
 
 export async function readSourceDocumentSelection(input: {
-  compilationId: string;
+  publicationRunId: string;
   selection: SourceDocumentSelection;
   maxCharacters?: number;
   startOrder?: number;
 }): Promise<SourceDocumentReadResult & { nextStartOrder?: number }> {
-  const compilation = await getDatabase().memoryCompilation.findUnique({
-    where: { id: input.compilationId },
+  const publicationRun = await getDatabase().librarySourceProcessingRun.findUnique({
+    where: { id: input.publicationRunId },
     select: {
       id: true,
-      sourceTitle: true,
-      sourceSha256: true,
-      sourceParser: true,
-      sourcePageCount: true,
-      sourceBlockCount: true,
+      parserKey: true,
+      libraryNode: { select: { name: true } },
+      sourceBlob: { select: { sha256: true } },
+      publishedBlocks: { select: { sourcePages: true } },
     },
   });
-  if (!compilation) throw new SourceDocumentReadError("当前记忆快照没有可读取的原文文档");
+  if (!publicationRun?.sourceBlob) {
+    throw new SourceDocumentReadError("Shared Brain 中没有可读取的来源文档");
+  }
 
-  const document = documentMetadata(compilation);
+  const pages = new Set(publicationRun.publishedBlocks.flatMap((block) => block.sourcePages));
+  const document = documentMetadata({
+    id: publicationRun.id,
+    sourceTitle: publicationRun.libraryNode.name,
+    sourceSha256: publicationRun.sourceBlob.sha256,
+    sourceParser: publicationRun.parserKey ?? "unknown",
+    sourcePageCount: pages.size,
+    sourceBlockCount: publicationRun.publishedBlocks.length,
+  });
   const requestedMaxCharacters = Math.max(
     sourceDocumentLimits.minCharacters,
     Math.min(
@@ -227,7 +236,7 @@ export async function readSourceDocumentSelection(input: {
 
   if (input.selection.mode === "outline") {
     const headings = await getDatabase().memorySourceBlock.findMany({
-      where: { compilationId: input.compilationId, headingLevel: { not: null } },
+      where: { publicationRunId: input.publicationRunId, headingLevel: { not: null } },
       orderBy: { order: "asc" },
       select: {
         sourceBlockId: true,
@@ -258,14 +267,14 @@ export async function readSourceDocumentSelection(input: {
     };
   }
 
-  const bounds = await selectionBounds(input.compilationId, input.selection);
+  const bounds = await selectionBounds(input.publicationRunId, input.selection);
   const effectiveStart = Math.max(bounds.startOrder, input.startOrder ?? bounds.startOrder);
   if (effectiveStart > bounds.endOrder) {
     throw new SourceDocumentReadError("续读位置已经超出本次原文选择范围");
   }
   const rows = await getDatabase().memorySourceBlock.findMany({
     where: {
-      compilationId: input.compilationId,
+      publicationRunId: input.publicationRunId,
       order: { gte: effectiveStart, lte: bounds.endOrder },
     },
     orderBy: { order: "asc" },
@@ -312,12 +321,12 @@ export async function readSourceDocumentSelection(input: {
 
 
 export async function readSourceDocumentRange(input: {
-  compilationId: string;
+  publicationRunId: string;
   startBlockId: string;
   endBlockId: string;
 }): Promise<{ document: SourceDocumentMetadata; blocks: SourceDocumentBlock[] }> {
   const result = await readSourceDocumentSelection({
-    compilationId: input.compilationId,
+    publicationRunId: input.publicationRunId,
     selection: {
       mode: "range",
       startBlockId: input.startBlockId,

@@ -1,4 +1,3 @@
-import { getDatabase } from "@/db";
 import { maintainHigherMemories } from "@/memory/higher-memory-maintenance";
 import {
   buildViewChangeContext,
@@ -21,13 +20,6 @@ export async function reconcileObjectHigherMemoryFromViewChange(
     .filter((object) => object.cognitiveMemory !== undefined)
     .slice(0, 6);
   if (!existingTargets.length) return 0;
-
-  const database = getDatabase();
-  const compilation = await database.memoryCompilation.findFirst({
-    orderBy: [{ importedAt: "desc" }, { id: "desc" }],
-    select: { id: true },
-  });
-  if (!compilation) return 0;
 
   const submittedAt = new Date().toISOString();
   const latestExecution = input.executions.at(-1);
@@ -57,7 +49,6 @@ export async function reconcileObjectHigherMemoryFromViewChange(
     retrieval: {
       query: `${input.viewModule.manifest.label}正式修改后的 Object Higher Memory 对账`,
       mode: "object-assertion",
-      compilationId: compilation.id,
       seedMap: { facets: [], objects: [], assertions: [], connections: [] },
     },
     queueDecision: {
