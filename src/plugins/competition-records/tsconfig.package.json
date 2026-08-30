@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "strict": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "jsx": "react-jsx",
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "manifest.ts",
+    "skill.ts",
+    "view/**/*.ts",
+    "tools/**/*.ts",
+    "presentation/**/*.ts",
+    "presentation/**/*.tsx"
+  ],
+  "exclude": ["**/*.test.ts", "dist"]
+}

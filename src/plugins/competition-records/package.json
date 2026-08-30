@@ -1,0 +1,52 @@
+{
+  "name": "@sydaris/competition-records-plugin",
+  "version": "0.3.0",
+  "description": "Competition records View, tools, Skill, and Presentation for Sydaris",
+  "type": "module",
+  "files": [
+    "dist",
+    "echo.plugin.json",
+    "README.md"
+  ],
+  "exports": {
+    "./server": {
+      "types": "./dist/manifest.d.ts",
+      "import": "./dist/manifest.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation/competition-records-workspace.d.ts",
+      "import": "./dist/presentation/competition-records-workspace.js"
+    },
+    "./sync-contracts": {
+      "types": "./dist/tools/contracts.d.ts",
+      "import": "./dist/tools/contracts.js"
+    },
+    "./echo.plugin.json": "./echo.plugin.json"
+  },
+  "echoPlugin": "./echo.plugin.json",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.package.json && node scripts/copy-assets.mjs",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
+  },
+  "peerDependencies": {
+    "@sydaris/plugin-sdk": ">=0.1.0-alpha.7 <0.2.0-0",
+    "react": "^19.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@sydaris/plugin-sdk": "workspace:*",
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.20.0",
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "typescript": "^5.0.0",
+    "zod": "^4.0.0"
+  },
+  "license": "Apache-2.0"
+}

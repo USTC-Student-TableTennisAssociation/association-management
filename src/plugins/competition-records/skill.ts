@@ -1,7 +1,9 @@
 import { z } from "zod";
 
-import type { SkillExtension } from "@/contracts";
-import { zodContractSchema } from "@/contracts";
+import {
+  type SkillExtension,
+  zodContractSchema,
+} from "@sydaris/plugin-sdk";
 
 export const competitionSeriesCuratorSkill: SkillExtension = {
   id: "echo.competition-records.curate-series",

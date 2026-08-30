@@ -1,11 +1,11 @@
-import type { ToolProviderExtension } from "@/contracts";
+import type { ToolProviderExtension } from "@sydaris/plugin-sdk";
 import {
   COMPETITION_EDITION_PROJECT_CAPABILITY,
   COMPETITION_EDITION_PROJECTION_PROVIDER_ID,
   COMPETITION_TOOL_CAPABILITY_VERSION,
   type CompetitionEditionProjectInput,
   type CompetitionEditionProjectOutput,
-} from "@/plugins/competition-records/tools/contracts";
+} from "./contracts.js";
 
 const digitValues: Readonly<Record<string, number>> = {
   "零": 0,

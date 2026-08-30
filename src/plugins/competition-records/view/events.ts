@@ -1,7 +1,9 @@
 import { z } from "zod";
 
-import type { DomainEventDefinition } from "@/contracts";
-import { zodContractSchema } from "@/contracts";
+import {
+  type DomainEventDefinition,
+  zodContractSchema,
+} from "@sydaris/plugin-sdk";
 
 const uuid = z.string().uuid();
 

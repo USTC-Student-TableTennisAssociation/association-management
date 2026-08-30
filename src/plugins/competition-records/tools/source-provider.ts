@@ -1,6 +1,6 @@
 import { Pool } from "pg";
 
-import type { ToolProviderExtension } from "@/contracts";
+import type { ToolProviderExtension } from "@sydaris/plugin-sdk";
 import {
   COMPETITION_SOURCE_READ_CAPABILITY,
   COMPETITION_TOOL_CAPABILITY_VERSION,
@@ -9,7 +9,7 @@ import {
   type SourceCompetitionRecord,
   USTCTTA_SOURCE_SYSTEM,
   USTCTTA_SOURCE_PROVIDER_ID,
-} from "@/plugins/competition-records/tools/contracts";
+} from "./contracts.js";
 
 type SourceRow = {
   sourceId: string;

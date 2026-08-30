@@ -1,4 +1,4 @@
-import type { PresentationExtension } from "@/contracts";
+import type { PresentationExtension } from "@sydaris/plugin-sdk";
 
 export const competitionRecordsPresentation: PresentationExtension = {
   id: "echo.competition-records.presentation",

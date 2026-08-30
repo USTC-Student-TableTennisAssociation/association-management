@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "id": "echo.competition-records",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "engines": {
-    "echo": ">=0.1.0-alpha.1 <0.2.0-0"
+    "echo": ">=0.1.0-alpha.7 <0.2.0-0"
   },
   "server": {
-    "entry": "./manifest.ts",
+    "entry": "./dist/manifest.js",
     "export": "competitionRecordsPlugin"
   },
   "contributes": {
@@ -16,7 +16,7 @@
     "presentations": [
       {
         "loader": "competition-records/workspace",
-        "entry": "./presentation/competition-records-workspace.tsx",
+        "entry": "./dist/presentation/competition-records-workspace.js",
         "export": "CompetitionRecordsWorkspace"
       }
     ],

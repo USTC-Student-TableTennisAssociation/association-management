@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { competitionRecordsPlugin } from "@/plugins/competition-records/manifest";
 import { societyInformationPlugin } from "@/plugins/society-information/dist/manifest";
 import { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
+import { competitionRecordsPlugin } from "@sydaris/competition-records-plugin/server";
 
 describe("competition records Plugin", () => {
   it("registers the view, AI commands, and executable series-curation skill", () => {

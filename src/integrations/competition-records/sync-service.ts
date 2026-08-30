@@ -1,4 +1,4 @@
-import type { ActorContext, ToolCaller } from "@/contracts";
+import type { ActorContext, ToolCaller } from "@sydaris/plugin-sdk";
 import {
   COMPETITION_EDITION_PROJECT_CAPABILITY,
   COMPETITION_EDITION_PROJECTION_PROVIDER_ID,
@@ -8,7 +8,8 @@ import {
   competitionSourceBatchSchema,
   type CompetitionSourceReadInput,
   USTCTTA_SOURCE_PROVIDER_ID,
-} from "@/plugins/competition-records/tools/contracts";
+} from "@sydaris/competition-records-plugin/sync-contracts";
+
 import type { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
 import type { ViewCommandBus } from "@/view-runtime/application/command-bus";
 

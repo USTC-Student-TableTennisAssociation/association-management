@@ -97,18 +97,8 @@ describe("Echo plugin architecture boundaries", () => {
     expect(presentationHost).toContain("installedPresentationComponents");
   });
 
-  it("does not hide new Plugin boundary violations behind the known normalization debt", () => {
-    const unexpected = pluginBoundaryViolations()
-      .filter((violation) => violation.pluginId !== "echo.competition-records")
-      .map((violation) => violation.message);
-    expect(unexpected).toEqual([]);
-  });
-
-  it.fails("keeps competition-records behind the public SDK boundary (normalization pending)", () => {
-    const pending = pluginBoundaryViolations()
-      .filter((violation) => violation.pluginId === "echo.competition-records")
-      .map((violation) => violation.message);
-    expect(pending).toEqual([]);
+  it("keeps every installed Plugin behind the public SDK boundary", () => {
+    expect(pluginBoundaryViolations().map((violation) => violation.message)).toEqual([]);
   });
 
   it("keeps Generic Surfaces read-only", () => {
