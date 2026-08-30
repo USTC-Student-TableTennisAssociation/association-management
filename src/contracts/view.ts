@@ -35,6 +35,7 @@ export type {
   ViewKey,
   ViewManifest,
   ViewModule,
+  ViewPresentationSnapshot,
   ViewReadSnapshot,
   ViewReactionAttentionPolicy,
   ViewReactionAttentionStatus,

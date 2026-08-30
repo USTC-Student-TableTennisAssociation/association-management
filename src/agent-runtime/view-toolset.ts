@@ -154,7 +154,9 @@ export function createAgentViewToolset(input: {
 }) {
   const { registry, readPort, commandBus } = input;
   const inspectedViews = new Set<string>();
-  const snapshots = new Map<string, Promise<ViewReadSnapshot & { references: ViewInformationReference[] }>>();
+  const snapshots = new Map<string, Promise<
+    ViewReadSnapshot & { references: readonly ViewInformationReference[] }
+  >>();
   const referenceByRef = new Map<string, ViewInformationReference>();
   const publishedObjects = new Map<string, { id: string; canonicalName: string }>();
 
@@ -357,7 +359,7 @@ export function createAgentViewToolset(input: {
         return {
           ...snapshot,
           cards: presentCards(snapshot.cards),
-          references: (snapshot.references as readonly ViewInformationReference[]).map((reference) => ({
+          references: snapshot.references.map((reference) => ({
             ref: reference.ref,
             label: reference.label,
             targetKind: reference.target.kind,

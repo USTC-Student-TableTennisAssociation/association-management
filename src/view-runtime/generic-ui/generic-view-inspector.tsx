@@ -1,9 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { AIInvocation } from "@sydaris/plugin-sdk";
-
-import type { ViewInspectorSnapshot } from "@/view-runtime/application/view-read-port";
+import { useView } from "@sydaris/plugin-sdk/react";
 
 function displayValue(value: unknown): string {
   if (typeof value === "string") return value;
@@ -26,37 +25,7 @@ export function GenericViewInspector({
   onOpenAI?: () => void;
   onInvokeAI?: (invocation: AIInvocation) => void;
 }) {
-  const [reloadSequence, setReloadSequence] = useState(0);
-  const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
-  const [result, setResult] = useState<{
-    requestKey: string;
-    snapshot?: ViewInspectorSnapshot;
-    error?: string;
-  }>();
-
-  useEffect(() => {
-    const controller = new AbortController();
-    fetch(`/api/views/${encodeURIComponent(viewKey)}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    }).then(async (response) => {
-      const body = await response.json() as ViewInspectorSnapshot & { error?: string };
-      if (!response.ok) throw new Error(body.error ?? "无法读取 View");
-      setResult({ requestKey, snapshot: body });
-    }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return;
-      setResult((current) => ({
-        requestKey,
-        snapshot: current?.snapshot,
-        error: cause instanceof Error ? cause.message : String(cause),
-      }));
-    });
-    return () => controller.abort();
-  }, [requestKey, viewKey]);
-
-  const loading = !result?.snapshot && result?.requestKey !== requestKey;
-  const snapshot = result?.snapshot;
-  const error = result?.requestKey === requestKey ? result.error : undefined;
+  const { snapshot, error, loading, refresh } = useView(viewKey, refreshRevision);
 
   const schemaByType = useMemo(() => new Map(
     snapshot?.schema.cardTypes.map((cardType) => [cardType.key, cardType]) ?? [],
@@ -85,7 +54,7 @@ export function GenericViewInspector({
         </div>
         <div className="flex gap-2">
           {onClose ? <button type="button" onClick={onClose} className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50">返回工作视图</button> : null}
-          <button type="button" onClick={() => setReloadSequence((value) => value + 1)} className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">刷新</button>
+          <button type="button" onClick={refresh} className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-700 hover:bg-zinc-50">刷新</button>
           {onOpenAI ? <button type="button" onClick={onOpenAI} className="rounded-lg bg-emerald-800 px-3 py-2 text-sm text-white hover:bg-emerald-900">打开 AI</button> : null}
         </div>
       </header>

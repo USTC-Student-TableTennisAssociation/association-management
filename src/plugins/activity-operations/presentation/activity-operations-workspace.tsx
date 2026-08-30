@@ -303,7 +303,7 @@ export function ActivityOperationsWorkspace({ viewKey, refreshRevision = 0, focu
   const { snapshot, loading, error, refresh } = useView(viewKey, refreshRevision + localRevision);
   const executeCommand = useViewCommand(viewKey);
   const model = useMemo(() => snapshot ? buildActivityStudio(snapshot, { selectedActivityId, selectedPlaybookId, selectedCardId, focusCardId }) : undefined, [focusCardId, selectedActivityId, selectedCardId, selectedPlaybookId, snapshot]);
-  const objectNames = useMemo(() => new Map(snapshot?.objects?.map((object) => [object.id, object.canonicalName]) ?? []), [snapshot]);
+  const objectNames = useMemo(() => new Map(snapshot?.objects.map((object) => [object.id, object.canonicalName]) ?? []), [snapshot]);
   const lastFocusRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {

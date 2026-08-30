@@ -132,7 +132,6 @@ function fixture(options: {
           relatedObjectIds: [],
         },
       ],
-      references: [],
     }),
   };
   const evaluate = vi.fn().mockResolvedValue({

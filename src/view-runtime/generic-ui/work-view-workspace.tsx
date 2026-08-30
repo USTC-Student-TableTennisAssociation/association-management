@@ -1,10 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import type { AIInvocation } from "@sydaris/plugin-sdk";
-import { useViewReactions } from "@sydaris/plugin-sdk/react";
-
-import type { ViewInspectorSnapshot } from "@/view-runtime/application/view-read-port";
+import { useView, useViewReactions } from "@sydaris/plugin-sdk/react";
 
 function displayValue(value: unknown): string {
   if (typeof value === "string") return value;
@@ -25,38 +23,8 @@ export function WorkViewWorkspace({
   onOpenInspector: () => void;
   onInvokeAI: (invocation: AIInvocation) => void;
 }) {
-  const [reloadSequence, setReloadSequence] = useState(0);
   const { reactions } = useViewReactions(viewKey);
-  const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
-  const [result, setResult] = useState<{
-    requestKey: string;
-    snapshot?: ViewInspectorSnapshot;
-    error?: string;
-  }>();
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch(`/api/views/${encodeURIComponent(viewKey)}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    }).then(async (response) => {
-      const body = await response.json() as ViewInspectorSnapshot & { error?: string };
-      if (!response.ok) throw new Error(body.error ?? "无法读取 Work View");
-      setResult({ requestKey, snapshot: body });
-    }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return;
-      setResult((current) => ({
-        requestKey,
-        snapshot: current?.snapshot,
-        error: cause instanceof Error ? cause.message : String(cause),
-      }));
-    });
-    return () => controller.abort();
-  }, [requestKey, viewKey]);
-
-  const loading = !result?.snapshot && result?.requestKey !== requestKey;
-  const snapshot = result?.snapshot;
-  const error = result?.requestKey === requestKey ? result.error : undefined;
+  const { snapshot, error, loading, refresh } = useView(viewKey, refreshRevision);
   const cardTypes = useMemo(() => new Map(
     snapshot?.schema.cardTypes.map((cardType) => [cardType.key, cardType]) ?? [],
   ), [snapshot]);
@@ -95,7 +63,7 @@ export function WorkViewWorkspace({
             </button>
             <button
               type="button"
-              onClick={() => setReloadSequence((value) => value + 1)}
+              onClick={refresh}
               className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-600 hover:bg-zinc-50"
             >
               刷新

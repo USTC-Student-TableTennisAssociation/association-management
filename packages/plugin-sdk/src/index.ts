@@ -341,7 +341,15 @@ export interface ViewReadSnapshot {
   stateVersion: string;
   observedAt: string;
   cards: readonly ViewCardState[];
-  references: readonly unknown[];
+}
+
+export interface ViewPresentationSnapshot extends ViewReadSnapshot {
+  manifest: ViewManifest;
+  schema: ViewSchema;
+  objects: readonly {
+    id: ObjectId;
+    canonicalName: string;
+  }[];
 }
 
 export interface ViewPresentationDefinition {

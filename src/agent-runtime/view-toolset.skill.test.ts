@@ -38,7 +38,6 @@ function fixture(allowedCommand: string) {
         stateVersion: "3",
         observedAt: "2026-08-28T00:00:00.000Z",
         cards: [],
-        references: [],
       }),
     } as never,
     commandBus: commandBus as never,
