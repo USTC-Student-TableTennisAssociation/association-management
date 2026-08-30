@@ -209,7 +209,7 @@ export function buildViewChangeContext(input: ViewChangeContextInput) {
       canonicalName: object.canonicalName,
       cognitiveHigherMemory: object.cognitiveMemory ?? null,
     })),
-    humanChanges: input.executions.map((execution) => ({
+    commandExecutions: input.executions.map((execution) => ({
       command: commandsByKey.get(execution.commandKey)?.label ?? execution.commandKey,
       fromStateVersion: execution.stateVersionBefore,
       toStateVersion: execution.stateVersionAfter,

@@ -9,10 +9,12 @@ const executionId = "00000000-0000-4000-8000-000000000003";
 const societyCardId = "00000000-0000-4000-8000-000000000004";
 const societyObjectId = "00000000-0000-4000-8000-000000000005";
 const reactionId = "00000000-0000-4000-8000-000000000006";
+const viewLocalCardId = "00000000-0000-4000-8000-000000000007";
 
 function fixture(options: {
   deleted?: boolean;
-  reconcile?: () => Promise<number>;
+  reconcileObject?: () => Promise<number>;
+  reconcileView?: () => Promise<number>;
   superseded?: boolean;
 } = {}) {
   const registry = new ExtensionRegistry();
@@ -112,14 +114,24 @@ function fixture(options: {
       schemaVersion: "5",
       stateVersion: "2",
       observedAt: "2026-08-26T00:00:00.000Z",
-      cards: options.deleted ? [] : [{
-        id: societyCardId,
-        viewKey: "society_information",
-        cardTypeKey: "SocietyCard",
-        dimensions: { rating: "五星级社团" },
-        slots: {},
-        relatedObjectIds: [societyObjectId],
-      }],
+      cards: [
+        ...(options.deleted ? [] : [{
+          id: societyCardId,
+          viewKey: "society_information",
+          cardTypeKey: "SocietyCard",
+          dimensions: { rating: "五星级社团" },
+          slots: {},
+          relatedObjectIds: [societyObjectId],
+        }]),
+        {
+          id: viewLocalCardId,
+          viewKey: "society_information",
+          cardTypeKey: "SocietyCard",
+          dimensions: { rating: "未评级" },
+          slots: {},
+          relatedObjectIds: [],
+        },
+      ],
       references: [],
     }),
   };
@@ -128,15 +140,24 @@ function fixture(options: {
     message: "知识层只有三星级的历史记录，请确认五星级是否已正式获评。",
     reason: "当前修改与修改前认知不一致",
   });
-  const reconcileHigherMemory = vi.fn(options.reconcile ?? (async () => 1));
+  const reconcileObjectHigherMemory = vi.fn(options.reconcileObject ?? (async () => 1));
+  const reconcileViewHigherMemory = vi.fn(options.reconcileView ?? (async () => 1));
   const coordinator = new ViewChangeCoordinator({
     database: database as never,
     registry,
     readPort: readPort as never,
     evaluate,
-    reconcileHigherMemory,
+    reconcileObjectHigherMemory,
+    reconcileViewHigherMemory,
   });
-  return { coordinator, evaluate, reconcileHigherMemory, reaction, viewChangeReaction };
+  return {
+    coordinator,
+    evaluate,
+    reconcileObjectHigherMemory,
+    reconcileViewHigherMemory,
+    reaction,
+    viewChangeReaction,
+  };
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -151,15 +172,22 @@ describe("View change reaction coordinator", () => {
     const reconciliation = new Promise<number>((resolve) => {
       releaseReconciliation = resolve;
     });
-    const { coordinator, evaluate, reconcileHigherMemory, reaction } = fixture({
-      reconcile: () => reconciliation,
+    const {
+      coordinator,
+      evaluate,
+      reconcileObjectHigherMemory,
+      reconcileViewHigherMemory,
+      reaction,
+    } = fixture({
+      reconcileObject: () => reconciliation,
     });
 
     await expect(coordinator.enqueue({ reactionId })).resolves.toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => expect(evaluate).toHaveBeenCalledTimes(1));
 
-    expect(reconcileHigherMemory).toHaveBeenCalledTimes(1);
+    expect(reconcileObjectHigherMemory).toHaveBeenCalledTimes(1);
+    expect(reconcileViewHigherMemory).toHaveBeenCalledTimes(1);
     expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({
       attentionPolicy: "evaluate",
       reactionGuidance: ["星级是正式评定结果。"],
@@ -173,10 +201,21 @@ describe("View change reaction coordinator", () => {
         cognitiveMemory: { narrative: "历史资料只记录为三星级社团。" },
       })],
     }));
-    expect(reconcileHigherMemory).toHaveBeenCalledWith(expect.objectContaining({
+    expect(reconcileObjectHigherMemory).toHaveBeenCalledWith(expect.objectContaining({
+      snapshot: expect.objectContaining({
+        cards: [expect.objectContaining({ id: societyCardId })],
+      }),
       objects: [expect.objectContaining({
         cognitiveMemory: { narrative: "历史资料只记录为三星级社团。" },
       })],
+    }));
+    expect(reconcileViewHigherMemory).toHaveBeenCalledWith(expect.objectContaining({
+      snapshot: expect.objectContaining({
+        cards: [
+          expect.objectContaining({ id: societyCardId }),
+          expect.objectContaining({ id: viewLocalCardId, relatedObjectIds: [] }),
+        ],
+      }),
     }));
     expect(reaction.attentionStatus).toBe("needs_confirmation");
     releaseReconciliation?.(1);
@@ -185,22 +224,33 @@ describe("View change reaction coordinator", () => {
   });
 
   it("keeps a deleted card's former Object in both worker contexts", async () => {
-    const { coordinator, evaluate, reconcileHigherMemory } = fixture({ deleted: true });
+    const {
+      coordinator,
+      evaluate,
+      reconcileObjectHigherMemory,
+      reconcileViewHigherMemory,
+    } = fixture({ deleted: true });
 
     await coordinator.enqueue({ reactionId });
     await vi.advanceTimersByTimeAsync(1_000);
-    await vi.waitFor(() => expect(reconcileHigherMemory).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(reconcileObjectHigherMemory).toHaveBeenCalledTimes(1));
 
     expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({
       snapshot: expect.objectContaining({ cards: [] }),
       objects: [expect.objectContaining({ id: societyObjectId })],
     }));
-    expect(reconcileHigherMemory).toHaveBeenCalledWith(expect.objectContaining({
+    expect(reconcileObjectHigherMemory).toHaveBeenCalledWith(expect.objectContaining({
       snapshot: expect.objectContaining({ cards: [] }),
       objects: [expect.objectContaining({ id: societyObjectId })],
       executions: [expect.objectContaining({
         changes: [expect.objectContaining({ kind: "card_deleted" })],
       })],
+    }));
+    expect(reconcileViewHigherMemory).toHaveBeenCalledWith(expect.objectContaining({
+      snapshot: expect.objectContaining({
+        cards: [expect.objectContaining({ id: viewLocalCardId })],
+      }),
+      objects: [expect.objectContaining({ id: societyObjectId })],
     }));
     coordinator.dispose();
   });
@@ -215,13 +265,19 @@ describe("View change reaction coordinator", () => {
   });
 
   it("does not let a superseded reconciliation overwrite a newer View state", async () => {
-    const { coordinator, reconcileHigherMemory, reaction } = fixture({ superseded: true });
+    const {
+      coordinator,
+      reconcileObjectHigherMemory,
+      reconcileViewHigherMemory,
+      reaction,
+    } = fixture({ superseded: true });
 
     await coordinator.enqueue({ reactionId });
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.waitFor(() => expect(reaction.knowledgeStatus).toBe("completed"));
 
-    expect(reconcileHigherMemory).not.toHaveBeenCalled();
+    expect(reconcileObjectHigherMemory).not.toHaveBeenCalled();
+    expect(reconcileViewHigherMemory).not.toHaveBeenCalled();
     coordinator.dispose();
   });
 });
