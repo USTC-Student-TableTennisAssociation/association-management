@@ -44,7 +44,7 @@ export function createLibraryToolset(input: {
     tools: {
       listLibrary: tool({
         description: [
-          "查看 Echo 资料库的文件夹、文件索引和处理档位。",
+          "查看 Sydaris 资料库的文件夹、文件索引和处理档位。",
           "返回文件名、原始相对路径、格式与 catalog/coarse/deep 状态；full 模式另含大小和哈希等技术字段。它不读取文件内容。",
           "catalog（仅归档）文件没有被解析，不得从文件名推断其内容事实。",
           "盘点多层文件时使用 recursive=true，通常同时设置 kind=file、profile/queries/extensions；多个目录放入 folderIds。不要逐层遍历，也不要从历史文字猜测 UUID。",

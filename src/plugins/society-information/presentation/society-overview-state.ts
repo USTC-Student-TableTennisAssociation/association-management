@@ -20,7 +20,7 @@ export function presentSocietyReaction(
     reaction.attention.status === "running" ||
     reaction.knowledge.status === "queued" ||
     reaction.knowledge.status === "running";
-  if (active) return { label: "Echo 正在核对", tone: "checking" };
+  if (active) return { label: "Sydaris 正在核对", tone: "checking" };
   if (
     reaction.attention.status === "failed" ||
     reaction.knowledge.status === "failed"
@@ -31,7 +31,7 @@ export function presentSocietyReaction(
     return { label: "需要确认", tone: "attention" };
   }
   if (reaction.attention.status === "inform") {
-    return { label: "Echo 有一条说明", tone: "inform" };
+    return { label: "Sydaris 有一条说明", tone: "inform" };
   }
   if (
     reaction.attention.status === "silent" ||

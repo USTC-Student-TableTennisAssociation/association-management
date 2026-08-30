@@ -11,12 +11,12 @@ import { processLibraryCompilationRun } from "@/library/compilation-processor";
 import { processLibraryGlobalResolution } from "@/library/global-object-resolver";
 
 const globalRunner = globalThis as typeof globalThis & {
-  echoLibraryJobs?: Map<string, Promise<void>>;
+  libraryJobs?: Map<string, Promise<void>>;
 };
 
 function activeJobs(): Map<string, Promise<void>> {
-  globalRunner.echoLibraryJobs ??= new Map();
-  return globalRunner.echoLibraryJobs;
+  globalRunner.libraryJobs ??= new Map();
+  return globalRunner.libraryJobs;
 }
 
 const HEARTBEAT_INTERVAL_MS = 15_000;

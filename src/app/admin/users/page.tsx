@@ -115,11 +115,11 @@ export default function UserAdminPage() {
       <div className="mx-auto max-w-6xl">
         <header className="flex items-center justify-between gap-4">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-700">Echo 管理</p>
+            <p className="text-sm font-semibold uppercase tracking-[0.16em] text-emerald-700">Sydaris 管理</p>
             <h1 className="mt-2 text-3xl font-semibold">登录人员</h1>
             <p className="mt-2 text-sm text-zinc-600">账号与 Actor、Actor Object 一对一关联。密码只能重置，不能查看。</p>
           </div>
-          <button onClick={() => router.push("/")} className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm hover:bg-zinc-50">返回 Echo</button>
+          <button onClick={() => router.push("/")} className="rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm hover:bg-zinc-50">返回 Sydaris</button>
         </header>
 
         {error ? <p role="alert" className="mt-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</p> : null}

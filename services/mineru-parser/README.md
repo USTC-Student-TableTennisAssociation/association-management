@@ -7,7 +7,7 @@
 PDF
   → MinerU 3.4.4 原始产物（完整保留）
   → 薄适配器读取稳定的 content_list.json
-  → echo-document.json（页码、阅读顺序、类型、bbox、文字/资源）
+  → sydaris-document.json（页码、阅读顺序、类型、bbox、文字/资源）
   → 非阻塞回归检查报告
 ```
 
@@ -18,7 +18,7 @@ PDF
 ```bat
 cd services\mineru-parser
 uv sync --python 3.11 --extra mineru
-uv run --extra mineru echo-mineru doctor
+uv run --extra mineru sydaris-mineru doctor
 ```
 
 这里安装的是 MinerU 的 `core` 能力，已经包含本地 `hybrid-engine` 所需的 VLM、Pipeline
@@ -48,7 +48,7 @@ $env:MINERU_MODEL_SOURCE = "modelscope"
 在 `services\mineru-parser` 中运行：
 
 ```bat
-uv run --extra mineru echo-mineru parse ^
+uv run --extra mineru sydaris-mineru parse ^
   --pdf "..\..\docs\architecture\USTC_TTA_乒协生存手册.pdf" ^
   --output "..\..\.cold-start\mineru-runs" ^
   --profile ".\benchmarks\ustc-tta-manual.json"
@@ -64,7 +64,7 @@ PowerShell 请把续行符 `^` 换成反引号，或直接写成一行。默认�
 需要最高精度对照时可以另跑一个新目录：
 
 ```bat
-uv run --extra mineru echo-mineru parse ^
+uv run --extra mineru sydaris-mineru parse ^
   --pdf "..\..\docs\architecture\USTC_TTA_乒协生存手册.pdf" ^
   --output "..\..\.cold-start\mineru-runs" ^
   --profile ".\benchmarks\ustc-tta-manual.json" ^
@@ -82,12 +82,12 @@ uv run --extra mineru echo-mineru parse ^
   mineru.log               MinerU 完整终端输出
   mineru-raw/              MinerU 的全部原始 Markdown、JSON、图片和调试 PDF
   parsed-document.md       复制出的 MinerU 主 Markdown，方便直接阅读
-  echo-document.json       Echo 薄适配结果
+  sydaris-document.json       Sydaris 薄适配结果
   benchmark-report.json    机器可读检查结果
   benchmark-report.md      人工可读检查结果
 ```
 
-`echo-document.json` 只依赖 MinerU 官方稳定的 `content_list.json`，不绑定仍标记为开发版的
+`sydaris-document.json` 只依赖 MinerU 官方稳定的 `content_list.json`，不绑定仍标记为开发版的
 `content_list_v2.json`。每个块保留从 1 开始的页码、全局阅读顺序、内容类型、0–1000 bbox 和资源
 路径。MinerU 原始产物始终完整保留；适配失败也不会删除它们。
 
@@ -98,11 +98,11 @@ uv run --extra mineru echo-mineru parse ^
 
 ## 本地开发验证
 
-不安装 MinerU 大模型依赖也能测试 Echo 适配器：
+不安装 MinerU 大模型依赖也能测试 Sydaris 适配器：
 
 ```bash
 uv run pytest
 uv run ruff check .
 ```
 
-uv run --extra mineru echo-mineru parse --pdf "..\..\docs\architecture\USTC_TTA_乒协生存手册.pdf" --output "..\..\.cold-start\mineru-runs" --profile ".\benchmarks\ustc-tta-manual.json" --effort high --image-analysis
+uv run --extra mineru sydaris-mineru parse --pdf "..\..\docs\architecture\USTC_TTA_乒协生存手册.pdf" --output "..\..\.cold-start\mineru-runs" --profile ".\benchmarks\ustc-tta-manual.json" --effort high --image-analysis

@@ -49,7 +49,7 @@ function fixture(existingObjects: readonly { id: string; canonicalName: string }
     commandBus: commandBus as never,
     findExistingObjectsByCanonicalName,
     resolveObjectReference: (reference) => reference === "O1"
-      ? { id: objectId, canonicalName: "Echo 人工验收赛" }
+      ? { id: objectId, canonicalName: "Sydaris 人工验收赛" }
       : undefined,
     onProposal: proposals,
   });
@@ -127,15 +127,15 @@ describe("Agent View Toolset foreground Object binding", () => {
 
   it("carries an exactly named foreground Object into the Activity proposal", async () => {
     const { commandBus, proposals, toolset } = fixture();
-    toolset.registerPublishedObjects([{ id: objectId, canonicalName: "Echo 人工验收赛" }]);
+    toolset.registerPublishedObjects([{ id: objectId, canonicalName: "Sydaris 人工验收赛" }]);
 
-    await runCreateActivity(toolset, { name: "Echo人工验收赛", status: "PLANNING" });
+    await runCreateActivity(toolset, { name: "Sydaris人工验收赛", status: "PLANNING" });
 
     expect(commandBus.dispatch).toHaveBeenCalledWith(expect.objectContaining({
-      input: expect.objectContaining({ objectId, name: "Echo人工验收赛" }),
+      input: expect.objectContaining({ objectId, name: "Sydaris人工验收赛" }),
     }));
     expect(proposals).toHaveBeenCalledWith(expect.objectContaining({
-      input: { name: "Echo人工验收赛", status: "PLANNING" },
+      input: { name: "Sydaris人工验收赛", status: "PLANNING" },
     }));
   });
 
@@ -143,22 +143,22 @@ describe("Agent View Toolset foreground Object binding", () => {
     const { commandBus, toolset } = fixture();
     toolset.registerPublishedObjects([{ id: objectId, canonicalName: "会员大赛" }]);
 
-    await runCreateActivity(toolset, { name: "Echo人工验收赛", status: "PLANNING" });
+    await runCreateActivity(toolset, { name: "Sydaris人工验收赛", status: "PLANNING" });
 
     expect(commandBus.dispatch).toHaveBeenCalledWith(expect.objectContaining({
-      input: { name: "Echo人工验收赛", status: "PLANNING" },
+      input: { name: "Sydaris人工验收赛", status: "PLANNING" },
     }));
   });
 
   it("binds the unique exactly named Object already in the current Compilation", async () => {
     const { commandBus, findExistingObjectsByCanonicalName, toolset } = fixture([{
       id: objectId,
-      canonicalName: "Echo人工验收赛",
+      canonicalName: "Sydaris人工验收赛",
     }]);
 
-    await runCreateActivity(toolset, { name: "Echo人工验收赛", status: "PLANNING" });
+    await runCreateActivity(toolset, { name: "Sydaris人工验收赛", status: "PLANNING" });
 
-    expect(findExistingObjectsByCanonicalName).toHaveBeenCalledWith("Echo人工验收赛");
+    expect(findExistingObjectsByCanonicalName).toHaveBeenCalledWith("Sydaris人工验收赛");
     expect(commandBus.dispatch).toHaveBeenCalledWith(expect.objectContaining({
       input: expect.objectContaining({ objectId }),
     }));
@@ -175,7 +175,7 @@ describe("Agent View Toolset foreground Object binding", () => {
       viewKey: "activity_operations",
       commandKey: "activity.create_activity",
       commandVersion: "1",
-      input: { name: "Echo 人工验收赛", objectId: "O1", status: "PLANNING" },
+      input: { name: "Sydaris 人工验收赛", objectId: "O1", status: "PLANNING" },
     });
 
     expect(commandBus.dispatch).toHaveBeenCalledWith(expect.objectContaining({
@@ -247,7 +247,7 @@ describe("Agent View Toolset foreground Object binding", () => {
     const { commandBus, toolset } = fixture();
 
     await expect(runCreateActivity(toolset, {
-      name: "Echo 人工验收赛",
+      name: "Sydaris 人工验收赛",
       objectId,
       status: "PLANNING",
     })).resolves.toMatchObject({
@@ -260,17 +260,17 @@ describe("Agent View Toolset foreground Object binding", () => {
 
   it("does not bind an existing Object when the exact name is ambiguous", async () => {
     const { commandBus, toolset } = fixture([
-      { id: objectId, canonicalName: "Echo人工验收赛" },
+      { id: objectId, canonicalName: "Sydaris人工验收赛" },
       {
         id: "00000000-0000-4000-8000-000000000102",
-        canonicalName: "Echo人工验收赛",
+        canonicalName: "Sydaris人工验收赛",
       },
     ]);
 
-    await runCreateActivity(toolset, { name: "Echo人工验收赛", status: "PLANNING" });
+    await runCreateActivity(toolset, { name: "Sydaris人工验收赛", status: "PLANNING" });
 
     expect(commandBus.dispatch).toHaveBeenCalledWith(expect.objectContaining({
-      input: { name: "Echo人工验收赛", status: "PLANNING" },
+      input: { name: "Sydaris人工验收赛", status: "PLANNING" },
     }));
   });
 

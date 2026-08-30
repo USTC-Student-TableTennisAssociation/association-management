@@ -517,7 +517,7 @@ export function KnowledgeGraphWorkspace({
                 })}
                 className="mt-4 w-full rounded-lg border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
               >
-                {mode === "isolated" ? "让 Echo 分析孤立项" : "让 Echo 解读这张图"}
+                {mode === "isolated" ? "让 Sydaris 分析孤立项" : "让 Sydaris 解读这张图"}
               </button>
             </div>
           ) : null}
@@ -530,7 +530,7 @@ export function KnowledgeGraphWorkspace({
               </div>
               <h2 className="mt-3 text-base font-semibold leading-6 text-zinc-950">{selectedObject.label}</h2>
               <p className="mt-1 text-xs text-zinc-500">{selectedObject.degree ? `连接 ${selectedObject.degree} 条可见 Assertion` : "尚未连接 Assertion"}</p>
-              <button type="button" onClick={() => onInvokeAI({ actionId: "knowledge.explain-object", message: `帮我解读知识图谱中的 Object「${selectedObject.label}」。` })} className="mt-3 w-full rounded-lg bg-zinc-950 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-800">询问 Echo</button>
+              <button type="button" onClick={() => onInvokeAI({ actionId: "knowledge.explain-object", message: `帮我解读知识图谱中的 Object「${selectedObject.label}」。` })} className="mt-3 w-full rounded-lg bg-zinc-950 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-800">询问 Sydaris</button>
               {relatedAssertions.length ? <div className="mt-5 border-t border-zinc-100 pt-4">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-zinc-400">相关 Assertion</p>
                 <div className="mt-2 space-y-1.5">
@@ -540,7 +540,7 @@ export function KnowledgeGraphWorkspace({
                     </button>
                   ))}
                 </div>
-              </div> : <div className="mt-5 rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-3 text-xs leading-5 text-zinc-500">当前没有可展示的 Assertion。可以询问 Echo，进一步判断这个 Object 应该与哪些组织知识建立连接。</div>}
+              </div> : <div className="mt-5 rounded-lg border border-dashed border-zinc-200 bg-zinc-50 p-3 text-xs leading-5 text-zinc-500">当前没有可展示的 Assertion。可以询问 Sydaris，进一步判断这个 Object 应该与哪些组织知识建立连接。</div>}
             </div>
           ) : null}
 
@@ -551,7 +551,7 @@ export function KnowledgeGraphWorkspace({
                 <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800">Assertion</span>
                 <span className="text-[10px] text-zinc-400">{selectedAssertion.kind === "grounded" ? "事实陈述" : "引用陈述"}</span>
               </div>
-              <div className="echo-markdown mt-3 text-[13px] leading-6 text-zinc-800">
+              <div className="sydaris-markdown mt-3 text-[13px] leading-6 text-zinc-800">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} urlTransform={defaultUrlTransform}>{selectedAssertion.statement}</ReactMarkdown>
               </div>
               <p className="mt-3 text-[10px] text-zinc-400">来源 · {selectedAssertion.sourceLabel}</p>
@@ -565,7 +565,7 @@ export function KnowledgeGraphWorkspace({
                   })}
                 </div>
               </div>
-              <button type="button" onClick={() => onInvokeAI({ actionId: "knowledge.explain-assertion", message: `帮我解读这条 Assertion：${markdownLabel(selectedAssertion.statement)}` })} className="mt-4 w-full rounded-lg bg-zinc-950 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-800">询问 Echo</button>
+              <button type="button" onClick={() => onInvokeAI({ actionId: "knowledge.explain-assertion", message: `帮我解读这条 Assertion：${markdownLabel(selectedAssertion.statement)}` })} className="mt-4 w-full rounded-lg bg-zinc-950 px-3 py-2 text-xs font-medium text-white hover:bg-zinc-800">询问 Sydaris</button>
             </div>
           ) : null}
         </aside>

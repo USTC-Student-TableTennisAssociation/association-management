@@ -143,7 +143,7 @@ export function createAgentSkillToolset(input: {
   const tools: ToolSet = {
     activateSkill: tool({
       description: [
-        "激活一个已安装的 Echo Skill，将其专用指令、View 边界与 Command 权限应用到本轮后续步骤。",
+        "激活一个已安装的 Sydaris Skill，将其专用指令、View 边界与 Command 权限应用到本轮后续步骤。",
         "当用户明确点名 Skill，或当前任务与某个 Skill 的职责高度匹配时调用。每轮只能激活一个 Skill。",
         `已安装 Skills：\n${catalog}`,
       ].join("\n"),

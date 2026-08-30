@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 
-import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { DebugTrace } from "@/ai/debug-trace";
 import { getDatabase } from "@/db";
 import {
   captureChatAssertions,
@@ -17,7 +17,7 @@ import type {
   MemoryRetrievalResult,
 } from "@/memory/types";
 
-const runLive = process.env.ECHO_LIVE_MEMORY_CLOSED_LOOP_TEST === "1";
+const runLive = process.env.SYDARIS_LIVE_MEMORY_CLOSED_LOOP_TEST === "1";
 const eventName = "结构化闭环远航验收会";
 const firstMessageId = "live-memory-closed-loop-create-001";
 const updateMessageId = "live-memory-closed-loop-update-001";
@@ -25,7 +25,7 @@ const maintenanceOneMessageId = "live-memory-closed-loop-maintain-001";
 const maintenanceTwoMessageId = "live-memory-closed-loop-maintain-002";
 const testMessageIds = [firstMessageId, updateMessageId];
 
-function traceRecorder(titles: string[]): EchoDebugTrace {
+function traceRecorder(titles: string[]): DebugTrace {
   return {
     enabled: true,
     appendSection: async (title) => { titles.push(title); },
@@ -48,7 +48,7 @@ function semanticContext(input: {
       text: input.text,
       submittedAt: input.submittedAt,
     }],
-    systemInstruction: "你是 Echo。本轮是隔离的真实记忆闭环测试。",
+    systemInstruction: "你是 Sydaris。本轮是隔离的真实记忆闭环测试。",
     modelCalls: [],
     toolExecutions: [],
     finalAnswer: input.finalAnswer,

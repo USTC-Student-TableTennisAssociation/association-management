@@ -30,7 +30,7 @@ describe("PrismaCardGraphTransaction Related Objects", () => {
 
     await expect(graph.createCard({
       cardTypeKey: "ActivityCard",
-      dimensions: { name: "Echo 验收赛" },
+      dimensions: { name: "Sydaris 验收赛" },
       relatedObjectIds: [objectId],
     })).resolves.toBe("00000000-0000-4000-8000-000000000201");
 
@@ -51,7 +51,7 @@ describe("PrismaCardGraphTransaction Related Objects", () => {
 
     await expect(graph.createCard({
       cardTypeKey: "ActivityCard",
-      dimensions: { name: "Echo 验收赛" },
+      dimensions: { name: "Sydaris 验收赛" },
       relatedObjectIds: [objectId],
     })).rejects.toThrow(`Related Objects 不存在：${objectId}`);
 
@@ -70,7 +70,7 @@ describe("PrismaCardGraphTransaction Related Objects", () => {
 
     await expect(graph.createCard({
       cardTypeKey: "ActivityCard",
-      dimensions: { name: "Echo 验收赛" },
+      dimensions: { name: "Sydaris 验收赛" },
       relatedObjectIds: [objectId],
     })).rejects.toThrow(`ActivityCard 已有关联 Object ${objectId} 的 Card`);
 

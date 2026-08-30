@@ -306,8 +306,8 @@ describe("library compilation profiles", () => {
   });
 
   it("keeps the MinerU input basename short while retaining the full SHA in its parent", () => {
-    const previous = process.env.ECHO_COLD_START_OUTPUT_ROOT;
-    process.env.ECHO_COLD_START_OUTPUT_ROOT = "/tmp/echo-cold-start-test";
+    const previous = process.env.SYDARIS_COLD_START_OUTPUT_ROOT;
+    process.env.SYDARIS_COLD_START_OUTPUT_ROOT = "/tmp/sydaris-cold-start-test";
     try {
       const sha256 = "a".repeat(64);
       const sourcePath = webSourcePath(sha256);
@@ -315,8 +315,8 @@ describe("library compilation profiles", () => {
       expect(path.basename(path.dirname(sourcePath))).toBe(sha256);
       expect(path.basename(path.dirname(path.dirname(sourcePath)))).toBe("web-sources");
     } finally {
-      if (previous === undefined) delete process.env.ECHO_COLD_START_OUTPUT_ROOT;
-      else process.env.ECHO_COLD_START_OUTPUT_ROOT = previous;
+      if (previous === undefined) delete process.env.SYDARIS_COLD_START_OUTPUT_ROOT;
+      else process.env.SYDARIS_COLD_START_OUTPUT_ROOT = previous;
     }
   });
 

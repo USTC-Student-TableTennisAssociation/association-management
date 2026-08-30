@@ -1,7 +1,7 @@
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const DEFAULT_TRACE_ROOT = ".echo-debug/chat-runs";
+const DEFAULT_TRACE_ROOT = ".sydaris-debug/chat-runs";
 const SECRET_ENV_KEYS = [
   "AI_API_KEY",
   "DATABASE_URL",
@@ -9,7 +9,7 @@ const SECRET_ENV_KEYS = [
   "SHADOW_DATABASE_URL",
 ] as const;
 
-export type EchoDebugTrace = {
+export type DebugTrace = {
   readonly enabled: boolean;
   readonly filePath?: string;
   appendSection(title: string, markdown: string): Promise<void>;
@@ -18,7 +18,7 @@ export type EchoDebugTrace = {
   flush(): Promise<void>;
 };
 
-export type EchoDebugTraceStart = {
+export type DebugTraceStart = {
   clientMessageId: string;
   submittedAt: Date;
   timezone: string;
@@ -33,7 +33,7 @@ function falseLike(value: string): boolean {
 }
 
 export function debugTraceEnabled(environment: NodeJS.ProcessEnv = process.env): boolean {
-  const configured = environment.ECHO_DEBUG_TRACE;
+  const configured = environment.SYDARIS_DEBUG_TRACE;
   if (configured !== undefined && configured.trim()) return !falseLike(configured);
   return environment.NODE_ENV !== "test";
 }
@@ -213,7 +213,7 @@ function renderError(error: unknown): string {
   return debugCodeBlock(debugJson(error), "json");
 }
 
-class FileEchoDebugTrace implements EchoDebugTrace {
+class FileDebugTrace implements DebugTrace {
   readonly enabled = true;
   readonly filePath: string;
   private queue: Promise<void>;
@@ -255,7 +255,7 @@ class FileEchoDebugTrace implements EchoDebugTrace {
   }
 }
 
-const NOOP_TRACE: EchoDebugTrace = {
+const NOOP_TRACE: DebugTrace = {
   enabled: false,
   async appendSection() {},
   async appendJsonSection() {},
@@ -263,20 +263,20 @@ const NOOP_TRACE: EchoDebugTrace = {
   async flush() {},
 };
 
-export function createEchoDebugTrace(
-  input: EchoDebugTraceStart,
+export function createDebugTrace(
+  input: DebugTraceStart,
   environment: NodeJS.ProcessEnv = process.env,
-): EchoDebugTrace {
+): DebugTrace {
   if (!debugTraceEnabled(environment)) return NOOP_TRACE;
   const local = localTimestamp(input.submittedAt, input.timezone);
-  const traceRoot = environment.ECHO_DEBUG_TRACE_DIR?.trim() || DEFAULT_TRACE_ROOT;
+  const traceRoot = environment.SYDARIS_DEBUG_TRACE_DIR?.trim() || DEFAULT_TRACE_ROOT;
   const root = path.isAbsolute(traceRoot)
     ? traceRoot
     : path.join(/* turbopackIgnore: true */ process.cwd(), traceRoot);
   const filename = `${local.filenameTime}_${safeSegment(input.clientMessageId, "message")}.md`;
   const filePath = path.join(root, local.date, filename);
   const initial = [
-    "# Echo Chat 调试报告",
+    "# Sydaris Chat 调试报告",
     "",
     `- 用户消息 ID：\`${input.clientMessageId}\``,
     `- 提交人：${input.actorDisplayName}（\`${input.actorId}\`）`,
@@ -292,9 +292,9 @@ export function createEchoDebugTrace(
     "",
     debugCodeBlock(input.userMessage),
     "",
-    "> 本报告记录 Echo 实际发送和收到的模型内容，以及后台处理结果。API Key、数据库连接串和认证 Header 不会写入。",
+    "> 本报告记录 Sydaris 实际发送和收到的模型内容，以及后台处理结果。API Key、数据库连接串和认证 Header 不会写入。",
   ].join("\n");
-  const trace = new FileEchoDebugTrace(filePath, initial);
+  const trace = new FileDebugTrace(filePath, initial);
   console.info("[chat.debug-trace]", filePath);
   return trace;
 }

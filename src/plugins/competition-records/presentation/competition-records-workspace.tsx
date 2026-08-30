@@ -78,7 +78,7 @@ function formatObservedAt(value: string | undefined): string {
   if (!value) return "正在读取正式 View";
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return "正式 View 已载入";
-  return `Echo 读取于 ${new Intl.DateTimeFormat("zh-CN", {
+  return `Sydaris 读取于 ${new Intl.DateTimeFormat("zh-CN", {
     month: "long",
     day: "numeric",
     hour: "2-digit",

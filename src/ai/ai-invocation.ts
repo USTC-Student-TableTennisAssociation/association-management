@@ -7,7 +7,7 @@ const stableActionId = z.string().trim().min(1).max(160).regex(
   "AI actionId 必须是稳定的小写标识符",
 );
 
-export const echoAIInvocationSchema: z.ZodType<AIInvocation> = z.object({
+export const aiInvocationSchema: z.ZodType<AIInvocation> = z.object({
   actionId: stableActionId,
   message: z.string().trim().min(1).max(1_000),
   skill: z.object({

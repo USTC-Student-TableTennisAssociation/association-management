@@ -54,7 +54,7 @@ function pluginBoundaryViolations(): Array<{ pluginId: string; message: string }
   );
 }
 
-describe("Echo plugin architecture boundaries", () => {
+describe("Sydaris plugin architecture boundaries", () => {
   it("uses the published SDK as the single source of public Plugin contracts", () => {
     const publicContractWrappers = [
       "src/contracts/schema.ts",

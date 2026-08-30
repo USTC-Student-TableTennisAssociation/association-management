@@ -49,7 +49,7 @@ const exampleNotesView = defineView({
     label: "Example Notes",
     specializedLabel: "示例笔记",
     schemaVersion: "1",
-    description: "用于验证 Echo 在线 Plugin 安装、专属 UI、Command、Skill 和 Tool 的示例 View。",
+    description: "用于验证 Sydaris 在线 Plugin 安装、专属 UI、Command、Skill 和 Tool 的示例 View。",
     retrievalDescription: "用于读取由示例 Plugin 创建的简短笔记。",
     aiSemanticInstructions: "笔记是用户明确保存的测试内容，不应被扩写为组织事实。",
     defaultSettings: { aiWritePolicy: "approval_required" },
@@ -114,8 +114,8 @@ const exampleToolProvider: ToolProviderExtension = {
       const range = input as { start?: string; end?: string };
       return {
         events: [{
-          id: "echo-example-calendar",
-          title: "Echo Example Plugin",
+          id: "sydaris-example-calendar",
+          title: "Sydaris Example Plugin",
           start: range.start ?? new Date(0).toISOString(),
           ...(range.end ? { end: range.end } : {}),
         }],

@@ -86,7 +86,7 @@ type InstalledViewSummary = {
 type SurfaceMode = "work" | "knowledge" | "library";
 type LibraryMode = "files" | "processing";
 type LayoutMode = "focus" | "collaborate" | "conversation";
-const layoutModeStorageKey = "echo.layoutMode";
+const layoutModeStorageKey = "sydaris.layoutMode";
 
 function storedLayoutMode(value: string | null): LayoutMode | undefined {
   return value === "focus" || value === "collaborate" || value === "conversation"
@@ -363,18 +363,18 @@ function MarkdownText({
 
   const markdown = text.replace(
     /\[((?:V|S|F)\d+)\]/g,
-    "[$1](echo-ref:$1)",
+    "[$1](sydaris-ref:$1)",
   );
 
   return (
-    <div className={`echo-markdown ${inverse ? "echo-markdown-inverse" : ""}`}>
+    <div className={`sydaris-markdown ${inverse ? "sydaris-markdown-inverse" : ""}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        urlTransform={(url) => url.startsWith("echo-ref:") ? url : defaultUrlTransform(url)}
+        urlTransform={(url) => url.startsWith("sydaris-ref:") ? url : defaultUrlTransform(url)}
         components={{
           a: ({ href, children }) => {
-            const referenceRef = href?.startsWith("echo-ref:")
-              ? href.slice("echo-ref:".length)
+            const referenceRef = href?.startsWith("sydaris-ref:")
+              ? href.slice("sydaris-ref:".length)
               : undefined;
             const reference = referenceRef
               ? referencesByRef.get(referenceRef)
@@ -388,7 +388,7 @@ function MarkdownText({
 
             if (artifactReference) {
               return (
-                <span className="echo-reference" title={artifactReference.label}>
+                <span className="sydaris-reference" title={artifactReference.label}>
                   {artifactReference.ref} · 资料库
                 </span>
               );
@@ -398,7 +398,7 @@ function MarkdownText({
                 <button
                   type="button"
                   onClick={() => onOpenSourceReference?.(sourceReference)}
-                  className="echo-reference"
+                  className="sydaris-reference"
                   title={`查看 ${sourceReference.label}`}
                 >
                   {sourceReference.ref} · 原文 ↗
@@ -410,7 +410,7 @@ function MarkdownText({
                 <button
                   type="button"
                   onClick={() => onOpenViewReference?.(reference)}
-                  className="echo-reference"
+                  className="sydaris-reference"
                   title={`打开 ${reference.label}`}
                 >
                   {reference.label} ↗
@@ -676,7 +676,7 @@ function ChatSurface({
               <article key={message.id} className={`flex items-start ${isUser ? "justify-end" : "gap-2.5"}`}>
                 {!isUser ? (
                   <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-[9px] font-semibold text-white">
-                    E
+                    S
                   </div>
                 ) : null}
                 <div className={`${isUser
@@ -791,7 +791,7 @@ function ChatSurface({
           })}
           {status === "submitted" ? (
             <article className="flex items-center gap-2.5 text-[13px] text-zinc-500">
-              <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-[9px] font-semibold text-white">E</div>
+              <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-[9px] font-semibold text-white">S</div>
               <span>正在思考</span>
               <span className="flex gap-1" aria-hidden="true">
                 <span className="size-1 animate-pulse rounded-full bg-zinc-400" />
@@ -809,7 +809,7 @@ function ChatSurface({
         : `shrink-0 bg-gradient-to-t from-white via-white to-white/0 px-4 pb-3 pt-2 ${compact ? "" : "sm:px-6 sm:pb-4"}`
       }>
         <form onSubmit={handleSubmit} className="mx-auto flex w-full max-w-[46rem] items-end gap-1.5 rounded-[24px] border border-zinc-200 bg-white p-2 shadow-[0_5px_22px_rgba(0,0,0,0.07)] transition-shadow focus-within:border-zinc-300 focus-within:shadow-[0_7px_26px_rgba(0,0,0,0.09)]">
-          <label className="sr-only" htmlFor={textareaId}>向 Echo 提问</label>
+          <label className="sr-only" htmlFor={textareaId}>向 Sydaris 提问</label>
           <textarea
             id={textareaId}
             value={input}
@@ -818,7 +818,7 @@ function ChatSurface({
             rows={1}
             disabled={isSending || !canInteract}
             className="min-h-8 max-h-40 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1 text-[14px] leading-6 text-zinc-950 outline-none [field-sizing:content] placeholder:text-zinc-400 disabled:opacity-60"
-            placeholder={compact ? "继续提问" : "向 Echo 提问"}
+            placeholder={compact ? "继续提问" : "向 Sydaris 提问"}
           />
           {isSending ? (
             <button type="button" onClick={onStop} aria-label="停止生成" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white transition hover:bg-zinc-700">
@@ -1072,7 +1072,7 @@ export default function Home() {
         setHistoryError(
           bootstrapError instanceof Error
             ? bootstrapError.message
-            : "无法初始化 Echo。",
+            : "无法初始化 Sydaris。",
         );
         setHistoryState("error");
       }
@@ -1119,7 +1119,7 @@ export default function Home() {
         const enabledViews = body.views.filter((view) => view.status === "enabled");
         setInstalledViews(enabledViews);
         setActiveWorkViewKey((current) => {
-          const restored = current ?? window.localStorage.getItem("echo.activeWorkView") ?? undefined;
+          const restored = current ?? window.localStorage.getItem("sydaris.activeWorkView") ?? undefined;
           return enabledViews.some((view) => view.viewKey === restored)
             ? restored
             : enabledViews[0]?.viewKey;
@@ -1244,7 +1244,7 @@ export default function Home() {
   function openWorkView(viewKey: string) {
     setSurfaceMode("work");
     setActiveWorkViewKey(viewKey);
-    window.localStorage.setItem("echo.activeWorkView", viewKey);
+    window.localStorage.setItem("sydaris.activeWorkView", viewKey);
     setViewFocusCardId(undefined);
     setWorkInspectorOpen(false);
     setLayoutMode("focus");
@@ -1253,7 +1253,7 @@ export default function Home() {
   function openViewReference(reference: ViewInformationReference) {
     setSurfaceMode("work");
     setActiveWorkViewKey(reference.target.viewKey);
-    window.localStorage.setItem("echo.activeWorkView", reference.target.viewKey);
+    window.localStorage.setItem("sydaris.activeWorkView", reference.target.viewKey);
     setWorkInspectorOpen(false);
     setLayoutMode("collaborate");
     setViewFocusCardId(reference.target.kind === "card" ? reference.target.cardId : undefined);
@@ -1347,7 +1347,7 @@ export default function Home() {
     return (
       <main className="flex min-h-dvh items-center justify-center bg-[#eef2ef] px-5 text-zinc-700">
         <div className="max-w-md rounded-xl border border-zinc-200 bg-white px-6 py-5 text-center shadow-sm">
-          <p className="font-medium">{historyState === "error" ? "Echo 初始化失败" : "正在进入 Echo…"}</p>
+          <p className="font-medium">{historyState === "error" ? "Sydaris 初始化失败" : "正在进入 Sydaris…"}</p>
           {historyError ? <p className="mt-2 text-sm text-red-700">{historyError}</p> : null}
           {historyState === "error" ? <button onClick={() => window.location.reload()} className="mt-4 rounded-lg bg-emerald-800 px-4 py-2 text-sm text-white">重试</button> : null}
         </div>
@@ -1368,7 +1368,7 @@ export default function Home() {
 
   const navigationRail = (
     <aside
-      aria-label="Echo 主导航"
+      aria-label="Sydaris 主导航"
       className={`group absolute inset-y-0 left-0 z-40 flex flex-col overflow-hidden border-r backdrop-blur-2xl transition-[width,padding,background-color,border-color,box-shadow] duration-500 ease-[cubic-bezier(.16,1,.3,1)] motion-reduce:transition-none hover:w-48 hover:border-zinc-200/80 hover:bg-white/94 hover:px-2 hover:shadow-[18px_0_48px_rgba(0,0,0,0.14)] focus-within:w-48 focus-within:border-zinc-200/80 focus-within:bg-white/94 focus-within:px-2 focus-within:shadow-[18px_0_48px_rgba(0,0,0,0.14)] ${
         layoutMode === "focus"
           ? "w-2 border-transparent bg-transparent px-0"
@@ -1381,8 +1381,8 @@ export default function Home() {
           : "opacity-100"
       }`}>
         <div className="flex h-9 shrink-0 items-center gap-3 rounded-[10px] px-2">
-          <span className="flex size-6 shrink-0 items-center justify-center rounded-[8px] bg-zinc-950 text-[10px] font-semibold text-white shadow-sm">E</span>
-          <span className="text-[14px] font-semibold tracking-[-0.02em] text-zinc-950 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">Echo</span>
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-[8px] bg-zinc-950 text-[10px] font-semibold text-white shadow-sm">S</span>
+          <span className="text-[14px] font-semibold tracking-[-0.02em] text-zinc-950 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">Sydaris</span>
         </div>
 
         <nav className="space-y-1" aria-label="工作空间">
@@ -1554,7 +1554,7 @@ export default function Home() {
       className="flex w-[236px] shrink-0 flex-col overflow-hidden border-r border-[#e8e8e8] bg-[#f7f7f8] px-2.5 pb-2.5 pt-2"
     >
       <div className="flex h-11 shrink-0 items-center justify-center">
-        <p className="text-[16px] font-semibold tracking-[-0.02em] text-zinc-900">Echo</p>
+        <p className="text-[16px] font-semibold tracking-[-0.02em] text-zinc-900">Sydaris</p>
       </div>
 
       <button
@@ -1624,8 +1624,8 @@ export default function Home() {
         }>
           {layoutMode === "collaborate" ? (
             <div className="flex items-center gap-2 text-[13px] font-semibold tracking-[-0.01em] text-zinc-900">
-              <span className="flex size-6 items-center justify-center rounded-full bg-zinc-950 text-[9px] text-white">E</span>
-              Echo
+              <span className="flex size-6 items-center justify-center rounded-full bg-zinc-950 text-[9px] text-white">S</span>
+              Sydaris
             </div>
           ) : null}
           <div className={`pointer-events-auto flex items-center gap-1 ${
@@ -1662,8 +1662,8 @@ export default function Home() {
             <button
               type="button"
               onClick={() => setLayoutMode("focus")}
-              aria-label="关闭 Echo，进入专注视图"
-              title="关闭 Echo"
+              aria-label="关闭 Sydaris，进入专注视图"
+              title="关闭 Sydaris"
               className="flex size-8 items-center justify-center rounded-[9px] text-zinc-500 transition active:scale-95 hover:bg-zinc-100 hover:text-zinc-900"
             >
               <svg viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
@@ -1723,11 +1723,11 @@ export default function Home() {
         <button
           type="button"
           onClick={() => setLayoutMode("collaborate")}
-          aria-label="打开 Echo，与当前工作区协作"
-          title="打开 Echo"
+          aria-label="打开 Sydaris，与当前工作区协作"
+          title="打开 Sydaris"
           className="absolute bottom-5 right-5 z-30 flex size-12 items-center justify-center rounded-full border border-white/25 bg-sky-600 text-[11px] font-semibold text-white shadow-[0_14px_36px_rgba(2,82,153,0.38),inset_0_1px_0_rgba(255,255,255,0.3)] backdrop-blur-xl transition active:scale-95 hover:bg-sky-500"
         >
-          Echo
+          Sydaris
         </button>
       ) : null}
       {sourceReference ? (

@@ -12,18 +12,18 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-from echo_mineru.adapter import normalize_mineru_output
-from echo_mineru.benchmark import run_benchmark, write_benchmark_report
+from sydaris_mineru.adapter import normalize_mineru_output
+from sydaris_mineru.benchmark import run_benchmark, write_benchmark_report
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="echo-mineru", description="独立运行 MinerU 并保存 Echo 基准产物"
+        prog="sydaris-mineru", description="独立运行 MinerU 并保存 Sydaris 基准产物"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor", help="检查 MinerU、Torch 和 CUDA 环境")
 
-    parse = subparsers.add_parser("parse", help="解析一份 PDF 并生成 Echo 适配产物")
+    parse = subparsers.add_parser("parse", help="解析一份 PDF 并生成 Sydaris 适配产物")
     parse.add_argument("--pdf", type=Path, required=True)
     parse.add_argument("--output", type=Path, default=Path(".cold-start/mineru-runs"))
     parse.add_argument(
@@ -133,8 +133,8 @@ def _parse(args: argparse.Namespace) -> int:
             finished_at=datetime.now(UTC).isoformat(),
         )
         _write_run_metadata(run_directory, metadata)
-        print(f"[Echo 适配] 失败：{error}", file=sys.stderr)
-        print(f"[Echo 适配] MinerU 原始产物仍保留在：{raw_directory}", file=sys.stderr)
+        print(f"[Sydaris 适配] 失败：{error}", file=sys.stderr)
+        print(f"[Sydaris 适配] MinerU 原始产物仍保留在：{raw_directory}", file=sys.stderr)
         return 1
 
     metadata.update(
@@ -145,7 +145,7 @@ def _parse(args: argparse.Namespace) -> int:
     )
     _write_run_metadata(run_directory, metadata)
     print(f"[完成] Markdown：{run_directory / 'parsed-document.md'}")
-    print(f"[完成] Echo 文档：{run_directory / 'echo-document.json'}")
+    print(f"[完成] Sydaris 文档：{run_directory / 'sydaris-document.json'}")
     print(f"[完成] 检查报告：{run_directory / 'benchmark-report.md'}")
     return 2 if args.strict and report["summary"]["failed"] else 0
 

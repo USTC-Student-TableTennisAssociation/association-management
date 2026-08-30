@@ -606,7 +606,7 @@ export function auditGroundedAnswer(input: {
     const missing = coverage.missingAspects.length
       ? `未覆盖：${coverage.missingAspects.join("；")}`
       : "本轮只获得了部分可验证证据";
-    notices.push(`${missing}；不要把未覆盖部分理解为 Echo 当前事实。`);
+    notices.push(`${missing}；不要把未覆盖部分理解为 Sydaris 当前事实。`);
   }
 
   const memoryAudit = redactUnsupportedConversationMemoryClaims({

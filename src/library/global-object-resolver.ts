@@ -427,7 +427,7 @@ async function decideWithModel(
   candidateExisting: ExistingObject[],
 ): Promise<GlobalDecision> {
   const prompt = [
-    "你正在做 Echo 基础编译的跨文件 Global Object 身份归并。当前文件等价于一个叶子来源。",
+    "你正在做 Sydaris 基础编译的跨文件 Global Object 身份归并。当前文件等价于一个叶子来源。",
     "只判断不同文件中的名称是否指向现实中的同一个稳定对象；主题相关、同属一个活动、斜杠并列或标题相邻都不等于同一对象。",
     "attach_draft 只能指向给出的草稿候选；bind_existing 只能指向给出的正式 Object 候选；证据不足时 create_new。",
     "允许把当前文件的多个 incomingKeys 放入同一组，但只有来源理由明确说明它们同指时才这样做。",
@@ -498,7 +498,7 @@ async function resolveIncomingSource(
 }
 
 function globalArtifactRoot(): string {
-  const configured = process.env.ECHO_COLD_START_OUTPUT_ROOT?.trim();
+  const configured = process.env.SYDARIS_COLD_START_OUTPUT_ROOT?.trim();
   if (configured) return path.normalize(/* turbopackIgnore: true */ configured);
   return path.join(/* turbopackIgnore: true */ process.cwd(), ".cold-start");
 }

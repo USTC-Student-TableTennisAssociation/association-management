@@ -45,7 +45,7 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-[#eef2ef] px-5 py-10 text-zinc-950">
       <section className="w-full max-w-md rounded-2xl border border-emerald-950/10 bg-white p-8 shadow-xl shadow-emerald-950/10">
-        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">Echo</p>
+        <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">Sydaris</p>
         <h1 className="mt-3 text-3xl font-semibold">登录</h1>
         <p className="mt-2 text-sm leading-6 text-zinc-600">使用管理员为你设置的姓名账号和密码进入工作空间。</p>
         <form className="mt-7 space-y-5" onSubmit={submit}>

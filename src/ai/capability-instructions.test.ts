@@ -16,7 +16,7 @@ describe("capability instructions", () => {
     expect(instructions).toContain("Object、Ambient、View 与 Actor 四类 Higher Memory");
     expect(instructions).toContain("不要等用户说‘请记住’才维护");
     expect(instructions).toContain("某个 Ambient scope 缺失");
-    expect(instructions).toContain("某位用户给 Echo 起的私人称呼");
+    expect(instructions).toContain("某位用户给 Sydaris 起的私人称呼");
     expect(instructions).toContain("不表示 Higher Memory 已经更新");
   });
 

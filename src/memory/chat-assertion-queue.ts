@@ -1,7 +1,7 @@
 import { tool } from "ai";
 import { z } from "zod";
 
-import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { DebugTrace } from "@/ai/debug-trace";
 import type { ChatAssertionCaptureResult } from "@/memory/chat-assertion";
 
 export type ChatAssertionQueueDecision = {
@@ -11,7 +11,7 @@ export type ChatAssertionQueueDecision = {
 export type ChatAssertionQueueExecution = "background" | "foreground_for_view";
 
 export function createChatAssertionQueueTool(input: {
-  trace?: EchoDebugTrace;
+  trace?: DebugTrace;
   captureForeground?: (
     decision: ChatAssertionQueueDecision,
   ) => Promise<ChatAssertionCaptureResult>;

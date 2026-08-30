@@ -5,11 +5,11 @@ import { afterAll, describe, expect, it } from "vitest";
 import { getDatabase } from "@/db";
 import { viewCommandBus, viewReadPort } from "@/shell/composition-root";
 
-const runLive = process.env.ECHO_LIVE_VIEW_PROPOSAL_REBASE_TEST === "1";
+const runLive = process.env.SYDARIS_LIVE_VIEW_PROPOSAL_REBASE_TEST === "1";
 const viewKey = "activity_operations";
 const activityNames = [
-  "Echo Proposal Rebase 验收活动 A",
-  "Echo Proposal Rebase 验收活动 B",
+  "Sydaris Proposal Rebase 验收活动 A",
+  "Sydaris Proposal Rebase 验收活动 B",
 ] as const;
 
 function resultCardId(summary: unknown): string | undefined {

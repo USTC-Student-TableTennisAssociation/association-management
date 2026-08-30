@@ -62,7 +62,7 @@ export class ModelInFlightGate {
 }
 
 const modelRuntime = globalThis as typeof globalThis & {
-  echoLibraryModelRuntime?: {
+  libraryModelRuntime?: {
     nextTextCallAt: number;
     nextVisionCallAt: number;
     gates: Map<string, ModelInFlightGate>;
@@ -70,12 +70,12 @@ const modelRuntime = globalThis as typeof globalThis & {
 };
 
 function runtime() {
-  modelRuntime.echoLibraryModelRuntime ??= {
+  modelRuntime.libraryModelRuntime ??= {
     nextTextCallAt: 0,
     nextVisionCallAt: 0,
     gates: new Map(),
   };
-  return modelRuntime.echoLibraryModelRuntime;
+  return modelRuntime.libraryModelRuntime;
 }
 
 function structuredTextModel() {
@@ -435,7 +435,7 @@ function semanticPrompt(input: {
 }): string {
   const coarse = input.run.profile === "coarse";
   return [
-    `你正在为 Echo 资料库执行${coarse ? "粗编译" : "仅归档的轻量语义编目"}。`,
+    `你正在为 Sydaris 资料库执行${coarse ? "粗编译" : "仅归档的轻量语义编目"}。`,
     "文件名和目录只作归档上下文；正文中的事实必须有正文原文支持。无法确认的内容不要输出。",
     ...(input.preview.sourceKind === "visual_observation"
       ? ["来源预览是独立视觉模型产生的 OCR 与视觉观察记录；你没有看到原图，不得补充、改写或猜测记录之外的画面内容。"]
@@ -552,7 +552,7 @@ function validateAssessment(
 
 function visualObservationPrompt(run: ProcessingRun): string {
   return [
-    "你是 Echo 资料库的视觉转文字阶段，只负责忠实观察图片，不负责组织知识编译。",
+    "你是 Sydaris 资料库的视觉转文字阶段，只负责忠实观察图片，不负责组织知识编译。",
     "请提取清晰可见的文字，并描述画面中可直接确认的场景、物体、人数范围、版式或关系。",
     "无法确认的人名、身份、活动名称和时间必须放入 uncertainties，不能根据文件名或目录猜测。",
     "文件名与目录仅帮助理解拍摄语境，不是图片内容证据。",

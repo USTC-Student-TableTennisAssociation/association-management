@@ -44,7 +44,7 @@ function layerHint(layer: PreferredKnowledgeLayer): string {
     case "library":
       return "优先从 Library 判断文件是否存在、位于何处或内容是什么；不足时再跨到其他可用只读知识层。";
     case "unknown":
-      return "先判断是否真的需要 Echo 资料，再选择最权威且成本最低的可用知识层。";
+      return "先判断是否真的需要 Sydaris 资料，再选择最权威且成本最低的可用知识层。";
   }
 }
 
@@ -55,10 +55,10 @@ export function buildCapabilityInstructions(input: {
   const toolNames = new Set(input.toolNames);
   const sections = [
     [
-      "你负责回答用户当前问题，并只在确有必要时读取 Echo 资料。",
+      "你负责回答用户当前问题，并只在确有必要时读取 Sydaris 资料。",
       layerHint(input.preferredKnowledgeLayer),
       "preferred knowledge layer 只是首选来源提示，不是权限边界；首选来源不足时，可使用本轮实际提供的其他只读能力。",
-      "不要凭模型内部知识补写 Echo 的组织事实。不同知识层的权威范围不同：文件存在性、路径、处理档位与文件原文以 Library 为准；正式当前业务状态以 Business View 为准；对象级组织事实与高层认知以 Shared Brain/Higher Memory/Assertions 为准；来源语境以实际读取的 Source Document 为准。",
+      "不要凭模型内部知识补写 Sydaris 的组织事实。不同知识层的权威范围不同：文件存在性、路径、处理档位与文件原文以 Library 为准；正式当前业务状态以 Business View 为准；对象级组织事实与高层认知以 Shared Brain/Higher Memory/Assertions 为准；来源语境以实际读取的 Source Document 为准。",
       "回答完成后，服务端会独立判断用户原话是否值得固化为长期知识。除非本轮操作明确成功，不要声称已经记住、写入、更新或归档。",
       "最终回答只引用本轮工具实际返回的真实 [V#]/[H#]/[A#]/[S#]；证据不足时明确说明边界。",
       "区分 fact 与 synthesis：单一明确事实优先 Assertion；完整理解、名单/表格、资料梳理和多字段 View 填充属于 synthesis，应积极使用高价值 Source Document 的目录与章节。",
@@ -192,7 +192,7 @@ export function buildCapabilityInstructions(input: {
       "你知道系统拥有 Object、Ambient、View 与 Actor 四类 Higher Memory；本工具只登记回答后的共享 Object/Ambient 维护意图，View Higher Memory 由正式 View 事件链维护，Actor Higher Memory 使用独立的私有能力维护。",
       "不要等用户说‘请记住’才维护。当本轮已经读取到真实证据，并由此形成值得跨会话延续的环境身份、组织叙事、近期共同工作集，或某个重要 Object 的新高层理解时，应主动调用 queueHigherMemoryMaintenance。",
       "自动加载状态明确显示某个 Ambient scope 缺失时，如果本轮正式证据已经足以建立它，应主动为缺失 scope 登记第一版维护；证据不足则保持缺失，不要为了填空而猜测。",
-      "维护必须有本轮真实读取的正式 View、Grounded Assertion、Source 或既有 Higher Memory 支撑。问候、能力介绍、模型自我分析、系统诊断、单纯检索命中、一次性闲聊，以及某位用户给 Echo 起的私人称呼或个人偏好，都不是 Ambient Higher Memory。",
+      "维护必须有本轮真实读取的正式 View、Grounded Assertion、Source 或既有 Higher Memory 支撑。问候、能力介绍、模型自我分析、系统诊断、单纯检索命中、一次性闲聊，以及某位用户给 Sydaris 起的私人称呼或个人偏好，都不是 Ambient Higher Memory。",
       "工具成功只表示已登记后台维护意图，不表示 Higher Memory 已经更新；最终回答不得声称维护完成。",
     ].join("\n"));
   }

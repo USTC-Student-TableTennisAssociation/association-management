@@ -8,7 +8,7 @@
   --paper: #f7f8f5;
   --panel: rgba(255, 255, 255, .84);
   min-height: 100%;
-  height: calc(100dvh - var(--echo-shell-offset, 0px));
+  height: calc(100dvh - var(--sydaris-shell-offset, 0px));
   overflow: hidden;
   color: var(--ink);
   background:

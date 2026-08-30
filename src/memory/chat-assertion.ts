@@ -8,7 +8,7 @@ import {
   debugJson,
   renderDebugMessages,
   renderDebugModelOutput,
-  type EchoDebugTrace,
+  type DebugTrace,
 } from "@/ai/debug-trace";
 import { getChatModel } from "@/ai/provider";
 import {
@@ -225,8 +225,8 @@ function requiredUuid(value: string | undefined, fallback: string, label: string
 
 export function currentMemoryActor(environment: NodeJS.ProcessEnv = process.env) {
   return {
-    id: requiredUuid(environment.ECHO_ACTOR_ID, DEFAULT_ACTOR_ID, "ECHO_ACTOR_ID"),
-    displayName: environment.ECHO_ACTOR_DISPLAY_NAME?.trim() || DEFAULT_ACTOR_NAME,
+    id: requiredUuid(environment.SYDARIS_ACTOR_ID, DEFAULT_ACTOR_ID, "SYDARIS_ACTOR_ID"),
+    displayName: environment.SYDARIS_ACTOR_DISPLAY_NAME?.trim() || DEFAULT_ACTOR_NAME,
   };
 }
 
@@ -1040,7 +1040,7 @@ function evidenceTimestamp(
 
 export async function captureChatAssertions(
   input: ChatAssertionCaptureInput,
-  trace?: EchoDebugTrace,
+  trace?: DebugTrace,
 ): Promise<ChatAssertionCaptureResult> {
   const submittedAt = new Date(input.submittedAt);
   const currentMessage = input.semanticContext.conversation.find((message) =>

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 
-import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { DebugTrace } from "@/ai/debug-trace";
 import { getDatabase } from "@/db";
 import {
   captureChatAssertions,
@@ -14,7 +14,7 @@ import {
 import { maintainObjectHigherMemories } from "@/memory/object-higher-memory";
 import type { MemoryRetrievalResult } from "@/memory/types";
 
-const runLive = process.env.ECHO_LIVE_STRUCTURED_SUBMISSION_TEST === "1";
+const runLive = process.env.SYDARIS_LIVE_STRUCTURED_SUBMISSION_TEST === "1";
 const chatMessageId = "live-structured-submission-chat-001";
 const hypotheticalMessageId = "live-structured-submission-hypothetical-001";
 const questionMessageId = "live-structured-submission-question-001";
@@ -24,7 +24,7 @@ const multiFactHistoryMessageId = "live-structured-submission-multi-fact-history
 const multiFactMessageId = "live-structured-submission-multi-fact-001";
 const objectMaintenanceMessageId = "live-structured-submission-object-memory-001";
 
-function traceRecorder(titles: string[], sections?: string[]): EchoDebugTrace {
+function traceRecorder(titles: string[], sections?: string[]): DebugTrace {
   return {
     enabled: true,
     appendSection: async (title, markdown) => {
@@ -143,7 +143,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
             text: "请把“欢迎参加活动”改得更简洁。",
             submittedAt: "2026-08-15T01:05:00.000Z",
           }],
-          systemInstruction: "你是 Echo。",
+          systemInstruction: "你是 Sydaris。",
           modelCalls: [],
           toolExecutions: [],
           finalAnswer: "可以改成：欢迎参加。",
@@ -173,10 +173,10 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
           conversation: [{
             messageId: hypotheticalMessageId,
             role: "user",
-            text: "假设Echo人工验收赛-20260821-C1在2026年8月26日举行、地点在东区馆，这只是测试假设，不代表真实安排。",
+            text: "假设Sydaris人工验收赛-20260821-C1在2026年8月26日举行、地点在东区馆，这只是测试假设，不代表真实安排。",
             submittedAt: "2026-08-21T05:00:00.000Z",
           }],
-          systemInstruction: "你是 Echo。本轮验证明确假设不得写入组织事实。",
+          systemInstruction: "你是 Sydaris。本轮验证明确假设不得写入组织事实。",
           modelCalls: [],
           toolExecutions: [],
           finalAnswer: "明白，这是测试假设，不代表真实安排。",
@@ -190,7 +190,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
       expect(titles).toContain("后台 Assertion Agent · Schema 校验后的输出");
       await expect(database.memoryGlobalObject.count({
         where: {
-          canonicalName: "Echo人工验收赛-20260821-C1",
+          canonicalName: "Sydaris人工验收赛-20260821-C1",
         },
       })).resolves.toBe(0);
     } finally {
@@ -212,10 +212,10 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
           conversation: [{
             messageId: questionMessageId,
             role: "user",
-            text: "Echo人工验收赛-20260821-C2是不是在2026年8月27日于西区馆举行？",
+            text: "Sydaris人工验收赛-20260821-C2是不是在2026年8月27日于西区馆举行？",
             submittedAt: "2026-08-21T05:05:00.000Z",
           }],
-          systemInstruction: "你是 Echo。本轮验证用户问题不得写入组织事实。",
+          systemInstruction: "你是 Sydaris。本轮验证用户问题不得写入组织事实。",
           modelCalls: [],
           toolExecutions: [],
           finalAnswer: "目前没有足够证据确认该活动的时间和地点。",
@@ -229,7 +229,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
       expect(titles).toContain("后台 Assertion Agent · Schema 校验后的输出");
       await expect(database.memoryGlobalObject.count({
         where: {
-          canonicalName: "Echo人工验收赛-20260821-C2",
+          canonicalName: "Sydaris人工验收赛-20260821-C2",
         },
       })).resolves.toBe(0);
     } finally {
@@ -251,13 +251,13 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
           conversation: [{
             messageId: assistantInferenceMessageId,
             role: "user",
-            text: "请介绍一下Echo人工验收赛-20260821-C3。",
+            text: "请介绍一下Sydaris人工验收赛-20260821-C3。",
             submittedAt: "2026-08-21T05:10:00.000Z",
           }],
-          systemInstruction: "你是 Echo。本轮验证 Assistant 内容不能重新认证为用户事实。",
+          systemInstruction: "你是 Sydaris。本轮验证 Assistant 内容不能重新认证为用户事实。",
           modelCalls: [],
           toolExecutions: [],
-          finalAnswer: "Echo人工验收赛-20260821-C3将于2026年8月28日在南区馆举行。",
+          finalAnswer: "Sydaris人工验收赛-20260821-C3将于2026年8月28日在南区馆举行。",
         },
         retrieval: emptyRetrieval("Assistant 单方面给出的活动信息"),
         queueDecision: { reason: "负例验收：只有 Assistant 提供的事实必须被 Assertion Agent 拒绝" },
@@ -268,7 +268,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
       expect(titles).toContain("后台 Assertion Agent · Schema 校验后的输出");
       await expect(database.memoryGlobalObject.count({
         where: {
-          canonicalName: "Echo人工验收赛-20260821-C3",
+          canonicalName: "Sydaris人工验收赛-20260821-C3",
         },
       })).resolves.toBe(0);
     } finally {
@@ -280,7 +280,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
     const database = getDatabase();
     await requireSharedBrainIndex();
     const titles: string[] = [];
-    const testObjectName = "Echo人工验收赛-20260821-C4";
+    const testObjectName = "Sydaris人工验收赛-20260821-C4";
     const userMessage =
       `我问了一下验收员王明，他说${testObjectName}可能在2026年8月29日举行，地点还没确定。`;
     const staleObject = await database.memoryGlobalObject.findFirst({
@@ -304,7 +304,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
           text: userMessage,
           submittedAt: "2026-08-21T05:15:00.000Z",
         }],
-        systemInstruction: "你是 Echo。本轮验证转述来源和不确定性必须保留。",
+        systemInstruction: "你是 Sydaris。本轮验证转述来源和不确定性必须保留。",
         modelCalls: [],
         toolExecutions: [],
         finalAnswer: "收到，我会把它作为验收员王明提供、且时间和地点尚未完全确定的信息处理。",
@@ -387,8 +387,8 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
     await requireSharedBrainIndex();
     const titles: string[] = [];
     const sections: string[] = [];
-    const eventName = "Echo人工验收赛-20260821-C5";
-    const groupName = "Echo-C5验收组";
+    const eventName = "Sydaris人工验收赛-20260821-C5";
+    const groupName = "Sydaris-C5验收组";
     const staleObjects = await database.memoryGlobalObject.findMany({
       where: {
         canonicalName: { in: [eventName, groupName] },
@@ -425,7 +425,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
             text: `刚才说的负责人安排保持不变；${eventName}确定在2026年8月30日于中区馆举行，报名截止时间为2026年8月28日。`,
             submittedAt: "2026-08-21T05:25:00.000Z",
           }],
-          systemInstruction: "你是 Echo。本轮验证多命题、多对象和跨消息 Evidence。",
+          systemInstruction: "你是 Sydaris。本轮验证多命题、多对象和跨消息 Evidence。",
           modelCalls: [],
           toolExecutions: [],
           finalAnswer: "收到，负责人安排不变，并已补充活动时间、地点和报名截止时间。",
@@ -513,7 +513,7 @@ describe.runIf(runLive)("GLM structured submission compatibility", () => {
             text: `请根据已有记忆重新理解${target.canonicalName}。`,
             submittedAt: "2026-08-15T01:10:00.000Z",
           }],
-          systemInstruction: "你是 Echo。",
+          systemInstruction: "你是 Sydaris。",
           modelCalls: [],
           toolExecutions: [],
           finalAnswer: "我会基于已有记忆整理。",

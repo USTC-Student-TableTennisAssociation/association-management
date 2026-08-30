@@ -32,7 +32,7 @@ beforeEach(() => {
     memoryActorHigherMemory: {
       findMany: vi.fn().mockResolvedValue([{
         scope: "interaction",
-        contentMarkdown: "当前用户希望 Echo 在回答不确定问题时先说明证据边界。",
+        contentMarkdown: "当前用户希望 Sydaris 在回答不确定问题时先说明证据边界。",
         maintainedAt,
       }]),
     },
@@ -62,7 +62,7 @@ describe("Actor Higher Memory", () => {
     ]);
     const context = buildActorPrivateMemoryContext(memory);
     expect(context).toContain("只属于当前登录 Actor");
-    expect(context).toContain("当前用户希望 Echo 在回答不确定问题时先说明证据边界");
+    expect(context).toContain("当前用户希望 Sydaris 在回答不确定问题时先说明证据边界");
     expect(context).toContain("不得向其他 Actor 暴露");
   });
 
@@ -96,7 +96,7 @@ describe("Actor Higher Memory", () => {
 
     const call = aiState.generateText.mock.calls[0][0];
     expect(call.prompt).toContain("以后讨论不确定事项时，请先说明证据边界");
-    expect(call.prompt).toContain("当前用户希望 Echo 在回答不确定问题时先说明证据边界");
+    expect(call.prompt).toContain("当前用户希望 Sydaris 在回答不确定问题时先说明证据边界");
     expect(call.prompt).toContain("发起者、动作和接受者或对象");
     expect(call.prompt).not.toContain("助手臆测：用户永远只喜欢一种交流方式");
     expect(call.prompt).not.toContain("secret system prompt");

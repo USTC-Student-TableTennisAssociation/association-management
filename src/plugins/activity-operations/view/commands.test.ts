@@ -41,14 +41,14 @@ describe("activity.create_activity", () => {
 
     await executeCreateActivity(transaction, {
       objectId,
-      name: "Echo 验收赛",
+      name: "Sydaris 验收赛",
       status: "PLANNING",
     });
 
     expect(transaction.createCard).toHaveBeenCalledWith(expect.objectContaining({
       cardTypeKey: "ActivityCard",
       relatedObjectIds: [objectId],
-      dimensions: expect.objectContaining({ name: "Echo 验收赛", status: "PLANNING" }),
+      dimensions: expect.objectContaining({ name: "Sydaris 验收赛", status: "PLANNING" }),
     }));
   });
 
@@ -68,7 +68,7 @@ describe("activity.create_activity", () => {
 
     expect(() => command.inputSchema.parse({
       objectId: "not-a-uuid",
-      name: "Echo 验收赛",
+      name: "Sydaris 验收赛",
     })).toThrow();
   });
 });

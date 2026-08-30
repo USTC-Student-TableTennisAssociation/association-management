@@ -1,7 +1,7 @@
 import { generateText } from "ai";
 import { z } from "zod";
 
-import { debugCodeBlock, debugJson, type EchoDebugTrace } from "@/ai/debug-trace";
+import { debugCodeBlock, debugJson, type DebugTrace } from "@/ai/debug-trace";
 import { getChatModel } from "@/ai/provider";
 import {
   requireStructuredSubmission,
@@ -63,14 +63,14 @@ export function objectUpdatesFromAssertionGraph(
 export async function consolidateTurnKnowledge(
   input: KnowledgeConsolidationInput,
   captureResult: ChatAssertionCaptureResult,
-  trace?: EchoDebugTrace,
+  trace?: DebugTrace,
 ): Promise<KnowledgeConsolidationResult> {
   const oldAmbientMemories = await loadAmbientHigherMemories();
   const graphObjectUpdates = objectUpdatesFromAssertionGraph(captureResult);
   const prompt = [
     "你负责在一次真实对话结束后判断哪些 Ambient Higher Memory scope 值得维护。你不选择 Object，不写 Assertion，不撰写 Object Higher Memory，也不修改 Business View。",
     "所有新发布 Assertion 引用的 Object 已由 Object–Assertion 图自动成为对象级维护候选；这一传播仅由连接决定，不附加端点角色或 Object 类型判断，也不由你裁决。",
-    "Ambient identity 表示环境类型、边界和 Echo 长期职责；narrative 表示使命、历史、文化和共同意义；working_set 表示近期共同工作的焦点、阶段、风险和未结事项。",
+    "Ambient identity 表示环境类型、边界和 Sydaris 长期职责；narrative 表示使命、历史、文化和共同意义；working_set 表示近期共同工作的焦点、阶段、风险和未结事项。",
     "Ambient 描述跨单一 Object 的共享环境认知。某个事实连接到哪些 Object，不会自动把它提升为 Ambient；只在本轮证据确实改变共享环境层时选择 scope。",
     "事实强度必须忠于本轮语义。只有正式 View、grounded Assertion 和已成功发布的新 Assertion 可以支持业务事实。",
     "不得把 Assistant 的检索结论、未命中判断、工具能力说明、系统诊断、模型自我分析或回答措辞写入任何 Higher Memory；‘近期正在讨论什么’也只有在已发布 Assertion 能证明其为真实工作焦点时才可维护。",

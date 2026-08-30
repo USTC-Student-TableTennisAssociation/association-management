@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from echo_mineru.benchmark import run_benchmark
+from sydaris_mineru.benchmark import run_benchmark
 
 
 def test_profile_reports_order_and_forbidden_heading(tmp_path: Path) -> None:

@@ -83,7 +83,7 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
   return {
     openBusinessContext: tool({
       description:
-        "当回答需要 Echo 的业务状态、View 结构能力、组织知识、人物/活动背景时调用。它会立即读取指定正式 View，返回实时 cardTypes schema、相关 Cards、Card Object、Object Higher Memory，以及描述本次读取实际证明内容的 semantics.observations / semantics.answerability。普通闲聊和仅处理用户已给文字时不要调用。",
+        "当回答需要 Sydaris 的业务状态、View 结构能力、组织知识、人物/活动背景时调用。它会立即读取指定正式 View，返回实时 cardTypes schema、相关 Cards、Card Object、Object Higher Memory，以及描述本次读取实际证明内容的 semantics.observations / semantics.answerability。普通闲聊和仅处理用户已给文字时不要调用。",
       inputSchema: z.object({
         viewKey: handlers.viewKeySchema
           .describe("根据每轮已提供的 View Frame 选择一个首要 View"),
@@ -101,7 +101,7 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
     }),
     openArtifacts: tool({
       description:
-        "当回答需要查找或核对 Echo 资料库文件时调用。它会立即返回文件名、路径、处理状态、已发布 Assertion/Object 数，以及本次标题查询能与不能回答什么；不会把 coarse 误解为未进入 Shared Brain。",
+        "当回答需要查找或核对 Sydaris 资料库文件时调用。它会立即返回文件名、路径、处理状态、已发布 Assertion/Object 数，以及本次标题查询能与不能回答什么；不会把 coarse 误解为未进入 Shared Brain。",
       inputSchema: z.object({
         title: z.string().trim().min(1).max(300)
           .describe("要查找的文件完整标题或最长、最有区分度的标题部分；不要拆成多个宽泛 OR 词"),
@@ -159,11 +159,11 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
 }
 
 export const TURN_KERNEL_INSTRUCTIONS = `
-你是 Echo 的主对话模型。请先理解用户这一轮真正要做什么，再决定是直接回答还是打开更多能力。
+你是 Sydaris 的主对话模型。请先理解用户这一轮真正要做什么，再决定是直接回答还是打开更多能力。
 
-- 问候、闲聊、改写、翻译、总结用户已给文字，以及不依赖 Echo 内部资料的任务，直接回答。
+- 问候、闲聊、改写、翻译、总结用户已给文字，以及不依赖 Sydaris 内部资料的任务，直接回答。
 - 用户明确点名某个已安装 Skill，或当前任务与 Skill 目标高度匹配时，先调用 activateSkill。Skill 激活后必须遵守其 View/Command 边界和专用指令；不得用普通对话模式绕过 Skill Runtime 的写入约束。
-- 需要理解 Echo 的业务状态、组织事实、人物或活动背景时，调用 openBusinessContext。该入口会立即返回正式 View 中的相关 Card 及其 Object Higher Memory；只有它明确不足时才 expandEvidence。
+- 需要理解 Sydaris 的业务状态、组织事实、人物或活动背景时，调用 openBusinessContext。该入口会立即返回正式 View 中的相关 Card 及其 Object Higher Memory；只有它明确不足时才 expandEvidence。
 - 需要按主题查找跨文件、跨对象的组织知识时，直接调用 searchMemory。文件标题搜索只证明文件是否存在，未执行 searchMemory 前不得声称 Shared Brain 没有相关 Object、Assertion 或主题知识。
 - searchMemory 必须区分任务形状：单一明确事实使用 fact；完整理解、名单/表格、资料梳理或多字段 View 填充使用 synthesis。一次 query 只表达一个内聚的信息需求；多字段 synthesis 可先定位主体，再针对尚未覆盖的字段分别窄查。返回 partial/truncated、列表中出现“等”、或读完某个章节，只证明该次选择已完成，不证明用户要求的完整集合已经穷尽。Reference Assertion 未回读来源前不能作为事实。
 - 需要查找、核对或读取文件时，调用 openArtifacts。该入口会立即返回精确文件匹配、处理状态与 Shared Brain 发布计数。原始文件也可以在业务查询的任何阶段打开。
@@ -179,5 +179,5 @@ export const TURN_KERNEL_INSTRUCTIONS = `
 - 仅当当前用户原话确实包含值得独立审查的新业务事实时调用 submitTurnHandoff；纯问题无需调用，也不得为了结束回答而调用。它不负责决定写入。
 - reviewNeeded=true 时 candidateQuotes 必须逐字引用当前用户消息中的事实陈述；纯问题、检索要求、假设、模型自我分析以及只有 Assistant 说过的内容必须设为 false 并返回空 quotes。
 - 用户追问此前信息是否已经进入记忆时，调用 readMemoryWriteStatus，并根据对应原话显式传入目标 messageId；不得省略、猜测最近消息或把回执套用于其他消息。
-- 不要凭模型内部知识补写 Echo 的组织事实。不要声称未实际完成的写入、更新或归档。
+- 不要凭模型内部知识补写 Sydaris 的组织事实。不要声称未实际完成的写入、更新或归档。
 `.trim();

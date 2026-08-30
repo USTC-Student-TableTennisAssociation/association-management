@@ -1,7 +1,7 @@
 import { generateText } from "ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { DebugTrace } from "@/ai/debug-trace";
 import { getChatModel } from "@/ai/provider";
 import { getDatabase } from "@/db";
 import { captureChatAssertions, localDateAt } from "@/memory/chat-assertion";
@@ -161,7 +161,7 @@ function mockTrace() {
     appendJsonSection: vi.fn().mockResolvedValue(undefined),
     appendError: vi.fn().mockResolvedValue(undefined),
     flush: vi.fn().mockResolvedValue(undefined),
-  } satisfies EchoDebugTrace;
+  } satisfies DebugTrace;
 }
 
 function extractionResult(output: unknown) {
@@ -416,7 +416,7 @@ describe("Chat Assertion capture agent", () => {
     const captureInput = input();
     captureInput.semanticContext.conversation[0].text = "我说的是另一个活动。";
     captureInput.semanticContext.conversation[2].text =
-      "Echo人工验收赛-C6确定在2026年8月31日举行。";
+      "Sydaris人工验收赛-C6确定在2026年8月31日举行。";
     vi.mocked(generateText).mockResolvedValue(extractionResult({
       objects: [existingAssociationBinding()],
       assertions: [{
@@ -425,7 +425,7 @@ describe("Chat Assertion capture agent", () => {
         objectRefs: [associationRef],
         evidence: [{
           messageId: "user-current",
-          quotes: ["Echo人工验收赛-C6确定在2026年8月31日举行"],
+          quotes: ["Sydaris人工验收赛-C6确定在2026年8月31日举行"],
         }],
       }],
     }));

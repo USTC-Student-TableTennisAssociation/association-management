@@ -64,7 +64,7 @@ beforeEach(() => {
         },
         {
           scope: "identity",
-          contentMarkdown: "Echo 正在逐步理解当前环境。",
+          contentMarkdown: "Sydaris 正在逐步理解当前环境。",
           maintainedAt,
         },
       ]),
@@ -80,7 +80,7 @@ beforeEach(() => {
       input: {
         memories: [{
           scope: "identity",
-          contentMarkdown: "## 当前环境\n\nEcho 正在逐步理解这个团队、长期工作方式及自身能承担的协作职责；目前主要根据真实对话延续共同工作，仍应通过后续互动和实际业务读取继续修正这种理解，不能预设环境类型或成员身份。",
+          contentMarkdown: "## 当前环境\n\nSydaris 正在逐步理解这个团队、长期工作方式及自身能承担的协作职责；目前主要根据真实对话延续共同工作，仍应通过后续互动和实际业务读取继续修正这种理解，不能预设环境类型或成员身份。",
         }, {
           scope: "working_set",
           contentMarkdown: "## 近期焦点\n\n近期主要在准备一场比赛，场地是当前重点；具体申请和确认状态可能继续变化，下一轮协作时应先了解最新进展，再根据仍未解决的风险决定是否需要协助准备材料、联系相关方或调整安排。",

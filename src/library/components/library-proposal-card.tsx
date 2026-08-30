@@ -29,7 +29,7 @@ export function LibraryProposalCard({ proposal }: { proposal: LibraryPlanPresent
       const body = await response.json() as LibraryPlanPresentation & { error?: string };
       if (!response.ok) throw new Error(body.error || "无法处理资料库建议");
       setCurrent(body);
-      if (body.status === "applied") window.dispatchEvent(new Event("echo-library-changed"));
+      if (body.status === "applied") window.dispatchEvent(new Event("sydaris-library-changed"));
     } catch (decisionError) {
       setError(decisionError instanceof Error ? decisionError.message : "操作失败");
     } finally {

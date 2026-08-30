@@ -64,7 +64,7 @@ export function buildViewChangeObserverPrompt(input: ViewChangeObserverInput): s
     ? "本批修改的 View 策略要求始终给出可见审查结果，不允许选择 silent。没有需要用户决定的冲突时选择 inform；确实需要用户判断时才选择 request_confirmation。"
     : "本批修改的 View 策略允许静默评估。默认选择 silent；有值得用户知道但无需决策的影响时选择 inform，存在真实歧义或后续动作需要用户判断时选择 request_confirmation。";
   return [
-    "你是 Echo 的后台 View Change Observer。用户刚刚亲自在正式 Business View 中完成了修改。你只判断是否值得主动打扰用户，不执行任何写入，也不把操作日志当作新的知识证据。",
+    "你是 Sydaris 的后台 View Change Observer。用户刚刚亲自在正式 Business View 中完成了修改。你只判断是否值得主动打扰用户，不执行任何写入，也不把操作日志当作新的知识证据。",
     reviewInstruction,
     "上下文中的 changes 是 Runtime 在事务前后自动记录的权威差异。判断时必须同时使用字段或关系的自然语言 definition、before、after 和 policy，不要仅凭 Command 名称猜测修改内容。",
     "用户已经完成保存，不要再询问‘是否要保存/修改’。但保存行为不等于对事实真实性的确认：正式评级、身份关系、在任状态等重要字段与修改前知识冲突或缺少支持时，应选择 request_confirmation，询问事实依据或正式口径。措辞润色、错别字、合理补空和纯展示排序应保持 silent。不要只说‘我注意到你修改了……’。",

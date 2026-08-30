@@ -227,7 +227,7 @@ const parsedBlocksSchema = z.array(z.object({
 }));
 
 function coldStartOutputRoot(): string {
-  const configured = process.env.ECHO_COLD_START_OUTPUT_ROOT?.trim();
+  const configured = process.env.SYDARIS_COLD_START_OUTPUT_ROOT?.trim();
   if (configured) return path.normalize(/* turbopackIgnore: true */ configured);
   return path.join(/* turbopackIgnore: true */ process.cwd(), ".cold-start");
 }

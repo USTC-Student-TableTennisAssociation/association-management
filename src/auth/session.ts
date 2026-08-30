@@ -4,7 +4,7 @@ import { cookies } from "next/headers";
 
 import { getDatabase } from "@/db";
 
-const SESSION_COOKIE = "echo_session";
+const SESSION_COOKIE = "sydaris_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const SESSION_TOUCH_INTERVAL_MS = 5 * 60 * 1_000;
 

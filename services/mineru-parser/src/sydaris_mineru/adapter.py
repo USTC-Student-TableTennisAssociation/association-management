@@ -1,4 +1,4 @@
-"""把 MinerU 稳定内容列表转换为 Echo 可检查的薄中间表示。"""
+"""把 MinerU 稳定内容列表转换为 Sydaris 可检查的薄中间表示。"""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ def normalize_mineru_output(
     effort: str,
     method: str,
 ) -> dict[str, Any]:
-    """保留 MinerU 原始产物，并生成不依赖开发版 v2 Schema 的 Echo 文档。"""
+    """保留 MinerU 原始产物，并生成不依赖开发版 v2 Schema 的 Sydaris 文档。"""
 
     content_list_path = _find_one(raw_directory, "*_content_list.json")
     markdown_path = _find_markdown(raw_directory, source_pdf.stem)
@@ -95,7 +95,7 @@ def normalize_mineru_output(
         },
         "pages": pages,
     }
-    (run_directory / "echo-document.json").write_text(
+    (run_directory / "sydaris-document.json").write_text(
         json.dumps(document, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

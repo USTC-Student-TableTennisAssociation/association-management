@@ -1,8 +1,9 @@
 # 贡献指南
 
-感谢你帮助完善 Echo。本项目希望同时保持两件事：业务表达可以继续生长，Runtime 的基础边界依然简单。
+感谢你帮助完善 Sydaris。本项目希望同时保持两件事：业务表达可以继续生长，Runtime 的基础边界依然简单。
 
-请先阅读 [README](README.md) 和 [Echo Runtime 架构](docs/architecture/Echo-Runtime架构.md)。
+请先阅读 [README](README.md)。仓库当前没有另一份独立的架构规范；如文档与代码、测试冲突，
+以当前可运行实现和架构边界测试为准，并在改动中同步修正文档。
 
 ## 开发流程
 
@@ -25,7 +26,7 @@ docs/runtime-contracts
 
 ### Contracts
 
-`src/contracts/` 只描述 Echo Runtime 的稳定协议。
+`src/contracts/` 只描述 Sydaris Runtime 的稳定协议。
 
 - 不能包含 `activity_operations`、`society_information` 或具体 Card Type 判断。
 - 不能导入 Plugin、Shell、Prisma 或 Next.js。
@@ -151,7 +152,7 @@ pnpm build
 
 - `.env`、API Key、密码、Token 或数据库连接信息；
 - 未脱敏的成员信息、组织内部材料、财务记录或私人对话；
-- `.next/`、`node_modules/`、`.echo-debug/`、`.echo-library/` 等本地产物；
+- `.next/`、`node_modules/`、`.sydaris-debug/`、`.sydaris-library/` 等本地产物；
 - 与当前 PR 无关的批量格式化或生成文件。
 
 ## PR 要求

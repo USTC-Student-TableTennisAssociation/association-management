@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 
 import { purgeViewData } from "./sydaris-plugin.mjs";
 
-const runLive = process.env.ECHO_LIVE_PLUGIN_PURGE_TEST === "1";
+const runLive = process.env.SYDARIS_LIVE_PLUGIN_PURGE_TEST === "1";
 const pool = runLive ? new pg.Pool({ connectionString: process.env.DATABASE_URL }) : undefined;
 
 describe.runIf(runLive)("Plugin --purge database cleanup", () => {

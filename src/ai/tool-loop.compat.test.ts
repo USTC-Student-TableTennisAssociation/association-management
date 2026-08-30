@@ -208,17 +208,17 @@ describe("AI SDK 7 tool-loop compatibility", () => {
           {
             toolCallId: "call-default-stop",
             toolName: "lookup",
-            input: JSON.stringify({ query: "Echo" }),
+            input: JSON.stringify({ query: "Sydaris" }),
           },
         ]),
         textStep("unreachable-answer", "this step must not run"),
       ],
     });
 
-    const result = streamText({ model, tools, prompt: "lookup Echo" });
+    const result = streamText({ model, tools, prompt: "lookup Sydaris" });
     await result.consumeStream();
 
-    expect(executions).toEqual(["Echo"]);
+    expect(executions).toEqual(["Sydaris"]);
     expect(model.doStreamCalls).toHaveLength(1);
     expect(await result.text).toBe("");
     expect(await result.finishReason).toBe("tool-calls");
@@ -239,17 +239,17 @@ describe("AI SDK 7 tool-loop compatibility", () => {
           {
             toolCallId: "call-forced-answer",
             toolName: "lookup",
-            input: JSON.stringify({ query: "Echo" }),
+            input: JSON.stringify({ query: "Sydaris" }),
           },
         ]),
-        textStep("forced-answer", "Echo was found."),
+        textStep("forced-answer", "Sydaris was found."),
       ],
     });
 
     const result = streamText({
       model,
       tools,
-      prompt: "lookup Echo and answer",
+      prompt: "lookup Sydaris and answer",
       stopWhen: stepCountIs(2),
       prepareStep: ({ stepNumber }) => {
         preparedSteps.push(stepNumber);
@@ -261,7 +261,7 @@ describe("AI SDK 7 tool-loop compatibility", () => {
     expect(preparedSteps).toEqual([0, 1]);
     expect(model.doStreamCalls[0].toolChoice).toEqual({ type: "required" });
     expect(model.doStreamCalls[1].toolChoice).toEqual({ type: "none" });
-    expect(await result.text).toBe("Echo was found.");
+    expect(await result.text).toBe("Sydaris was found.");
     expect(await result.steps).toHaveLength(2);
   });
 
@@ -278,7 +278,7 @@ describe("AI SDK 7 tool-loop compatibility", () => {
           {
             toolCallId: "call-agent",
             toolName: "lookup",
-            input: JSON.stringify({ query: "Echo" }),
+            input: JSON.stringify({ query: "Sydaris" }),
           },
         ]),
         textStep("agent-answer", "Agent completed."),
@@ -286,7 +286,7 @@ describe("AI SDK 7 tool-loop compatibility", () => {
     });
     const agent = new ToolLoopAgent({ model, tools });
 
-    const result = await agent.stream({ prompt: "lookup Echo" });
+    const result = await agent.stream({ prompt: "lookup Sydaris" });
     await result.consumeStream();
 
     expect(model.doStreamCalls).toHaveLength(2);

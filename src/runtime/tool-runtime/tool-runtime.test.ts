@@ -21,7 +21,7 @@ function runtime() {
 }
 
 describe("ToolRuntime", () => {
-  it("validates Provider input and output with Echo's Capability Contract", async () => {
+  it("validates Provider input and output with Sydaris's Capability Contract", async () => {
     const execute = vi.fn(async () => ({ messageId: "message-1" }));
     const subject = runtime();
     subject.registerProvider({

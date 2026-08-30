@@ -346,7 +346,7 @@ export function createAgentViewToolset(input: {
   const tools = {
     readView: tool({
       description: [
-        "通过 Echo 统一 ViewReadPort 读取指定 View 的完整正式 Card Graph 快照。",
+        "通过 Sydaris 统一 ViewReadPort 读取指定 View 的完整正式 Card Graph 快照。",
         "View 职责范围：",
         orientation(registry),
         "返回 pluginVersion、schemaVersion、stateVersion、Typed Dimensions、View-local Slots 和 Related Objects。",

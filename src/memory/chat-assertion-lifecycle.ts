@@ -1,6 +1,6 @@
 import { after } from "next/server";
 
-import type { EchoDebugTrace } from "@/ai/debug-trace";
+import type { DebugTrace } from "@/ai/debug-trace";
 import {
   captureChatAssertions,
   type ChatAssertionCaptureInput,
@@ -49,7 +49,7 @@ export type ChatMemoryMaintenanceScheduler = {
  * and Higher Memory maintenance in that order.
  */
 export function createChatMemoryMaintenanceScheduler(
-  trace?: EchoDebugTrace,
+  trace?: DebugTrace,
 ): ChatMemoryMaintenanceScheduler {
   let resolveInput: (input: ChatMemoryMaintenanceInput | undefined) => void = () => undefined;
   let published = false;

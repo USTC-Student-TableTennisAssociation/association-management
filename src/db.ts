@@ -4,7 +4,7 @@ import { Pool } from "pg";
 import { PrismaClient } from "@/generated/prisma/client";
 
 const globalDatabase = globalThis as typeof globalThis & {
-  echoPrisma?: PrismaClient;
+  prisma?: PrismaClient;
 };
 
 function createPrismaClient(): PrismaClient {
@@ -17,6 +17,6 @@ function createPrismaClient(): PrismaClient {
 }
 
 export function getDatabase(): PrismaClient {
-  globalDatabase.echoPrisma ??= createPrismaClient();
-  return globalDatabase.echoPrisma;
+  globalDatabase.prisma ??= createPrismaClient();
+  return globalDatabase.prisma;
 }
