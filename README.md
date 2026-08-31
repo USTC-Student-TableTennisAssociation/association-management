@@ -1,64 +1,64 @@
 # Sydaris
 
-> **Sydaris is a runtime for software where humans and AI work together.**
-> **Organizational state and knowledge persist across people, agents, and time.**
+> A runtime for software where humans and AI share durable business state and organizational knowledge.
 
-Sydaris 是面向人类与 AI 协同工作的软件 Runtime。
+Sydaris 是面向人类与 AI 协同工作的软件 Runtime。它让组织的业务状态、原始资料和长期认知独立于具体成员、Agent 与单次会话持续存在。
 
-组织的业务状态与长期认知独立于具体成员、Agent 和会话持续存在。
+当前版本为 `0.1 alpha`，公共合同尚未稳定。
 
-> Sydaris is under active development.
+## Sydaris 能做什么
 
-## Architecture
+- 用 Business View 表达不同领域的业务模型，而不是要求所有业务服从一个全局 ontology。
+- 让人、AI、Skill、专属 UI 和外部系统通过同一套 Domain Command 修改业务状态。
+- 把文档与对话中的信息编译为可追溯的 Evidence、Assertion、Object 和 Higher Memory。
+- 让 AI 同时读取 View Snapshot、Shared Brain 与原始资料，并在证据不足时明确保留不确定性。
+- 将需要人工确认的 AI 修改保存为 Proposal；批准后仍由同一条 Command 路径执行。
+- 通过 Plugin 独立安装或移除 View、Presentation、Skill 与 Tool Provider。
 
-```text
-┌───────────────────────────────────────────────┐
-│ Cognitive Runtime                             │
-│                                               │
-│ Object · Assertion · Evidence · Higher Memory │
-│ Retrieval                                     │
-└──────────────────────┬────────────────────────┘
-                       │ context
-                       ▼
-┌───────────────────────────────────────────────┐
-│ View Runtime                                  │
-│                                               │
-│ Card Graph · Commands · Invariants            │
-│ Proposal · State Version · Events             │
-└──────────────────────┬────────────────────────┘
-                       │ runtime contracts
-                       ▼
-┌───────────────────────────────────────────────┐
-│ Extensions                                    │
-│                                               │
-│ View · Presentation · Skill · Tool Provider   │
-└───────────────────────────────────────────────┘
+Sydaris 的目标不是把所有信息投影成一套预设业务表，也不是让 AI 绕过正式业务规则直接修改数据库。底层保存信息和认知锚点；每个 View 在其上声明自己的业务世界。
+
+## 架构
+
+```mermaid
+flowchart LR
+    Documents["Documents / Files"] --> Library["Library<br/>Source Documents"]
+    Conversations["Conversations"] --> Cognitive["Cognitive Runtime<br/>Evidence · Assertion · Object · Higher Memory"]
+    Library --> Cognitive
+
+    Cognitive -->|"grounded context"| Agent["Agent Runtime<br/>Chat · Skill · Tool"]
+    View["View Runtime<br/>Cards · Slots · Commands · Proposals"] -->|"snapshots"| Agent
+    Agent -->|"Command or Proposal"| View
+    Human["Human / Presentation / API"] -->|"Command"| View
+
+    Plugins["Plugins<br/>View · Presentation · Skill · Tool Provider"] --> View
+    Plugins --> Agent
+    View -->|"post-commit memory maintenance"| Cognitive
 ```
 
-### Cognitive Runtime
+### 信息与认知
 
-Cognitive Runtime 保存组织长期认知：
+Sydaris 的认知底座由以下概念组成：
 
-* `Evidence`：原始来源与可追溯内容
-* `Object`：信息与业务内容的稳定锚点，不承担统一业务 ontology
-* `Assertion`：带来源与时间背景的事实
-* `Higher Memory`：面向 AI 的高层认知入口
+- `Evidence`：原始来源和可追溯内容。
+- `Assertion`：带来源与时间背景的信息陈述。
+- `Object`：信息与业务内容的稳定锚点，不承担统一业务 ontology。
+- `Higher Memory`：面向 AI 的高层导航与工作记忆，不替代 Evidence。
 
-这些认知为 AI 理解当前业务提供长期上下文。
+Library 管理来源文件、稳定 Source Document 和编译过程。成功编译的结果会原子发布到唯一的 Shared Brain；重新编译同一来源时，当前发布版本会被整体替换，而不是产生另一套并行业务状态。
 
-### View Runtime
+### Business View
 
-View 定义一个业务领域的状态与操作：
+每个 View 独立声明一个业务领域：
 
-* Card Types 与 Typed Dimensions
-* Slots 与 Related Objects
-* Domain Commands
-* Business Invariants
-* Domain Events
+- Card Types 与 Typed Dimensions
+- View-local Slots
+- Card 与稳定 Object 之间的 Related Objects
+- Domain Commands、Invariants 与 Domain Events
+- AI 写入策略与状态版本
 
-View Runtime 提供持久化、读取、Schema 校验、权限、Proposal、并发控制与 Events。
+Card 之间的业务关系使用 Slot。Object 只提供跨信息与业务内容的稳定锚点，不扩张为全局业务模型。
 
-所有业务写入通过 Domain Command 执行。
+### 统一写入路径
 
 ```text
 Human ──────────────┐
@@ -66,210 +66,164 @@ AI ─────────────────┤
 Skill ──────────────┼──► Domain Command ──► View State
 Presentation ───────┤                         │
 API / External ─────┘                         ▼
-                                             Events
+                                      Execution + Events
 ```
 
-人、AI、Skill、Presentation 和外部系统使用相同的 Runtime Contracts。
-
-AI 写入由 View 的策略控制：
+所有正式 View 修改最终都由 Domain Command 执行。
 
 ```text
-approval_required → Proposal → Approval → Execute
-auto_execute      → Execute
+approval_required → Proposal → Approval → Command
+auto_execute      → Command
 ```
 
-`stateVersion` 提供并发控制。Domain Events 描述命令产生的业务结果。
+Proposal 是等待审核的修改建议，不是第二套状态修改机制。`stateVersion` 负责并发控制；Domain Events 作为 Command Execution 的业务结果一同保存，目前不代表独立的外部 Outbox 或消息总线。
 
-## Plugins
+### Extension
 
-Plugin 是 Sydaris 的业务扩展单元。
+| Extension | 职责 |
+| --- | --- |
+| `ViewModule` | 业务状态、Commands、Invariants、Events |
+| `PresentationExtension` | View-specific UI 与交互 |
+| `SkillExtension` | AI 的专用业务工作流与精确 Command 权限 |
+| `ToolProviderExtension` | 外部 Capability Contract 的实现 |
 
-| Extension               | 定义                              |
-| ----------------------- | ------------------------------- |
-| `ViewModule`            | 业务状态、Commands、Invariants、Events |
-| `PresentationExtension` | 专属 UI 与交互                       |
-| `SkillExtension`        | AI 的业务处理能力                      |
-| `ToolProviderExtension` | 外部 Capability 的实现               |
+Generic Inspector 为任何 View 提供只读默认界面；专属 Presentation 可以提供业务操作，但仍只能调用 Domain Command。Plugin 通过稳定 Runtime Contract 工作，不依赖 Prisma、内部 service 或 Shell 实现。
 
-一个最小 Plugin 只包含 View：
+## 本地运行
 
-```text
-src/plugins/project-operations/
-├── manifest.ts
-└── view/
-    ├── schema.ts
-    ├── commands.ts
-    └── events.ts
-```
+### 环境要求
 
-例如：
+- Node.js 20+
+- pnpm
+- PostgreSQL；也可以使用仓库提供的 Prisma 本地开发数据库
+- 一个 OpenAI-compatible 文字模型
+- Python 3.11 或 3.12 与 [`uv`](https://docs.astral.sh/uv/)；完整 Shared Brain 检索与深度资料编译需要
 
-```text
-Project
-├── name
-├── status
-├── owner
-├── tasks
-└── budget
+MinerU、视觉模型和 GPU 只在处理相应文档或图片时需要。
 
-Commands
-├── project.create
-├── task.assign
-├── budget.approve
-└── project.close
-```
-
-注册后的 View 使用 Sydaris 提供的持久化、读取、权限、Proposal、并发控制、Events、Generic Inspector 与 AI Tools。
-
-Presentation、Skill 和 Tool Provider 通过独立 Extension 提供。
-
-### Plugin 安装
-
-Plugin 使用静态注册和正常的 Next.js 编译，不在运行中的服务内执行刚下载的远程代码。
-根目录的 `sydaris.plugins.json` 是已安装清单；`src/generated/installed-plugins.ts` 和
-`src/generated/installed-presentations.tsx` 由 CLI 生成，不能手工修改。
-
-每个 Plugin 需要提供 `sydaris.plugin.json`，其中声明服务端 Manifest export、所拥有的
-View keys，以及可选的专属 React Presentation。CLI 支持仓库内目录、本地 `.tgz` 和 npm
-包名；npm 安装会禁用包的 install scripts。安装后重新启动 Sydaris 即可生效：
-
-```bash
-pnpm sydaris:plugin install src/plugins/activity-operations
-pnpm sydaris:plugin install ./my-sydaris-plugin-1.0.0.tgz
-pnpm sydaris:plugin install @your-scope/my-sydaris-plugin@1.0.0
-pnpm sydaris:plugin list
-pnpm sydaris:plugin generate --check
-```
-
-删除是不可恢复操作，必须显式使用 `--purge`。CLI 会先在一个数据库事务中删除该 Plugin
-所有 View 的 Cards、Dimensions、Slots、Proposal、Execution、Event、Higher Memory 和
-Installed View 状态，成功后才从安装清单移除 Plugin：
-
-```bash
-pnpm sydaris:plugin remove sydaris.activity-operations --purge
-```
-
-当前版本只面向可信包，不提供代码沙箱、签名校验、升级、迁移或回滚。在线安装实际是
-`pnpm add` 下载到 `node_modules`，随后读取包内描述文件并生成静态 Registry；专属 UI 因此
-可以使用普通 React/TypeScript，在 Sydaris 下次启动或构建时一起编译。
-
-### 开发与发布 Plugin
-
-`packages/plugin-sdk` 提供可发布 Plugin 使用的公共合同、`sydaris.plugin.json`
-描述文件 Schema 和 React hooks；
-`packages/example-plugin` 是包含 View、Command、Skill、专属 UI 和全局只读 Tool Provider
-的最小完整示例。现有的 `src/plugins/society-information` 也已经是可发布 workspace 包，
-它的 tarball 包含真实 Card Schema、Commands、Events、沉浸式 UI、CSS 和全部图片资源：
-
-```bash
-pnpm plugins:build
-pnpm plugins:pack:sdk
-pnpm --filter @sydaris/example-plugin pack
-mkdir -p artifacts
-pnpm plugins:pack:society --pack-destination ./artifacts
-```
-
-`@sydaris/society-information-plugin` 通过 `@sydaris/plugin-sdk` peer dependency 使用宿主合同，
-不包含 Sydaris 数据库实现或 `@/` 内部路径。
-
-发布到 npm 时先发布 SDK，再发布 Plugin。当前 SDK 为 alpha 预发布版，
-`publishConfig` 会默认发到 `next` tag：
-
-```bash
-pnpm --filter @sydaris/plugin-sdk publish
-pnpm --filter @sydaris/example-plugin publish --tag next --access public
-```
-
-每个 Plugin 必须通过 `engines.sydaris` 声明兼容的 Sydaris 版本，不匹配时 CLI 会拒绝安装。
-实际发布需要 `@sydaris` npm scope 权限；本仓库不会保存发布凭据。
-当前可发布的 SDK 与 Plugin 包使用 Apache-2.0 许可证。
-
-可复用 Tool Provider 应独立成 Plugin；只读 Provider 会注册成所有 AI 聊天均可使用的全局
-Tool，具有外部副作用的 Tool 在增加人工审批 UI 前不会暴露给模型。
-
-## Tool Capabilities
-
-外部工具通过 Capability Contract 接入 Sydaris。
-
-```text
-Skill
-  │
-  ▼
-Capability Contract
-  │
-  ├── Gmail Provider
-  ├── Outlook Provider
-  └── ...
-```
-
-Capability Contract 定义 capability key、version、input schema、output schema 与执行语义。
-
-Skill 声明 Capability 依赖。Tool Provider 实现对应的 Capability Contract。Runtime 负责 Provider 解析、Schema 校验与权限检查。
-
-## Built-in Plugins
-
-`sydaris.society-information`
-组织身份、人物、学年职位、长期活动与平台入口。
-
-`sydaris.activity-operations`
-Activity 的任务、分工、预算、采购、报销、材料、审批、结果与复盘。
-
-## Repository
-
-```text
-src/
-├── contracts/        Runtime Contracts
-├── runtime/          Extension Host / Tool Runtime
-├── view-runtime/     View Runtime
-├── agent-runtime/    AI Runtime
-├── plugins/          First-party Plugins
-├── shell/            Composition Root
-├── memory/           Cognitive Runtime
-├── library/          Evidence / Knowledge
-├── app/              Next.js Application
-└── auth/             Identity / Session
-
-prisma/               Database Schema
-
-services/
-├── cold-start/       Cognitive cold start / BGE-M3
-└── mineru-parser/    Document parsing
-```
-
-## Development
-
-Requirements:
-
-* Node.js 20+
-* pnpm
-* PostgreSQL
-* Python 3.11 / 3.12 与 `uv`（认知服务）
+### 1. 安装与配置
 
 ```bash
 pnpm install
 cp .env.example .env
-
-pnpm prisma:dev
-pnpm prisma:deploy
-pnpm prisma:generate
-
-pnpm dev
 ```
 
-```env
-DATABASE_URL=postgresql://postgres:postgres@localhost:51214/template1
-SHADOW_DATABASE_URL=postgresql://postgres:postgres@localhost:51215/template1
+至少填写文字模型：
 
+```env
 AI_API_KEY=
 AI_API_BASE_URL=https://api.openai.com/v1
 AI_MODEL=
-
-ENVIRONMENT_TIMEZONE=Asia/Shanghai
 ```
 
-首次运行通过 `/setup` 创建管理员。
+`.env.example` 包含数据库、模型限速、Library、Shared Brain 与本地调试的全部可选配置。不要提交真实密钥或数据库凭据。
 
-## Validation
+### 2. 启动数据库
+
+使用仓库提供的本地数据库：
+
+```bash
+pnpm prisma:dev
+pnpm prisma:deploy
+pnpm prisma:generate
+```
+
+也可以直接在 `.env` 中配置已有 PostgreSQL 的 `DATABASE_URL` 和 `SHADOW_DATABASE_URL`。
+
+### 3. 启动 Shared Brain 检索
+
+完整认知检索需要常驻的 BGE-M3 embedding 服务：
+
+```bash
+pnpm memory:serve-embeddings
+```
+
+首次运行可能需要下载模型。生产或离线环境可通过 `COLD_START_EMBEDDING_MODEL` 指向本地模型路径。
+
+如果只需要检查应用界面，可以在 `.env` 中设置 `MEMORY_RETRIEVER_MODE=disabled` 并跳过此步骤；这不代表完整 Sydaris 体验。
+
+### 4. 启动 Sydaris
+
+```bash
+pnpm dev
+```
+
+访问 [http://localhost:3000/setup](http://localhost:3000/setup) 创建第一个管理员。之后可以在 Library 中导入资料并启动基础编译；成功结果会发布到 Shared Brain 并同步更新检索索引。
+
+认知冷启动、Parser 和 embedding 服务的详细说明见 [`services/cold-start`](services/cold-start/README.md) 与 [`services/mineru-parser`](services/mineru-parser/README.md)。
+
+## 内置 Plugin
+
+| Plugin | 业务范围 |
+| --- | --- |
+| `sydaris.society-information` | 组织身份、人物、学年职位、长期活动与平台入口 |
+| `sydaris.activity-operations` | Activity 的任务、分工、预算、采购、报销、材料、审批、结果与复盘 |
+| `sydaris.competition-records` | 比赛届次、长期赛事系列与来源数据同步 |
+
+Competition Records 的 USTCTTA 来源 Provider 是可选集成，需要 `USTCTTA_DATABASE_URL` 或 `USTCTTA_DATABASE_URL_UNPOOLED`。
+
+## Plugin 开发
+
+Plugin 使用静态注册和正常的 Next.js 构建，不在运行中的服务内执行刚下载的远程代码。每个包通过 `sydaris.plugin.json` 声明服务端 Manifest、View keys、宿主版本范围和可选 Presentation。
+
+```bash
+pnpm sydaris:plugin install ./my-plugin.tgz
+pnpm sydaris:plugin list
+pnpm sydaris:plugin generate --check
+```
+
+移除 Plugin 及其 View 数据是不可恢复操作，必须显式使用 `--purge`：
+
+```bash
+pnpm sydaris:plugin remove sydaris.example-notes --purge
+```
+
+- [`packages/plugin-sdk`](packages/plugin-sdk/README.md)：公共 TypeScript contracts、React hooks 与包格式。
+- [`packages/example-plugin`](packages/example-plugin/README.md)：可复制的最小完整 Plugin。
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)：架构边界、开发流程和发布前验证。
+
+## 仓库结构
+
+```text
+src/
+├── contracts/        Stable Runtime contracts
+├── runtime/          Extension host / Tool runtime
+├── view-runtime/     View state, Command and Proposal runtime
+├── agent-runtime/    AI-facing View, Skill and Tool runtime
+├── ai/               Chat model orchestration and grounding
+├── memory/           Cognitive Runtime
+├── evidence/         Evidence-layer semantics
+├── library/          Source documents and knowledge compilation
+├── plugins/          First-party Plugins
+├── integrations/     Host-owned external workflows
+├── shell/            Composition Root
+├── app/              Next.js application and API routes
+└── auth/             Identity and session
+
+packages/
+├── plugin-sdk/       Public Plugin SDK
+└── example-plugin/   Publishable example
+
+services/
+├── cold-start/       Cognitive compilation and BGE-M3 service
+└── mineru-parser/    Document parser service
+
+prisma/               Current schema and initial migration baseline
+```
+
+`src/shell/` 是唯一同时了解具体 Plugin 与 Runtime 实现的组合根。View、Skill、Tool Provider 和 Presentation 不应反向依赖 Shell 或数据库实现。
+
+## 项目状态
+
+Sydaris 当前仍处于 alpha 阶段：
+
+- 运行时只维护一个 Knowledge Space / Shared Brain。
+- Plugin SDK 和公共 API 在首次稳定发布前仍可能发生破坏性调整。
+- 当前只接受可信 Plugin，不提供代码沙箱或包签名校验。
+- 第一版不提供 Plugin 升级、数据迁移或回滚；已发布行为变化应使用新的包版本。
+- 具有外部副作用的 Tool 在具备明确人工审批界面前不会暴露给模型。
+
+## 验证
 
 ```bash
 pnpm lint
@@ -278,3 +232,11 @@ pnpm exec tsc --noEmit
 pnpm prisma validate
 pnpm build
 ```
+
+## 贡献
+
+提交修改前请阅读 [`CONTRIBUTING.md`](CONTRIBUTING.md)。如果文档与当前代码、测试冲突，以可运行实现和架构边界测试为准，并在同一改动中修正文档。
+
+## 许可证
+
+Sydaris 使用 [Apache License 2.0](LICENSE)。
