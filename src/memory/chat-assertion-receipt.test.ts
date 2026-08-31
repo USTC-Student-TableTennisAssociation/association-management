@@ -11,7 +11,7 @@ import {
   completeChatAssertionReceipt,
   createMemoryWriteStatusTool,
   listChatAssertionReceipts,
-  loadChatAssertionWritebackJob,
+  loadChatAssertionReceiptInput,
   queueChatAssertionReceipt,
 } from "@/memory/chat-assertion-receipt";
 
@@ -158,7 +158,7 @@ describe("Chat Assertion processing receipts", () => {
       }),
     );
 
-    await expect(loadChatAssertionWritebackJob({
+    await expect(loadChatAssertionReceiptInput({
       actorId: "00000000-0000-4000-8000-000000000001",
       clientMessageId: "message-current",
     })).resolves.toEqual(expect.objectContaining({

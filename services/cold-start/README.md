@@ -53,7 +53,7 @@ CLI 会从当前目录向上查找 `.env`，也可通过 `--env-file` 显式指�
 ## 主要命令
 
 ```text
-explore              单 PDF 全局勘探与连续区域树
+explore              单文档全局勘探与连续区域树
 parse-document       只执行来源解析并写入可复用缓存
 compile-source       编译单个 Source Region
 compile-sources      并行编译全部 Source Region
@@ -75,11 +75,11 @@ uv run cold-start parse-document \
 
 `--source-suffix` 支持 `pdf`、`docx`、`pptx` 和 `xlsx`。
 
-对单份 PDF 生成勘探运行目录：
+对单份文档生成勘探运行目录：
 
 ```bash
 uv run cold-start explore \
-  --pdf "/absolute/path/to/manual.pdf" \
+  --source "/absolute/path/to/manual.pdf" \
   --output "/absolute/path/to/runs"
 ```
 

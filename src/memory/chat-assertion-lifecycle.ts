@@ -9,7 +9,7 @@ import {
 import {
   completeChatAssertionReceipt,
   failChatAssertionReceipt,
-  loadChatAssertionWritebackJob,
+  loadChatAssertionReceiptInput,
   markChatAssertionReceiptRunning,
   type ChatAssertionReceiptKey,
 } from "@/memory/chat-assertion-receipt";
@@ -27,8 +27,6 @@ import {
 } from "@/memory/actor-higher-memory";
 
 export type ChatMemoryMaintenanceInput = {
-  assertion?: ChatAssertionCaptureInput;
-  assertionJob?: ChatAssertionReceiptKey;
   assertionReceipt?: ChatAssertionReceiptKey;
   completedAssertion?: {
     input: ChatAssertionCaptureInput;
@@ -77,19 +75,19 @@ export function createChatMemoryMaintenanceScheduler(
           affectedObjectIds: [],
           affectedObjects: [],
         };
-        let assertionInput = input.assertion;
-        if (!input.completedAssertion && !assertionInput && input.assertionJob) {
+        let assertionInput: ChatAssertionCaptureInput | undefined;
+        if (!input.completedAssertion && input.assertionReceipt) {
           try {
-            assertionInput = await loadChatAssertionWritebackJob(input.assertionJob);
+            assertionInput = await loadChatAssertionReceiptInput(input.assertionReceipt);
             await trace?.appendSection(
               "后台 Chat → Assertion 任务恢复",
               "已使用持久化回执 key 重新加载完整语义上下文与检索快照；后台任务不依赖请求局部变量保存工作内容。",
             );
           } catch (error) {
-            console.error("[chat.assertion-job.load]", error);
-            await trace?.appendError("加载持久化 Assertion 写回任务失败", error);
+            console.error("[chat.assertion-receipt.load]", error);
+            await trace?.appendError("加载持久化 Assertion 回执输入失败", error);
             try {
-              await failChatAssertionReceipt(input.assertionJob, error);
+              await failChatAssertionReceipt(input.assertionReceipt, error);
             } catch (receiptError) {
               console.error("[chat.assertion-receipt.failed]", receiptError);
             }
@@ -104,15 +102,13 @@ export function createChatMemoryMaintenanceScheduler(
               `- 关联 Object：${captureResult.affectedObjectIds.length} 个`,
             ].join("\n"),
           );
-        } else if (assertionInput) {
+        } else if (assertionInput && input.assertionReceipt) {
           try {
-            if (input.assertionReceipt) {
-              try {
-                await markChatAssertionReceiptRunning(input.assertionReceipt);
-              } catch (error) {
-                console.error("[chat.assertion-receipt.running]", error);
-                await trace?.appendError("Assertion 回执更新为处理中失败", error);
-              }
+            try {
+              await markChatAssertionReceiptRunning(input.assertionReceipt);
+            } catch (error) {
+              console.error("[chat.assertion-receipt.running]", error);
+              await trace?.appendError("Assertion 回执更新为处理中失败", error);
             }
             await trace?.appendSection(
               "后台 Chat → Assertion 开始",
@@ -123,24 +119,20 @@ export function createChatMemoryMaintenanceScheduler(
               clientMessageId: assertionInput.clientMessageId,
               ...captureResult,
             }));
-            if (input.assertionReceipt) {
-              try {
-                await completeChatAssertionReceipt(input.assertionReceipt, captureResult);
-              } catch (error) {
-                console.error("[chat.assertion-receipt.complete]", error);
-                await trace?.appendError("Assertion 回执写入处理结果失败", error);
-              }
+            try {
+              await completeChatAssertionReceipt(input.assertionReceipt, captureResult);
+            } catch (error) {
+              console.error("[chat.assertion-receipt.complete]", error);
+              await trace?.appendError("Assertion 回执写入处理结果失败", error);
             }
           } catch (error) {
             console.error("[chat.assertion-capture]", error);
             await trace?.appendError("后台 Chat → Assertion 失败", error);
-            if (input.assertionReceipt) {
-              try {
-                await failChatAssertionReceipt(input.assertionReceipt, error);
-              } catch (receiptError) {
-                console.error("[chat.assertion-receipt.failed]", receiptError);
-                await trace?.appendError("Assertion 回执写入失败状态失败", receiptError);
-              }
+            try {
+              await failChatAssertionReceipt(input.assertionReceipt, error);
+            } catch (receiptError) {
+              console.error("[chat.assertion-receipt.failed]", receiptError);
+              await trace?.appendError("Assertion 回执写入失败状态失败", receiptError);
             }
           }
         } else {

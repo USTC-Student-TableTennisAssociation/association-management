@@ -11,7 +11,7 @@ CREATE TYPE "MemoryAssertionKind" AS ENUM ('grounded', 'reference');
 CREATE TYPE "ProposalStatus" AS ENUM ('pending', 'rejected', 'applied', 'failed');
 
 -- CreateEnum
-CREATE TYPE "InstalledViewStatus" AS ENUM ('enabled', 'disabled', 'incompatible');
+CREATE TYPE "InstalledViewStatus" AS ENUM ('enabled', 'incompatible');
 
 -- CreateEnum
 CREATE TYPE "ViewCommandInitiator" AS ENUM ('human', 'ai', 'system');

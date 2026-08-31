@@ -7,7 +7,7 @@ const lifecycleState = vi.hoisted(() => ({
   receiptRunning: vi.fn(),
   receiptComplete: vi.fn(),
   receiptFail: vi.fn(),
-  loadJob: vi.fn(),
+  loadReceipt: vi.fn(),
   consolidate: vi.fn(),
   maintainActor: vi.fn(),
   order: [] as string[],
@@ -22,7 +22,7 @@ vi.mock("@/memory/chat-assertion", () => ({
   captureChatAssertions: lifecycleState.capture,
 }));
 vi.mock("@/memory/chat-assertion-receipt", () => ({
-  loadChatAssertionWritebackJob: lifecycleState.loadJob,
+  loadChatAssertionReceiptInput: lifecycleState.loadReceipt,
   markChatAssertionReceiptRunning: lifecycleState.receiptRunning,
   completeChatAssertionReceipt: lifecycleState.receiptComplete,
   failChatAssertionReceipt: lifecycleState.receiptFail,
@@ -74,27 +74,26 @@ beforeEach(() => {
     lifecycleState.order.push("actor-higher-memory:start");
     return 1;
   });
-  lifecycleState.loadJob.mockResolvedValue({
-    clientMessageId: "message-durable",
+  lifecycleState.loadReceipt.mockImplementation(async (key: { clientMessageId: string }) => ({
+    clientMessageId: key.clientMessageId,
     submittedAt: "2026-08-14T00:00:00.000Z",
     timezone: "Asia/Shanghai",
     semanticContext: {},
     retrieval: {},
     queueDecision: { reason: "durable job" },
-  });
+  }));
 });
 
 describe("post-answer memory maintenance pipeline", () => {
   it("loads a persisted job by key before starting background capture", async () => {
     const scheduler = createChatMemoryMaintenanceScheduler();
     scheduler.publish({
-      assertionJob: { actorId: "actor-1", clientMessageId: "message-durable" },
       assertionReceipt: { actorId: "actor-1", clientMessageId: "message-durable" },
     });
 
     await lifecycleState.afterCallback?.();
 
-    expect(lifecycleState.loadJob).toHaveBeenCalledWith({
+    expect(lifecycleState.loadReceipt).toHaveBeenCalledWith({
       actorId: "actor-1",
       clientMessageId: "message-durable",
     });
@@ -110,7 +109,6 @@ describe("post-answer memory maintenance pipeline", () => {
   it("always completes Chat Assertion before starting Higher Memory", async () => {
     const scheduler = createChatMemoryMaintenanceScheduler();
     scheduler.publish({
-      assertion: { clientMessageId: "message-1" } as never,
       assertionReceipt: { actorId: "actor-1", clientMessageId: "message-1" },
       higherMemory: { clientMessageId: "message-1" } as never,
     });
@@ -208,13 +206,7 @@ describe("post-answer memory maintenance pipeline", () => {
   it("consolidates only after publishing an Assertion", async () => {
     const scheduler = createChatMemoryMaintenanceScheduler();
     scheduler.publish({
-      assertion: {
-        clientMessageId: "message-3",
-        submittedAt: "2026-08-14T00:00:00.000Z",
-        timezone: "Asia/Shanghai",
-        semanticContext: {},
-        retrieval: {},
-      } as never,
+      assertionReceipt: { actorId: "actor-1", clientMessageId: "message-3" },
       consolidation: {
         clientMessageId: "message-3",
         submittedAt: "2026-08-14T00:00:00.000Z",
@@ -257,13 +249,7 @@ describe("post-answer memory maintenance pipeline", () => {
     });
     const scheduler = createChatMemoryMaintenanceScheduler();
     scheduler.publish({
-      assertion: {
-        clientMessageId: "message-graph-scope",
-        submittedAt: "2026-08-14T00:00:00.000Z",
-        timezone: "Asia/Shanghai",
-        semanticContext: {},
-        retrieval: {},
-      } as never,
+      assertionReceipt: { actorId: "actor-1", clientMessageId: "message-graph-scope" },
       consolidation: {
         clientMessageId: "message-graph-scope",
         submittedAt: "2026-08-14T00:00:00.000Z",
@@ -310,10 +296,7 @@ describe("post-answer memory maintenance pipeline", () => {
     });
     const scheduler = createChatMemoryMaintenanceScheduler();
     scheduler.publish({
-      assertion: {
-        clientMessageId: "message-4",
-        retrieval: {},
-      } as never,
+      assertionReceipt: { actorId: "actor-1", clientMessageId: "message-4" },
       consolidation: {
         clientMessageId: "message-4",
         submittedAt: "2026-08-14T00:00:00.000Z",
@@ -338,7 +321,7 @@ describe("post-answer memory maintenance pipeline", () => {
     });
     const scheduler = createChatMemoryMaintenanceScheduler();
     scheduler.publish({
-      assertion: { clientMessageId: "message-empty" } as never,
+      assertionReceipt: { actorId: "actor-1", clientMessageId: "message-empty" },
       consolidation: { clientMessageId: "message-empty" } as never,
     });
 
@@ -352,7 +335,6 @@ describe("post-answer memory maintenance pipeline", () => {
     lifecycleState.capture.mockRejectedValueOnce(new Error("capture failed"));
     const scheduler = createChatMemoryMaintenanceScheduler();
     scheduler.publish({
-      assertion: { clientMessageId: "message-failed" } as never,
       assertionReceipt: { actorId: "actor-1", clientMessageId: "message-failed" },
     });
 

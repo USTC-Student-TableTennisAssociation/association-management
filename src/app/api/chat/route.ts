@@ -1831,7 +1831,7 @@ export async function POST(request: Request) {
           let writebackStatus = !reviewNeeded
             ? handoffIsValid ? "skipped_by_handoff" : "skipped_invalid_handoff"
             : "eligible";
-          let durableBackgroundJob = false;
+          let durableBackgroundReceipt = false;
           let writebackPersistenceDurationMs = 0;
           if (latestUserMessage && backgroundAssertionDecision) {
             const persistentInput = assertionInput(backgroundAssertionDecision);
@@ -1849,21 +1849,21 @@ export async function POST(request: Request) {
                 semanticContext,
                 retrieval: accumulatedRetrieval,
               });
-              durableBackgroundJob = true;
+              durableBackgroundReceipt = true;
               writebackStatus = "queued_persisted";
             } catch (error) {
               writebackStatus = "persistence_failed";
-              console.error("[chat.assertion-job.persist]", error);
-              await debugTrace.appendError("持久化 Assertion 写回任务失败", error);
+              console.error("[chat.assertion-receipt.persist]", error);
+              await debugTrace.appendError("持久化 Assertion 回执失败", error);
               try {
                 await failChatAssertionReceipt({
                   actorId: requestActor.id,
                   clientMessageId: latestUserMessage.id,
                 }, error);
               } catch (receiptError) {
-                console.error("[chat.assertion-job.persist-failed-receipt]", receiptError);
+                console.error("[chat.assertion-receipt.persist-failed]", receiptError);
                 await debugTrace.appendError(
-                  "Assertion 写回任务失败状态落库失败",
+                  "Assertion 回执失败状态落库失败",
                   receiptError,
                 );
               }
@@ -1877,7 +1877,7 @@ export async function POST(request: Request) {
           }
 
           const hasBackgroundWork = Boolean(
-            latestUserMessage && backgroundAssertionDecision && durableBackgroundJob,
+            latestUserMessage && backgroundAssertionDecision && durableBackgroundReceipt,
           );
           const hasForegroundWork = Boolean(
             latestUserMessage && foregroundAssertionResult && foregroundAssertionDecision,
@@ -1930,9 +1930,6 @@ export async function POST(request: Request) {
                     assertionReceipt: receiptKey,
                   }
                 : {}),
-              ...(hasBackgroundWork && receiptKey
-                ? { assertionJob: receiptKey }
-                : {}),
               ...(foregroundAssertionResult && foregroundAssertionDecision
                 ? {
                     completedAssertion: {
@@ -1952,7 +1949,7 @@ export async function POST(request: Request) {
               "Assertion 入口判断",
               writebackStatus === "persistence_failed"
                 ? "结果：本轮值得尝试写回，但持久化任务失败，未启动不可恢复的局部后台任务。"
-                : "结果：服务端事后门控未登记 Assertion 写回任务。",
+                : "结果：服务端事后门控未登记 Assertion 回执。",
             );
             await debugTrace.appendSection(
               "Higher Memory 入口判断",

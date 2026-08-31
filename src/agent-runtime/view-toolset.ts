@@ -403,8 +403,7 @@ export function createAgentViewToolset(input: {
             const availableCommands = (registry.getView(commandRequest.viewKey)?.commands ?? [])
               .filter((candidate) => candidate.allowedInitiators.includes("ai"));
             const command = availableCommands.find((candidate) =>
-              candidate.key === commandRequest.commandKey ||
-              `${candidate.key}@${candidate.version}` === commandRequest.commandKey
+              candidate.key === commandRequest.commandKey
             );
             if (!command) {
               throw new ViewRuntimeError(

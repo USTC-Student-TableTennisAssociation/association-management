@@ -75,7 +75,7 @@ type InstalledViewSummary = {
   pluginVersion: string;
   schemaVersion: string;
   stateVersion: string;
-  status: "enabled" | "disabled" | "incompatible";
+  status: "enabled" | "incompatible";
   presentation?: {
     key: string;
     label: string;

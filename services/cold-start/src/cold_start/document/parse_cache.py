@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cold_start.document.pdf_loader import MinerUDocumentLoader
+from cold_start.document.document_loader import MinerUDocumentLoader
 from cold_start.global_exploration.artifacts import write_parsing_artifacts
 
 

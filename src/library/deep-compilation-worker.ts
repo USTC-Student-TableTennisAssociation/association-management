@@ -260,7 +260,7 @@ async function ensureExploration(
   const forwardProgress = progressForwarder(1, input.onProgress);
   await runColdStartCommand({
     command: "explore",
-    args: ["--pdf", sourcePath, "--output", runRoot],
+    args: ["--source", sourcePath, "--output", runRoot],
     onLine: async (line) => {
       forwardProgress(line);
       const reported = artifactDirectoryFromProgress(line, "已创建运行目录 ");

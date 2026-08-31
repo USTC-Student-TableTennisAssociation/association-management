@@ -18,7 +18,7 @@ from cold_start.compilation.source_semantics import (
     open_source_semantic_paths,
 )
 from cold_start.config import CompilationSettings, ExplorationSettings, ModelSettings
-from cold_start.document import MinerUPdfLoader
+from cold_start.document import MinerUDocumentLoader
 from cold_start.document.parse_cache import parse_document_to_cache
 from cold_start.embedding_server import (
     DEFAULT_EMBEDDING_MODEL_REVISION,
@@ -79,8 +79,8 @@ def _add_model_arguments(command: argparse.ArgumentParser) -> None:
     )
 
 
-def _add_pdf_arguments(command: argparse.ArgumentParser) -> None:
-    command.add_argument("--pdf", type=Path, required=True, help="待处理 PDF 路径")
+def _add_document_arguments(command: argparse.ArgumentParser) -> None:
+    command.add_argument("--source", type=Path, required=True, help="待处理文档路径")
     command.add_argument(
         "--output",
         type=Path,
@@ -96,11 +96,11 @@ def _add_pdf_arguments(command: argparse.ArgumentParser) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="cold-start",
-        description="解析单份来源 PDF 并建立连续原文区域树",
+        description="解析单份来源文档并建立连续原文区域树",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    explore = subparsers.add_parser("explore", help="运行单 PDF 全局勘探")
-    _add_pdf_arguments(explore)
+    explore = subparsers.add_parser("explore", help="运行单文档全局勘探")
+    _add_document_arguments(explore)
     _add_model_arguments(explore)
 
     parse_document = subparsers.add_parser(
@@ -304,27 +304,29 @@ async def _execute_explore(
 
     run_directory = create_exploration_run_directory(
         output_root=args.output,
-        source_path=args.pdf,
+        source_path=args.source,
     )
     model_stream_directory = run_directory / "model-streams"
     progress.report("产物", f"已创建运行目录 {run_directory}")
 
-    pdf_loader = MinerUPdfLoader(progress=lambda message: progress.report("PDF", message))
+    document_loader = MinerUDocumentLoader(
+        progress=lambda message: progress.report("文档", message)
+    )
     progress.report(
-        "PDF",
+        "文档",
         (
-            f"开始解析 {args.pdf}；{pdf_loader.parser_name}，"
-            f"计算设备 {pdf_loader.accelerator_description()}"
+            f"开始解析 {args.source}；{document_loader.parser_name}，"
+            f"计算设备 {document_loader.accelerator_description()}"
         ),
     )
     document = await asyncio.to_thread(
-        pdf_loader.load,
-        args.pdf,
+        document_loader.load,
+        args.source,
         raw_output_directory=run_directory / "mineru-raw",
     )
     nonempty_pages = sum(bool(page.markdown.strip()) for page in document.pages)
     progress.report(
-        "PDF",
+        "文档",
         (
             f"解析完成：{nonempty_pages}/{document.page_count} 页非空，"
             f"全文 {len(document.markdown)} 字符，{len(document.blocks)} 个稳定块；"

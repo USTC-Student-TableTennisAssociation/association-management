@@ -15,7 +15,7 @@ from cold_start.document.models import ParsedDocument, ParsedPage
 from cold_start.llm.base import ModelTurn, ThinkingMode
 
 
-class FakePdfLoader:
+class FakeDocumentLoader:
     parser_name = "fake"
 
     def __init__(self, *, progress=None) -> None:
@@ -118,12 +118,12 @@ async def test_cli_auto_loads_env_and_prints_detailed_progress(
         monkeypatch.delenv(variable, raising=False)
     monkeypatch.chdir(working_directory)
     (working_directory / "handbook.pdf").write_bytes(b"pdf")
-    monkeypatch.setattr(cli, "MinerUPdfLoader", FakePdfLoader)
+    monkeypatch.setattr(cli, "MinerUDocumentLoader", FakeDocumentLoader)
     monkeypatch.setattr(cli, "OpenAICompatibleChatModel", FakeChatModel)
 
     result = await cli._run_explore(
         argparse.Namespace(
-            pdf=Path("handbook.pdf"),
+            source=Path("handbook.pdf"),
             output=tmp_path / "runs",
             model=None,
             api_base_url=None,

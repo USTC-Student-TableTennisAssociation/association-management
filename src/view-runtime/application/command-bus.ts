@@ -145,7 +145,7 @@ async function runtimeView(
   viewModule: ViewModule;
   installed: {
     stateVersion: bigint;
-    status: "enabled" | "disabled" | "incompatible";
+    status: "enabled" | "incompatible";
     pluginVersion: string;
     schemaVersion: string;
     settingsJson: Prisma.JsonValue;

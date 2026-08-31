@@ -1,7 +1,5 @@
 import type {
   PluginManifest,
-  ExtensionActivation,
-  ExtensionKind,
   PresentationExtension,
   SkillExtension,
   ToolCapabilityContract,
@@ -10,6 +8,8 @@ import type {
   ViewChangePolicy,
 } from "@/contracts";
 import { isVersionCompatible } from "@sydaris/plugin-sdk";
+
+type ExtensionKind = "view" | "presentation" | "skill" | "tool";
 
 const identifierPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const schemaIdentifierPattern = /^[A-Za-z][A-Za-z0-9]*(?:[._-][A-Za-z0-9]+)*$/;
@@ -276,7 +276,6 @@ export class ExtensionRegistry {
   private readonly skills = new Map<string, Registered<SkillExtension>>();
   private readonly toolCapabilities = new Map<string, Registered<ToolCapabilityContract>>();
   private readonly tools = new Map<string, Registered<ToolProviderExtension>>();
-  private readonly activations = new Map<string, ExtensionActivation>();
 
   registerPlugin(plugin: PluginManifest): void {
     requireIdentifier("Plugin id", plugin.id);
@@ -376,13 +375,6 @@ export class ExtensionRegistry {
         extension: addition.extension,
       };
       this.registryFor(addition.kind).set(addition.id, registered as never);
-      this.activations.set(`${addition.kind}:${addition.id}`, {
-        extensionId: addition.id,
-        extensionKind: addition.kind,
-        pluginId: plugin.id,
-        pluginVersion: plugin.version,
-        enabled: true,
-      });
     }
   }
 
@@ -390,12 +382,12 @@ export class ExtensionRegistry {
     return [...this.plugins.values()];
   }
 
-  listViews(options: { includeDisabled?: boolean } = {}): readonly ViewModule[] {
-    return this.list(this.views, "view", options);
+  listViews(): readonly ViewModule[] {
+    return [...this.views.values()].map((registered) => registered.extension);
   }
 
-  getView(viewKey: string, options: { includeDisabled?: boolean } = {}): ViewModule | undefined {
-    return this.get(this.views, "view", viewKey, options);
+  getView(viewKey: string): ViewModule | undefined {
+    return this.views.get(viewKey)?.extension;
   }
 
   getViewOwner(viewKey: string): { pluginId: string; pluginVersion: string } | undefined {
@@ -405,31 +397,20 @@ export class ExtensionRegistry {
       : undefined;
   }
 
-  listPresentations(options: { includeDisabled?: boolean } = {}): readonly PresentationExtension[] {
-    return this.list(this.presentations, "presentation", options);
+  listPresentations(): readonly PresentationExtension[] {
+    return [...this.presentations.values()].map((registered) => registered.extension);
   }
 
-  listSkills(options: { includeDisabled?: boolean } = {}): readonly SkillExtension[] {
-    return this.list(this.skills, "skill", options);
+  listSkills(): readonly SkillExtension[] {
+    return [...this.skills.values()].map((registered) => registered.extension);
   }
 
-  listToolProviders(options: { includeDisabled?: boolean } = {}): readonly ToolProviderExtension[] {
-    return this.list(this.tools, "tool", options);
+  listToolProviders(): readonly ToolProviderExtension[] {
+    return [...this.tools.values()].map((registered) => registered.extension);
   }
 
   listToolCapabilityContracts(): readonly ToolCapabilityContract[] {
     return [...this.toolCapabilities.values()].map((registered) => registered.extension);
-  }
-
-  setEnabled(kind: ExtensionKind, extensionId: string, enabled: boolean): void {
-    const key = `${kind}:${extensionId}`;
-    const activation = this.activations.get(key);
-    if (!activation) throw new ExtensionRegistrationError(`Extension 不存在：${key}`);
-    this.activations.set(key, { ...activation, enabled });
-  }
-
-  listActivations(): readonly ExtensionActivation[] {
-    return [...this.activations.values()];
   }
 
   private registryFor(kind: ExtensionKind): Map<string, Registered<never>> {
@@ -439,27 +420,4 @@ export class ExtensionRegistry {
     return this.tools as Map<string, Registered<never>>;
   }
 
-  private get<T>(
-    registry: Map<string, Registered<T>>,
-    kind: ExtensionKind,
-    id: string,
-    options: { includeDisabled?: boolean },
-  ): T | undefined {
-    const registered = registry.get(id);
-    if (!registered) return undefined;
-    if (!options.includeDisabled && !this.activations.get(`${kind}:${id}`)?.enabled) return undefined;
-    return registered.extension;
-  }
-
-  private list<T>(
-    registry: Map<string, Registered<T>>,
-    kind: ExtensionKind,
-    options: { includeDisabled?: boolean },
-  ): T[] {
-    return [...registry.entries()].flatMap(([id, registered]) =>
-      options.includeDisabled || this.activations.get(`${kind}:${id}`)?.enabled
-        ? [registered.extension]
-        : []
-    );
-  }
 }

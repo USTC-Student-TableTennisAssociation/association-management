@@ -2,13 +2,13 @@
 "use client";
 
 import type { ComponentType } from "react";
-import type { WorkPresentationProps } from "@/view-runtime/presentation-host/work-presentation-host";
+import type { PresentationProps } from "@sydaris/plugin-sdk";
 import { ActivityOperationsWorkspace as installedPresentation0 } from "@/plugins/activity-operations/dist/presentation/activity-operations-workspace";
 import { SocietyOverviewWorkspace as installedPresentation1 } from "@/plugins/society-information/dist/presentation/society-overview-workspace";
 import { CompetitionRecordsWorkspace as installedPresentation2 } from "@/plugins/competition-records/dist/presentation/competition-records-workspace";
 
 export const installedPresentationComponents: Readonly<
-  Record<string, ComponentType<WorkPresentationProps>>
+  Record<string, ComponentType<PresentationProps>>
 > = {
   "activity-operations/operations-workspace": installedPresentation0,
   "society-information/immersive-overview": installedPresentation1,

@@ -28,14 +28,13 @@ export class InstalledViewService {
 
   async synchronize(): Promise<void> {
     await this.database.$transaction(async (transaction) => {
-      for (const view of this.registry.listViews({ includeDisabled: true })) {
+      for (const view of this.registry.listViews()) {
         const owner = this.registry.getViewOwner(view.manifest.key);
         if (!owner) throw new ViewRuntimeError(`View 没有 Plugin owner：${view.manifest.key}`);
         const existing = await transaction.installedView.findUnique({
           where: { viewKey: view.manifest.key },
           select: { schemaVersion: true },
         });
-        const enabled = Boolean(this.registry.getView(view.manifest.key));
         if (!existing) {
           await transaction.installedView.create({
             data: {
@@ -43,7 +42,7 @@ export class InstalledViewService {
               moduleId: owner.pluginId,
               pluginVersion: owner.pluginVersion,
               schemaVersion: view.manifest.schemaVersion,
-              status: enabled ? "enabled" : "disabled",
+              status: "enabled",
               settingsJson: json(view.manifest.defaultSettings),
             },
           });
@@ -54,11 +53,9 @@ export class InstalledViewService {
           data: {
             moduleId: owner.pluginId,
             pluginVersion: owner.pluginVersion,
-            status: !enabled
-              ? "disabled"
-              : existing.schemaVersion === view.manifest.schemaVersion
-                ? "enabled"
-                : "incompatible",
+            status: existing.schemaVersion === view.manifest.schemaVersion
+              ? "enabled"
+              : "incompatible",
           },
         });
       }
@@ -70,7 +67,7 @@ export class InstalledViewService {
     settings: ViewSettings;
   }): Promise<void> {
     parseViewSettings(input.settings);
-    if (!this.registry.getView(input.viewKey, { includeDisabled: true })) {
+    if (!this.registry.getView(input.viewKey)) {
       throw new ViewRuntimeError(`View Module 未注册：${input.viewKey}`);
     }
     await this.synchronize();
