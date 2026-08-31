@@ -72,6 +72,7 @@ class FixtureMemoryRetriever implements MemoryRetriever {
                 matchedFacets: [facets[0].id],
                 sources: [
                   {
+                    kind: "document",
                     sourceDocumentId: "fixture-document",
                     sourceTitle: "聊天框架测试 fixture",
                     sourceSha256: "fixture",

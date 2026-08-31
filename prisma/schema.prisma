@@ -159,6 +159,7 @@ model LibrarySourceBlob {
   nodes              LibraryNode[]
   processingRuns     LibrarySourceProcessingRun[]
   catalogAssessments LibraryCatalogAssessment[]
+  sourceDocuments    LibrarySourceDocument[]
 
   @@map("library_source_blobs")
 }
@@ -265,13 +266,11 @@ model LibrarySourceProcessingRun {
   createdAt               DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
   completedAt             DateTime?                @map("completed_at") @db.Timestamptz(3)
 
-  libraryNode      LibraryNode               @relation(fields: [libraryNodeId], references: [id], onDelete: Cascade)
-  sourceBlob       LibrarySourceBlob?        @relation(fields: [sourceBlobId], references: [id], onDelete: Restrict)
-  job              LibraryCompilationJob?    @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  document         LibrarySourceDocument?
-  assessment       LibraryCatalogAssessment?
-  publishedRegions MemorySourceRegion[]
-  publishedBlocks  MemorySourceBlock[]
+  libraryNode LibraryNode               @relation(fields: [libraryNodeId], references: [id], onDelete: Cascade)
+  sourceBlob  LibrarySourceBlob?        @relation(fields: [sourceBlobId], references: [id], onDelete: Restrict)
+  job         LibraryCompilationJob?    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  document    LibrarySourceDocument?
+  assessment  LibraryCatalogAssessment?
 
   @@unique([jobId, sourceBlobId])
   @@index([libraryNodeId, createdAt])
@@ -303,18 +302,22 @@ model LibraryCatalogAssessment {
   @@map("library_catalog_assessments")
 }
 
-/// 经过解析的资料库文档骨架；后续 SourceBlock 迁移后将直接挂到这里。
+/// 一次已发布的来源文档版本；认知层的 SourceRegion 与 SourceBlock 以它为稳定回读锚点。
 model LibrarySourceDocument {
-  id                String   @id @default(uuid()) @db.Uuid
-  processingRunId   String   @unique @map("processing_run_id") @db.Uuid
-  title             String   @db.Text
-  parser            String   @db.Text
-  structureMetadata Json     @default("{}") @map("structure_metadata") @db.JsonB
-  blockCount        Int      @default(0) @map("block_count")
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id              String   @id @default(uuid()) @db.Uuid
+  processingRunId String?  @unique @map("processing_run_id") @db.Uuid
+  sourceBlobId    String   @map("source_blob_id") @db.Uuid
+  title           String   @db.Text
+  parser          String   @db.Text
+  blockCount      Int      @default(0) @map("block_count")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  processingRun LibrarySourceProcessingRun @relation(fields: [processingRunId], references: [id], onDelete: Cascade)
+  processingRun LibrarySourceProcessingRun? @relation(fields: [processingRunId], references: [id], onDelete: SetNull)
+  sourceBlob    LibrarySourceBlob           @relation(fields: [sourceBlobId], references: [id], onDelete: Restrict)
+  sourceRegions MemorySourceRegion[]
+  sourceBlocks  MemorySourceBlock[]
 
+  @@index([sourceBlobId])
   @@map("library_source_documents")
 }
 
@@ -336,7 +339,7 @@ model LibraryPlan {
 /// 区域树中实际拥有原文并经过 source semantics 编译的节点。
 model MemorySourceRegion {
   id                  String   @id @default(uuid()) @db.Uuid
-  publicationRunId    String   @map("publication_run_id") @db.Uuid
+  sourceDocumentId    String   @map("source_document_id") @db.Uuid
   sourceNodeId        String   @map("source_node_id") @db.Text
   schemaVersion       String   @map("schema_version") @db.Text
   label               String   @db.Text
@@ -349,27 +352,21 @@ model MemorySourceRegion {
   reviewAdditionCount Int      @map("review_addition_count")
   modelCalls          Int      @map("model_calls")
   createdAt           DateTime @map("created_at")
-  /// Shared Brain 中每个来源区域自己的来源元数据。
-  sourcePath          String?  @map("source_path") @db.Text
-  sourceTitle         String   @map("source_title") @db.Text
-  sourceSha256        String   @map("source_sha256") @db.Text
-  sourceParser        String?  @map("source_parser") @db.Text
 
-  publicationRun  LibrarySourceProcessingRun   @relation(fields: [publicationRunId], references: [id], onDelete: Cascade)
+  sourceDocument  LibrarySourceDocument        @relation(fields: [sourceDocumentId], references: [id], onDelete: Cascade)
   objectFragments MemorySourceObjectFragment[]
   assertions      MemoryAssertion[]
 
-  @@unique([publicationRunId, sourceNodeId])
-  @@index([publicationRunId])
+  @@unique([sourceDocumentId, sourceNodeId])
+  @@index([sourceDocumentId])
   @@index([label])
-  @@index([sourceSha256])
   @@map("memory_source_regions")
 }
 
 /// PDF 解析后的稳定原文块，是 Assertion 的来源依据和回看锚点。
 model MemorySourceBlock {
   id               String   @id @default(uuid()) @db.Uuid
-  publicationRunId String   @map("publication_run_id") @db.Uuid
+  sourceDocumentId String   @map("source_document_id") @db.Uuid
   sourceBlockId    String   @map("source_block_id") @db.Text
   order            Int
   blockType        String   @map("block_type") @db.Text
@@ -382,12 +379,12 @@ model MemorySourceBlock {
   assetPath        String?  @map("asset_path") @db.Text
   markdown         String   @db.Text
 
-  publicationRun LibrarySourceProcessingRun   @relation(fields: [publicationRunId], references: [id], onDelete: Cascade)
+  sourceDocument LibrarySourceDocument        @relation(fields: [sourceDocumentId], references: [id], onDelete: Cascade)
   assertionUses  MemoryAssertionSourceBlock[]
 
-  @@unique([publicationRunId, sourceBlockId])
-  @@unique([publicationRunId, order])
-  @@index([publicationRunId])
+  @@unique([sourceDocumentId, sourceBlockId])
+  @@unique([sourceDocumentId, order])
+  @@index([sourceDocumentId])
   @@map("memory_source_blocks")
 }
 

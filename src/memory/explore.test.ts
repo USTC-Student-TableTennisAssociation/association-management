@@ -38,7 +38,8 @@ function locatedSeedMap() {
     matchedBy: [],
     matchedFacets: ["facet-0"],
     sources: [{
-      sourceDocumentId: `run-${index + 1}`,
+      kind: "document",
+      sourceDocumentId: `document-${index + 1}`,
       sourceTitle: "Test source",
       sourceSha256: "sha",
       sourceNodeId: `source-node-${index + 1}`,
@@ -96,11 +97,13 @@ function assertionRow(input: {
     globalStatementTemplateMarkdown: input.statement,
     contextDependent: input.kind === "reference",
     sourceRegion: {
-      publicationRunId: "run-test",
       sourceNodeId: `region-${input.id}`,
       label: "来源章节",
-      sourceTitle: "生存手册",
-      sourceSha256: "sha",
+      sourceDocument: {
+        id: "document-test",
+        title: "生存手册",
+        sourceBlob: { sha256: "sha" },
+      },
     },
     chatEvidenceLinks: [],
     objectLinks: input.objectLinks ?? [],
@@ -108,7 +111,7 @@ function assertionRow(input: {
     sourceBlockLinks: [{
       ordinal: 0,
       sourceBlock: {
-        publicationRunId: "run-test",
+        sourceDocumentId: "document-test",
         sourceBlockId: `block-${input.id}`,
         sourcePages: [3],
       },
@@ -255,18 +258,20 @@ function followAssertionRows(includeReference = false) {
     kind: "grounded" as const,
     contextDependent: false,
     sourceRegion: {
-      publicationRunId: "run-follow",
       sourceNodeId: "region-1",
       label: "Follow region",
-      sourceTitle: "Follow test source",
-      sourceSha256: "follow-sha",
+      sourceDocument: {
+        id: "document-follow",
+        title: "Follow test source",
+        sourceBlob: { sha256: "follow-sha" },
+      },
     },
     objectCoverage: [],
     chatEvidenceLinks: [],
     sourceBlockLinks: [{
       ordinal: 0,
       sourceBlock: {
-        publicationRunId: "run-follow",
+        sourceDocumentId: "document-follow",
         sourceBlockId: "block-1",
         sourcePages: [2],
       },

@@ -215,8 +215,6 @@ async function loadAssertions() {
         select: {
           sourceNodeId: true,
           label: true,
-          sourceTitle: true,
-          sourceSha256: true,
         },
       },
       objectLinks: {
@@ -398,11 +396,15 @@ async function loadSources(
       id: true,
       sourceRegion: {
         select: {
-          publicationRunId: true,
           sourceNodeId: true,
           label: true,
-          sourceTitle: true,
-          sourceSha256: true,
+          sourceDocument: {
+            select: {
+              id: true,
+              title: true,
+              sourceBlob: { select: { sha256: true } },
+            },
+          },
         },
       },
       chatEvidenceLinks: {
@@ -425,7 +427,7 @@ async function loadSources(
           ordinal: true,
           sourceBlock: {
             select: {
-              publicationRunId: true,
+              sourceDocumentId: true,
               sourceBlockId: true,
               sourcePages: true,
             },
@@ -439,9 +441,9 @@ async function loadSources(
       const sources: MemorySourceReference[] = row.sourceRegion
         ? row.sourceBlockLinks.map(({ ordinal, sourceBlock }) => ({
             kind: "document",
-            sourceDocumentId: sourceBlock.publicationRunId,
-            sourceTitle: row.sourceRegion!.sourceTitle,
-            sourceSha256: row.sourceRegion!.sourceSha256,
+            sourceDocumentId: sourceBlock.sourceDocumentId,
+            sourceTitle: row.sourceRegion!.sourceDocument.title,
+            sourceSha256: row.sourceRegion!.sourceDocument.sourceBlob.sha256,
             sourceNodeId: row.sourceRegion!.sourceNodeId,
             sourceRegionLabel: row.sourceRegion!.label,
             sourceBlockId: sourceBlock.sourceBlockId,

@@ -249,7 +249,7 @@ const matchSchema = z.object({
 });
 
 const documentSourceSchema = z.object({
-  kind: z.literal("document").optional(),
+  kind: z.literal("document"),
   sourceDocumentId: z.string(),
   sourceTitle: z.string(),
   sourceSha256: z.string(),

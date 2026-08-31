@@ -27,7 +27,7 @@ export async function GET(
       endBlockId: url.searchParams.get("endBlockId"),
     });
     return Response.json(await readSourceDocumentRange({
-      publicationRunId: documentId,
+      sourceDocumentId: documentId,
       ...query,
     }));
   } catch (error) {

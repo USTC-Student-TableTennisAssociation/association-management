@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const databaseState = vi.hoisted(() => ({
-  publicationRunFindUnique: vi.fn(),
+  sourceDocumentFindUnique: vi.fn(),
   blockFindUnique: vi.fn(),
   blockFindFirst: vi.fn(),
   blockFindMany: vi.fn(),
@@ -9,7 +9,7 @@ const databaseState = vi.hoisted(() => ({
 
 vi.mock("@/db", () => ({
   getDatabase: () => ({
-    librarySourceProcessingRun: { findUnique: databaseState.publicationRunFindUnique },
+    librarySourceDocument: { findUnique: databaseState.sourceDocumentFindUnique },
     memorySourceBlock: {
       findUnique: databaseState.blockFindUnique,
       findFirst: databaseState.blockFindFirst,
@@ -23,7 +23,7 @@ import {
   readSourceDocumentSelection,
 } from "@/memory/source-document";
 
-const publicationRunId = "00000000-0000-4000-8000-000000000020";
+const sourceDocumentId = "00000000-0000-4000-8000-000000000020";
 const blocks = [
   {
     sourceBlockId: "heading-1",
@@ -83,16 +83,17 @@ const blocks = [
 
 beforeEach(() => {
   vi.clearAllMocks();
-  databaseState.publicationRunFindUnique.mockResolvedValue({
-    id: publicationRunId,
-    parserKey: "mineru",
-    libraryNode: { name: "测试手册" },
+  databaseState.sourceDocumentFindUnique.mockResolvedValue({
+    id: sourceDocumentId,
+    title: "测试手册",
+    parser: "mineru",
+    blockCount: blocks.length,
     sourceBlob: { sha256: "sha" },
-    publishedBlocks: blocks.map((block) => ({ sourcePages: block.sourcePages })),
+    sourceBlocks: blocks.map((block) => ({ sourcePages: block.sourcePages })),
   });
   databaseState.blockFindUnique.mockImplementation(async ({ where }) =>
     blocks.find(
-      (block) => block.sourceBlockId === where.publicationRunId_sourceBlockId.sourceBlockId,
+      (block) => block.sourceBlockId === where.sourceDocumentId_sourceBlockId.sourceBlockId,
     ) ?? null
   );
   databaseState.blockFindFirst.mockImplementation(async ({ where, orderBy }) => {
@@ -124,13 +125,13 @@ beforeEach(() => {
 
 describe("readSourceDocumentSelection", () => {
   it("resolves the nearest containing section heading for a source Block", async () => {
-    await expect(containingSectionHeadingBlockId(publicationRunId, "text-2"))
+    await expect(containingSectionHeadingBlockId(sourceDocumentId, "text-2"))
       .resolves.toBe("heading-1-1");
   });
 
   it("returns a compact outline with stable heading Block ids", async () => {
     const result = await readSourceDocumentSelection({
-      publicationRunId,
+      sourceDocumentId,
       selection: { mode: "outline" },
     });
 
@@ -145,7 +146,7 @@ describe("readSourceDocumentSelection", () => {
 
   it("reads a complete section until the next same-or-higher-level heading", async () => {
     const result = await readSourceDocumentSelection({
-      publicationRunId,
+      sourceDocumentId,
       selection: { mode: "section", headingBlockId: "heading-1" },
       maxCharacters: 10_000,
     });
@@ -167,7 +168,7 @@ describe("readSourceDocumentSelection", () => {
 
   it("paginates a full read between Blocks and resumes from an exact order", async () => {
     const first = await readSourceDocumentSelection({
-      publicationRunId,
+      sourceDocumentId,
       selection: { mode: "full" },
       maxCharacters: 2_000,
     });
@@ -193,7 +194,7 @@ describe("readSourceDocumentSelection", () => {
       )
     );
     const paged = await readSourceDocumentSelection({
-      publicationRunId,
+      sourceDocumentId,
       selection: { mode: "full" },
       maxCharacters: 2_000,
     });
@@ -202,7 +203,7 @@ describe("readSourceDocumentSelection", () => {
     expect(paged.isFullDocument).toBe(false);
 
     const continued = await readSourceDocumentSelection({
-      publicationRunId,
+      sourceDocumentId,
       selection: { mode: "full" },
       maxCharacters: 2_000,
       startOrder: paged.nextStartOrder,
@@ -213,7 +214,7 @@ describe("readSourceDocumentSelection", () => {
   it("reloads a cited Block range for the lightweight S# UI", async () => {
     const { readSourceDocumentRange } = await import("@/memory/source-document");
     const result = await readSourceDocumentRange({
-      publicationRunId,
+      sourceDocumentId,
       startBlockId: "text-1",
       endBlockId: "text-2",
     });

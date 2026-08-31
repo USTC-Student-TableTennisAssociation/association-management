@@ -45,7 +45,7 @@ function withoutExcerpt(source: MemorySourceReference): MemorySourceReference {
     };
   }
   return {
-    ...(source.kind ? { kind: source.kind } : {}),
+    kind: "document",
     sourceDocumentId: source.sourceDocumentId,
     sourceTitle: source.sourceTitle,
     sourceSha256: source.sourceSha256,

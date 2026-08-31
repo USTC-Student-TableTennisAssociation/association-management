@@ -83,7 +83,7 @@ describe("library Shared Brain publication preparation", () => {
       artifactLocation: null,
       completedAt: new Date("2026-08-16T00:00:00Z"),
       sourceBlob: { sha256 },
-      libraryNode: { name: title, originalRelativePath: title },
+      libraryNode: { name: title },
       assessment: {
         referenceCandidates: [],
         assertionCandidates: [{
@@ -128,9 +128,9 @@ describe("library Shared Brain publication preparation", () => {
     expect(later.objectLinks).toEqual([
       { assertionId: later.assertions[0].id, globalObjectId: DRAFT_ID },
     ]);
-    expect(later.regions[0]).toMatchObject({
-      sourceTitle: "补充通知.docx",
-      sourceSha256: LATER_SHA,
+    expect(later.document).toEqual({
+      title: "补充通知.docx",
+      parser: "mineru-raw",
     });
   });
 
@@ -145,7 +145,6 @@ describe("library Shared Brain publication preparation", () => {
       sourceBlob: { sha256: SHA },
       libraryNode: {
         name: "比赛通知.docx",
-        originalRelativePath: "25-26/比赛通知.docx",
       },
       assessment: {
         referenceCandidates: [{
@@ -176,10 +175,9 @@ describe("library Shared Brain publication preparation", () => {
     expect(publication.objectLinks).toEqual([
       { assertionId: publication.assertions[1].id, globalObjectId: DRAFT_ID },
     ]);
-    expect(publication.regions[0]).toMatchObject({
-      sourceTitle: "比赛通知.docx",
-      sourceSha256: SHA,
-      sourceParser: "mineru-raw",
+    expect(publication.document).toEqual({
+      title: "比赛通知.docx",
+      parser: "mineru-raw",
     });
   });
 
@@ -268,7 +266,7 @@ describe("library Shared Brain publication preparation", () => {
       artifactLocation: `cold-start-global-resolution:${resolutionDirectory}`,
       completedAt: new Date("2026-08-16T00:00:00Z"),
       sourceBlob: { sha256: SHA },
-      libraryNode: { name: "手册.pdf", originalRelativePath: "手册.pdf" },
+      libraryNode: { name: "手册.pdf" },
       assessment: null,
     }, [resolvedObject(`${RUN_ID}:deep:0`)]);
 

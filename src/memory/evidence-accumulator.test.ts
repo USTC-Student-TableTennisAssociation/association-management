@@ -41,7 +41,8 @@ function initial(): MemoryRetrievalResult {
         matchedBy: [],
         matchedFacets: ["facet-0"],
         sources: [{
-          sourceDocumentId: "run-1",
+          kind: "document",
+          sourceDocumentId: "document-1",
           sourceTitle: "手册",
           sourceSha256: "sha",
           sourceNodeId: "region-1",
@@ -133,7 +134,8 @@ function explored(): MemoryExploreResult {
         renderedStatement: "换届包含工作交接。",
         contextDependent: false,
         sources: [{
-          sourceDocumentId: "run-1",
+          kind: "document",
+          sourceDocumentId: "document-1",
           sourceTitle: "手册",
           sourceSha256: "sha",
           sourceNodeId: "region-2",

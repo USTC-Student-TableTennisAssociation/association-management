@@ -50,7 +50,8 @@ describe("buildEvidenceContext", () => {
             matchedFacets: ["facet-0"],
             sources: [
               {
-                sourceDocumentId: "run-1",
+                kind: "document",
+                sourceDocumentId: "document-1",
                 sourceTitle: "测试来源",
                 sourceSha256: "sha",
                 sourceNodeId: "region-1",
