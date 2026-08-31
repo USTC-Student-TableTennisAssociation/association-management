@@ -10,6 +10,16 @@ import { ViewNotFoundError, ViewRuntimeError } from "@/view-runtime/domain/error
 import type { InstalledViewService } from "@/view-runtime/application/installed-views";
 import type { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 
+export type ObjectViewCardLocation = {
+  viewKey: string;
+  cardTypeKey: string;
+};
+
+export type ObjectViewCardDiscovery = {
+  searchedViewKeys: readonly string[];
+  cards: readonly ObjectViewCardLocation[];
+};
+
 export class PrismaViewReadPort implements ViewReadPort {
   constructor(
     private readonly registry: ExtensionRegistry,
@@ -77,6 +87,44 @@ export class PrismaViewReadPort implements ViewReadPort {
         };
       }),
     };
+  }
+
+  async locateObject(input: {
+    objectId: string;
+    viewKeys: readonly string[];
+    actor: ActorContext;
+  }): Promise<ObjectViewCardDiscovery> {
+    if (!input.actor.permissions.includes("view.read")) {
+      throw new ViewRuntimeError("缺少 View 读取权限：view.read");
+    }
+    await this.installedViews.synchronize();
+    const registeredViewKeys = [...new Set(input.viewKeys)].filter((viewKey) =>
+      Boolean(this.registry.getView(viewKey))
+    );
+    if (!registeredViewKeys.length) {
+      return { searchedViewKeys: [], cards: [] };
+    }
+    const enabledViews = await this.database.installedView.findMany({
+      where: {
+        viewKey: { in: registeredViewKeys },
+        status: "enabled",
+      },
+      orderBy: { viewKey: "asc" },
+      select: { viewKey: true },
+    });
+    const searchedViewKeys = enabledViews.map((view) => view.viewKey);
+    if (!searchedViewKeys.length) {
+      return { searchedViewKeys, cards: [] };
+    }
+    const cards = await this.database.viewCard.findMany({
+      where: {
+        viewKey: { in: searchedViewKeys },
+        relatedObjects: { some: { objectId: input.objectId } },
+      },
+      orderBy: [{ viewKey: "asc" }, { createdAt: "asc" }],
+      select: { viewKey: true, cardTypeKey: true },
+    });
+    return { searchedViewKeys, cards };
   }
 
   async inspect(input: {
