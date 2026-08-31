@@ -4,10 +4,11 @@ const lifecycleState = vi.hoisted(() => ({
   afterCallback: undefined as (() => Promise<void>) | undefined,
   capture: vi.fn(),
   maintain: vi.fn(),
-  receiptRunning: vi.fn(),
+  receiptClaim: vi.fn(),
   receiptComplete: vi.fn(),
   receiptFail: vi.fn(),
   loadReceipt: vi.fn(),
+  recoverReceipts: vi.fn(),
   consolidate: vi.fn(),
   maintainActor: vi.fn(),
   order: [] as string[],
@@ -23,9 +24,10 @@ vi.mock("@/memory/chat-assertion", () => ({
 }));
 vi.mock("@/memory/chat-assertion-receipt", () => ({
   loadChatAssertionReceiptInput: lifecycleState.loadReceipt,
-  markChatAssertionReceiptRunning: lifecycleState.receiptRunning,
+  claimChatAssertionReceipt: lifecycleState.receiptClaim,
   completeChatAssertionReceipt: lifecycleState.receiptComplete,
   failChatAssertionReceipt: lifecycleState.receiptFail,
+  recoverPendingChatAssertionReceipts: lifecycleState.recoverReceipts,
 }));
 vi.mock("@/memory/higher-memory-maintenance", () => ({
   maintainHigherMemories: lifecycleState.maintain,
@@ -37,12 +39,22 @@ vi.mock("@/memory/actor-higher-memory", () => ({
   maintainActorHigherMemories: lifecycleState.maintainActor,
 }));
 
-import { createChatMemoryMaintenanceScheduler } from "@/memory/chat-assertion-lifecycle";
+import {
+  createChatMemoryMaintenanceScheduler,
+  resumePendingChatAssertionReceipts,
+} from "@/memory/chat-assertion-lifecycle";
+
+const claimStartedAt = new Date("2026-08-14T00:00:01.000Z");
 
 beforeEach(() => {
   vi.clearAllMocks();
   lifecycleState.afterCallback = undefined;
   lifecycleState.order = [];
+  lifecycleState.receiptClaim.mockImplementation(async (key: object) => ({
+    ...key,
+    startedAt: claimStartedAt,
+  }));
+  lifecycleState.recoverReceipts.mockResolvedValue([]);
   lifecycleState.capture.mockImplementation(async () => {
     lifecycleState.order.push("assertion:start");
     await Promise.resolve();
@@ -96,6 +108,7 @@ describe("post-answer memory maintenance pipeline", () => {
     expect(lifecycleState.loadReceipt).toHaveBeenCalledWith({
       actorId: "actor-1",
       clientMessageId: "message-durable",
+      startedAt: claimStartedAt,
     });
     expect(lifecycleState.capture).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -121,12 +134,16 @@ describe("post-answer memory maintenance pipeline", () => {
       "higher-memory:start",
     ]);
     expect(lifecycleState.capture).toHaveBeenCalledOnce();
-    expect(lifecycleState.receiptRunning).toHaveBeenCalledWith({
+    expect(lifecycleState.receiptClaim).toHaveBeenCalledWith({
       actorId: "actor-1",
       clientMessageId: "message-1",
     });
     expect(lifecycleState.receiptComplete).toHaveBeenCalledWith(
-      { actorId: "actor-1", clientMessageId: "message-1" },
+      {
+        actorId: "actor-1",
+        clientMessageId: "message-1",
+        startedAt: claimStartedAt,
+      },
       expect.objectContaining({ publishedAssertions: 2 }),
     );
     expect(lifecycleState.maintain).toHaveBeenCalledOnce();
@@ -341,9 +358,31 @@ describe("post-answer memory maintenance pipeline", () => {
     await lifecycleState.afterCallback?.();
 
     expect(lifecycleState.receiptFail).toHaveBeenCalledWith(
-      { actorId: "actor-1", clientMessageId: "message-failed" },
+      {
+        actorId: "actor-1",
+        clientMessageId: "message-failed",
+        startedAt: claimStartedAt,
+      },
       expect.objectContaining({ message: "capture failed" }),
     );
     expect(lifecycleState.receiptComplete).not.toHaveBeenCalled();
+  });
+
+  it("resumes a bounded batch of persisted receipts on a later request", async () => {
+    lifecycleState.recoverReceipts.mockResolvedValueOnce([{
+      actorId: "actor-1",
+      clientMessageId: "message-interrupted",
+    }]);
+
+    await expect(resumePendingChatAssertionReceipts({ actorId: "actor-1" }))
+      .resolves.toBe(1);
+    await lifecycleState.afterCallback?.();
+
+    expect(lifecycleState.recoverReceipts).toHaveBeenCalledWith({ actorId: "actor-1" });
+    expect(lifecycleState.receiptClaim).toHaveBeenCalledWith({
+      actorId: "actor-1",
+      clientMessageId: "message-interrupted",
+    });
+    expect(lifecycleState.capture).toHaveBeenCalledOnce();
   });
 });

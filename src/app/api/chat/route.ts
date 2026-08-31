@@ -102,19 +102,23 @@ import { MemoryEvidenceAccumulator } from "@/memory/evidence-accumulator";
 import {
   captureChatAssertions,
   environmentTimezone,
+  type ChatAssertionCaptureResult,
   type ChatMainModelCall,
   type ChatMainToolExecution,
   type ChatSemanticMessage,
 } from "@/memory/chat-assertion";
 import { createChatAssertionQueueTool } from "@/memory/chat-assertion-queue";
 import {
+  claimChatAssertionReceipt,
   completeChatAssertionReceipt,
   createMemoryWriteStatusTool,
   failChatAssertionReceipt,
-  markChatAssertionReceiptRunning,
   queueChatAssertionReceipt,
 } from "@/memory/chat-assertion-receipt";
-import { createChatMemoryMaintenanceScheduler } from "@/memory/chat-assertion-lifecycle";
+import {
+  createChatMemoryMaintenanceScheduler,
+  resumePendingChatAssertionReceipts,
+} from "@/memory/chat-assertion-lifecycle";
 import {
   loadAmbientHigherMemories,
   type AmbientHigherMemorySnapshot,
@@ -700,6 +704,7 @@ export async function POST(request: Request) {
       text: message.text,
     }));
   const memoryMaintenance = createChatMemoryMaintenanceScheduler(debugTrace);
+  await resumePendingChatAssertionReceipts({ actorId: requestActor.id });
   let actorPrivateMemory: ActorPrivateMemorySnapshot = emptyActorPrivateMemory();
   try {
     actorPrivateMemory = await loadActorPrivateMemory(requestActor.id);
@@ -1065,9 +1070,13 @@ export async function POST(request: Request) {
             actorId: requestActor.id,
             clientMessageId: latestUserMessage.id,
           };
+          const claim = await claimChatAssertionReceipt(receiptKey);
+          if (!claim) {
+            throw new Error("Assertion 回执已由另一个处理者领取或不再等待处理");
+          }
+          let captureResult: ChatAssertionCaptureResult;
           try {
-            await markChatAssertionReceiptRunning(receiptKey);
-            const captureResult = await captureChatAssertions({
+            captureResult = await captureChatAssertions({
               actor: requestActor,
               conversationId,
               clientMessageId: latestUserMessage.id,
@@ -1083,17 +1092,17 @@ export async function POST(request: Request) {
               retrieval: evidence.snapshot(),
               queueDecision,
             }, debugTrace);
-            await completeChatAssertionReceipt(receiptKey, captureResult);
-            return captureResult;
           } catch (error) {
             try {
-              await failChatAssertionReceipt(receiptKey, error);
+              await failChatAssertionReceipt(claim, error);
             } catch (receiptError) {
               console.error("[chat.assertion-receipt.foreground-failed]", receiptError);
               await debugTrace.appendError("前台 Assertion 失败回执写入失败", receiptError);
             }
             throw error;
           }
+          await completeChatAssertionReceipt(claim, captureResult);
+          return captureResult;
         },
         onForegroundResult: (captureResult) => {
           objectManagementToolset.registerPublishedMemory(captureResult);
@@ -1855,18 +1864,6 @@ export async function POST(request: Request) {
               writebackStatus = "persistence_failed";
               console.error("[chat.assertion-receipt.persist]", error);
               await debugTrace.appendError("持久化 Assertion 回执失败", error);
-              try {
-                await failChatAssertionReceipt({
-                  actorId: requestActor.id,
-                  clientMessageId: latestUserMessage.id,
-                }, error);
-              } catch (receiptError) {
-                console.error("[chat.assertion-receipt.persist-failed]", receiptError);
-                await debugTrace.appendError(
-                  "Assertion 回执失败状态落库失败",
-                  receiptError,
-                );
-              }
             } finally {
               writebackPersistenceDurationMs = Math.round(
                 performance.now() - persistenceStartedAt,

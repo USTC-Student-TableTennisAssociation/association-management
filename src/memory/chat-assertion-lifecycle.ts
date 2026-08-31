@@ -7,10 +7,12 @@ import {
   type ChatAssertionCaptureResult,
 } from "@/memory/chat-assertion";
 import {
+  claimChatAssertionReceipt,
   completeChatAssertionReceipt,
   failChatAssertionReceipt,
   loadChatAssertionReceiptInput,
-  markChatAssertionReceiptRunning,
+  recoverPendingChatAssertionReceipts,
+  type ChatAssertionReceiptClaim,
   type ChatAssertionReceiptKey,
 } from "@/memory/chat-assertion-receipt";
 import {
@@ -42,6 +44,91 @@ export type ChatMemoryMaintenanceScheduler = {
   cancel(reason?: string): void;
 };
 
+function emptyCaptureResult(): ChatAssertionCaptureResult {
+  return {
+    publishedAssertions: 0,
+    publishedAssertionIds: [],
+    affectedObjectIds: [],
+    affectedObjects: [],
+  };
+}
+
+async function processQueuedChatAssertionReceipt(
+  key: ChatAssertionReceiptKey,
+  trace?: DebugTrace,
+): Promise<ChatAssertionCaptureResult> {
+  let claim: ChatAssertionReceiptClaim | undefined;
+  try {
+    claim = await claimChatAssertionReceipt(key);
+  } catch (error) {
+    console.error("[chat.assertion-receipt.claim]", error);
+    await trace?.appendError("领取持久化 Assertion 回执失败", error);
+    return emptyCaptureResult();
+  }
+  if (!claim) {
+    await trace?.appendSection(
+      "后台 Chat → Assertion 跳过",
+      "该回执已由另一个处理者领取，当前进程不重复执行。",
+    );
+    return emptyCaptureResult();
+  }
+
+  try {
+    const assertionInput = await loadChatAssertionReceiptInput(claim);
+    await trace?.appendSection(
+      "后台 Chat → Assertion 任务恢复",
+      "已从持久化回执加载完整语义上下文与检索快照。",
+    );
+    await trace?.appendSection(
+      "后台 Chat → Assertion 开始",
+      "主回答已结束，现在独立判断用户原话是否值得固化。",
+    );
+    const result = await captureChatAssertions(assertionInput, trace);
+    console.info("[chat.assertion-capture]", JSON.stringify({
+      clientMessageId: assertionInput.clientMessageId,
+      ...result,
+    }));
+    try {
+      await completeChatAssertionReceipt(claim, result);
+    } catch (error) {
+      // The capture itself is idempotent. Leave this claim running so a later
+      // request can requeue it and reconstruct the receipt from persisted data.
+      console.error("[chat.assertion-receipt.complete]", error);
+      await trace?.appendError("Assertion 回执写入处理结果失败", error);
+    }
+    return result;
+  } catch (error) {
+    console.error("[chat.assertion-capture]", error);
+    await trace?.appendError("后台 Chat → Assertion 失败", error);
+    try {
+      await failChatAssertionReceipt(claim, error);
+    } catch (receiptError) {
+      console.error("[chat.assertion-receipt.failed]", receiptError);
+      await trace?.appendError("Assertion 回执写入失败状态失败", receiptError);
+    }
+    return emptyCaptureResult();
+  }
+}
+
+/** Resume interrupted Assertion publication when the actor next uses Chat. */
+export async function resumePendingChatAssertionReceipts(input: {
+  actorId: string;
+}): Promise<number> {
+  try {
+    const receipts = await recoverPendingChatAssertionReceipts(input);
+    if (!receipts.length) return 0;
+    after(async () => {
+      for (const receipt of receipts) {
+        await processQueuedChatAssertionReceipt(receipt);
+      }
+    });
+    return receipts.length;
+  } catch (error) {
+    console.warn("[chat.assertion-receipt.resume]", error);
+    return 0;
+  }
+}
+
 /**
  * One post-answer pipeline owns assertion publication, semantic consolidation,
  * and Higher Memory maintenance in that order.
@@ -69,30 +156,8 @@ export function createChatMemoryMaintenanceScheduler(
             "固定顺序：Assertion 发布 → Knowledge Consolidation → Object/Ambient Higher Memory → Actor 私有 Higher Memory。View Higher Memory 由正式 View 的 post-commit 事件链维护。",
           ].join("\n"),
         );
-        let captureResult: ChatAssertionCaptureResult = input.completedAssertion?.result ?? {
-          publishedAssertions: 0,
-          publishedAssertionIds: [],
-          affectedObjectIds: [],
-          affectedObjects: [],
-        };
-        let assertionInput: ChatAssertionCaptureInput | undefined;
-        if (!input.completedAssertion && input.assertionReceipt) {
-          try {
-            assertionInput = await loadChatAssertionReceiptInput(input.assertionReceipt);
-            await trace?.appendSection(
-              "后台 Chat → Assertion 任务恢复",
-              "已使用持久化回执 key 重新加载完整语义上下文与检索快照；后台任务不依赖请求局部变量保存工作内容。",
-            );
-          } catch (error) {
-            console.error("[chat.assertion-receipt.load]", error);
-            await trace?.appendError("加载持久化 Assertion 回执输入失败", error);
-            try {
-              await failChatAssertionReceipt(input.assertionReceipt, error);
-            } catch (receiptError) {
-              console.error("[chat.assertion-receipt.failed]", receiptError);
-            }
-          }
-        }
+        let captureResult: ChatAssertionCaptureResult = input.completedAssertion?.result ??
+          emptyCaptureResult();
         if (input.completedAssertion) {
           await trace?.appendSection(
             "后台 Chat → Assertion 跳过",
@@ -102,39 +167,11 @@ export function createChatMemoryMaintenanceScheduler(
               `- 关联 Object：${captureResult.affectedObjectIds.length} 个`,
             ].join("\n"),
           );
-        } else if (assertionInput && input.assertionReceipt) {
-          try {
-            try {
-              await markChatAssertionReceiptRunning(input.assertionReceipt);
-            } catch (error) {
-              console.error("[chat.assertion-receipt.running]", error);
-              await trace?.appendError("Assertion 回执更新为处理中失败", error);
-            }
-            await trace?.appendSection(
-              "后台 Chat → Assertion 开始",
-              "主回答已结束，现在独立判断用户原话是否值得固化。",
-            );
-            captureResult = await captureChatAssertions(assertionInput, trace);
-            console.info("[chat.assertion-capture]", JSON.stringify({
-              clientMessageId: assertionInput.clientMessageId,
-              ...captureResult,
-            }));
-            try {
-              await completeChatAssertionReceipt(input.assertionReceipt, captureResult);
-            } catch (error) {
-              console.error("[chat.assertion-receipt.complete]", error);
-              await trace?.appendError("Assertion 回执写入处理结果失败", error);
-            }
-          } catch (error) {
-            console.error("[chat.assertion-capture]", error);
-            await trace?.appendError("后台 Chat → Assertion 失败", error);
-            try {
-              await failChatAssertionReceipt(input.assertionReceipt, error);
-            } catch (receiptError) {
-              console.error("[chat.assertion-receipt.failed]", receiptError);
-              await trace?.appendError("Assertion 回执写入失败状态失败", receiptError);
-            }
-          }
+        } else if (input.assertionReceipt) {
+          captureResult = await processQueuedChatAssertionReceipt(
+            input.assertionReceipt,
+            trace,
+          );
         } else {
           await trace?.appendSection(
             "后台 Chat → Assertion 跳过",

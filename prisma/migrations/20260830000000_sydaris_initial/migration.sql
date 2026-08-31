@@ -801,6 +801,9 @@ CREATE UNIQUE INDEX "memory_assertions_chat_capture_id_source_claim_id_key" ON "
 CREATE UNIQUE INDEX "memory_chat_assertion_captures_queued_by_actor_id_queued_by_key" ON "memory_chat_assertion_captures"("queued_by_actor_id", "queued_by_message_id");
 
 -- CreateIndex
+CREATE INDEX "chat_assertion_receipts_recovery_idx" ON "memory_chat_assertion_receipts"("actor_id", "execution", "status", "started_at");
+
+-- CreateIndex
 CREATE INDEX "memory_chat_assertion_receipts_actor_id_updated_at_idx" ON "memory_chat_assertion_receipts"("actor_id", "updated_at");
 
 -- CreateIndex

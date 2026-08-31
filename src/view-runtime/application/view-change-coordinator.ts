@@ -13,6 +13,8 @@ import type {
   ViewRelatedObject,
 } from "@/view-runtime/application/view-change-context";
 
+const STALE_REACTION_AFTER_MS = 10 * 60 * 1_000;
+
 export type ViewAttentionEvaluator = (input: {
   viewModule: NonNullable<ReturnType<ExtensionRegistry["getView"]>>;
   snapshot: Awaited<ReturnType<ViewReadPort["query"]>>;
@@ -112,6 +114,39 @@ export class ViewChangeCoordinator {
   }
 
   async resumePending(input: { viewKey: string }): Promise<number> {
+    const staleBefore = new Date(Date.now() - STALE_REACTION_AFTER_MS);
+    await Promise.all([
+      this.dependencies.database.viewChangeReaction.updateMany({
+        where: {
+          viewKey: input.viewKey,
+          attentionStatus: "running",
+          OR: [
+            { attentionStartedAt: null },
+            { attentionStartedAt: { lt: staleBefore } },
+          ],
+        },
+        data: {
+          attentionStatus: "queued",
+          attentionStartedAt: null,
+          attentionErrorMessage: null,
+        },
+      }),
+      this.dependencies.database.viewChangeReaction.updateMany({
+        where: {
+          viewKey: input.viewKey,
+          knowledgeStatus: "running",
+          OR: [
+            { knowledgeStartedAt: null },
+            { knowledgeStartedAt: { lt: staleBefore } },
+          ],
+        },
+        data: {
+          knowledgeStatus: "queued",
+          knowledgeStartedAt: null,
+          knowledgeErrorMessage: null,
+        },
+      }),
+    ]);
     const reactions = await this.dependencies.database.viewChangeReaction.findMany({
       where: {
         viewKey: input.viewKey,
@@ -150,6 +185,9 @@ export class ViewChangeCoordinator {
   private async flush(reactionId: string): Promise<void> {
     this.timers.delete(reactionId);
     const database = this.dependencies.database;
+    let attentionClaimed = false;
+    let knowledgeClaimed = false;
+    let claimStartedAt: Date | undefined;
     try {
       const pending = await database.viewChangeReaction.findUnique({ where: { id: reactionId } });
       if (!pending) return;
@@ -157,28 +195,31 @@ export class ViewChangeCoordinator {
         this.schedule(pending.id, pending.settleUntil);
         return;
       }
-      const now = new Date();
-      await Promise.all([
+      claimStartedAt = new Date();
+      const startedAt = claimStartedAt;
+      const [attentionClaim, knowledgeClaim] = await Promise.all([
         pending.attentionStatus === "queued"
           ? database.viewChangeReaction.updateMany({
               where: { id: reactionId, attentionStatus: "queued" },
-              data: { attentionStatus: "running", attentionStartedAt: now },
+              data: { attentionStatus: "running", attentionStartedAt: startedAt },
             })
-          : Promise.resolve(),
+          : Promise.resolve({ count: 0 }),
         pending.knowledgeStatus === "queued"
           ? database.viewChangeReaction.updateMany({
               where: { id: reactionId, knowledgeStatus: "queued" },
-              data: { knowledgeStatus: "running", knowledgeStartedAt: now },
+              data: { knowledgeStatus: "running", knowledgeStartedAt: startedAt },
             })
-          : Promise.resolve(),
+          : Promise.resolve({ count: 0 }),
       ]);
+      attentionClaimed = attentionClaim.count === 1;
+      knowledgeClaimed = knowledgeClaim.count === 1;
+      if (!attentionClaimed && !knowledgeClaimed) return;
 
       const reaction = await database.viewChangeReaction.findUnique({
         where: { id: reactionId },
         include: { execution: true },
       });
       if (!reaction) return;
-      if (reaction.attentionStatus !== "running" && reaction.knowledgeStatus !== "running") return;
       const viewModule = this.dependencies.registry.getView(reaction.viewKey);
       if (!viewModule) throw new Error(`View ${reaction.viewKey} 未加载`);
 
@@ -211,7 +252,7 @@ export class ViewChangeCoordinator {
       const guidance = storedStrings(reaction.guidanceJson);
 
       const jobs: Promise<void>[] = [];
-      if (reaction.attentionStatus === "running") {
+      if (attentionClaimed) {
         jobs.push(this.dependencies.evaluate({
           viewModule,
           snapshot: reactionSnapshot,
@@ -225,8 +266,12 @@ export class ViewChangeCoordinator {
           const attentionStatus = decision.action === "request_confirmation"
             ? "needs_confirmation"
             : decision.action;
-          await database.viewChangeReaction.update({
-            where: { id: reaction.id },
+          await database.viewChangeReaction.updateMany({
+            where: {
+              id: reaction.id,
+              attentionStatus: "running",
+              attentionStartedAt: startedAt,
+            },
             data: {
               attentionStatus,
               message: decision.message || null,
@@ -241,8 +286,12 @@ export class ViewChangeCoordinator {
             reason: decision.reason,
           }));
         }).catch(async (error: unknown) => {
-          await database.viewChangeReaction.update({
-            where: { id: reaction.id },
+          await database.viewChangeReaction.updateMany({
+            where: {
+              id: reaction.id,
+              attentionStatus: "running",
+              attentionStartedAt: startedAt,
+            },
             data: {
               attentionStatus: "failed",
               attentionErrorMessage: error instanceof Error ? error.message : String(error),
@@ -252,7 +301,7 @@ export class ViewChangeCoordinator {
           console.error("[view.reaction.attention]", error);
         }));
       }
-      if (reaction.knowledgeStatus === "running") {
+      if (knowledgeClaimed) {
         jobs.push(this.enqueueKnowledge(reaction.viewKey, async () => {
           try {
             const newerReconciliation = await database.viewChangeReaction.count({
@@ -264,8 +313,12 @@ export class ViewChangeCoordinator {
               },
             });
             if (newerReconciliation) {
-              await database.viewChangeReaction.update({
-                where: { id: reaction.id },
+              await database.viewChangeReaction.updateMany({
+                where: {
+                  id: reaction.id,
+                  knowledgeStatus: "running",
+                  knowledgeStartedAt: startedAt,
+                },
                 data: { knowledgeStatus: "completed", knowledgeCompletedAt: new Date() },
               });
               console.info("[view.reaction.knowledge]", JSON.stringify({
@@ -291,8 +344,12 @@ export class ViewChangeCoordinator {
                 objects: priorObjects,
               }),
             ]);
-            await database.viewChangeReaction.update({
-              where: { id: reaction.id },
+            await database.viewChangeReaction.updateMany({
+              where: {
+                id: reaction.id,
+                knowledgeStatus: "running",
+                knowledgeStartedAt: startedAt,
+              },
               data: { knowledgeStatus: "completed", knowledgeCompletedAt: new Date() },
             });
             console.info("[view.reaction.knowledge]", JSON.stringify({
@@ -302,8 +359,12 @@ export class ViewChangeCoordinator {
               viewMemories,
             }));
           } catch (error) {
-            await database.viewChangeReaction.update({
-              where: { id: reaction.id },
+            await database.viewChangeReaction.updateMany({
+              where: {
+                id: reaction.id,
+                knowledgeStatus: "running",
+                knowledgeStartedAt: startedAt,
+              },
               data: {
                 knowledgeStatus: "failed",
                 knowledgeErrorMessage: error instanceof Error ? error.message : String(error),
@@ -320,22 +381,34 @@ export class ViewChangeCoordinator {
       const completedAt = new Date();
       const message = error instanceof Error ? error.message : String(error);
       await Promise.all([
-        database.viewChangeReaction.updateMany({
-          where: { id: reactionId, attentionStatus: { in: ["queued", "running"] } },
-          data: {
-            attentionStatus: "failed",
-            attentionErrorMessage: message,
-            attentionCompletedAt: completedAt,
-          },
-        }),
-        database.viewChangeReaction.updateMany({
-          where: { id: reactionId, knowledgeStatus: { in: ["queued", "running"] } },
-          data: {
-            knowledgeStatus: "failed",
-            knowledgeErrorMessage: message,
-            knowledgeCompletedAt: completedAt,
-          },
-        }),
+        attentionClaimed && claimStartedAt
+          ? database.viewChangeReaction.updateMany({
+              where: {
+                id: reactionId,
+                attentionStatus: "running",
+                attentionStartedAt: claimStartedAt,
+              },
+              data: {
+                attentionStatus: "failed",
+                attentionErrorMessage: message,
+                attentionCompletedAt: completedAt,
+              },
+            })
+          : Promise.resolve(),
+        knowledgeClaimed && claimStartedAt
+          ? database.viewChangeReaction.updateMany({
+              where: {
+                id: reactionId,
+                knowledgeStatus: "running",
+                knowledgeStartedAt: claimStartedAt,
+              },
+              data: {
+                knowledgeStatus: "failed",
+                knowledgeErrorMessage: message,
+                knowledgeCompletedAt: completedAt,
+              },
+            })
+          : Promise.resolve(),
       ]).catch(() => undefined);
     }
   }
