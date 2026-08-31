@@ -203,6 +203,49 @@ export function createAgentViewToolset(input: {
       : undefined;
   };
 
+  const locateObjectViews = async (objectRef: string) => {
+    const object = input.resolveObjectReference?.(objectRef);
+    if (!object) {
+      throw new ViewRuntimeError(
+        `Object 引用 ${objectRef} 尚未出现在本轮知识或业务上下文中；请先检索并使用真实 O#`,
+      );
+    }
+    const allowedViewKeys = registry.listViews()
+      .map((view) => view.manifest.key)
+      .filter((viewKey) => input.skillSession?.canReadView(viewKey) ?? true);
+    const discovery = await readPort.locateObject({
+      objectId: object.id,
+      viewKeys: allowedViewKeys,
+      actor: input.actor,
+    });
+    const cardsByView = new Map<string, Map<string, number>>();
+    for (const card of discovery.cards) {
+      const cardTypes = cardsByView.get(card.viewKey) ?? new Map<string, number>();
+      cardTypes.set(card.cardTypeKey, (cardTypes.get(card.cardTypeKey) ?? 0) + 1);
+      cardsByView.set(card.viewKey, cardTypes);
+    }
+    const matches = discovery.searchedViewKeys.flatMap((viewKey) => {
+      const cardTypes = cardsByView.get(viewKey);
+      if (!cardTypes) return [];
+      const view = registry.getView(viewKey)!;
+      return [{
+        viewKey,
+        viewLabel: view.manifest.label,
+        viewDescription: view.manifest.description,
+        cardCount: [...cardTypes.values()].reduce((total, count) => total + count, 0),
+        cardTypes: [...cardTypes].map(([cardTypeKey, count]) => ({ cardTypeKey, count })),
+      }];
+    });
+    return {
+      object: { ref: objectRef, canonicalName: object.canonicalName },
+      searchedViewKeys: discovery.searchedViewKeys,
+      matches,
+      next: matches.length
+        ? `选择与任务有关的 View，并调用 openBusinessContext；在 targetObjectRefs 中继续使用 ${objectRef}，以精确读取关联 Card。`
+        : "当前授权且启用的 View 中没有关联这个 Object 的 Card。只有用户还要求相关资料或背景时，才继续检索 Shared Brain。",
+    };
+  };
+
   const resolveOneReference = async (
     value: unknown,
     reference: CommandInputReferenceDefinition,
@@ -509,6 +552,7 @@ export function createAgentViewToolset(input: {
   return {
     tools,
     readView,
+    locateObjectViews,
     presentCards,
     describeCommands,
     registerPublishedObjects(objects: readonly { id: string; canonicalName: string }[]): void {

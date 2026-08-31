@@ -72,6 +72,84 @@ describe("buildViewContext", () => {
     ]);
   });
 
+  it("uses an exact Object identity instead of including a same-named Card", async () => {
+    const targetObjectId = "00000000-0000-4000-8000-000000000003";
+    const sameNamedObjectId = "00000000-0000-4000-8000-000000000004";
+    const targetCardId = "00000000-0000-4000-8000-000000000005";
+    const sameNamedCardId = "00000000-0000-4000-8000-000000000006";
+    databaseState.findMany.mockResolvedValue([
+      {
+        id: targetObjectId,
+        globalObjectKey: "activity:target",
+        canonicalName: "同名活动",
+        higherMemory: null,
+      },
+      {
+        id: sameNamedObjectId,
+        globalObjectKey: "activity:other",
+        canonicalName: "同名活动",
+        higherMemory: null,
+      },
+    ]);
+
+    const result = await buildViewContext({
+      snapshot: {
+        viewKey: "activity_operations",
+        pluginVersion: "1.0.0",
+        schemaVersion: "1",
+        stateVersion: "state-1",
+        observedAt: "2026-08-31T00:00:00.000Z",
+        cards: [{
+          id: targetCardId,
+          viewKey: "activity_operations",
+          cardTypeKey: "ActivityCard",
+          dimensions: {},
+          slots: {},
+          relatedObjectIds: [targetObjectId],
+        }, {
+          id: sameNamedCardId,
+          viewKey: "activity_operations",
+          cardTypeKey: "ActivityCard",
+          dimensions: {},
+          slots: {},
+          relatedObjectIds: [sameNamedObjectId],
+        }],
+        references: [{
+          ref: "V1",
+          label: "活动运营",
+          target: { kind: "view", viewKey: "activity_operations" },
+        }, {
+          ref: "V2",
+          label: "目标活动",
+          target: { kind: "card", viewKey: "activity_operations", cardId: targetCardId },
+        }, {
+          ref: "V3",
+          label: "同名的另一个活动",
+          target: { kind: "card", viewKey: "activity_operations", cardId: sameNamedCardId },
+        }],
+      },
+      viewLabel: "活动运营",
+      viewDescription: "活动业务状态",
+      cardTypes: [{
+        key: "ActivityCard",
+        label: "活动",
+        description: "一次真实活动",
+        dimensions: [],
+        slots: [],
+      }],
+      focus: "读取目标活动",
+      targetHints: ["同名活动"],
+      targetObjectIds: [targetObjectId],
+    });
+
+    expect(result.relevantCards).toEqual([
+      expect.objectContaining({ id: targetCardId }),
+    ]);
+    expect(result.evidence.objects).toEqual([
+      expect.objectContaining({ id: targetObjectId }),
+    ]);
+  });
+
   it("returns one-hop slot Cards with a matching parent", async () => {
     const societyObjectId = "00000000-0000-4000-8000-000000000011";
     const activityObjectId = "00000000-0000-4000-8000-000000000012";

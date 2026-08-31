@@ -113,9 +113,11 @@ export async function buildViewContext(input: {
   cardTypes: readonly CardTypeDefinition[];
   focus: string;
   targetHints: readonly string[];
+  targetObjectIds?: readonly string[];
   activeCardId?: string;
 }) {
   const hints = input.targetHints.map(searchable).filter(Boolean);
+  const targetObjectIds = new Set(input.targetObjectIds ?? []);
   // Resolve every Card relationship before target filtering. A Card can be
   // intentionally sparse and identify its subject only through relatedObjectIds.
   const allObjectIds = [...new Set(input.snapshot.cards.flatMap((card) => card.relatedObjectIds))];
@@ -140,6 +142,9 @@ export async function buildViewContext(input: {
   const allObjectById = new Map(allObjectRows.map((object) => [object.id, object]));
   const directlyRelevantCards = input.snapshot.cards.filter((card) => {
     if (input.activeCardId && card.id === input.activeCardId) return true;
+    if (targetObjectIds.size) {
+      return card.relatedObjectIds.some((id) => targetObjectIds.has(id));
+    }
     if (!hints.length) return true;
     const relatedNames = card.relatedObjectIds.flatMap((id) => {
       const object = allObjectById.get(id);

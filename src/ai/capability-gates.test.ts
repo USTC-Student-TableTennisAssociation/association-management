@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { z } from "zod";
+import { describe, expect, it, vi } from "vitest";
 
 import {
+  capabilityGatewayToolNames,
+  createCapabilityGatewayTools,
   createOpenedCapabilities,
   detailedToolNames,
 } from "@/ai/capability-gates";
@@ -14,5 +17,58 @@ describe("capability gates", () => {
 
     expect(names).toEqual(["expandEvidence", "followObject", "readSourceDocument"]);
     expect(names).not.toContain("readSemanticView");
+  });
+
+  it("keeps Object View discovery available as a read-only gateway", async () => {
+    const locateObjectViews = vi.fn().mockResolvedValue({ matches: [] });
+    const tools = createCapabilityGatewayTools(createOpenedCapabilities(), {
+      viewKeySchema: z.string(),
+      locateObjectViews,
+      openBusinessContext: vi.fn(),
+      findArtifacts: vi.fn(),
+      describeBusinessViewActions: vi.fn(),
+    });
+    const execute = tools.locateObjectViews.execute as unknown as (
+      input: { objectRef: string },
+    ) => Promise<unknown>;
+
+    await expect(execute({ objectRef: "O3" })).resolves.toEqual({ matches: [] });
+    expect(locateObjectViews).toHaveBeenCalledWith({ objectRef: "O3" });
+    expect(capabilityGatewayToolNames).toContain("locateObjectViews");
+  });
+
+  it("passes exact Object references into Business Context without opening Actions", async () => {
+    const state = createOpenedCapabilities();
+    const openBusinessContext = vi.fn().mockResolvedValue({ relevantCards: [] });
+    const tools = createCapabilityGatewayTools(state, {
+      viewKeySchema: z.string(),
+      locateObjectViews: vi.fn(),
+      openBusinessContext,
+      findArtifacts: vi.fn(),
+      describeBusinessViewActions: vi.fn(),
+    });
+    const execute = tools.openBusinessContext.execute as unknown as (input: {
+      viewKey: string;
+      focus: string;
+      targetHints: string[];
+      targetObjectRefs: string[];
+    }) => Promise<unknown>;
+
+    await execute({
+      viewKey: "activity_operations",
+      focus: "读取这项活动的当前状态",
+      targetHints: [],
+      targetObjectRefs: ["O1"],
+    });
+
+    expect(openBusinessContext).toHaveBeenCalledWith({
+      viewKey: "activity_operations",
+      focus: "读取这项活动的当前状态",
+      targetHints: [],
+      targetObjectRefs: ["O1"],
+    });
+    expect(state.businessContext).toBe(true);
+    expect(state.businessViewKey).toBe("activity_operations");
+    expect(state.actionAreas.size).toBe(0);
   });
 });

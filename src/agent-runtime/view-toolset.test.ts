@@ -30,6 +30,10 @@ function fixture(existingObjects: readonly { id: string; canonicalName: string }
         relatedObjectIds: [],
       }],
     }),
+    locateObject: vi.fn().mockResolvedValue({
+      searchedViewKeys: ["activity_operations"],
+      cards: [],
+    }),
   };
   const commandBus = {
     dispatch: vi.fn().mockResolvedValue({
@@ -52,7 +56,7 @@ function fixture(existingObjects: readonly { id: string; canonicalName: string }
       : undefined,
     onProposal: proposals,
   });
-  return { commandBus, findExistingObjectsByCanonicalName, proposals, toolset };
+  return { commandBus, findExistingObjectsByCanonicalName, proposals, readPort, toolset };
 }
 
 async function runCreateActivity(
@@ -72,6 +76,31 @@ async function runCreateActivity(
 }
 
 describe("Agent View Toolset foreground Object binding", () => {
+  it("reports an exact Object with no linked Cards without inventing a fallback", async () => {
+    const { readPort, toolset } = fixture();
+
+    await expect(toolset.locateObjectViews("O1")).resolves.toMatchObject({
+      object: { ref: "O1", canonicalName: "Sydaris 人工验收赛" },
+      searchedViewKeys: ["activity_operations"],
+      matches: [],
+      next: expect.stringContaining("没有关联这个 Object 的 Card"),
+    });
+    expect(readPort.locateObject).toHaveBeenCalledWith({
+      objectId,
+      viewKeys: ["activity_operations"],
+      actor: { permissions: ["view.read", "view.write"] },
+    });
+  });
+
+  it("rejects an Object reference that was not discovered in this request", async () => {
+    const { readPort, toolset } = fixture();
+
+    await expect(toolset.locateObjectViews("O99")).rejects.toThrow(
+      "尚未出现在本轮知识或业务上下文中",
+    );
+    expect(readPort.locateObject).not.toHaveBeenCalled();
+  });
+
   it("presents reference fields as model references instead of database UUIDs", () => {
     expect(modelFacingCommandInputSchema(
       {

@@ -923,22 +923,41 @@ export async function POST(request: Request) {
       const gatewayTools = createCapabilityGatewayTools(openedCapabilities, {
         viewKeySchema: registeredViewKeySchema(extensionRegistry),
         describeBusinessViewActions: (viewKey) => viewToolset.describeCommands(viewKey),
+        locateObjectViews: ({ objectRef }) => viewToolset.locateObjectViews(objectRef),
         authorizeAction: (area, businessViewKey) => ({
           allowed: skillSession.canOpenAction(area, businessViewKey),
           reason: skillSession.active()
             ? `已激活 Skill ${skillSession.active()!.extension.id} 未声明该 Action 权限。`
             : undefined,
         }),
-        openBusinessContext: async ({ viewKey, focus, targetHints }) => {
+        openBusinessContext: async ({
+          viewKey,
+          focus,
+          targetHints,
+          targetObjectRefs,
+        }) => {
           const viewModule = extensionRegistry.getView(viewKey)!;
+          const targetObjects = targetObjectRefs.map((objectRef) => {
+            const object = evidence.objectForModelReference(objectRef);
+            if (!object) {
+              throw new Error(
+                `Object 引用 ${objectRef} 尚未出现在本轮知识或业务上下文中；请先检索并使用真实 O#`,
+              );
+            }
+            return object;
+          });
           const [snapshot, viewHigherMemory] = await Promise.all([
             viewToolset.readView(viewKey),
             loadViewHigherMemory(viewKey),
           ]);
           const refersToCurrentPage = /(这个|这份|这里|当前|该节点|该对象|此处|本页)/u.test(query);
-          const pageTargetHints = refersToCurrentPage && pageContext?.activeObjectName
-            ? [...new Set([...targetHints, pageContext.activeObjectName])]
-            : targetHints;
+          const pageTargetHints = [...new Set([
+            ...targetHints,
+            ...targetObjects.map((object) => object.canonicalName),
+            ...(refersToCurrentPage && pageContext?.activeObjectName
+              ? [pageContext.activeObjectName]
+              : []),
+          ])];
           const businessContext = await buildViewContext({
             snapshot,
             viewLabel: viewModule.manifest.label,
@@ -947,6 +966,7 @@ export async function POST(request: Request) {
             cardTypes: viewModule.schema.cardTypes,
             focus,
             targetHints: pageTargetHints,
+            targetObjectIds: targetObjects.map((object) => object.id),
             activeCardId: refersToCurrentPage
               ? pageContext?.activeCardId
               : undefined,
@@ -1178,7 +1198,7 @@ export async function POST(request: Request) {
       };
       await debugTrace.appendJsonSection("本轮工具暴露", {
         exposedToolNames,
-        note: "首次调用提供三个类别入口、主题语义搜索、记忆状态、Higher Memory 维护意图与 Handoff；其他详细工具按需开放。",
+        note: "首次调用提供业务上下文、Object 跨 View 定位、资料与 Action 入口，以及主题语义搜索、记忆状态、Higher Memory 维护意图与 Handoff；其他详细工具按需开放。",
       });
       const result = streamText({
         model,
@@ -1379,7 +1399,8 @@ export async function POST(request: Request) {
             memoryQueryCount += 1;
           }
           if (event.toolOutput.type === "tool-result") {
-            const toolLayer = toolName === "readView" || toolName === "openBusinessContext"
+            const toolLayer = toolName === "readView" || toolName === "openBusinessContext" ||
+                toolName === "locateObjectViews"
               ? "business_view"
               : toolName === "searchMemory" || toolName === "expandEvidence" ||
                   toolName === "followObject"

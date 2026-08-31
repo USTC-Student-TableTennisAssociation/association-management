@@ -2,6 +2,7 @@ import { tool, type ToolSet } from "ai";
 import { z } from "zod";
 
 export const capabilityGatewayToolNames = [
+  "locateObjectViews",
   "openBusinessContext",
   "openArtifacts",
   "openActions",
@@ -72,7 +73,9 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
     viewKey: string;
     focus: string;
     targetHints: string[];
+    targetObjectRefs: string[];
   }) => Promise<unknown>;
+  locateObjectViews: (input: { objectRef: string }) => Promise<unknown>;
   findArtifacts: (input: { title: string }) => Promise<unknown>;
   describeBusinessViewActions: (viewKey: string) => unknown;
   authorizeAction?: (
@@ -81,19 +84,38 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
   ) => { allowed: boolean; reason?: string };
 }): ToolSet {
   return {
+    locateObjectViews: tool({
+      description:
+        "当本轮已经通过知识检索或 Business Context 得到某个 O#，并且需要知道同一个 Object 还出现在哪些授权 Business View 时调用。它只返回 View/Card 类型位置，不读取 Card 内容，也不授予写入能力；随后用 openBusinessContext 精确读取与任务有关的 View。",
+      inputSchema: z.object({
+        objectRef: z.string().trim().regex(/^O\d+$/)
+          .describe("必须原样使用本轮知识检索或 Business Context 返回的 O#"),
+      }),
+      execute: handlers.locateObjectViews,
+    }),
     openBusinessContext: tool({
       description:
-        "当回答需要 Sydaris 的业务状态、View 结构能力、组织知识、人物/活动背景时调用。它会立即读取指定正式 View，返回实时 cardTypes schema、相关 Cards、Card Object、Object Higher Memory，以及描述本次读取实际证明内容的 semantics.observations / semantics.answerability。普通闲聊和仅处理用户已给文字时不要调用。",
+        "当回答需要 Sydaris 的业务状态、View 结构能力、组织知识、人物/活动背景时调用。它会立即读取指定正式 View，返回实时 cardTypes schema、相关 Cards、Card Object、Object Higher Memory，以及描述本次读取实际证明内容的 semantics.observations / semantics.answerability。已有 O# 时优先用 targetObjectRefs 精确定位；普通闲聊和仅处理用户已给文字时不要调用。",
       inputSchema: z.object({
         viewKey: handlers.viewKeySchema
           .describe("根据每轮已提供的 View Frame 选择一个首要 View"),
         focus: z.string().trim().min(1).max(500)
           .describe("用户围绕目标真正想了解的业务问题"),
-        targetHints: z.array(z.string().trim().min(1).max(200)).min(1).max(8)
-          .describe("用户所指业务实体的名称或别名，忠实保留原话"),
-      }),
-      execute: async ({ viewKey, focus, targetHints }) => {
-        const result = await handlers.openBusinessContext({ viewKey, focus, targetHints });
+        targetHints: z.array(z.string().trim().min(1).max(200)).max(8).default([])
+          .describe("尚无 Object 引用时，填写用户所指业务实体的名称或别名，忠实保留原话"),
+        targetObjectRefs: z.array(z.string().trim().regex(/^O\d+$/)).max(8).default([])
+          .describe("已经从本轮知识检索或 Business Context 得到的 O#；用于按 Object 身份精确匹配 Card"),
+      }).refine(
+        ({ targetHints, targetObjectRefs }) => targetHints.length > 0 || targetObjectRefs.length > 0,
+        { message: "targetHints 与 targetObjectRefs 至少提供一项" },
+      ),
+      execute: async ({ viewKey, focus, targetHints, targetObjectRefs }) => {
+        const result = await handlers.openBusinessContext({
+          viewKey,
+          focus,
+          targetHints,
+          targetObjectRefs,
+        });
         state.businessContext = true;
         state.businessViewKey = viewKey;
         return result;
@@ -163,7 +185,8 @@ export const TURN_KERNEL_INSTRUCTIONS = `
 
 - 问候、闲聊、改写、翻译、总结用户已给文字，以及不依赖 Sydaris 内部资料的任务，直接回答。
 - 用户明确点名某个已安装 Skill，或当前任务与 Skill 目标高度匹配时，先调用 activateSkill。Skill 激活后必须遵守其 View/Command 边界和专用指令；不得用普通对话模式绕过 Skill Runtime 的写入约束。
-- 需要理解 Sydaris 的业务状态、组织事实、人物或活动背景时，调用 openBusinessContext。该入口会立即返回正式 View 中的相关 Card 及其 Object Higher Memory；只有它明确不足时才 expandEvidence。
+- 需要理解 Sydaris 的业务状态、组织事实、人物或活动背景时，调用 openBusinessContext。该入口会立即返回正式 View 中的相关 Card 及其 Object Higher Memory；已有 O# 时放入 targetObjectRefs 做精确定位，只有读取明确不足时才 expandEvidence。
+- 已经得到 O#，且同一个对象可能同时存在于多个业务视角时，调用 locateObjectViews 发现当前授权范围内的 View/Card 位置，再分别用 openBusinessContext 读取与任务有关的 View。发现位置不等于读取了 Card 内容，也不改变任何 View。
 - 需要按主题查找跨文件、跨对象的组织知识时，直接调用 searchMemory。文件标题搜索只证明文件是否存在，未执行 searchMemory 前不得声称 Shared Brain 没有相关 Object、Assertion 或主题知识。
 - searchMemory 必须区分任务形状：单一明确事实使用 fact；完整理解、名单/表格、资料梳理或多字段 View 填充使用 synthesis。一次 query 只表达一个内聚的信息需求；多字段 synthesis 可先定位主体，再针对尚未覆盖的字段分别窄查。返回 partial/truncated、列表中出现“等”、或读完某个章节，只证明该次选择已完成，不证明用户要求的完整集合已经穷尽。Reference Assertion 未回读来源前不能作为事实。
 - 需要查找、核对或读取文件时，调用 openArtifacts。该入口会立即返回精确文件匹配、处理状态与 Shared Brain 发布计数。原始文件也可以在业务查询的任何阶段打开。
