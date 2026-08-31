@@ -37,6 +37,7 @@ export type ActionArea = keyof typeof actionToolNames;
 export type OpenedCapabilities = {
   businessContext: boolean;
   businessViewKey?: string;
+  businessViewKeys: Set<string>;
   artifacts: boolean;
   sharedBrain: boolean;
   actionAreas: Set<ActionArea>;
@@ -46,6 +47,7 @@ export function createOpenedCapabilities(): OpenedCapabilities {
   return {
     businessContext: false,
     businessViewKey: undefined,
+    businessViewKeys: new Set(),
     artifacts: false,
     sharedBrain: false,
     actionAreas: new Set(),
@@ -95,7 +97,7 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
     }),
     openBusinessContext: tool({
       description:
-        "当回答需要 Sydaris 的业务状态、View 结构能力、组织知识、人物/活动背景时调用。它会立即读取指定正式 View，返回实时 cardTypes schema、相关 Cards、Card Object、Object Higher Memory，以及描述本次读取实际证明内容的 semantics.observations / semantics.answerability。已有 O# 时优先用 targetObjectRefs 精确定位；普通闲聊和仅处理用户已给文字时不要调用。",
+        "当回答需要 Sydaris 的业务状态、View 结构能力、组织知识、人物/活动背景时调用。它会立即读取指定正式 View，返回该 View 自己声明的 Query Catalog、实时 cardTypes schema、相关 Cards、Card Object、Object Higher Memory，以及描述本次读取实际证明内容的 semantics.observations / semantics.answerability。已有 O# 时优先用 targetObjectRefs 精确定位；普通闲聊和仅处理用户已给文字时不要调用。",
       inputSchema: z.object({
         viewKey: handlers.viewKeySchema
           .describe("根据每轮已提供的 View Frame 选择一个首要 View"),
@@ -118,6 +120,7 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
         });
         state.businessContext = true;
         state.businessViewKey = viewKey;
+        state.businessViewKeys.add(viewKey);
         return result;
       },
     }),
@@ -186,6 +189,7 @@ export const TURN_KERNEL_INSTRUCTIONS = `
 - 问候、闲聊、改写、翻译、总结用户已给文字，以及不依赖 Sydaris 内部资料的任务，直接回答。
 - 用户明确点名某个已安装 Skill，或当前任务与 Skill 目标高度匹配时，先调用 activateSkill。Skill 激活后必须遵守其 View/Command 边界和专用指令；不得用普通对话模式绕过 Skill Runtime 的写入约束。
 - 需要理解 Sydaris 的业务状态、组织事实、人物或活动背景时，调用 openBusinessContext。该入口会立即返回正式 View 中的相关 Card 及其 Object Higher Memory；已有 O# 时放入 targetObjectRefs 做精确定位，只有读取明确不足时才 expandEvidence。
+- openBusinessContext 返回的 Query Catalog 由当前 View 声明。用户需要筛选、汇总、比较、趋势或其他 View 专业读取时，优先调用匹配的 query_* Tool；Query 只解释已观察到的正式 View Snapshot，不修改状态，也不替代外部来源 Tool。
 - 已经得到 O#，且同一个对象可能同时存在于多个业务视角时，调用 locateObjectViews 发现当前授权范围内的 View/Card 位置，再分别用 openBusinessContext 读取与任务有关的 View。发现位置不等于读取了 Card 内容，也不改变任何 View。
 - 需要按主题查找跨文件、跨对象的组织知识时，直接调用 searchMemory。文件标题搜索只证明文件是否存在，未执行 searchMemory 前不得声称 Shared Brain 没有相关 Object、Assertion 或主题知识。
 - searchMemory 必须区分任务形状：单一明确事实使用 fact；完整理解、名单/表格、资料梳理或多字段 View 填充使用 synthesis。一次 query 只表达一个内聚的信息需求；多字段 synthesis 可先定位主体，再针对尚未覆盖的字段分别窄查。返回 partial/truncated、列表中出现“等”、或读完某个章节，只证明该次选择已完成，不证明用户要求的完整集合已经穷尽。Reference Assertion 未回读来源前不能作为事实。

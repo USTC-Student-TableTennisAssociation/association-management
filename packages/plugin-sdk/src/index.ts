@@ -1,7 +1,7 @@
 import { z } from "zod";
 import semver from "semver";
 
-export const PLUGIN_API_VERSION = "0.1.0-alpha.7";
+export const PLUGIN_API_VERSION = "0.1.0-alpha.8";
 export const PLUGIN_DESCRIPTOR_SCHEMA_VERSION = 1;
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
@@ -25,6 +25,7 @@ export type DimensionKey = string;
 export type SlotKey = string;
 export type ObjectId = string;
 export type CommandKey = string;
+export type ViewQueryKey = string;
 export type SemVer = string;
 export type VersionRange = string;
 export type AiWritePolicy = "approval_required" | "auto_execute";
@@ -326,9 +327,34 @@ export interface DomainEventDefinition {
   reaction?: ViewChangePolicy;
 }
 
+export type ViewQueryCoverage =
+  | { level: "complete" }
+  | { level: "partial"; reason: string };
+
+export interface ViewQueryOutcome<Output = unknown> {
+  data: Output;
+  sourceCardIds: readonly CardId[];
+  coverage: ViewQueryCoverage;
+}
+
+/** A deterministic, read-only interpretation of one authoritative View snapshot. */
+export interface ViewQueryDefinition<Input = unknown, Output = unknown> {
+  key: ViewQueryKey;
+  version: SemVer;
+  label: string;
+  description: string;
+  inputSchema: ContractSchema<Input>;
+  outputSchema: ContractSchema<Output>;
+  execute(
+    snapshot: ViewReadSnapshot,
+    input: Input,
+  ): ViewQueryOutcome<Output>;
+}
+
 export interface ViewModule {
   manifest: ViewManifest;
   schema: ViewSchema;
+  queries: readonly ViewQueryDefinition[];
   commands: readonly CommandDefinition[];
   invariants: readonly BusinessInvariant[];
   events: readonly DomainEventDefinition[];

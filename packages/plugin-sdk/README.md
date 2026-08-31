@@ -2,7 +2,7 @@
 
 Sydaris Plugin 的公开 TypeScript 合同、描述文件 Schema 和 React hooks。
 
-> 当前是 `0.1.0-alpha.7` 预发布版，API 可能在后续 alpha 版调整。
+> 当前是 `0.1.0-alpha.8` 预发布版，API 可能在后续 alpha 版调整。
 
 ## 安装
 
@@ -26,6 +26,7 @@ const notesView = defineView({
     defaultSettings: { aiWritePolicy: "approval_required" },
   },
   schema: { viewKey: "notes", schemaVersion: "1", cardTypes: [] },
+  queries: [],
   commands: [],
   invariants: [],
   events: [],
@@ -37,6 +38,34 @@ export const notesPlugin = definePlugin({
   contributes: { views: [notesView] },
 });
 ```
+
+## View Query
+
+View 通过 Query 向 Sydaris 提供自己的只读业务能力。Query 只接收 Runtime
+提供的正式 `ViewReadSnapshot`，并返回结构化结果、参与计算的 Card 和覆盖范围；
+它不能修改状态，也不接触数据库或宿主内部 service。
+
+```ts
+const listNotes: ViewQueryDefinition<{ contains?: string }, { titles: string[] }> = {
+  key: "list_notes",
+  version: "1.0.0",
+  label: "查找笔记",
+  description: "按标题文字筛选正式笔记。",
+  inputSchema,
+  outputSchema,
+  execute(snapshot, input) {
+    const cards = snapshot.cards.filter(/* View 自己的业务筛选 */);
+    return {
+      data: { titles: cards.map((card) => String(card.dimensions.title)) },
+      sourceCardIds: cards.map((card) => card.id),
+      coverage: { level: "complete" },
+    };
+  },
+};
+```
+
+Runtime 在 AI 打开该 View 后把 Query 暴露为工具，并统一补充 View 版本、观测时间、
+覆盖范围和引用。跨 View 组合由 AI 或 Skill 完成，每个 Query 仍只解释自己的 View。
 
 ## Skill 执行契约
 

@@ -290,6 +290,7 @@ export const societyInformationViewModule: ViewModule = {
     schemaVersion: "5",
     cardTypes: societyInformationCardTypes,
   },
+  queries: [],
   commands: societyInformationCommands,
   invariants: societyInformationInvariants,
   events: societyInformationEvents,

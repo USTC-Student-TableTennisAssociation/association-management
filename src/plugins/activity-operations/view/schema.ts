@@ -479,6 +479,7 @@ export const activityOperationsViewModule: ViewModule = {
     schemaVersion: "3",
     cardTypes: activityOperationsCardTypes,
   },
+  queries: [],
   commands: activityOperationsCommands,
   invariants: activityOperationsInvariants,
   events: activityOperationsEvents,

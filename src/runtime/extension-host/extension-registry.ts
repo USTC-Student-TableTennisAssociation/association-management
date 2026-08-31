@@ -92,11 +92,26 @@ function validateViewModule(view: ViewModule): void {
     );
   }
   assertUnique(view.schema.cardTypes.map((card) => card.key), "Card Type key", view.manifest.key);
+  assertUnique(view.queries.map((query) => query.key), "Query key", view.manifest.key);
   assertUnique(view.commands.map((command) => command.key), "Command key", view.manifest.key);
   assertUnique(view.invariants.map((invariant) => invariant.key), "Invariant key", view.manifest.key);
   assertUnique(view.events.map((event) => `${event.key}@${event.version}`), "Event key/version", view.manifest.key);
 
   const cardTypeKeys = new Set(view.schema.cardTypes.map((card) => card.key));
+  for (const query of view.queries) {
+    requireIdentifier(`View ${view.manifest.key} Query key`, query.key);
+    requireSemver(`View ${view.manifest.key} Query ${query.key} version`, query.version);
+    if (!query.label.trim()) {
+      throw new ExtensionRegistrationError(
+        `View ${view.manifest.key} Query ${query.key} label 不能为空`,
+      );
+    }
+    if (!query.description.trim()) {
+      throw new ExtensionRegistrationError(
+        `View ${view.manifest.key} Query ${query.key} description 不能为空`,
+      );
+    }
+  }
   for (const command of view.commands) {
     if (command.allowedInitiators.length === 0) {
       throw new ExtensionRegistrationError(

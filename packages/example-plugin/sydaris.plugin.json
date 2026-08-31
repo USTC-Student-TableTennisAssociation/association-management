@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "id": "sydaris.example-notes",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "engines": {
-    "sydaris": ">=0.1.0-alpha.1 <0.2.0-0"
+    "sydaris": ">=0.1.0-alpha.8 <0.2.0-0"
   },
   "server": {
     "entry": "./dist/server.js",

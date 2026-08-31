@@ -1,6 +1,6 @@
 {
   "name": "@sydaris/society-information-plugin",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "description": "Publishable Society Information View plugin for Sydaris",
   "type": "module",
   "files": [
@@ -28,7 +28,7 @@
     "prepack": "pnpm build"
   },
   "peerDependencies": {
-    "@sydaris/plugin-sdk": ">=0.1.0-alpha.3 <0.2.0-0",
+    "@sydaris/plugin-sdk": ">=0.1.0-alpha.8 <0.2.0-0",
     "next": "^16.0.0",
     "react": "^19.0.0",
     "zod": "^4.0.0"

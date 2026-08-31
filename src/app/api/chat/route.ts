@@ -779,6 +779,18 @@ export async function POST(request: Request) {
         resolveObjectReference: (reference) => {
           return evidence.objectForModelReference(reference);
         },
+        onQueryResult: ({ complete, sourceCardCount, reason }) => {
+          groundingState.observeCoverage("business_view", {
+            level: complete ? "complete" : "partial",
+            missingAspects: reason ? [reason] : [],
+            observationComplete: complete,
+            contentPresence: sourceCardCount > 0
+              ? "present"
+              : complete
+                ? "absent"
+                : "unknown",
+          });
+        },
         onCommandAttempt: () => {
           viewCommandAttemptCount += 1;
         },
@@ -999,6 +1011,7 @@ export async function POST(request: Request) {
           );
           return {
             view: businessContext.view,
+            queries: viewToolset.describeQueries(viewKey),
             cardTypes: viewModule.schema.cardTypes,
             viewHigherMemory: viewHigherMemory ?? null,
             relevantCards: viewToolset.presentCards(
@@ -1014,8 +1027,8 @@ export async function POST(request: Request) {
             next: businessContext.formalCardMissing
               ? "当前正式 View 的存在性与收录状态已经可以直接回答：没有匹配 Card。只有用户还要求相关业务事实或补建依据时，才使用 expandEvidence；相关资料不得冒充正式 View。"
               : businessContext.unresolvedAspects.length
-                ? "如果缺口会影响回答，使用 expandEvidence；如果用户确认或后续可靠证据已经足以填补一个稳定、可复用的正式 View 缺口，还应使用 openActions(business_view) 生成待审批 Proposal；否则直接回答。"
-              : "当前 View 没有 schema-required 缺口。这只描述正式快照，不判断用户是否要求修改可选字段或空 Slot；请继续依据用户目标和 relevantCards 决定回答或打开 Actions。",
+                ? "需要筛选、汇总、比较或趋势时，先使用匹配的 View Query；如果知识缺口会影响回答，再使用 expandEvidence。用户确认或后续可靠证据足以填补稳定 View 缺口时，使用 openActions(business_view) 生成待审批 Proposal。"
+              : "当前 View 没有 schema-required 缺口。需要专业读取时使用匹配的 View Query；否则依据用户目标和 relevantCards 直接回答，只有需要修改时才打开 Actions。",
           };
         },
         findArtifacts: async ({ title }) => {
@@ -1160,6 +1173,8 @@ export async function POST(request: Request) {
         TURN_HANDOFF_TOOL,
         ...globalToolProviderToolset.toolNames,
       ];
+      const activeViewQueryToolNames = () =>
+        viewToolset.queryToolNames(openedCapabilities.businessViewKeys);
       const exposedToolNames = [
         ...capabilityGatewayToolNames,
         ...alwaysAvailableToolNames,
@@ -1169,6 +1184,7 @@ export async function POST(request: Request) {
       const stepSystem = () => {
         const enabledDetails = [...new Set([
           ...detailedToolNames(openedCapabilities),
+          ...activeViewQueryToolNames(),
           ...alwaysAvailableToolNames,
         ])]
           .filter((name) => Boolean(allTools[name]));
@@ -1271,6 +1287,7 @@ export async function POST(request: Request) {
               : {}),
             activeTools: [
               ...activeCapabilityToolNames(openedCapabilities),
+              ...activeViewQueryToolNames(),
               ...alwaysAvailableToolNames,
             ]
               .filter((name) => Boolean(allTools[name])),
@@ -1400,7 +1417,7 @@ export async function POST(request: Request) {
           }
           if (event.toolOutput.type === "tool-result") {
             const toolLayer = toolName === "readView" || toolName === "openBusinessContext" ||
-                toolName === "locateObjectViews"
+                toolName === "locateObjectViews" || toolName.startsWith("query_")
               ? "business_view"
               : toolName === "searchMemory" || toolName === "expandEvidence" ||
                   toolName === "followObject"

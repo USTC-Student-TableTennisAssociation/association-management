@@ -68,6 +68,7 @@ const exampleNotesView = defineView({
       slots: [],
     }],
   },
+  queries: [],
   commands: [createNote],
   invariants: [],
   events: [{
@@ -126,7 +127,7 @@ const exampleToolProvider: ToolProviderExtension = {
 
 export const exampleNotesPlugin = definePlugin({
   id: "sydaris.example-notes",
-  version: "0.1.0-alpha.1",
+  version: "0.1.0-alpha.2",
   contributes: {
     views: [exampleNotesView],
     presentations: [examplePresentation],

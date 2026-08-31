@@ -69,6 +69,7 @@ describe("capability gates", () => {
     });
     expect(state.businessContext).toBe(true);
     expect(state.businessViewKey).toBe("activity_operations");
+    expect([...state.businessViewKeys]).toEqual(["activity_operations"]);
     expect(state.actionAreas.size).toBe(0);
   });
 });

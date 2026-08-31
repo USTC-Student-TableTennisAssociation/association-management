@@ -33,6 +33,7 @@ function viewModule(
         slots: [],
       }],
     },
+    queries: [],
     commands: [],
     invariants: [],
     events: [],

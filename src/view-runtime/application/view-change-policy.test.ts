@@ -37,6 +37,7 @@ const viewModule: ViewModule = {
       slots: [],
     }],
   },
+  queries: [],
   commands: [],
   invariants: [],
   events: [],

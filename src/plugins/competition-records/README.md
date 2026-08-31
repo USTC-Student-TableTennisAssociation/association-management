@@ -4,6 +4,10 @@ Sydaris 的比赛届次与长期赛事系列 Plugin。它提供 Competition View
 Domain Commands、赛事系列整理 Skill、USTCTTA 来源读取与届次映射 Tool
 Providers，以及专用 React Presentation。
 
+Competition View 还提供三项只读 Query：筛选正式届次、汇总参与数据和查看年度
+参与趋势。Sydaris 在打开该 View 后向 AI 提供这些 Query，并为结果附上数据版本、
+覆盖范围和来源 Card 引用。
+
 正式比赛状态只能通过 `competition.sync_editions` 和
 `competition.organize_series` Commands 修改。Sydaris host 的同步入口负责依次
 执行本 Plugin 提供的来源与映射 Tools，再把映射结果交给 System Command；Plugin

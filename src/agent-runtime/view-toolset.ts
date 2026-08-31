@@ -1,4 +1,4 @@
-import { tool } from "ai";
+import { jsonSchema, tool, type ToolSet } from "ai";
 import { z } from "zod";
 
 import type {
@@ -37,6 +37,15 @@ function normalizedObjectName(value: string): string {
 }
 
 const databaseId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const VIEW_QUERY_SOURCE_REF_LIMIT = 40;
+
+function viewQueryToolName(viewKey: string, queryKey: string): string {
+  const normalized = `${viewKey}_${queryKey}`
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `query_${normalized}`;
+}
 
 function referenceAtPath(
   references: readonly CommandInputReferenceDefinition[],
@@ -145,6 +154,12 @@ export function createAgentViewToolset(input: {
   skillSession?: AgentSkillSession;
   onCommandAttempt?: () => void;
   onProposal?: (proposal: ViewCommandProposalNotice) => void;
+  onQueryResult?: (result: {
+    viewKey: string;
+    complete: boolean;
+    sourceCardCount: number;
+    reason?: string;
+  }) => void;
   findExistingObjectsByCanonicalName?: (
     canonicalName: string,
   ) => Promise<readonly { id: string; canonicalName: string }[]>;
@@ -159,6 +174,7 @@ export function createAgentViewToolset(input: {
   >>();
   const referenceByRef = new Map<string, ViewInformationReference>();
   const publishedObjects = new Map<string, { id: string; canonicalName: string }>();
+  const queryToolNamesByView = new Map<string, string[]>();
 
   const describeCommands = (viewKey: string) => {
     const view = registry.getView(viewKey);
@@ -180,6 +196,17 @@ export function createAgentViewToolset(input: {
         ),
       })),
     };
+  };
+
+  const describeQueries = (viewKey: string) => {
+    const view = registry.getView(viewKey);
+    if (!view) throw new ViewRuntimeError(`View ${viewKey} 未注册或未启用`);
+    return view.queries.map((query) => ({
+      queryKey: query.key,
+      label: query.label,
+      description: query.description,
+      toolName: viewQueryToolName(viewKey, query.key),
+    }));
   };
 
   const resolveObjectName = async (name: string) => {
@@ -388,7 +415,106 @@ export function createAgentViewToolset(input: {
     }));
   };
 
-  const tools = {
+  const queryTools: ToolSet = {};
+  for (const view of registry.listViews()) {
+    const toolNames: string[] = [];
+    for (const query of view.queries) {
+      const name = viewQueryToolName(view.manifest.key, query.key);
+      if (queryTools[name]) throw new Error(`View Query Tool 名称冲突：${name}`);
+      toolNames.push(name);
+      queryTools[name] = tool({
+        description: [
+          `${view.manifest.label} / ${query.label}`,
+          query.description,
+          "只读取该 View 已观察到的正式 Snapshot；结果中的 stateVersion、observedAt、coverage 与 references 由 Runtime 附加。",
+        ].join("\n"),
+        inputSchema: jsonSchema(query.inputSchema.jsonSchema),
+        execute: async (value) => {
+          if (!inspectedViews.has(view.manifest.key)) {
+            throw new ViewRuntimeError(
+              `调用 ${view.manifest.key} Query 前必须先用 openBusinessContext 选择并读取该 View`,
+            );
+          }
+          const snapshot = await readView(view.manifest.key);
+          const parsedInput = query.inputSchema.parse(value);
+          const outcome = await query.execute(snapshot, parsedInput);
+          const result = query.outputSchema.parse(outcome.data);
+          if (outcome.coverage.level === "partial" && !outcome.coverage.reason.trim()) {
+            throw new ViewRuntimeError(
+              `View Query ${view.manifest.key}.${query.key} 的 partial coverage 缺少原因`,
+            );
+          }
+          const snapshotCardIds = new Set(snapshot.cards.map((card) => card.id));
+          const sourceCardIds = [...new Set(outcome.sourceCardIds)];
+          const unknownCardId = sourceCardIds.find((cardId) => !snapshotCardIds.has(cardId));
+          if (unknownCardId) {
+            throw new ViewRuntimeError(
+              `View Query ${view.manifest.key}.${query.key} 引用了 Snapshot 外的 Card`,
+            );
+          }
+          const sourceCardRefById = new Map(
+            [...referenceByRef.values()].flatMap((reference) =>
+              reference.target.kind === "card"
+                ? [[reference.target.cardId, reference.ref] as const]
+                : []
+            ),
+          );
+          const viewReference = [...referenceByRef.values()].find((reference) =>
+            reference.target.kind === "view" &&
+            reference.target.viewKey === view.manifest.key
+          );
+          if (!viewReference) {
+            throw new ViewRuntimeError(`View ${view.manifest.key} 缺少本轮读取引用`);
+          }
+          const sourceCardRefs = sourceCardIds.flatMap((cardId) => {
+            const ref = sourceCardRefById.get(cardId);
+            return ref ? [ref] : [];
+          });
+          const coverageReason = outcome.coverage.level === "partial"
+            ? outcome.coverage.reason
+            : undefined;
+          const complete = coverageReason === undefined;
+          input.onQueryResult?.({
+            viewKey: view.manifest.key,
+            complete,
+            sourceCardCount: sourceCardIds.length,
+            ...(coverageReason ? { reason: coverageReason } : {}),
+          });
+          return {
+            view: {
+              ref: viewReference.ref,
+              viewKey: view.manifest.key,
+              viewLabel: view.manifest.label,
+              schemaVersion: snapshot.schemaVersion,
+              stateVersion: snapshot.stateVersion,
+              observedAt: snapshot.observedAt,
+            },
+            query: {
+              key: query.key,
+              version: query.version,
+              label: query.label,
+            },
+            input: parsedInput,
+            result,
+            coverage: {
+              level: outcome.coverage.level,
+              ...(coverageReason ? { reason: coverageReason } : {}),
+              sourceCardCount: sourceCardIds.length,
+            },
+            references: {
+              viewRef: viewReference.ref,
+              sourceCardRefs: sourceCardRefs.slice(0, VIEW_QUERY_SOURCE_REF_LIMIT),
+              sourceRefsTruncated: sourceCardRefs.length > VIEW_QUERY_SOURCE_REF_LIMIT,
+            },
+          };
+        },
+      });
+    }
+    queryToolNamesByView.set(view.manifest.key, toolNames);
+  }
+
+  const tools: ToolSet = {
+    ...queryTools,
     readView: tool({
       description: [
         "通过 Sydaris 统一 ViewReadPort 读取指定 View 的完整正式 Card Graph 快照。",
@@ -554,7 +680,15 @@ export function createAgentViewToolset(input: {
     readView,
     locateObjectViews,
     presentCards,
+    describeQueries,
     describeCommands,
+    queryToolNames(viewKeys: Iterable<string>): string[] {
+      return [...new Set([...viewKeys].flatMap((viewKey) =>
+        input.skillSession?.canReadView(viewKey) ?? true
+          ? queryToolNamesByView.get(viewKey) ?? []
+          : []
+      ))];
+    },
     registerPublishedObjects(objects: readonly { id: string; canonicalName: string }[]): void {
       for (const object of objects) publishedObjects.set(object.id, object);
     },
