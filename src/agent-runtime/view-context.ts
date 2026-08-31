@@ -104,8 +104,8 @@ export function describeViewContextEvidence(input: {
 }
 
 export async function buildViewContext(input: {
-  snapshot: Omit<ViewReadSnapshot, "references"> & {
-    references: ViewInformationReference[];
+  snapshot: ViewReadSnapshot & {
+    references: readonly ViewInformationReference[];
   };
   viewLabel: string;
   viewDescription: string;

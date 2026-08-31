@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ViewCardState } from "@sydaris/plugin-sdk";
-import type { ViewSnapshot } from "@sydaris/plugin-sdk/react";
+import type { ViewCardState, ViewPresentationSnapshot } from "@sydaris/plugin-sdk";
 
 import { buildActivityStudio, ownerNames } from "./activity-workspace-state";
 
@@ -17,7 +16,7 @@ function card(cardTypeKey: string, dimensions: Record<string, unknown> = {}, slo
   };
 }
 
-function snapshot(cards: readonly ViewCardState[]): ViewSnapshot {
+function snapshot(cards: readonly ViewCardState[]): ViewPresentationSnapshot {
   return {
     viewKey: "activity_operations",
     pluginVersion: "1.3.0",
@@ -27,7 +26,6 @@ function snapshot(cards: readonly ViewCardState[]): ViewSnapshot {
     manifest: { key: "activity_operations", label: "活动运营", schemaVersion: "3", description: "", defaultSettings: { aiWritePolicy: "approval_required" } },
     schema: { viewKey: "activity_operations", schemaVersion: "3", cardTypes: [] },
     cards,
-    references: [],
     objects: [],
   };
 }

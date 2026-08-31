@@ -29,7 +29,6 @@ function fixture(existingObjects: readonly { id: string; canonicalName: string }
         slots: {},
         relatedObjectIds: [],
       }],
-      references: [],
     }),
   };
   const commandBus = {

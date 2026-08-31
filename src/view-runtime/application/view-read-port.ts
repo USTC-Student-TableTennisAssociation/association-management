@@ -2,28 +2,13 @@ import type { PrismaClient } from "@/generated/prisma/client";
 import type {
   ActorContext,
   ViewCardState,
+  ViewPresentationSnapshot,
   ViewReadPort,
   ViewReadSnapshot,
 } from "@/contracts";
 import { ViewNotFoundError, ViewRuntimeError } from "@/view-runtime/domain/errors";
 import type { InstalledViewService } from "@/view-runtime/application/installed-views";
 import type { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
-
-export type ViewInspectorSnapshot = ViewReadSnapshot & {
-  schema: ReturnType<typeof serializableViewSchema>;
-  manifest: {
-    key: string;
-    label: string;
-    schemaVersion: string;
-    description: string;
-  };
-};
-
-function serializableViewSchema(registry: ExtensionRegistry, viewKey: string) {
-  const viewModule = registry.getView(viewKey);
-  if (!viewModule) throw new ViewNotFoundError(viewKey);
-  return viewModule.schema;
-}
 
 export class PrismaViewReadPort implements ViewReadPort {
   constructor(
@@ -91,7 +76,6 @@ export class PrismaViewReadPort implements ViewReadPort {
           relatedObjectIds: card.relatedObjects.map((relation) => relation.objectId),
         };
       }),
-      references: [],
     };
   }
 
@@ -99,18 +83,24 @@ export class PrismaViewReadPort implements ViewReadPort {
     viewKey: string;
     actor: ActorContext;
     query?: Readonly<Record<string, unknown>>;
-  }): Promise<ViewInspectorSnapshot> {
+  }): Promise<ViewPresentationSnapshot> {
     const snapshot = await this.query(input);
     const viewModule = this.registry.getView(input.viewKey)!;
+    const relatedObjectIds = [...new Set(
+      snapshot.cards.flatMap((card) => card.relatedObjectIds),
+    )];
+    const objects = relatedObjectIds.length
+      ? await this.database.memoryGlobalObject.findMany({
+          where: { id: { in: relatedObjectIds } },
+          orderBy: { canonicalName: "asc" },
+          select: { id: true, canonicalName: true },
+        })
+      : [];
     return {
       ...snapshot,
-      manifest: {
-        key: viewModule.manifest.key,
-        label: viewModule.manifest.label,
-        schemaVersion: viewModule.manifest.schemaVersion,
-        description: viewModule.manifest.description,
-      },
-      schema: serializableViewSchema(this.registry, input.viewKey),
+      manifest: viewModule.manifest,
+      schema: viewModule.schema,
+      objects,
     };
   }
 }

@@ -1,5 +1,8 @@
-import type { ViewReaction, ViewCardState } from "@sydaris/plugin-sdk";
-import type { ViewSnapshot } from "@sydaris/plugin-sdk/react";
+import type {
+  ViewReaction,
+  ViewCardState,
+  ViewPresentationSnapshot,
+} from "@sydaris/plugin-sdk";
 
 export type MethodEdge = {
   id: string;
@@ -81,7 +84,7 @@ function edgesFor(node: ViewCardState): MethodEdge[] {
   ];
 }
 
-function playbookModels(snapshot: ViewSnapshot, cardsById: ReadonlyMap<string, ViewCardState>): PlaybookModel[] {
+function playbookModels(snapshot: ViewPresentationSnapshot, cardsById: ReadonlyMap<string, ViewCardState>): PlaybookModel[] {
   const nestedPlaybookIds = new Set(
     snapshot.cards
       .filter((card) => card.cardTypeKey === "GuideNodeCard")
@@ -151,7 +154,7 @@ function isActive(card: ViewCardState): boolean {
   return status !== "COMPLETED" && status !== "CANCELLED";
 }
 
-export function buildActivityStudio(snapshot: ViewSnapshot, options: {
+export function buildActivityStudio(snapshot: ViewPresentationSnapshot, options: {
   selectedActivityId?: string;
   selectedPlaybookId?: string;
   selectedCardId?: string;

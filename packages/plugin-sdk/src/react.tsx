@@ -5,28 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   ViewCommandResult,
   ViewReaction,
-  ViewCardState,
-  ViewManifest,
-  ViewSchema,
+  ViewPresentationSnapshot,
 } from "./index.js";
-
-export interface ViewSnapshot {
-  viewKey: string;
-  pluginVersion: string;
-  schemaVersion: string;
-  stateVersion: string;
-  observedAt: string;
-  manifest: ViewManifest;
-  schema: ViewSchema;
-  cards: readonly ViewCardState[];
-  references: readonly unknown[];
-  objects?: readonly { id: string; canonicalName: string }[];
-}
 
 interface ViewLoadState {
   requestKey: string;
   viewKey: string;
-  snapshot?: ViewSnapshot;
+  snapshot?: ViewPresentationSnapshot;
   error?: string;
 }
 
@@ -46,7 +31,7 @@ export function useView(viewKey: string, refreshRevision = 0) {
     void fetch(`/api/views/${encodeURIComponent(viewKey)}`, {
       cache: "no-store",
       signal: controller.signal,
-    }).then(responseJson<ViewSnapshot>)
+    }).then(responseJson<ViewPresentationSnapshot>)
       .then((snapshot) => setLoadState({ requestKey, viewKey, snapshot }))
       .catch((cause: unknown) => {
         if (!controller.signal.aborted) {

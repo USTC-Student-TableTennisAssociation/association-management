@@ -32,7 +32,6 @@ function input() {
         slots: {},
         relatedObjectIds: [existingObjectId, coldObjectId],
       }],
-      references: [],
     },
     executions: [{
       id: executionId,

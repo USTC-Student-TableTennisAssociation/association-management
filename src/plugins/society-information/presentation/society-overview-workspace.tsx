@@ -20,10 +20,7 @@ import type {
   ViewReaction,
   ViewCardState,
 } from "@sydaris/plugin-sdk";
-import {
-  type ViewSnapshot,
-  useViewReactions,
-} from "@sydaris/plugin-sdk/react";
+import { useView, useViewCommand, useViewReactions } from "@sydaris/plugin-sdk/react";
 
 import {
   SocietyCardEditor,
@@ -46,7 +43,6 @@ import heroImage from "./assets/hero-evening-hall.png";
 import wordmarkImage from "./assets/ustctta-wordmark.svg";
 import styles from "./society-overview.module.css";
 
-type SocietyOverviewSnapshot = ViewSnapshot;
 type WorkspaceProps = PresentationProps;
 
 type EmptySlotProps = {
@@ -309,7 +305,6 @@ export function SocietyOverviewWorkspace({
   onOpenInspector,
   onInvokeAI,
 }: WorkspaceProps) {
-  const [reloadSequence, setReloadSequence] = useState(0);
   const [heroReady, setHeroReady] = useState(false);
   const [editorTarget, setEditorTarget] = useState<EditorTarget>();
   const [editorSaving, setEditorSaving] = useState(false);
@@ -332,7 +327,8 @@ export function SocietyOverviewWorkspace({
     refresh: refreshReactions,
     markSeen: markReactionSeen,
   } = useViewReactions(viewKey);
-  const requestKey = `${viewKey}:${refreshRevision}:${reloadSequence}`;
+  const { snapshot, error, loading, refresh } = useView(viewKey, refreshRevision);
+  const runViewCommand = useViewCommand(viewKey);
   const heroScrollRef = useRef<HTMLElement>(null);
   const heroStageRef = useRef<HTMLDivElement>(null);
   const heroBadgeRef = useRef<HTMLDivElement>(null);
@@ -341,37 +337,8 @@ export function SocietyOverviewWorkspace({
   const overviewContentRef = useRef<HTMLDivElement>(null);
   const activityDragSessionRef = useRef<ActivityDragSession | undefined>(undefined);
   const lastFocusedCardIdRef = useRef<string | undefined>(undefined);
-  const [result, setResult] = useState<{
-    requestKey: string;
-    snapshot?: SocietyOverviewSnapshot;
-    error?: string;
-  }>();
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch(`/api/views/${encodeURIComponent(viewKey)}`, {
-      cache: "no-store",
-      signal: controller.signal,
-    }).then(async (response) => {
-      const body = await response.json() as SocietyOverviewSnapshot & { error?: string };
-      if (!response.ok) throw new Error(body.error ?? "无法读取社团概览");
-      setResult({ requestKey, snapshot: body });
-    }).catch((cause: unknown) => {
-      if (controller.signal.aborted) return;
-      setResult((current) => ({
-        requestKey,
-        snapshot: current?.snapshot,
-        error: cause instanceof Error ? cause.message : String(cause),
-      }));
-    });
-    return () => controller.abort();
-  }, [requestKey, viewKey]);
-
-  const loading = !result?.snapshot && result?.requestKey !== requestKey;
-  const snapshot = result?.snapshot;
-  const error = result?.requestKey === requestKey ? result.error : undefined;
   const objectNames = useMemo(() => new Map(
-    snapshot?.objects?.map((object) => [object.id, object.canonicalName]) ?? [],
+    snapshot?.objects.map((object) => [object.id, object.canonicalName]) ?? [],
   ), [snapshot]);
   const cardsById = useMemo(() => new Map(
     snapshot?.cards.map((card) => [card.id, card]) ?? [],
@@ -593,22 +560,14 @@ export function SocietyOverviewWorkspace({
     input: unknown,
   ) => {
     if (!snapshot) throw new Error("正式 View 尚未载入");
-    const response = await fetch(
-      `/api/views/${encodeURIComponent(viewKey)}/commands/${encodeURIComponent(commandKey)}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          input,
-          expectedStateVersion: snapshot.stateVersion,
-        }),
-      },
+    const result = await runViewCommand<ViewCommandResult>(
+      commandKey,
+      input,
+      snapshot.stateVersion,
     );
-    const body = await response.json() as ViewCommandResult & { error?: string };
-    if (!response.ok) throw new Error(body.error ?? "无法保存 View 修改");
     refreshReactions();
-    return body;
-  }, [refreshReactions, snapshot, viewKey]);
+    return result;
+  }, [refreshReactions, runViewCommand, snapshot]);
 
   const openEditor = useCallback((
     card: ViewCardState,
@@ -681,13 +640,13 @@ export function SocietyOverviewWorkspace({
     try {
       await executeHumanCommand(commandKey, input);
       setEditorTarget(undefined);
-      setReloadSequence((value) => value + 1);
+      refresh();
     } catch (cause) {
       setEditorError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setEditorSaving(false);
     }
-  }, [editorCard, executeHumanCommand, society]);
+  }, [editorCard, executeHumanCommand, refresh, society]);
 
   const createCard = useCallback(async (submission: SocietyCreateSubmission) => {
     if (!society || !creatorTarget) return;
@@ -747,13 +706,13 @@ export function SocietyOverviewWorkspace({
     try {
       await executeHumanCommand(commandKey, input);
       setCreatorTarget(undefined);
-      setReloadSequence((value) => value + 1);
+      refresh();
     } catch (cause) {
       setCreatorError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setCreatorSaving(false);
     }
-  }, [advisors, creatorTarget, executeHumanCommand, society]);
+  }, [advisors, creatorTarget, executeHumanCommand, refresh, society]);
 
   const removeEditorCard = useCallback(async (reason: SocietyRemovalReason) => {
     if (!society || !editorCard || !editorTarget) return;
@@ -786,13 +745,13 @@ export function SocietyOverviewWorkspace({
     try {
       await executeHumanCommand(commandKey, input);
       setEditorTarget(undefined);
-      setReloadSequence((value) => value + 1);
+      refresh();
     } catch (cause) {
       setEditorError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setEditorRemoving(false);
     }
-  }, [advisors, editorCard, editorTarget, executeHumanCommand, society]);
+  }, [advisors, editorCard, editorTarget, executeHumanCommand, refresh, society]);
 
   const commitActivityOrder = useCallback(async (
     nextOrder: string[],
@@ -809,17 +768,17 @@ export function SocietyOverviewWorkspace({
         activityCardIds: nextOrder,
       });
       setActivityOrderStatus(announcement);
-      setReloadSequence((value) => value + 1);
+      refresh();
     } catch (cause) {
       setActivityOrderOverride(undefined);
       setActivityOrderStatus(
         `顺序未保存：${cause instanceof Error ? cause.message : String(cause)}`,
       );
-      setReloadSequence((value) => value + 1);
+      refresh();
     } finally {
       setActivityOrderSaving(false);
     }
-  }, [activityOrderSaving, executeHumanCommand, snapshot, society]);
+  }, [activityOrderSaving, executeHumanCommand, refresh, snapshot, society]);
 
   const beginActivityDrag = useCallback((
     event: ReactPointerEvent<HTMLButtonElement>,
@@ -996,7 +955,7 @@ export function SocietyOverviewWorkspace({
         <div className={styles.errorCard}>
           <p className={styles.errorTitle}>今晚的球场暂时无法开放</p>
           <p className={styles.errorMessage}>{error ?? "社团概览不可用"}</p>
-          <button type="button" onClick={() => setReloadSequence((value) => value + 1)} className={styles.primaryButton}>
+          <button type="button" onClick={refresh} className={styles.primaryButton}>
             重新载入
           </button>
         </div>
