@@ -6,7 +6,6 @@ import type { LibraryPlanPresentation } from "@/library/types";
 
 const STATUS_LABELS: Record<LibraryPlanPresentation["status"], string> = {
   pending: "待确认",
-  approved: "已批准",
   rejected: "已拒绝",
   applied: "已应用",
   failed: "应用失败",

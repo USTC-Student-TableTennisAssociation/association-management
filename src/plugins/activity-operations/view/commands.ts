@@ -446,7 +446,6 @@ const updateActivity: CommandDefinition<z.infer<typeof updateActivitySchema>> = 
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(updateActivitySchema),
   inputReferences: [{ path: ["activityId"], kind: "card" }],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const activity = requireType(
       await context.transaction.getCard(input.activityId),
@@ -514,7 +513,6 @@ const updateWorkPackage: CommandDefinition<z.infer<typeof updateWorkPackageSchem
     { path: ["activityId"], kind: "card" },
     { path: ["workPackageId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const { workPackage } = await requireActivityWorkPackage(
       context.transaction,
@@ -590,7 +588,6 @@ const updateTask: CommandDefinition<z.infer<typeof updateTaskSchema>> = {
     { path: ["workPackageId"], kind: "card" },
     { path: ["taskId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const { task } = await requireWorkPackageTask(
       context.transaction,
@@ -625,7 +622,6 @@ const removeTask: CommandDefinition<z.infer<typeof removeTaskSchema>> = {
     { path: ["workPackageId"], kind: "card" },
     { path: ["taskId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const { workPackage, task } = await requireWorkPackageTask(
       context.transaction,
@@ -679,7 +675,6 @@ const assignOwner: CommandDefinition<z.infer<typeof assignOwnerSchema>> = {
     { path: ["targetCardId"], kind: "card" },
     { path: ["objectId"], kind: "object" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const target = await context.transaction.getCard(input.targetCardId);
     if (!target || !["ActivityCard", "WorkPackageCard", "TaskCard", "PurchaseCard", "ReimbursementCard"].includes(target.cardTypeKey)) {
@@ -723,7 +718,6 @@ const unassignOwner: CommandDefinition<z.infer<typeof unassignOwnerSchema>> = {
     { path: ["targetCardId"], kind: "card" },
     { path: ["assignmentCardId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const target = await context.transaction.getCard(input.targetCardId);
     if (!target || !(target.slots.assignments ?? []).includes(input.assignmentCardId)) {
@@ -803,7 +797,6 @@ const updateMilestone: CommandDefinition<z.infer<typeof updateMilestoneSchema>> 
     { path: ["activityId"], kind: "card" },
     { path: ["milestoneId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const activity = requireType(await context.transaction.getCard(input.activityId), "ActivityCard");
     const milestone = requireType(
@@ -876,7 +869,6 @@ const updatePlaybook: CommandDefinition<z.infer<typeof updatePlaybookSchema>> = 
   requiredPermissions: ["view.write"],
   inputSchema: zodContractSchema(updatePlaybookSchema),
   inputReferences: [{ path: ["playbookId"], kind: "card" }],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const playbook = requireType(
       await context.transaction.getCard(input.playbookId),
@@ -981,7 +973,6 @@ const updateGuideNode: CommandDefinition<z.infer<typeof updateGuideNodeSchema>> 
     { path: ["playbookId"], kind: "card" },
     { path: ["nodeId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const { node } = await requirePlaybookNode(
       context.transaction,
@@ -1028,7 +1019,6 @@ const setGuideEdge: CommandDefinition<z.infer<typeof setGuideEdgeSchema>> = {
     { path: ["fromNodeId"], kind: "card" },
     { path: ["toNodeId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     if (input.fromNodeId === input.toNodeId) throw new Error("流程步骤不能连接自身");
     const { node: from } = await requirePlaybookNode(
@@ -1075,7 +1065,6 @@ const setNestedPlaybook: CommandDefinition<z.infer<typeof setNestedPlaybookSchem
     { path: ["nodeId"], kind: "card" },
     { path: ["nestedPlaybookId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const { node } = await requirePlaybookNode(
       context.transaction,
@@ -1120,7 +1109,6 @@ const applyPlaybook: CommandDefinition<z.infer<typeof applyPlaybookSchema>> = {
     { path: ["activityId"], kind: "card" },
     { path: ["playbookId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     const runtime = await activityRuntime(context.transaction, input.activityId);
     const playbook = requireType(
@@ -1319,7 +1307,6 @@ const setWorkPackageDependency: CommandDefinition<z.infer<typeof setWorkPackageD
     { path: ["workPackageId"], kind: "card" },
     { path: ["dependsOnWorkPackageId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     if (input.workPackageId === input.dependsOnWorkPackageId) {
       throw new Error("工作包不能依赖自身");
@@ -1361,7 +1348,6 @@ const setTaskDependency: CommandDefinition<z.infer<typeof setTaskDependencySchem
     { path: ["taskId"], kind: "card" },
     { path: ["dependsOnTaskId"], kind: "card" },
   ],
-  proposalApprovalConflictPolicy: () => "revalidate_latest",
   async execute(context, input) {
     if (input.taskId === input.dependsOnTaskId) throw new Error("任务不能依赖自身");
     const runtime = await activityRuntime(context.transaction, input.activityId);

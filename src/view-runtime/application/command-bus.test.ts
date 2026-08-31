@@ -436,14 +436,13 @@ describe("ViewCommandBus", () => {
       stateVersion: "3",
     });
 
-    expect(fixture.execute).toHaveBeenCalledOnce();
-    expect(fixture.database.$transaction).toHaveBeenCalledOnce();
+    expect(fixture.execute).not.toHaveBeenCalled();
+    expect(fixture.database.$transaction).not.toHaveBeenCalled();
     expect(fixture.database.viewCommandProposal.create).toHaveBeenCalledOnce();
   });
 
-  it("does not persist a Proposal that fails Domain Command preflight", async () => {
+  it("runs Domain validation only when a Proposal is approved", async () => {
     const fixture = runtimeFixture("approval_required");
-    fixture.execute.mockRejectedValueOnce(new Error("需要 SocietyCard Card"));
 
     await expect(fixture.bus.dispatch({
       viewKey: "test_view",
@@ -453,9 +452,27 @@ describe("ViewCommandBus", () => {
       actor: { actorId: fixture.proposalActorId, permissions: ["view.write"] },
       initiator: "ai",
       expectedStateVersion: "3",
+    })).resolves.toMatchObject({ kind: "proposed" });
+
+    expect(fixture.database.viewCommandProposal.create).toHaveBeenCalledOnce();
+    expect(fixture.execute).not.toHaveBeenCalled();
+
+    fixture.execute.mockRejectedValueOnce(new Error("需要 SocietyCard Card"));
+    await expect(fixture.bus.decideProposal({
+      proposalId: "proposal-1",
+      decision: "approve",
+      actor: { actorId: fixture.proposalActorId, permissions: ["view.write"] },
     })).rejects.toThrow("需要 SocietyCard Card");
 
-    expect(fixture.database.viewCommandProposal.create).not.toHaveBeenCalled();
+    expect(fixture.execute).toHaveBeenCalledOnce();
+    expect(fixture.database.viewCommandProposal.updateMany).toHaveBeenCalledWith({
+      where: { id: "proposal-1", status: "pending" },
+      data: {
+        status: "failed",
+        decidedAt: expect.any(Date),
+        failureReason: "需要 SocietyCard Card",
+      },
+    });
   });
 
   it("executes the same Domain Command atomically when the View allows AI writes", async () => {

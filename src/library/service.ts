@@ -969,7 +969,7 @@ function operationDescription(operation: LibraryPlanOperation): string {
 
 function planPresentation(plan: {
   id: string;
-  status: "pending" | "approved" | "rejected" | "applied" | "failed";
+  status: "pending" | "rejected" | "applied" | "failed";
   reason: string;
   operations: unknown;
   createdAt: Date;
@@ -1067,14 +1067,10 @@ export async function decideLibraryPlan(input: {
   const operations = libraryPlanPayloadSchema.shape.operations.parse(existing.operations);
   try {
     return planPresentation(await database.$transaction(async (transaction) => {
-      await transaction.libraryPlan.update({
-        where: { id: existing.id },
-        data: { status: "approved", decidedAt: new Date() },
-      });
       await applyPlanOperations(transaction, operations);
       return transaction.libraryPlan.update({
         where: { id: existing.id },
-        data: { status: "applied", appliedAt: new Date() },
+        data: { status: "applied", decidedAt: new Date(), appliedAt: new Date() },
       });
     }));
   } catch (error) {
