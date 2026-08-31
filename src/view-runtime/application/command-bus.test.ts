@@ -61,6 +61,7 @@ function runtimeFixture(
           : {}),
       }],
     },
+    queries: [],
     commands: [{
       key: "test.accept",
       version: "1",

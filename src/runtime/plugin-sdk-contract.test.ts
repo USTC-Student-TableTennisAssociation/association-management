@@ -25,7 +25,7 @@ const descriptor = {
 
 describe("published Plugin SDK contract", () => {
   it("owns the package descriptor schema used by Sydaris", () => {
-    expect(PLUGIN_API_VERSION).toBe("0.1.0-alpha.7");
+    expect(PLUGIN_API_VERSION).toBe("0.1.0-alpha.8");
     expect(sdkPackage).toMatchObject({
       name: "@sydaris/plugin-sdk",
       version: PLUGIN_API_VERSION,

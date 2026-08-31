@@ -28,6 +28,7 @@ function view(key = "test_view"): ViewModule {
         slots: [],
       }],
     },
+    queries: [],
     commands: [],
     invariants: [],
     events: [],
@@ -112,6 +113,58 @@ describe("ExtensionRegistry", () => {
         }],
       },
     })).toThrow(ExtensionRegistrationError);
+    expect(registry.listPlugins()).toEqual([]);
+  });
+
+  it("rejects duplicate View Queries", () => {
+    const querySchema = zodContractSchema(z.object({}));
+    const viewModule = view();
+    viewModule.queries = [{
+      key: "summary",
+      version: "1.0.0",
+      label: "Summary",
+      description: "Summarize the View.",
+      inputSchema: querySchema,
+      outputSchema: querySchema,
+      execute: () => ({ data: {}, sourceCardIds: [], coverage: { level: "complete" } }),
+    }, {
+      key: "summary",
+      version: "latest",
+      label: "Duplicate",
+      description: "Duplicate query.",
+      inputSchema: querySchema,
+      outputSchema: querySchema,
+      execute: () => ({ data: {}, sourceCardIds: [], coverage: { level: "complete" } }),
+    }];
+
+    const registry = new ExtensionRegistry();
+    expect(() => registry.registerPlugin({
+      id: "sydaris.bad-queries",
+      version: "1.0.0",
+      contributes: { views: [viewModule] },
+    })).toThrow("重复的 Query key");
+    expect(registry.listPlugins()).toEqual([]);
+  });
+
+  it("requires View Query versions to be SemVer", () => {
+    const querySchema = zodContractSchema(z.object({}));
+    const viewModule = view();
+    viewModule.queries = [{
+      key: "summary",
+      version: "latest",
+      label: "Summary",
+      description: "Summarize the View.",
+      inputSchema: querySchema,
+      outputSchema: querySchema,
+      execute: () => ({ data: {}, sourceCardIds: [], coverage: { level: "complete" } }),
+    }];
+
+    const registry = new ExtensionRegistry();
+    expect(() => registry.registerPlugin({
+      id: "sydaris.unversioned-query",
+      version: "1.0.0",
+      contributes: { views: [viewModule] },
+    })).toThrow("必须是 SemVer");
     expect(registry.listPlugins()).toEqual([]);
   });
 

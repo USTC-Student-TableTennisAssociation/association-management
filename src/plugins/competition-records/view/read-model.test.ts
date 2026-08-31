@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ViewCardState } from "@sydaris/plugin-sdk";
 import {
   buildCompetitionRecordsModel,
-} from "@/plugins/competition-records/presentation/competition-records-state";
+} from "@/plugins/competition-records/view/read-model";
 
 function card(input: Partial<ViewCardState> & Pick<ViewCardState, "id" | "cardTypeKey">) {
   return {
@@ -16,7 +16,7 @@ function card(input: Partial<ViewCardState> & Pick<ViewCardState, "id" | "cardTy
   } satisfies ViewCardState;
 }
 
-describe("competition records presentation state", () => {
+describe("competition records read model", () => {
   it("groups editions through the Series Slot and derives chart statistics", () => {
     const model = buildCompetitionRecordsModel([
       card({

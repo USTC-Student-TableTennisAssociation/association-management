@@ -6,6 +6,7 @@ import type {
 
 import { competitionRecordsCommands } from "./commands.js";
 import { competitionRecordsEvents } from "./events.js";
+import { competitionRecordsQueries } from "./queries.js";
 
 export const COMPETITION_RECORDS_VIEW_KEY = "competition_records";
 
@@ -172,6 +173,7 @@ export const competitionRecordsViewModule: ViewModule = {
     schemaVersion: "1",
     cardTypes: competitionRecordsCardTypes,
   },
+  queries: competitionRecordsQueries,
   commands: competitionRecordsCommands,
   invariants: [],
   events: competitionRecordsEvents,

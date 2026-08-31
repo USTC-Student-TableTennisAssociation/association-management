@@ -6,7 +6,7 @@ import { societyInformationViewModule } from "./view/schema.js";
 
 export const societyInformationPlugin = definePlugin({
   id: "sydaris.society-information",
-  version: "1.11.0",
+  version: "1.11.1",
   contributes: {
     views: [societyInformationViewModule],
     presentations: [societyOverviewPresentation],

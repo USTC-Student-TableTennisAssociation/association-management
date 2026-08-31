@@ -1,6 +1,6 @@
 {
   "name": "@sydaris/example-plugin",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "Publishable example View plugin for Sydaris",
   "type": "module",
   "files": [
@@ -25,7 +25,7 @@
     "prepack": "pnpm build"
   },
   "peerDependencies": {
-    "@sydaris/plugin-sdk": ">=0.1.0-alpha.1 <0.2.0-0",
+    "@sydaris/plugin-sdk": ">=0.1.0-alpha.8 <0.2.0-0",
     "react": "^19.0.0",
     "zod": "^4.0.0"
   },

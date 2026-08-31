@@ -9,7 +9,7 @@ import { activityOperationsViewModule } from "./view/schema.js";
 
 export const activityOperationsPlugin = definePlugin({
   id: "sydaris.activity-operations",
-  version: "1.3.0",
+  version: "1.3.1",
   contributes: {
     views: [activityOperationsViewModule],
     presentations: [activityOperationsPresentation],
