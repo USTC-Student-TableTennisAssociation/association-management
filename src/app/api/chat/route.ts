@@ -1409,13 +1409,17 @@ export async function POST(request: Request) {
             ? event.toolOutput.output
             : event.toolOutput.error;
           const toolName = event.toolCall.toolName;
+          const queryRejected = toolName.startsWith("query_") &&
+            event.toolOutput.type === "tool-result" &&
+            objectValue(objectValue(output)?.error)?.code === "INVALID_VIEW_QUERY_INPUT";
+          const toolSucceeded = event.toolOutput.type === "tool-result" && !queryRejected;
           if (toolName === "listLibrary" || toolName === "openArtifacts") {
             libraryQueryCount += 1;
           }
           if (toolName === "searchMemory" || toolName === "expandEvidence") {
             memoryQueryCount += 1;
           }
-          if (event.toolOutput.type === "tool-result") {
+          if (event.toolOutput.type === "tool-result" && !queryRejected) {
             const toolLayer = toolName === "readView" || toolName === "openBusinessContext" ||
                 toolName === "locateObjectViews" || toolName.startsWith("query_")
               ? "business_view"
@@ -1479,13 +1483,17 @@ export async function POST(request: Request) {
             toolName: event.toolCall.toolName,
             input: event.toolCall.input,
             output: semanticToolOutput,
-            success: event.toolOutput.type === "tool-result",
+            success: toolSucceeded,
           });
           await debugTrace.appendSection(
             `工具执行 · ${event.toolCall.toolName}`,
             [
               `- Tool call ID：\`${event.toolCall.toolCallId}\``,
-              `- 执行结果：${event.toolOutput.type === "tool-result" ? "成功" : "失败"}`,
+              `- 执行结果：${queryRejected
+                ? "输入被 Query 契约拒绝"
+                : event.toolOutput.type === "tool-result"
+                  ? "成功"
+                  : "失败"}`,
               `- 执行耗时：${event.toolExecutionMs} ms`,
               "",
               "### 输入参数",

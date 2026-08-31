@@ -66,6 +66,8 @@ const listNotes: ViewQueryDefinition<{ contains?: string }, { titles: string[] }
 
 Runtime 在 AI 打开该 View 后把 Query 暴露为工具，并统一补充 View 版本、观测时间、
 覆盖范围和引用。跨 View 组合由 AI 或 Skill 完成，每个 Query 仍只解释自己的 View。
+每个 Query 的输入 Schema 独立生效；Runtime 不会删除未知字段或猜测修正值。输入被拒绝时，
+Runtime 返回 `INVALID_VIEW_QUERY_INPUT`、具体 issues 和一次纠正机会，连续失败后在本轮停用该 Query。
 
 ## Skill 执行契约
 
