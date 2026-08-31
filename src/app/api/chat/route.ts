@@ -96,6 +96,7 @@ import { artifactReferenceBundleSchema } from "@/library/artifact-reference-ui-s
 import { createArtifactReferenceRegistry } from "@/library/artifact-references";
 import { createLibraryToolset } from "@/library/toolset";
 import { libraryPlanPresentationSchema } from "@/library/ui-schema";
+import { createKnowledgeEnvironmentTool } from "@/knowledge-environment/toolset";
 import {
   citedAssertionRefs,
   hydrateCitedSourceExcerpts,
@@ -614,7 +615,10 @@ export async function POST(request: Request) {
     originalMessages: messages,
     execute: async ({ writer }) => {
       const evidence = new MemoryEvidenceAccumulator(context.retrieval);
-      const groundingState = new GroundingState(query, pageContext, semanticConversation);
+      const groundingState = new GroundingState(query, pageContext);
+      if (actorPrivateMemory.higherMemories.length > 0) {
+        groundingState.observeActorPrivateMemory();
+      }
       const artifactReferences = createArtifactReferenceRegistry();
       const openedCapabilities = createOpenedCapabilities();
       const skillToolset = createAgentSkillToolset({
@@ -659,17 +663,18 @@ export async function POST(request: Request) {
       let viewCommandAttemptCount = 0;
       let finalRawText = "";
       let finalAudit: GroundingAudit | undefined;
-      let memoryWriteCommitted = false;
-      let actorPrivateMemoryGrounded = actorPrivateMemory.higherMemories.length > 0;
       const actorHigherMemoryWriteToolset = createActorHigherMemoryWriteToolset({
         actorId: requestActor.id,
         currentMessageId: latestUserMessage.id,
         currentUserMessage: query,
         trace: debugTrace,
         onCommitted: (summary) => {
-          memoryWriteCommitted =
-            summary.replacedScopes.length + summary.clearedScopes.length > 0;
-          if (summary.replacedScopes.length > 0) actorPrivateMemoryGrounded = true;
+          if (summary.replacedScopes.length + summary.clearedScopes.length > 0) {
+            groundingState.observeDurableMemoryWrite();
+          }
+          if (summary.replacedScopes.length > 0) {
+            groundingState.observeActorPrivateMemory();
+          }
         },
       });
       const actorHigherMemoryQueueToolset = createActorHigherMemoryQueueTool({
@@ -713,6 +718,7 @@ export async function POST(request: Request) {
         onEvidence: (current, discovered) => {
           openedCapabilities.sharedBrain = true;
           hasSearchedMemory = true;
+          groundingState.observeSharedBrainTarget();
           if (discovered.coverage) {
             groundingState.observeCoverage("shared_brain", discovered.coverage);
           }
@@ -793,6 +799,7 @@ export async function POST(request: Request) {
         },
         onCommandAttempt: () => {
           viewCommandAttemptCount += 1;
+          groundingState.observeBusinessViewActionRequest();
         },
         onProposal: (proposal) => {
           proposalReceiptCount += 1;
@@ -811,6 +818,56 @@ export async function POST(request: Request) {
           writer.write({ type: "data-libraryProposal", data: proposal });
         },
         onPreview: (preview) => groundingState.observeLibraryPreview(preview),
+      });
+      const knowledgeEnvironmentTool = createKnowledgeEnvironmentTool({
+        dependencies: {
+          database: getDatabase(),
+          registry: extensionRegistry,
+          canReadView: (viewKey) => skillSession.canReadView(viewKey),
+        },
+        onInspect: (inventory) => {
+          firstAuthoritativeTool ??= "inspectKnowledgeEnvironment";
+          groundingState.observeKnowledgeInventory();
+          if (inventory.sharedBrain) {
+            sourceLayersUsed.add("shared_brain");
+            groundingState.observeCoverage("shared_brain", {
+              level: "complete",
+              missingAspects: [],
+              observationComplete: true,
+              contentPresence:
+                inventory.sharedBrain.objects +
+                    inventory.sharedBrain.assertions.total +
+                    inventory.sharedBrain.higherMemories.object +
+                    inventory.sharedBrain.higherMemories.ambient > 0
+                  ? "present"
+                  : "absent",
+            });
+          }
+          if (inventory.library) {
+            sourceLayersUsed.add("library");
+            groundingState.observeCoverage("library", {
+              level: "complete",
+              missingAspects: [],
+              observationComplete: true,
+              contentPresence: inventory.library.files + inventory.library.folders > 0
+                ? "present"
+                : "absent",
+            });
+          }
+          if (inventory.businessViews) {
+            sourceLayersUsed.add("business_view");
+            groundingState.observeCoverage("business_view", {
+              level: "complete",
+              missingAspects: [],
+              observationComplete: true,
+              contentPresence:
+                inventory.businessViews.totalCards +
+                    inventory.businessViews.views.filter((view) => view.higherMemory).length > 0
+                  ? "present"
+                  : "absent",
+            });
+          }
+        },
       });
       const sourceDocumentToolset = createSourceDocumentToolset({
         evidence,
@@ -848,8 +905,6 @@ export async function POST(request: Request) {
           text: rawText,
           contract: groundingState.contract(),
           validRefs: validReferenceRefs(),
-          memoryWriteCommitted,
-          actorPrivateMemoryGrounded,
         });
       };
       const exploreSystem = [
@@ -927,6 +982,9 @@ export async function POST(request: Request) {
           return captureResult;
         },
         onForegroundResult: (captureResult) => {
+          if (captureResult.publishedAssertions > 0) {
+            groundingState.observeDurableMemoryWrite();
+          }
           objectManagementToolset.registerPublishedMemory(captureResult);
           viewToolset.registerPublishedObjects(captureResult.affectedObjects);
         },
@@ -1031,12 +1089,12 @@ export async function POST(request: Request) {
               : "当前 View 没有 schema-required 缺口。需要专业读取时使用匹配的 View Query；否则依据用户目标和 relevantCards 直接回答，只有需要修改时才打开 Actions。",
           };
         },
-        findArtifacts: async ({ title }) => {
+        findArtifacts: async ({ title, purpose }) => {
           const result = await findArtifactsByTitle({ title });
           const referencedResult = artifactReferences.attachSearchReferences(result);
           const semantics = artifactSearchEvidenceSemantics(referencedResult);
           referencedResult.items.forEach((item) => knownArtifactNodeIds.add(item.nodeId));
-          groundingState.observeArtifactSearch(referencedResult);
+          groundingState.observeArtifactSearch({ ...referencedResult, purpose });
           groundingState.observeSemantics(semantics);
           firstAuthoritativeTool ??= "openArtifacts";
           sourceLayersUsed.add("library");
@@ -1154,6 +1212,7 @@ export async function POST(request: Request) {
         ...viewToolset.tools,
         ...objectManagementToolset.tools,
         ...libraryToolset.tools,
+        inspectKnowledgeEnvironment: knowledgeEnvironmentTool,
         ...globalToolProviderToolset.tools,
         openArtifactKnowledge,
         queueChatAssertionCapture: assertionQueueToolset.tool,
@@ -1165,6 +1224,7 @@ export async function POST(request: Request) {
       const alwaysAvailableToolNames = [
         ...skillToolset.toolNames,
         "searchMemory",
+        "inspectKnowledgeEnvironment",
         "readMemoryWriteStatus",
         "queueChatAssertionCapture",
         "queueHigherMemoryMaintenance",
@@ -1214,7 +1274,7 @@ export async function POST(request: Request) {
       };
       await debugTrace.appendJsonSection("本轮工具暴露", {
         exposedToolNames,
-        note: "首次调用提供业务上下文、Object 跨 View 定位、资料与 Action 入口，以及主题语义搜索、记忆状态、Higher Memory 维护意图与 Handoff；其他详细工具按需开放。",
+        note: "首次调用提供知识环境库存、业务上下文、Object 跨 View 定位、资料与 Action 入口，以及主题语义搜索、记忆状态、Higher Memory 维护意图与 Handoff；其他详细工具按需开放。",
       });
       const result = streamText({
         model,
@@ -1548,20 +1608,10 @@ export async function POST(request: Request) {
             });
             return;
           }
-          const completedForegroundAssertion = assertionQueueToolset.foregroundResult();
-          memoryWriteCommitted = Boolean(
-            completedForegroundAssertion?.publishedAssertions ||
-            actorHigherMemoryWriteToolset.hasCommit(),
-          );
-          actorPrivateMemoryGrounded =
-            actorPrivateMemory.higherMemories.length > 0 ||
-            actorHigherMemoryWriteToolset.hasReplacementCommit();
           finalAudit = auditGroundedAnswer({
             text,
             contract: groundingState.contract(),
             validRefs: validReferenceRefs(),
-            memoryWriteCommitted,
-            actorPrivateMemoryGrounded,
           });
           const finalAnswer = finalAudit.text;
           streamObservation.finishReason = finishReason;
@@ -1620,7 +1670,7 @@ export async function POST(request: Request) {
           const accumulatedRetrieval = evidence.snapshot();
           const assertionQueueDecision = assertionQueueToolset.decision();
           const foregroundAssertionDecision = assertionQueueToolset.foregroundDecision();
-          const foregroundAssertionResult = completedForegroundAssertion;
+          const foregroundAssertionResult = assertionQueueToolset.foregroundResult();
           let higherMemoryQueueDecision = higherMemoryQueueToolset.decision();
           const actorHigherMemoryQueueDecision = actorHigherMemoryWriteToolset.hasCommit()
             ? undefined

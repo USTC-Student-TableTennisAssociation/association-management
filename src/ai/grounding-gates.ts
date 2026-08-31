@@ -8,31 +8,6 @@ import type {
   EvidenceLayer,
 } from "@/memory/types";
 
-const DOCUMENT_NOUN_PATTERN =
-  /(操作手册|手册|指南|文档|文件|报告|方案|申请表|通知|规程|制度)/u;
-const DOCUMENT_ANALYSIS_PATTERN =
-  /(分析|看看|看一下|阅读|审阅|评价|评估|复杂|简化|修改|重写|改写|优化|总结|概括|内容|说了什么|怎么完成|如何完成|为什么|问题|准备什么|怎么做|如何做|步骤|要求|流程)/u;
-const EVIDENCE_BOUNDARY_PATTERN =
-  /(无法|不能确认|尚未|缺少|仅能|只能|部分|证据不足|未覆盖|未读取|没有读取|没有匹配|未找到|不能替代|不足以)/u;
-const ARTIFACT_METADATA_PATTERN =
-  /(路径\s*[:：]|处理状态|处理档位|发布到\s*Shared Brain|尚未发布|已发布|资料库.{0,12}(?:找到|未找到|存在|没有|匹配)|文件名\s*(?:为|是)|目录项|catalog|coarse|deep|ready|\d+\s*条\s*Assertion|\d+\s*个\s*Object)/iu;
-const BUSINESS_VIEW_PATTERN =
-  /(业务视角|业务视图|正式视图|正式\s*View|Business\s*View|Activity\s*Operations|正式\s*Card|业务卡片)/iu;
-const SHARED_BRAIN_PATTERN =
-  /(Shared\s*Brain|Assertion|Higher\s*Memory|GlobalObject|组织记忆)/iu;
-const DEICTIC_CONTINUATION_PATTERN =
-  /(这个|那个|它|这里|刚才|上面|前面|我说的是|不是说|所以|那现在|清楚吗|看不到)/u;
-const BUSINESS_VIEW_ACTION_PATTERN =
-  /(?:请|帮我|需要|把|将|能否|可以).{0,20}(?:新增|添加|修改|更新|改成|写入|收录|建立|创建|删除|补建)/u;
-const BUSINESS_VIEW_ABSENCE_ACK_PATTERN =
-  /(?:没有.{0,50}(?:Card|卡片|条目|收录|内容)|(?:未|尚未|暂未).{0,30}(?:收录|建立|创建)|(?:0|零)\s*个?\s*(?:Card|卡片|条目)|(?:正式\s*View|业务视角).{0,30}(?:是空的|为空|看不到)|看不到.{0,30}(?:内容|Card|卡片|条目))/iu;
-const DURABLE_MEMORY_COMMITMENT_PATTERN =
-  /(?:(?:已经|已|会|将|以后|从现在起|一直|永远).{0,16}(?:记住|记得|记下)|(?:已经|已|会|将).{0,16}(?:保存|写入|归档).{0,12}(?:记忆|Higher\s*Memory|长期知识)|(?:已经|已).{0,12}(?:进入|写入|保存到).{0,12}(?:记忆|Higher\s*Memory))/iu;
-const ACTOR_SCOPED_PERSONALIZATION_PATTERN =
-  /(?:专属称呼|只属于(?:你|我们)|只对你.{0,16}(?:使用|生效|这样叫)|面对其他人时.{0,40}(?:名字|身份|叫|称作)|对其他人.{0,40}(?:叫|称作|身份))/iu;
-const MEMORY_BOUNDARY_PATTERN =
-  /(?:没有|尚未|暂未|未完成|不能|无法|不会|不代表|只在当前对话|仅在当前对话|不能保证|无法保证|如果|若要|需要.{0,12}成功)/u;
-
 function searchable(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("zh-CN")
     .replace(/\.[a-z0-9]{1,10}$/iu, "")
@@ -89,10 +64,16 @@ export type GroundingContract = {
   evidenceSemantics: EvidenceSemantics;
   businessView?: BusinessViewGrounding;
   businessViewActionRequested: boolean;
+  knowledgeInventoryObserved?: boolean;
+  memoryProvenance: {
+    durableWriteCommitted: boolean;
+    actorPrivateMemoryGrounded: boolean;
+  };
 };
 
 type ArtifactSearchObservation = {
   queryTitle: string;
+  purpose?: "locate" | "read" | "analyze";
   ref?: string;
   matchedCount?: number;
   truncated?: boolean;
@@ -122,8 +103,7 @@ type BusinessContextObservation = {
 
 /** Request-local evidence contract. Tool observations can only strengthen it. */
 export class GroundingState {
-  private readonly queryKey: string;
-  private readonly pageContext?: ChatPageContext;
+  private readonly activeLibraryNodeId?: string;
   private primaryArtifactQueryKey?: string;
   private primaryArtifactQuery?: string;
   private targetSearchRef?: string;
@@ -133,48 +113,21 @@ export class GroundingState {
   private readonly coverageByLayer: EvidenceCoverageByLayer = {};
   private readonly evidenceLedger = new EvidenceLedger();
   private businessView?: BusinessViewGrounding;
+  private knowledgeInventoryObserved = false;
+  private durableMemoryWriteCommitted = false;
+  private actorPrivateMemoryGrounded = false;
 
-  readonly targetKind: GroundingTargetKind;
-  readonly requiresReadableTarget: boolean;
-  readonly businessViewActionRequested: boolean;
+  private targetKind: GroundingTargetKind = "general";
+  private requiresReadableTarget = false;
+  private businessViewActionRequested = false;
 
   constructor(
-    query: string,
+    _query: string,
     pageContext?: ChatPageContext,
-    conversation: Array<{ role: "user" | "assistant"; text: string }> = [],
   ) {
-    this.queryKey = searchable(query);
-    this.pageContext = pageContext;
-    const userTurns = conversation
-      .filter((message) => message.role === "user")
-      .map((message) => message.text);
-    if (userTurns.at(-1)?.trim() === query.trim()) userTurns.pop();
-    const recentUserContext = userTurns.slice(-3).join("\n");
-    const currentBusinessTarget = BUSINESS_VIEW_PATTERN.test(query);
-    const inheritedBusinessTarget = DEICTIC_CONTINUATION_PATTERN.test(query) &&
-      BUSINESS_VIEW_PATTERN.test(recentUserContext);
-    // Page location is only a routing hint. It must never turn an otherwise
-    // general design/affordance question into a mandatory Business View read.
-    this.targetKind = currentBusinessTarget || inheritedBusinessTarget
-      ? "business_view"
-      : SHARED_BRAIN_PATTERN.test(query)
-        ? "shared_brain"
-        : DOCUMENT_NOUN_PATTERN.test(query)
-          ? "artifact"
-          : "general";
-    this.businessViewActionRequested = this.targetKind === "business_view" &&
-      BUSINESS_VIEW_ACTION_PATTERN.test(query);
-    const documentAnalysis = DOCUMENT_NOUN_PATTERN.test(query) &&
-      DOCUMENT_ANALYSIS_PATTERN.test(query);
-    this.requiresReadableTarget = this.targetKind === "artifact" && documentAnalysis;
-    if (
-      this.requiresReadableTarget &&
-      pageContext?.activePresentation === "library" &&
-      pageContext.activeNodeId
-    ) {
-      this.targetNodeIds.add(pageContext.activeNodeId);
-      this.targetLocated = true;
-    }
+    this.activeLibraryNodeId = pageContext?.activePresentation === "library"
+      ? pageContext.activeNodeId
+      : undefined;
   }
 
   observeCoverage(layer: EvidenceLayer, coverage: EvidenceCoverage | undefined): void {
@@ -185,7 +138,37 @@ export class GroundingState {
     this.evidenceLedger.record(semantics);
   }
 
+  observeKnowledgeInventory(): void {
+    this.knowledgeInventoryObserved = true;
+  }
+
+  observeSharedBrainTarget(): void {
+    if (this.targetKind === "general") this.targetKind = "shared_brain";
+  }
+
+  observeBusinessViewActionRequest(): void {
+    this.businessViewActionRequested = true;
+  }
+
+  observeDurableMemoryWrite(): void {
+    this.durableMemoryWriteCommitted = true;
+  }
+
+  observeActorPrivateMemory(): void {
+    this.actorPrivateMemoryGrounded = true;
+  }
+
   observeArtifactSearch(result: ArtifactSearchObservation): void {
+    if (this.targetKind === "general" || result.purpose === "analyze") {
+      this.targetKind = "artifact";
+    }
+    if (result.purpose === "read" || result.purpose === "analyze") {
+      this.requiresReadableTarget = true;
+      if (this.activeLibraryNodeId) {
+        this.targetNodeIds.add(this.activeLibraryNodeId);
+        this.targetLocated = true;
+      }
+    }
     const queryKey = searchable(result.queryTitle);
     if (!this.primaryArtifactQueryKey) {
       this.primaryArtifactQueryKey = queryKey;
@@ -253,7 +236,7 @@ export class GroundingState {
     const targetKey = this.primaryArtifactQueryKey;
     const aligned = targetKey
       ? titleKey.includes(targetKey) || targetKey.includes(titleKey)
-      : titleKey.length >= 4 && this.queryKey.includes(titleKey);
+      : false;
     if (!aligned) return;
     this.targetLocated = true;
     this.targetReadable = true;
@@ -266,6 +249,7 @@ export class GroundingState {
   }
 
   observeBusinessContext(input: BusinessContextObservation): void {
+    if (!this.requiresReadableTarget) this.targetKind = "business_view";
     this.observeCoverage("business_view", input.coverage);
     this.observeSemantics(input.semantics);
     const membership = input.semantics.observations.find((observation) =>
@@ -307,6 +291,11 @@ export class GroundingState {
       evidenceSemantics: this.evidenceLedger.snapshot(),
       ...(this.businessView ? { businessView: { ...this.businessView } } : {}),
       businessViewActionRequested: this.businessViewActionRequested,
+      knowledgeInventoryObserved: this.knowledgeInventoryObserved,
+      memoryProvenance: {
+        durableWriteCommitted: this.durableMemoryWriteCommitted,
+        actorPrivateMemoryGrounded: this.actorPrivateMemoryGrounded,
+      },
     };
   }
 
@@ -316,6 +305,19 @@ export class GroundingState {
       "服务端 Grounding Contract：引用与明确来源主张会经过校验；证据覆盖缺口会被标注，但不会仅因页面位置或检索不完整而整体替换回答。",
       "只能引用本轮工具真实返回的 [V#]/[A#]/[H#]/[S#]/[F#]。F# 只证明资料库查询或文件元数据，不能证明文件正文。",
     ];
+    if (contract.knowledgeInventoryObserved) {
+      lines.push(
+        "知识环境库存门：本轮已完成分层库存盘点；可直接报告工具返回的精确总量，但不得把库存总量解释为已读取具体正文。",
+      );
+    }
+    lines.push(
+      contract.memoryProvenance.durableWriteCommitted
+        ? "长期记忆写入状态：本轮已观察到同步写入成功；只能依据成功 Tool Result 描述实际写入范围。"
+        : "长期记忆写入状态：本轮尚未观察到同步写入成功；不得声称已经记住、写入或归档。",
+      contract.memoryProvenance.actorPrivateMemoryGrounded
+        ? "Actor 私有记忆状态：当前 Actor 已有可验证的私有 Higher Memory 或本轮同步修订成功；只能按真实 scope 描述。"
+        : "Actor 私有记忆状态：当前没有可验证的 Actor 私有 Higher Memory；不得承诺私人称呼或约定已经跨会话、跨用户隔离生效。",
+    );
     if (contract.requiresReadableTarget) {
       lines.push(
         contract.targetReadable
@@ -455,65 +457,11 @@ function redactUnsupportedClaims(input: {
       redactedCount += 1;
       return "";
     }
-    if (
-      ARTIFACT_METADATA_PATTERN.test(segment) &&
-      !refs.some((ref) => ref.startsWith("F") && input.validRefs.has(ref))
-    ) {
-      issues.push("artifact_claim_without_f_ref");
-      redactedCount += 1;
-      return "";
-    }
     return segment;
   });
   return {
     text: kept.join("").replace(/\n{3,}/gu, "\n\n").trim(),
     issues: unique(issues),
-    redactedCount,
-  };
-}
-
-function redactUnsupportedConversationMemoryClaims(input: {
-  text: string;
-  memoryWriteCommitted: boolean;
-  actorPrivateMemoryGrounded: boolean;
-}): {
-  text: string;
-  issues: string[];
-  notices: string[];
-  redactedCount: number;
-} {
-  const issues: string[] = [];
-  const notices: string[] = [];
-  let redactedCount = 0;
-  const segments = input.text.match(
-    /[^。！？!?\n]+[。！？!?]|[^。！？!?\n]+|\n+/gu,
-  ) ?? [input.text];
-  const kept = segments.map((segment) => {
-    if (!segment.trim() || MEMORY_BOUNDARY_PATTERN.test(segment)) return segment;
-    const unsupportedWrite = !input.memoryWriteCommitted &&
-      DURABLE_MEMORY_COMMITMENT_PATTERN.test(segment);
-    const unsupportedScope = !input.actorPrivateMemoryGrounded &&
-      ACTOR_SCOPED_PERSONALIZATION_PATTERN.test(segment);
-    if (!unsupportedWrite && !unsupportedScope) return segment;
-    if (unsupportedWrite) issues.push("unsupported_memory_commitment");
-    if (unsupportedScope) issues.push("unsupported_actor_scoped_personalization");
-    redactedCount += 1;
-    return "";
-  });
-  if (issues.includes("unsupported_memory_commitment")) {
-    notices.push(
-      "本轮没有完成可验证的长期记忆写入；当前称呼或偏好只能在本次对话上下文中沿用，不能承诺跨会话仍然记得。",
-    );
-  }
-  if (issues.includes("unsupported_actor_scoped_personalization")) {
-    notices.push(
-      "当前没有已验证的 Actor 私有 Higher Memory，不能承诺某项私人称呼或互动约定跨用户隔离生效。",
-    );
-  }
-  return {
-    text: kept.join("").replace(/\n{3,}/gu, "\n\n").trim(),
-    issues: unique(issues),
-    notices,
     redactedCount,
   };
 }
@@ -531,8 +479,6 @@ export function auditGroundedAnswer(input: {
   text: string;
   contract: GroundingContract;
   validRefs: Iterable<string>;
-  memoryWriteCommitted?: boolean;
-  actorPrivateMemoryGrounded?: boolean;
 }): GroundingAudit {
   const text = input.text.trim();
   const validRefs = new Set(input.validRefs);
@@ -547,24 +493,21 @@ export function auditGroundedAnswer(input: {
   ) {
     const viewRefCited = allCitedRefs(text).includes(input.contract.businessView.ref) &&
       validRefs.has(input.contract.businessView.ref);
-    const acknowledgesAbsence = BUSINESS_VIEW_ABSENCE_ACK_PATTERN.test(text);
-    if (!viewRefCited || !acknowledgesAbsence) {
-      const deterministicText = businessViewAbsentAnswer(
-        input.contract.businessView,
-        validRefs,
-      );
-      if (deterministicText) {
-        return {
-          text: deterministicText,
-          changed: deterministicText !== text,
-          mode: "deterministic_answer",
-          issues: [
-            !viewRefCited
-              ? "business_view_absence_without_view_ref"
-              : "business_view_absence_not_acknowledged",
-          ],
-        };
-      }
+    const deterministicText = businessViewAbsentAnswer(
+      input.contract.businessView,
+      validRefs,
+    );
+    if (deterministicText && deterministicText !== text) {
+      return {
+        text: deterministicText,
+        changed: true,
+        mode: "deterministic_answer",
+        issues: [viewRefCited
+          ? "business_view_absence_normalized"
+          : "business_view_absence_without_view_ref"],
+      };
+    }
+    if (!deterministicText) {
       issues.push("business_view_ref_unavailable");
     }
   }
@@ -598,10 +541,7 @@ export function auditGroundedAnswer(input: {
     notices.push(`${missing}；下面超出已引用证据的内容只能作为一般性说明。`);
   }
 
-  if (
-    coverage?.level === "partial" &&
-    !EVIDENCE_BOUNDARY_PATTERN.test(text)
-  ) {
+  if (coverage?.level === "partial") {
     issues.push("coverage_boundary_missing");
     const missing = coverage.missingAspects.length
       ? `未覆盖：${coverage.missingAspects.join("；")}`
@@ -609,24 +549,16 @@ export function auditGroundedAnswer(input: {
     notices.push(`${missing}；不要把未覆盖部分理解为 Sydaris 当前事实。`);
   }
 
-  const memoryAudit = redactUnsupportedConversationMemoryClaims({
-    text,
-    memoryWriteCommitted: input.memoryWriteCommitted ?? false,
-    actorPrivateMemoryGrounded: input.actorPrivateMemoryGrounded ?? false,
-  });
-  issues.push(...memoryAudit.issues);
-  notices.push(...memoryAudit.notices);
   const redaction = redactUnsupportedClaims({
-    text: memoryAudit.text,
+    text,
     validRefs,
   });
   issues.push(...redaction.issues);
 
   if (
     input.contract.requiresReadableTarget &&
-    !EVIDENCE_BOUNDARY_PATTERN.test(redaction.text) &&
     !allCitedRefs(redaction.text).some((ref) =>
-      /^(?:A|S|V)\d+$/.test(ref) && validRefs.has(ref)
+      ["A", "S", "V"].some((prefix) => ref.startsWith(prefix)) && validRefs.has(ref)
     )
   ) {
     return {
@@ -638,15 +570,6 @@ export function auditGroundedAnswer(input: {
   }
 
   if (!redaction.text) {
-    if (memoryAudit.redactedCount) {
-      const safeText = memoryAudit.notices.map(boundaryNotice).join("\n\n");
-      return {
-        text: safeText,
-        changed: safeText !== text,
-        mode: "redacted",
-        issues: unique(issues),
-      };
-    }
     return {
       text: citationFallback(redaction.issues),
       changed: true,
@@ -665,7 +588,7 @@ export function auditGroundedAnswer(input: {
   return {
     text: auditedText,
     changed,
-    mode: redaction.redactedCount || memoryAudit.redactedCount
+    mode: redaction.redactedCount
       ? "redacted"
       : changed
         ? "annotated"

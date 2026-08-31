@@ -72,4 +72,26 @@ describe("capability gates", () => {
     expect([...state.businessViewKeys]).toEqual(["activity_operations"]);
     expect(state.actionAreas.size).toBe(0);
   });
+
+  it("passes the model's structured artifact purpose to the handler", async () => {
+    const findArtifacts = vi.fn().mockResolvedValue({ items: [] });
+    const tools = createCapabilityGatewayTools(createOpenedCapabilities(), {
+      viewKeySchema: z.string(),
+      locateObjectViews: vi.fn(),
+      openBusinessContext: vi.fn(),
+      findArtifacts,
+      describeBusinessViewActions: vi.fn(),
+    });
+    const execute = tools.openArtifacts.execute as unknown as (input: {
+      title: string;
+      purpose: "locate" | "read" | "analyze";
+    }) => Promise<unknown>;
+
+    await execute({ title: "操作手册", purpose: "analyze" });
+
+    expect(findArtifacts).toHaveBeenCalledWith({
+      title: "操作手册",
+      purpose: "analyze",
+    });
+  });
 });

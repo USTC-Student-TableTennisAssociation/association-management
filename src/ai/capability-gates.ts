@@ -78,7 +78,10 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
     targetObjectRefs: string[];
   }) => Promise<unknown>;
   locateObjectViews: (input: { objectRef: string }) => Promise<unknown>;
-  findArtifacts: (input: { title: string }) => Promise<unknown>;
+  findArtifacts: (input: {
+    title: string;
+    purpose: "locate" | "read" | "analyze";
+  }) => Promise<unknown>;
   describeBusinessViewActions: (viewKey: string) => unknown;
   authorizeAction?: (
     area: ActionArea,
@@ -130,9 +133,11 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
       inputSchema: z.object({
         title: z.string().trim().min(1).max(300)
           .describe("要查找的文件完整标题或最长、最有区分度的标题部分；不要拆成多个宽泛 OR 词"),
+        purpose: z.enum(["locate", "read", "analyze"]).default("locate")
+          .describe("locate 只确认文件/路径/状态；read 要读取正文；analyze 要基于正文分析、总结、评价或改写"),
       }),
-      execute: async ({ title }) => {
-        const result = await handlers.findArtifacts({ title });
+      execute: async ({ title, purpose }) => {
+        const result = await handlers.findArtifacts({ title, purpose });
         state.artifacts = true;
         return result;
       },
@@ -192,6 +197,8 @@ export const TURN_KERNEL_INSTRUCTIONS = `
 - openBusinessContext 返回的 Query Catalog 由当前 View 声明。用户需要筛选、汇总、比较、趋势或其他 View 专业读取时，优先调用匹配的 query_* Tool；每个 Query 的输入契约彼此独立，只能使用当前 Tool Schema 声明的字段。收到 INVALID_VIEW_QUERY_INPUT 时根据 issues 修正一次，仍失败就停止调用并说明。Query 只解释已观察到的正式 View Snapshot，不修改状态，也不替代外部来源 Tool。
 - 已经得到 O#，且同一个对象可能同时存在于多个业务视角时，调用 locateObjectViews 发现当前授权范围内的 View/Card 位置，再分别用 openBusinessContext 读取与任务有关的 View。发现位置不等于读取了 Card 内容，也不改变任何 View。
 - 需要按主题查找跨文件、跨对象的组织知识时，直接调用 searchMemory。文件标题搜索只证明文件是否存在，未执行 searchMemory 前不得声称 Shared Brain 没有相关 Object、Assertion 或主题知识。
+- 用户问“你知道什么”“环境里有什么知识”“知识库有多大”“有多少 Object/Assertion/文件/View/Card”或某层是否为空时，先调用 inspectKnowledgeEnvironment。只有它返回的 inventory counts 才表示当前权限范围内的分层总量；searchMemory、Locate、标题搜索和单个 View 读取的 counts 都只是本次读取结果，不能据此推断全库为空。
+- inspectKnowledgeEnvironment 只做轻量盘点，不返回 Assertion 正文、文件原文或 Card 内容。用户问具体主题、具体对象或正式业务状态时，仍应直接使用 searchMemory、openArtifacts 或 openBusinessContext，不要机械地先盘点。
 - searchMemory 必须区分任务形状：单一明确事实使用 fact；完整理解、名单/表格、资料梳理或多字段 View 填充使用 synthesis。一次 query 只表达一个内聚的信息需求；多字段 synthesis 可先定位主体，再针对尚未覆盖的字段分别窄查。返回 partial/truncated、列表中出现“等”、或读完某个章节，只证明该次选择已完成，不证明用户要求的完整集合已经穷尽。Reference Assertion 未回读来源前不能作为事实。
 - 需要查找、核对或读取文件时，调用 openArtifacts。该入口会立即返回精确文件匹配、处理状态与 Shared Brain 发布计数。原始文件也可以在业务查询的任何阶段打开。
 - 原文与 Assertion 是并列的知识入口，不是固定的最后核验层：窄事实优先 Assertion；宽综合优先高价值来源的目录和章节。
