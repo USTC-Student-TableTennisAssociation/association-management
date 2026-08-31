@@ -38,6 +38,45 @@ function normalizedObjectName(value: string): string {
 
 const databaseId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const VIEW_QUERY_SOURCE_REF_LIMIT = 40;
+const VIEW_QUERY_INPUT_CORRECTION_ATTEMPTS = 1;
+
+type ViewQueryInputIssue = {
+  path: string;
+  code: string;
+  message: string;
+};
+
+function viewQueryInputIssues(error: unknown): ViewQueryInputIssue[] {
+  if (error instanceof z.ZodError) {
+    return error.issues.slice(0, 8).map((issue) => {
+      const path = issue.path.length
+        ? `$.${issue.path.map(String).join(".")}`
+        : "$";
+      if (issue.code === "unrecognized_keys") {
+        return {
+          path,
+          code: issue.code,
+          message: `未声明字段：${issue.keys.join("、")}`,
+        };
+      }
+      return { path, code: issue.code, message: issue.message };
+    });
+  }
+  return [{
+    path: "$",
+    code: "invalid_input",
+    message: error instanceof Error
+      ? error.message.replace(/\s+/g, " ").slice(0, 500)
+      : "输入不符合 Query 契约",
+  }];
+}
+
+function viewQueryInputFields(schema: Readonly<Record<string, unknown>>): string[] {
+  const properties = schema.properties;
+  return properties && typeof properties === "object" && !Array.isArray(properties)
+    ? Object.keys(properties)
+    : [];
+}
 
 function viewQueryToolName(viewKey: string, queryKey: string): string {
   const normalized = `${viewKey}_${queryKey}`
@@ -175,6 +214,8 @@ export function createAgentViewToolset(input: {
   const referenceByRef = new Map<string, ViewInformationReference>();
   const publishedObjects = new Map<string, { id: string; canonicalName: string }>();
   const queryToolNamesByView = new Map<string, string[]>();
+  const queryInputRejections = new Map<string, number>();
+  const blockedQueryToolNames = new Set<string>();
 
   const describeCommands = (viewKey: string) => {
     const view = registry.getView(viewKey);
@@ -426,6 +467,7 @@ export function createAgentViewToolset(input: {
         description: [
           `${view.manifest.label} / ${query.label}`,
           query.description,
+          "输入契约独立且精确；只使用本 Query Schema 声明的字段，不要沿用其他 Query 的参数。",
           "只读取该 View 已观察到的正式 Snapshot；结果中的 stateVersion、observedAt、coverage 与 references 由 Runtime 附加。",
         ].join("\n"),
         inputSchema: jsonSchema(query.inputSchema.jsonSchema),
@@ -435,8 +477,36 @@ export function createAgentViewToolset(input: {
               `调用 ${view.manifest.key} Query 前必须先用 openBusinessContext 选择并读取该 View`,
             );
           }
+          let parsedInput: unknown;
+          try {
+            parsedInput = query.inputSchema.parse(value);
+          } catch (error) {
+            const rejectionCount = (queryInputRejections.get(name) ?? 0) + 1;
+            queryInputRejections.set(name, rejectionCount);
+            const correctionAttemptsRemaining = Math.max(
+              0,
+              VIEW_QUERY_INPUT_CORRECTION_ATTEMPTS - rejectionCount + 1,
+            );
+            const retryable = correctionAttemptsRemaining > 0;
+            if (!retryable) blockedQueryToolNames.add(name);
+            const allowedFields = viewQueryInputFields(query.inputSchema.jsonSchema);
+            return {
+              ok: false,
+              error: {
+                code: "INVALID_VIEW_QUERY_INPUT",
+                viewKey: view.manifest.key,
+                queryKey: query.key,
+                issues: viewQueryInputIssues(error),
+                ...(allowedFields.length ? { allowedFields } : {}),
+                retryable,
+                correctionAttemptsRemaining,
+                next: retryable
+                  ? "根据 issues 修正输入，并且只重新调用这一次。不要复制其他 Query 的参数。"
+                  : "本轮已经用尽该 Query 的输入纠正机会；不要再次调用，请说明无法完成这项查询。",
+              },
+            };
+          }
           const snapshot = await readView(view.manifest.key);
-          const parsedInput = query.inputSchema.parse(value);
           const outcome = await query.execute(snapshot, parsedInput);
           const result = query.outputSchema.parse(outcome.data);
           if (outcome.coverage.level === "partial" && !outcome.coverage.reason.trim()) {
@@ -481,6 +551,7 @@ export function createAgentViewToolset(input: {
             ...(coverageReason ? { reason: coverageReason } : {}),
           });
           return {
+            ok: true,
             view: {
               ref: viewReference.ref,
               viewKey: view.manifest.key,
@@ -685,7 +756,9 @@ export function createAgentViewToolset(input: {
     queryToolNames(viewKeys: Iterable<string>): string[] {
       return [...new Set([...viewKeys].flatMap((viewKey) =>
         input.skillSession?.canReadView(viewKey) ?? true
-          ? queryToolNamesByView.get(viewKey) ?? []
+          ? (queryToolNamesByView.get(viewKey) ?? []).filter((name) =>
+              !blockedQueryToolNames.has(name)
+            )
           : []
       ))];
     },

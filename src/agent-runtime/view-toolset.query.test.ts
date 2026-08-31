@@ -106,6 +106,7 @@ describe("Agent View Query Toolset", () => {
       .execute as unknown as (input: unknown) => Promise<unknown>;
 
     await expect(execute({ seriesName: "积分赛" })).resolves.toMatchObject({
+      ok: true,
       view: {
         ref: "V1",
         viewKey: "competition_records",
@@ -137,6 +138,72 @@ describe("Agent View Query Toolset", () => {
       complete: true,
       sourceCardCount: 3,
     });
+  });
+
+  it("returns one structured correction before disabling repeatedly invalid Query input", async () => {
+    const { onQueryResult, toolset } = fixture();
+    await toolset.readView("competition_records");
+    const toolName = "query_competition_records_participation_trend";
+    const execute = toolset.tools[toolName].execute as unknown as (
+      input: unknown,
+    ) => Promise<unknown>;
+
+    await expect(execute({ seriesName: "积分赛", limit: 50 })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_VIEW_QUERY_INPUT",
+        viewKey: "competition_records",
+        queryKey: "participation_trend",
+        issues: [{
+          path: "$",
+          code: "unrecognized_keys",
+          message: "未声明字段：limit",
+        }],
+        allowedFields: [
+          "seriesName",
+          "nameContains",
+          "sourceSystem",
+          "heldOnFrom",
+          "heldOnThrough",
+        ],
+        retryable: true,
+        correctionAttemptsRemaining: 1,
+      },
+    });
+    expect(toolset.queryToolNames(["competition_records"])).toContain(toolName);
+    expect(onQueryResult).not.toHaveBeenCalled();
+
+    await expect(execute({ seriesName: "积分赛", limit: 50 })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_VIEW_QUERY_INPUT",
+        retryable: false,
+        correctionAttemptsRemaining: 0,
+      },
+    });
+    expect(toolset.queryToolNames(["competition_records"])).not.toContain(toolName);
+    expect(onQueryResult).not.toHaveBeenCalled();
+  });
+
+  it("accepts a valid correction after one rejected Query input", async () => {
+    const { onQueryResult, toolset } = fixture();
+    await toolset.readView("competition_records");
+    const execute = toolset.tools.query_competition_records_participation_trend
+      .execute as unknown as (input: unknown) => Promise<unknown>;
+
+    await execute({ seriesName: "积分赛", limit: 50 });
+    await expect(execute({ seriesName: "积分赛" })).resolves.toMatchObject({
+      ok: true,
+      result: {
+        points: [{
+          year: "2025",
+          editionCount: 2,
+          participantCountSum: 72,
+          averageParticipantCountPerEdition: 36,
+        }],
+      },
+    });
+    expect(onQueryResult).toHaveBeenCalledTimes(1);
   });
 
   it("does not expose Query tools from a View outside the active Skill", () => {
