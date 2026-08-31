@@ -38,6 +38,45 @@ export type ChatStreamObservation = {
   error?: ChatStreamStatus["error"];
 };
 
+export function summarizeChatStreamError(
+  error: unknown,
+): NonNullable<ChatStreamStatus["error"]> {
+  const record = typeof error === "object" && error !== null
+    ? error as Record<string, unknown>
+    : undefined;
+  const rawMessage = error instanceof Error
+    ? error.message
+    : typeof record?.message === "string"
+      ? record.message
+      : "Unknown stream error";
+  return {
+    name: error instanceof Error
+      ? error.name
+      : typeof record?.name === "string"
+        ? record.name
+        : "UnknownError",
+    message: rawMessage.replace(/\s+/g, " ").slice(0, 1_000),
+    ...(typeof record?.statusCode === "number"
+      ? { statusCode: record.statusCode }
+      : {}),
+  };
+}
+
+export function classifyChatStreamFailureCode(
+  error: unknown,
+): NonNullable<ChatStreamStatus["failureCode"]> {
+  const summary = summarizeChatStreamError(error);
+  const name = summary.name.toLowerCase();
+  const message = summary.message.toLowerCase();
+  if (name.includes("abort") || message.includes("aborted") || message.includes("abort")) {
+    return "stream_aborted";
+  }
+  if (name.includes("timeout") || message.includes("timeout") || message.includes("timed out")) {
+    return "timeout";
+  }
+  return "upstream_error";
+}
+
 export function createModelCallAttemptTracker() {
   let modelCallCount = 0;
   let retryCount = 0;
@@ -63,15 +102,9 @@ function failureCodeFor(
   observation: ChatStreamObservation,
 ): ChatStreamStatus["failureCode"] {
   if (observation.failureCode) return observation.failureCode;
-  const name = observation.error?.name.toLowerCase() ?? "";
-  const message = observation.error?.message.toLowerCase() ?? "";
-  if (name.includes("abort") || message.includes("aborted") || message.includes("abort")) {
-    return "stream_aborted";
-  }
-  if (name.includes("timeout") || message.includes("timeout") || message.includes("timed out")) {
-    return "timeout";
-  }
-  return observation.error ? "upstream_error" : "unknown_error";
+  return observation.error
+    ? classifyChatStreamFailureCode(observation.error)
+    : "unknown_error";
 }
 
 export function classifyChatStreamStatus(

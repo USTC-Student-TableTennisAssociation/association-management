@@ -1,6 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { classifyChatStreamStatus } from "@/ai/chat-stream-status";
+import {
+  classifyChatStreamFailureCode,
+  classifyChatStreamStatus,
+  summarizeChatStreamError,
+} from "@/ai/chat-stream-status";
+
+describe("chat stream errors", () => {
+  it("uses one classification rule for raw and summarized errors", () => {
+    const error = Object.assign(new Error("model call timed out"), {
+      name: "TimeoutError",
+      statusCode: 504,
+    });
+    const summary = summarizeChatStreamError(error);
+
+    expect(summary).toEqual({
+      name: "TimeoutError",
+      message: "model call timed out",
+      statusCode: 504,
+    });
+    expect(classifyChatStreamFailureCode(error)).toBe("timeout");
+    expect(classifyChatStreamFailureCode(summary)).toBe("timeout");
+  });
+});
 
 describe("classifyChatStreamStatus", () => {
   it("treats an audited final answer as completed", () => {
