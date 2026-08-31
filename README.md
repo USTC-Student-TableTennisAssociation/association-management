@@ -1,36 +1,38 @@
 # Sydaris
 
-> A shared workspace where organizational knowledge, business operations, and AI grow together.
+> A workspace where organizational knowledge endures, work stays current, and AI helps move both forward.
 
-Sydaris 让团队把资料、长期知识和日常业务放进同一个持续生长的工作空间。
+Sydaris 让团队积累的知识持续可用，让正在推进的工作保持清晰，并让 AI 在二者之间真正参与协作。
 
-成员通过 Business View 推进真实工作；AI 可以理解当前业务状态、追溯原始资料、调用专业 Skill，并在授权范围内提出或执行修改。组织积累的知识与状态会跨越成员、Agent 和会话持续存在。
+项目最初来自中国科学技术大学乒乓球协会的真实需求：换届之后，新成员需要接手历届资料、组织经验和仍在变化的活动工作。Sydaris 让这三部分在成员、Agent 与会话之间持续衔接。
 
 当前版本为 `0.1 alpha`。
 
-## 核心体验
+## 从一次真实接手开始
 
-### 从资料建立长期知识
+一名第一次负责“继往开来”交流赛的成员问：
 
-在 Library 中导入组织资料，选择适合的处理方式，Sydaris 会保留稳定的来源文档，并将其中的信息编译为可追溯的知识。
+> 根据往届策划和复盘、今年的成员分工与当前活动进度，帮我检查还有哪些工作需要安排。
 
-发布后的 Evidence、Assertion、Object 与 Higher Memory 共同组成 Shared Brain。AI 可以按主题检索知识、沿 Object 探索上下文，并在需要时回到原始章节核对来源。
+Sydaris 会沿着同一条工作线完成这件事。
 
-### 用 Business View 组织真实工作
+### 1. 找到组织已经积累的知识
 
-每个 View 面向一个清晰的业务领域，拥有自己的 Cards、字段、关系、规则和操作。
+AI 从 Library 和 Shared Brain 找到历届活动流程、场地经验、宣传安排与复盘结论，并回到原始资料核对关键依据。
 
-社团信息、活动运营和比赛记录可以使用不同的业务模型，同时共享同一套知识基础。团队可以随时接入新的 View，也可以为现有 View 配置专属界面与 AI 能力。
+### 2. 理解今年正在发生的工作
 
-### 与理解业务的 AI 协作
+Activity Operations View 保存本届活动的负责人、工作包、任务、里程碑和依赖。AI 因此能够把历史经验放到今年的真实进度中理解。
 
-Sydaris AI 会结合三类上下文工作：
+### 3. 与成员共同推进下一步
 
-- Business View 中的当前正式状态
-- Shared Brain 中积累的组织知识
-- Library 中可回读的原始资料
+Activity Skill 识别当前缺口，并提出新增任务、调整负责人或补充里程碑的建议。需要成员确认的修改形成 Proposal；批准后，Domain Command 更新所有人共享的正式状态。
 
-AI 可以回答问题、整理信息、调用外部工具、激活专业 Skill，并将业务修改交给 Domain Command。需要确认的修改会先形成 Proposal，供成员审核后执行。
+### 4. 让这次工作成为下一次的起点
+
+执行结果、成员补充的解释和最终复盘继续维护活动的长期认知。下一届负责人可以直接从更新后的组织知识和新的本届工作状态继续工作。
+
+四个步骤共同构成一次完整协作：Sydaris 记得组织经历过什么，理解现在正在做什么，帮助团队采取行动，并把行动结果带入下一轮工作。
 
 ## 工作方式
 
@@ -46,44 +48,30 @@ flowchart LR
     People --> AI
 
     AI -->|"Command or Proposal"| Views
+    Views -->|"Reaction"| Brain
     Plugins["Plugins"] --> Views
     Plugins --> AI
 ```
 
-资料和对话沉淀为长期知识，Business View 保存当前业务状态。AI 同时理解这两部分，并通过正式 Command 参与工作。
+资料和对话沉淀为长期知识，Business View 保存当前业务状态。AI 同时理解这两部分，并通过正式 Command 参与工作；完成的工作继续丰富后续认知。
 
-## 核心概念
+## 四个持续连接的部分
 
-### Shared Brain
-
-| Concept | 含义 |
+| 持续连接的内容 | Sydaris 如何承载 |
 | --- | --- |
-| `Evidence` | 可定位到原文或对话的来源内容 |
-| `Assertion` | 带来源与时间背景的信息陈述 |
-| `Object` | 连接不同来源与业务内容的稳定认知锚点 |
-| `Higher Memory` | 为 AI 持续维护的高层认知与导航上下文 |
+| 组织经历过什么 | Library 保存来源，Shared Brain 连接 Evidence、Assertion、Object 与 Higher Memory |
+| 当前正在做什么 | Business View 用 Cards、Dimensions 与 Slots 表达该领域的正式状态 |
+| 接下来如何行动 | Skill 组织专业工作流，Proposal 与 Command 将建议变成可审核、可执行的业务操作 |
+| 这次行动留下什么 | Execution 记录结果，Reaction 维护未来 AI 需要理解的高层认知 |
 
-每份来源拥有稳定的 Source Document 身份。资料重新编译后，Shared Brain 会原子更新到该来源的最新发布版本。
-
-### Business View
-
-| Concept | 含义 |
-| --- | --- |
-| `Card` | View 中的业务实体 |
-| `Dimension` | Card 上的类型化业务值 |
-| `Slot` | View 内 Card 之间的业务关系 |
-| `Related Object` | Card 与 Shared Brain Object 的连接 |
-| `Command` | 创建或修改正式业务状态的操作 |
-| `Proposal` | 等待审核的 Command 建议 |
-
-每个 View 在共享认知底座上声明自己的业务模型。所有正式修改沿相同的 Command 路径执行，并通过 `stateVersion` 处理并发；执行记录同时保存产生的 Domain Events。
+每个部分回答不同的工作问题，又在同一次任务中连续使用。新的业务领域可以拥有自己的 View、Presentation 与 Skill，同时复用已有组织知识和 Agent Runtime。
 
 ## 内置 Plugin
 
 | Plugin | 业务范围 |
 | --- | --- |
 | `sydaris.society-information` | 组织身份、人物、学年职位、长期活动与平台入口 |
-| `sydaris.activity-operations` | Activity 的任务、分工、预算、采购、报销、材料、审批、结果与复盘 |
+| `sydaris.activity-operations` | 活动、Playbook、工作包、任务、分工、里程碑与依赖 |
 | `sydaris.competition-records` | 比赛届次、长期赛事系列与来源数据同步 |
 
 Competition Records 可以连接 USTCTTA 比赛源库；配置 `USTCTTA_DATABASE_URL` 或 `USTCTTA_DATABASE_URL_UNPOOLED` 后即可启用来源读取与同步能力。
@@ -201,15 +189,9 @@ services/
 prisma/               Current schema and initial migration baseline
 ```
 
-## 当前阶段
+## 当前版本
 
-Sydaris `0.1 alpha` 聚焦于完整的知识—业务—AI 协作闭环：
-
-- 每个 Sydaris 实例使用一个 Shared Brain。
-- Plugin SDK 和公共 API 会在首个稳定版本前继续演进。
-- 当前 Plugin 模型面向可信包，并采用静态安装与构建。
-- 第一版支持 Plugin 安装与完整移除；升级、数据迁移与回滚将在后续版本完善。
-- 外部副作用 Tool 将随人工审批体验一起逐步开放。
+Sydaris `0.1 alpha` 已经连通 Library、Shared Brain、Business View、Agent、Skill、Proposal / Command 与 Reaction。当前版本使用一个 Shared Brain，并以可信、静态安装的 Plugin package 扩展业务；Plugin SDK 和公共 API 将继续随首个稳定版本演进。
 
 ## 验证
 
