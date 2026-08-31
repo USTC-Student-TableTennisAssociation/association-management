@@ -16,6 +16,10 @@ function contract(overrides: Partial<GroundingContract> = {}): GroundingContract
     targetReadable: false,
     coverageByLayer: {},
     evidenceSemantics: { observations: [], answerability: [] },
+    memoryProvenance: {
+      durableWriteCommitted: false,
+      actorPrivateMemoryGrounded: false,
+    },
     ...overrides,
   };
 }
@@ -52,6 +56,18 @@ function emptyBusinessContext(targetHints: string[]) {
 }
 
 describe("grounding gates", () => {
+  it("accepts exact inventory claims only after the structured inventory tool ran", () => {
+    const state = new GroundingState("这个环境里有多少知识？");
+    state.observeKnowledgeInventory();
+    const text = "Shared Brain 有 1 个 Object、0 条 Assertion；资料库有 0 个文件。";
+
+    expect(auditGroundedAnswer({
+      text,
+      contract: state.contract(),
+      validRefs: [],
+    })).toEqual({ text, changed: false, mode: "passed", issues: [] });
+  });
+
   it("does not require document content for a Library inventory question", () => {
     const state = new GroundingState("当前资料库有哪些文件？");
     expect(state.contract().requiresReadableTarget).toBe(false);
@@ -61,6 +77,7 @@ describe("grounding gates", () => {
     const state = new GroundingState("请分析当前操作手册为什么这么复杂");
     state.observeArtifactSearch({
       queryTitle: "操作手册",
+      purpose: "analyze",
       ref: "F1",
       items: [{
         nodeId: "related",
@@ -87,6 +104,7 @@ describe("grounding gates", () => {
     const state = new GroundingState("请分析当前操作手册");
     state.observeArtifactSearch({
       queryTitle: "操作手册",
+      purpose: "analyze",
       ref: "F1",
       items: [{
         nodeId: "target",
@@ -146,23 +164,28 @@ describe("grounding gates", () => {
     expect(result.text).not.toContain("该结论来自正式视图");
   });
 
-  it("rejects Library metadata claims supported only by a View ref", () => {
+  it("does not guess claim semantics from prose while still validating references", () => {
     const result = auditGroundedAnswer({
       text: "资料库里存在当前手册，处理档位是 deep。[V1]",
       contract: contract(),
       validRefs: ["V1", "F1"],
     });
 
-    expect(result.changed).toBe(true);
-    expect(result.issues).toContain("artifact_claim_without_f_ref");
+    expect(result).toEqual({
+      text: "资料库里存在当前手册，处理档位是 deep。[V1]",
+      changed: false,
+      mode: "passed",
+      issues: [],
+    });
   });
 
-  it("classifies an explicit business-view clarification as a View target", () => {
+  it("derives the Business View target from the structured tool observation", () => {
     const state = new GroundingState(
       "我说的是业务视角的操作手册",
-      undefined,
-      [{ role: "user", text: "请分析当前操作手册为什么复杂" }],
     );
+    expect(state.contract().targetKind).toBe("general");
+
+    state.observeBusinessContext(emptyBusinessContext(["操作手册"]));
 
     expect(state.contract().targetKind).toBe("business_view");
     expect(state.contract().requiresReadableTarget).toBe(false);
@@ -187,7 +210,7 @@ describe("grounding gates", () => {
     })).toEqual({ text, changed: false, mode: "passed", issues: [] });
   });
 
-  it("annotates rather than replaces an explicit View question when the View was not read", () => {
+  it("does not infer a Business View target from user phrasing alone", () => {
     const state = new GroundingState("业务视角里的操作建议可以写细节吗？");
     const text = "可以，说明性细节适合写在 ContentDimension 中。";
     const result = auditGroundedAnswer({
@@ -196,18 +219,15 @@ describe("grounding gates", () => {
       validRefs: [],
     });
 
-    expect(result.mode).toBe("annotated");
-    expect(result.text).toContain("本轮没有读取正式 Business View");
-    expect(result.text).toContain(text);
+    expect(state.contract().targetKind).toBe("general");
+    expect(result).toEqual({ text, changed: false, mode: "passed", issues: [] });
   });
 
   it("does not leak a prior View target into an unrelated new question", () => {
     const state = new GroundingState(
       "当前资料库有哪些文件？",
-      undefined,
-      [{ role: "user", text: "业务视角里写清楚了吗？" }],
     );
-    expect(state.contract().targetKind).toBe("artifact");
+    expect(state.contract().targetKind).toBe("general");
   });
 
   it("turns a completely observed empty View into a deterministic negative answer", () => {
@@ -230,7 +250,7 @@ describe("grounding gates", () => {
     expect(result.text).not.toContain("请继续检索");
   });
 
-  it("keeps a correctly grounded empty-View answer unchanged", () => {
+  it("normalizes an empty-View answer from structured state without phrase matching", () => {
     const state = new GroundingState("业务视角里写清楚了吗？");
     state.observeBusinessContext(emptyBusinessContext(["校内场地申请"]));
     const text = "我能看到业务视角，但目前没有匹配的正式 Card，因此不存在可评价清晰度的既有条目。[V1]";
@@ -241,7 +261,10 @@ describe("grounding gates", () => {
       validRefs: ["V1"],
     });
 
-    expect(result).toEqual({ text, changed: false, mode: "passed", issues: [] });
+    expect(result.mode).toBe("deterministic_answer");
+    expect(result.issues).toContain("business_view_absence_normalized");
+    expect(result.text).toContain("当前共有 0 个 Card");
+    expect(result.text).toContain("[V1]");
   });
 
   it("does not let Shared Brain coverage overwrite an authoritative empty View", () => {
@@ -267,53 +290,24 @@ describe("grounding gates", () => {
     expect(result.text).not.toContain("流程非常复杂");
   });
 
-  it("removes an unsupported promise to remember a conversational preference", () => {
-    const result = auditGroundedAnswer({
-      text: "好的，我会记住这项偏好，以后都会按这种格式回答。当前对话里可以继续这样做。",
-      contract: contract(),
-      validRefs: [],
+  it("derives memory claim boundaries from structured write events", () => {
+    const state = new GroundingState("记住这个私人约定");
+    expect(state.contract().memoryProvenance).toEqual({
+      durableWriteCommitted: false,
+      actorPrivateMemoryGrounded: false,
     });
+    expect(state.instruction()).toContain("本轮尚未观察到同步写入成功");
+    expect(state.instruction()).toContain("当前没有可验证的 Actor 私有 Higher Memory");
 
-    expect(result.mode).toBe("redacted");
-    expect(result.issues).toContain("unsupported_memory_commitment");
-    expect(result.text).toContain("没有完成可验证的长期记忆写入");
-    expect(result.text).toContain("当前对话里可以继续这样做");
-    expect(result.text).not.toContain("我会记住这个偏好");
-  });
+    state.observeDurableMemoryWrite();
+    state.observeActorPrivateMemory();
 
-  it("removes unsupported claims about cross-user nickname scope", () => {
-    const result = auditGroundedAnswer({
-      text: "这是你给我的专属称呼。面对其他人时，我仍使用默认身份。你在当前对话里可以这样叫我。",
-      contract: contract(),
-      validRefs: [],
-    });
-
-    expect(result.mode).toBe("redacted");
-    expect(result.issues).toContain("unsupported_actor_scoped_personalization");
-    expect(result.text).toContain("没有已验证的 Actor 私有 Higher Memory");
-    expect(result.text).toContain("当前对话里可以这样叫我");
-    expect(result.text).not.toContain("面对其他人时");
-  });
-
-  it("keeps Actor-scoped personalization after an exact private preference commit", () => {
-    const text = "这是你给我的专属称呼，只对你生效。";
-    expect(auditGroundedAnswer({
-      text,
-      contract: contract(),
-      validRefs: [],
-      memoryWriteCommitted: true,
+    expect(state.contract().memoryProvenance).toEqual({
+      durableWriteCommitted: true,
       actorPrivateMemoryGrounded: true,
-    })).toEqual({ text, changed: false, mode: "passed", issues: [] });
-  });
-
-  it("keeps a verified foreground memory commitment", () => {
-    const text = "我已经记住这项经过验证的组织事实。";
-    expect(auditGroundedAnswer({
-      text,
-      contract: contract(),
-      validRefs: [],
-      memoryWriteCommitted: true,
-    })).toEqual({ text, changed: false, mode: "passed", issues: [] });
+    });
+    expect(state.instruction()).toContain("本轮已观察到同步写入成功");
+    expect(state.instruction()).toContain("当前 Actor 已有可验证的私有 Higher Memory");
   });
 
   it("does not confuse a completed Business View save with a memory commitment", () => {
@@ -328,6 +322,7 @@ describe("grounding gates", () => {
   it("does not replace a Business View action result with the empty-state answer", () => {
     const state = new GroundingState("请帮我在业务视角里创建这个条目");
     state.observeBusinessContext(emptyBusinessContext(["场地申请"]));
+    state.observeBusinessViewActionRequest();
 
     expect(state.contract().businessViewActionRequested).toBe(true);
     const result = auditGroundedAnswer({

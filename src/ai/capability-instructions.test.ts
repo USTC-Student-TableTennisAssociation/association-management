@@ -7,6 +7,18 @@ vi.mock("@/shell/composition-root", () => ({
 import { buildCapabilityInstructions } from "@/ai/capability-instructions";
 
 describe("capability instructions", () => {
+  it("separates environment inventory from per-query retrieval counts", () => {
+    const instructions = buildCapabilityInstructions({
+      preferredKnowledgeLayer: "unknown",
+      toolNames: ["inspectKnowledgeEnvironment", "searchMemory"],
+    });
+
+    expect(instructions).toContain("知识环境分层盘点");
+    expect(instructions).toContain("inventory counts");
+    expect(instructions).toContain("只是本次读取命中数");
+    expect(instructions).toContain("不要把这些不同口径相加");
+  });
+
   it("teaches proactive but evidence-bound Higher Memory maintenance", () => {
     const instructions = buildCapabilityInstructions({
       preferredKnowledgeLayer: "unknown",

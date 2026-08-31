@@ -10,6 +10,7 @@ function businessViewRetrievalDescriptions(): string {
 type PreferredKnowledgeLayer = "business_view" | "shared_brain" | "library" | "unknown";
 
 export const knownRuntimeToolNames = [
+  "inspectKnowledgeEnvironment",
   "readView",
   "expandEvidence",
   "searchMemory",
@@ -64,6 +65,16 @@ export function buildCapabilityInstructions(input: {
       "区分 fact 与 synthesis：单一明确事实优先 Assertion；完整理解、名单/表格、资料梳理和多字段 View 填充属于 synthesis，应积极使用高价值 Source Document 的目录与章节。",
     ].join("\n"),
   ];
+
+  if (has(toolNames, "inspectKnowledgeEnvironment")) {
+    sections.push([
+      "【知识环境分层盘点】",
+      "用户问‘你知道什么’、‘环境里有什么知识’、‘知识库有多大’、‘有多少 Object/Assertion/文件/View/Card’，或要判断某层是否为空时，先调用 inspectKnowledgeEnvironment。",
+      "其 inventory counts 是 observedAt 时刻、当前权限范围内的精确库存统计。searchMemory、Locate、标题查询、单页结果或单个 View 的 counts 只是本次读取命中数；即使为 0，也不能改写成全库为 0。",
+      "盘点只回答数量和层级状态，不返回 Object 名称、文件名、具体事实或正文。用户问具体主题时直接使用 Shared Brain、Library 或 Business View 的对应读取工具。",
+      "回答时清楚区分：Shared Brain 的 Object、Assertion、Object/Ambient Higher Memory；Library 的文件、文件夹、处理状态；Business View 的已注册/已安装 View 与 Card。不要把这些不同口径相加成一个虚假的‘知识总条数’。",
+    ].join("\n"));
+  }
 
   if (has(toolNames, "readView")) {
     sections.push([
