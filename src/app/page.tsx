@@ -22,6 +22,7 @@ import remarkGfm from "remark-gfm";
 import type { AIInvocation } from "@sydaris/plugin-sdk";
 
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
+import { shouldSubmitChatInput } from "@/app/chat-input-keyboard";
 import type { ArtifactReference } from "@/library/artifact-references";
 import type { ViewInformationReference } from "@/agent-runtime/view-types";
 import {
@@ -86,13 +87,6 @@ type InstalledViewSummary = {
 type SurfaceMode = "work" | "knowledge" | "library";
 type LibraryMode = "files" | "processing";
 type LayoutMode = "focus" | "collaborate" | "conversation";
-const layoutModeStorageKey = "sydaris.layoutMode";
-
-function storedLayoutMode(value: string | null): LayoutMode | undefined {
-  return value === "focus" || value === "collaborate" || value === "conversation"
-    ? value
-    : undefined;
-}
 
 function messageReasoning(message: ClubChatMessage) {
   return message.parts
@@ -157,11 +151,12 @@ function resultCount(
 }
 
 function completedToolLabel(toolName: string, output: unknown) {
-  if (toolName === "readView") {
+  if (toolName === "readViewState") {
     const root = record(output);
-    const cards = Array.isArray(root?.cards) ? root.cards.length : 0;
-    const cardTypes = Array.isArray(root?.cardTypes) ? root.cardTypes.length : 0;
-    return `业务视图读取完成 · ${cardTypes} 种卡片 · ${cards} 张正式卡片`;
+    const view = record(root?.view);
+    const cards = Array.isArray(root?.matchingCards) ? root.matchingCards.length : 0;
+    const label = compactText(view?.label, 36) ?? "业务视图";
+    return `${label}状态读取完成 · ${cards} 张匹配卡片`;
   }
   if (toolName === "readSourceDocument") {
     const root = record(output);
@@ -199,7 +194,7 @@ function toolActivities(
     if (
       toolName !== "searchMemory" &&
       toolName !== "followObject" &&
-      toolName !== "readView" &&
+      toolName !== "readViewState" &&
       toolName !== "readSourceDocument"
     ) return [];
 
@@ -220,8 +215,8 @@ function toolActivities(
               ? "全文"
               : "后续内容";
     const runningLabel =
-      toolName === "readView"
-        ? "正在读取业务视图…"
+      toolName === "readViewState"
+        ? "正在读取业务视图状态…"
         : toolName === "readSourceDocument"
           ? `正在读取原文${sourceModeLabel}…`
         : toolName === "searchMemory"
@@ -243,8 +238,8 @@ function toolActivities(
       case "output-denied":
         return [{
           id: part.toolCallId,
-          label: toolName === "readView"
-            ? "业务视图读取失败"
+          label: toolName === "readViewState"
+            ? "业务视图状态读取失败"
             : toolName === "readSourceDocument"
               ? "原文读取失败"
             : toolName === "searchMemory"
@@ -256,8 +251,8 @@ function toolActivities(
         if (!part.approval.approved) {
           return [{
             id: part.toolCallId,
-            label: toolName === "readView"
-              ? "业务视图读取未执行"
+            label: toolName === "readViewState"
+              ? "业务视图状态读取未执行"
               : toolName === "readSourceDocument"
                 ? "原文读取未执行"
               : toolName === "searchMemory"
@@ -270,8 +265,8 @@ function toolActivities(
           id: part.toolCallId,
           label: isActiveAssistant
             ? runningLabel
-            : toolName === "readView"
-              ? "业务视图读取已中断"
+            : toolName === "readViewState"
+              ? "业务视图状态读取已中断"
               : toolName === "readSourceDocument"
                 ? "原文读取已中断"
               : toolName === "searchMemory"
@@ -284,8 +279,8 @@ function toolActivities(
           id: part.toolCallId,
           label: isActiveAssistant
             ? runningLabel
-            : toolName === "readView"
-              ? "业务视图读取已中断"
+            : toolName === "readViewState"
+              ? "业务视图状态读取已中断"
               : toolName === "readSourceDocument"
                 ? "原文读取已中断"
               : toolName === "searchMemory"
@@ -604,6 +599,7 @@ function ChatSurface({
   onOpenSourceReference: (reference: SourceDocumentReference) => void;
   onViewProposalApplied: (viewKey: string) => void;
 }) {
+  const compositionActive = useRef(false);
   const isSending = status === "submitted" || status === "streaming";
   const canInteract = historyState === "ready";
   const canSend = input.trim().length > 0 && !isSending && canInteract;
@@ -620,7 +616,7 @@ function ChatSurface({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === "Enter" && !event.shiftKey) {
+    if (shouldSubmitChatInput(event, compositionActive.current)) {
       event.preventDefault();
       onSubmit(input);
     }
@@ -712,9 +708,17 @@ function ChatSurface({
                             : streamStatus.failureCode === "upstream_error"
                               ? "上游模型服务返回错误"
                               : "模型流异常结束"
-                        : streamStatus.completionKind === "tool_call"
-                          ? "模型停在工具调用阶段，未生成最终正文"
-                          : "模型未生成完整正文"}。
+                        : streamStatus.interruptionReason === "no_progress"
+                          ? "工具调用重复且没有形成新进展，运行保护已停止"
+                          : streamStatus.interruptionReason === "emergency_step_limit"
+                            ? "模型运行达到异常安全上限，运行保护已停止"
+                            : streamStatus.interruptionReason === "context_capacity_exhausted"
+                              ? "可用于工具结果的上下文容量不足，运行保护已停止"
+                              : streamStatus.interruptionReason === "verification_failed"
+                                ? "最终回答修正后仍未通过证据校验"
+                                : streamStatus.completionKind === "tool_call"
+                                  ? "模型停在工具调用阶段，未生成最终正文"
+                                  : "模型未生成完整正文"}。
                       已保留中间内容
                       {streamStatus.retryCount > 0
                         ? `，模型层已自动重试 ${streamStatus.retryCount} 次`
@@ -815,6 +819,12 @@ function ChatSurface({
             value={input}
             onChange={(event) => onInputChange(event.target.value)}
             onKeyDown={handleKeyDown}
+            onCompositionStart={() => {
+              compositionActive.current = true;
+            }}
+            onCompositionEnd={() => {
+              compositionActive.current = false;
+            }}
             rows={1}
             disabled={isSending || !canInteract}
             className="min-h-8 max-h-40 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1 text-[14px] leading-6 text-zinc-950 outline-none [field-sizing:content] placeholder:text-zinc-400 disabled:opacity-60"
@@ -964,11 +974,7 @@ export default function Home() {
   const [installedViews, setInstalledViews] = useState<InstalledViewSummary[]>([]);
   const [installedViewsLoaded, setInstalledViewsLoaded] = useState(false);
   const [workInspectorOpen, setWorkInspectorOpen] = useState(false);
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>(() =>
-    typeof window === "undefined"
-      ? "focus"
-      : storedLayoutMode(window.localStorage.getItem(layoutModeStorageKey)) ?? "focus"
-  );
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>("conversation");
   const [surfaceShare, setSurfaceShare] = useState(66);
   const [viewRefreshRevisions, setViewRefreshRevisions] = useState<Record<string, number>>({});
   const [paneDragging, setPaneDragging] = useState(false);
@@ -998,10 +1004,6 @@ export default function Home() {
   const [historyState, setHistoryState] = useState<ChatHistoryState>("loading");
   const [historyError, setHistoryError] = useState<string>();
   const isSending = status === "submitted" || status === "streaming";
-
-  useEffect(() => {
-    window.localStorage.setItem(layoutModeStorageKey, layoutMode);
-  }, [layoutMode]);
 
   const refreshViewAfterProposal = useCallback((viewKey: string) => {
     setViewRefreshRevisions((current) => ({
