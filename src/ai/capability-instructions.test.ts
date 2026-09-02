@@ -17,6 +17,9 @@ describe("capability instructions", () => {
     expect(instructions).toContain("inventory counts");
     expect(instructions).toContain("只是本次读取命中数");
     expect(instructions).toContain("不要把这些不同口径相加");
+    expect(instructions).toContain("Library Processing Catalog");
+    expect(instructions).toContain("不是从 catalog 依次升级到 deep");
+    expect(instructions).toContain("不得只根据 profile 判断是否处理或发布");
   });
 
   it("treats Library browsing as a read capability", () => {

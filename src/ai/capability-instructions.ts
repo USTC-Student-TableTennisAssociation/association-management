@@ -1,3 +1,5 @@
+import { libraryProcessingCatalogInstruction } from "@/library/processing-catalog";
+
 type PreferredKnowledgeLayer = "business_view" | "shared_brain" | "library" | "unknown";
 
 export const knownRuntimeToolNames = [
@@ -75,6 +77,14 @@ export function buildCapabilityInstructions(input: {
       "listViewCards 返回当前权威 Snapshot 上的精确 matchedCount、Card 类型分布和一页 Card 摘要。truncated=true 时继续使用 nextOffset 翻页；未读完前不能声称已列出全部内容。",
       "需要某张 Card 的详细当前状态时，把列表返回的真实 V# 作为 card_ref 传给 readViewState。listViewCards 本身不读取 Higher Memory，也不开放专业 Query 或写入能力。",
     ].join("\n"));
+  }
+
+  if (
+    has(toolNames, "inspectKnowledgeEnvironment") ||
+    has(toolNames, "listLibrary") ||
+    has(toolNames, "readLibraryCompilation")
+  ) {
+    sections.push(libraryProcessingCatalogInstruction());
   }
 
   if (has(toolNames, "listLibrary")) {
