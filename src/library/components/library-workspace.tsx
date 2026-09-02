@@ -400,7 +400,17 @@ export function LibraryWorkspace({
           <div className="flex gap-2">
             <button type="button" onClick={onOpenProcessing} className="rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50">导入与处理</button>
             <button type="button" onClick={onOpenAI} className="rounded-md border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 hover:bg-emerald-50">与 Sydaris 整理</button>
-            <button type="button" onClick={() => onInvokeAI({ actionId: "library.triage", message: "帮我筛选当前资料库的处理优先级，先给建议。" })} className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800">请 AI 帮我筛选</button>
+            <button type="button" onClick={() => onInvokeAI({
+              actionId: "library.triage",
+              message: "帮我筛选当前资料库的处理优先级，先给建议。",
+              skill: {
+                id: "sydaris.library.triage",
+                input: {
+                  phase: "recommend",
+                  ...(listing?.folder.id ? { folderId: listing.folder.id } : {}),
+                },
+              },
+            })} className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800">请 AI 帮我筛选</button>
           </div>
         </div>
         {listing ? (

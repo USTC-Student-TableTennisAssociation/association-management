@@ -1,5 +1,6 @@
 import { getDatabase } from "@/db";
 import { installedPluginManifests } from "@/generated/installed-plugins";
+import { libraryBuiltinPlugin } from "@/runtime/builtin-extensions";
 import { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
 import { builtinToolCapabilityContracts } from "@/contracts/tool/capability-contracts/builtin";
@@ -13,6 +14,7 @@ import { reconcileViewHigherMemoryFromViewChange } from "@/memory/view-higher-me
 
 export function createInstalledExtensionRegistry(): ExtensionRegistry {
   const registry = new ExtensionRegistry();
+  registry.registerPlugin(libraryBuiltinPlugin);
   installedPluginManifests.forEach((plugin) => registry.registerPlugin(plugin));
   return registry;
 }
