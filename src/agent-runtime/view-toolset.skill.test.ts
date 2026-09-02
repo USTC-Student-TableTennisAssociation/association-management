@@ -12,9 +12,14 @@ const objectId = "00000000-0000-4000-8000-000000000101";
 function skillSession(allowedCommand: string): AgentSkillSession {
   return {
     active: () => ({ extension: { id: skillId } }),
+    activeSkillIds: () => [skillId],
     canReadView: (viewKey: string) => viewKey === "activity_operations",
     canRunCommand: (viewKey: string, commandKey: string) =>
       viewKey === "activity_operations" && commandKey === allowedCommand,
+    authorizingSkillForCommand: (viewKey: string, commandKey: string) =>
+      viewKey === "activity_operations" && commandKey === allowedCommand
+        ? { extension: { id: skillId } }
+        : undefined,
   } as unknown as AgentSkillSession;
 }
 
@@ -62,7 +67,7 @@ async function executeCommand(
   commandKey: string,
   input: unknown,
 ) {
-  await toolset.readView("activity_operations");
+  await toolset.readSnapshot("activity_operations");
   const execute = toolset.tools.runViewCommand.execute as unknown as (
     request: Record<string, unknown>,
   ) => Promise<unknown>;

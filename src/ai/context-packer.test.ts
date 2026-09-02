@@ -20,6 +20,8 @@ const roomyProfile: ModelProfile = {
   memoryMaxTokens: 64_000,
   maxRequestBytes: 2_000_000,
   maxRetries: 2,
+  agentEmergencyStepLimit: 64,
+  agentRepeatedToolCallLimit: 3,
   modelFirstChunkTimeoutMs: 180_000,
   modelChunkTimeoutMs: 180_000,
 };

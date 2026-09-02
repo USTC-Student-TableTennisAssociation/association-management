@@ -15,8 +15,20 @@ describe("createModelProfile", () => {
       memoryMaxTokens: 64_000,
       maxRequestBytes: 2_000_000,
       maxRetries: 2,
+      agentEmergencyStepLimit: 64,
+      agentRepeatedToolCallLimit: 3,
       modelFirstChunkTimeoutMs: 1_800_000,
       modelChunkTimeoutMs: 1_800_000,
+    });
+  });
+
+  it("accepts configurable agent run guard limits", () => {
+    expect(createModelProfile({
+      AI_AGENT_EMERGENCY_STEP_LIMIT: "96",
+      AI_AGENT_REPEATED_TOOL_CALL_LIMIT: "4",
+    })).toMatchObject({
+      agentEmergencyStepLimit: 96,
+      agentRepeatedToolCallLimit: 4,
     });
   });
 

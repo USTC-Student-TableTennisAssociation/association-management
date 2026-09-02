@@ -13,6 +13,7 @@ import type {
   ViewReferenceBundle,
 } from "@/agent-runtime/view-types";
 import type { AgentSkillSession } from "@/agent-runtime/skill-runtime";
+import type { EvidenceSemantics } from "@/evidence/types";
 import { ViewCommandBus } from "@/view-runtime/application/command-bus";
 import { PrismaViewReadPort } from "@/view-runtime/application/view-read-port";
 import { ViewRuntimeError } from "@/view-runtime/domain/errors";
@@ -22,13 +23,6 @@ export function registeredViewKeySchema(registry: ExtensionRegistry) {
     (viewKey) => Boolean(registry.getView(viewKey)),
     { message: "View 未注册或未启用" },
   );
-}
-
-function orientation(registry: ExtensionRegistry): string {
-  return registry.listViews().map((view) =>
-    `${view.manifest.key}（${view.manifest.label}）：` +
-    (view.manifest.retrievalDescription ?? view.manifest.description)
-  ).join("\n");
 }
 
 function normalizedObjectName(value: string): string {
@@ -110,7 +104,7 @@ function modelCardReferenceSchema(multiple: boolean): Record<string, unknown> {
   const reference = {
     type: "string",
     pattern: "^V\\d+$",
-    description: "必须使用本轮 readView 返回的 V# Card 引用；禁止填写数据库 UUID、Object 引用或名称。",
+    description: "必须使用本轮 listViewCards 或 readViewState 返回的 V# Card 引用；禁止填写数据库 UUID、Object 引用或名称。",
   };
   return multiple
     ? { type: "array", items: reference }
@@ -195,8 +189,10 @@ export function createAgentViewToolset(input: {
   onProposal?: (proposal: ViewCommandProposalNotice) => void;
   onQueryResult?: (result: {
     viewKey: string;
+    queryKey: string;
     complete: boolean;
     sourceCardCount: number;
+    semantics: EvidenceSemantics;
     reason?: string;
   }) => void;
   findExistingObjectsByCanonicalName?: (
@@ -212,6 +208,7 @@ export function createAgentViewToolset(input: {
     ViewReadSnapshot & { references: readonly ViewInformationReference[] }
   >>();
   const referenceByRef = new Map<string, ViewInformationReference>();
+  const presentedCardRefs = new Set<string>();
   const publishedObjects = new Map<string, { id: string; canonicalName: string }>();
   const queryToolNamesByView = new Map<string, string[]>();
   const queryInputRejections = new Map<string, number>();
@@ -275,7 +272,7 @@ export function createAgentViewToolset(input: {
     const object = input.resolveObjectReference?.(objectRef);
     if (!object) {
       throw new ViewRuntimeError(
-        `Object 引用 ${objectRef} 尚未出现在本轮知识或业务上下文中；请先检索并使用真实 O#`,
+        `Object 引用 ${objectRef} 尚未出现在本轮知识或 View 状态中；请先检索并使用真实 O#`,
       );
     }
     const allowedViewKeys = registry.listViews()
@@ -309,7 +306,7 @@ export function createAgentViewToolset(input: {
       searchedViewKeys: discovery.searchedViewKeys,
       matches,
       next: matches.length
-        ? `选择与任务有关的 View，并调用 openBusinessContext；在 targetObjectRefs 中继续使用 ${objectRef}，以精确读取关联 Card。`
+        ? `选择与任务有关的 View，并调用 readViewState；在 targets 中继续使用 ${objectRef} 的 object_ref，以精确读取关联 Card。`
         : "当前授权且启用的 View 中没有关联这个 Object 的 Card。只有用户还要求相关资料或背景时，才继续检索 Shared Brain。",
     };
   };
@@ -329,10 +326,12 @@ export function createAgentViewToolset(input: {
     }
     if (typeof value !== "string") return value;
     if (reference.kind === "card") {
-      const viewReference = referenceByRef.get(value);
+      const viewReference = presentedCardRefs.has(value)
+        ? referenceByRef.get(value)
+        : undefined;
       if (!viewReference) {
         throw new ViewRuntimeError(
-          `字段 ${reference.path.join(".")} 必须使用本轮 readView 返回的真实 V# Card 引用；禁止填写数据库 UUID、Object 引用或名称`,
+          `字段 ${reference.path.join(".")} 必须使用本轮 readViewState 返回的真实 V# Card 引用；禁止填写数据库 UUID、Object 引用或名称`,
         );
       }
       if (viewReference.target.kind !== "card") {
@@ -394,10 +393,10 @@ export function createAgentViewToolset(input: {
     return bound;
   };
 
-  const readView = (viewKey: string) => {
+  const readSnapshot = (viewKey: string) => {
     if (!(input.skillSession?.canReadView(viewKey) ?? true)) {
       throw new ViewRuntimeError(
-        `已激活 Skill ${input.skillSession?.active()?.extension.id} 不允许读取 View ${viewKey}`,
+        `已激活 Skills ${input.skillSession?.activeSkillIds().join("、")} 不允许读取 View ${viewKey}`,
       );
     }
     const existing = snapshots.get(viewKey);
@@ -438,22 +437,39 @@ export function createAgentViewToolset(input: {
           : []
       ),
     );
-    return cards.map((card) => ({
-      ref: cardRefById.get(card.id),
-      cardTypeKey: card.cardTypeKey,
-      dimensions: card.dimensions,
-      slots: Object.fromEntries(Object.entries(card.slots).map(([slotKey, targetIds]) => [
-        slotKey,
-        targetIds.flatMap((targetId) => {
-          const ref = cardRefById.get(targetId);
-          return ref ? [ref] : [];
+    return cards.map((card) => {
+      const ref = cardRefById.get(card.id);
+      if (ref) presentedCardRefs.add(ref);
+      return {
+        ref,
+        cardTypeKey: card.cardTypeKey,
+        dimensions: card.dimensions,
+        slots: Object.fromEntries(Object.entries(card.slots).map(([slotKey, targetIds]) => [
+          slotKey,
+          targetIds.flatMap((targetId) => {
+            const targetRef = cardRefById.get(targetId);
+            if (targetRef) presentedCardRefs.add(targetRef);
+            return targetRef ? [targetRef] : [];
+          }),
+        ])),
+        relatedObjectRefs: card.relatedObjectIds.flatMap((objectId) => {
+          const objectRef = objectRefById.get(objectId);
+          return objectRef ? [objectRef] : [];
         }),
-      ])),
-      relatedObjectRefs: card.relatedObjectIds.flatMap((objectId) => {
-        const ref = objectRefById.get(objectId);
-        return ref ? [ref] : [];
-      }),
-    }));
+      };
+    });
+  };
+
+  const resolveCardReference = (ref: string) => {
+    if (!presentedCardRefs.has(ref)) return undefined;
+    const reference = referenceByRef.get(ref);
+    if (!reference || reference.target.kind !== "card") return undefined;
+    return {
+      ref: reference.ref,
+      label: reference.label,
+      viewKey: reference.target.viewKey,
+      cardId: reference.target.cardId,
+    };
   };
 
   const queryTools: ToolSet = {};
@@ -468,13 +484,13 @@ export function createAgentViewToolset(input: {
           `${view.manifest.label} / ${query.label}`,
           query.description,
           "输入契约独立且精确；只使用本 Query Schema 声明的字段，不要沿用其他 Query 的参数。",
-          "只读取该 View 已观察到的正式 Snapshot；结果中的 stateVersion、observedAt、coverage 与 references 由 Runtime 附加。",
+          "只读取该 View 已观察到的正式 Snapshot；返回业务结果及可引用的 View/Card refs。coverage 与 evidence semantics 由服务端单独记录，不属于回答正文。",
         ].join("\n"),
         inputSchema: jsonSchema(query.inputSchema.jsonSchema),
         execute: async (value) => {
           if (!inspectedViews.has(view.manifest.key)) {
             throw new ViewRuntimeError(
-              `调用 ${view.manifest.key} Query 前必须先用 openBusinessContext 选择并读取该 View`,
+              `调用 ${view.manifest.key} Query 前必须先用 readViewState 读取该 View 的具体业务目标`,
             );
           }
           let parsedInput: unknown;
@@ -506,7 +522,7 @@ export function createAgentViewToolset(input: {
               },
             };
           }
-          const snapshot = await readView(view.manifest.key);
+          const snapshot = await readSnapshot(view.manifest.key);
           const outcome = await query.execute(snapshot, parsedInput);
           const result = query.outputSchema.parse(outcome.data);
           if (outcome.coverage.level === "partial" && !outcome.coverage.reason.trim()) {
@@ -544,39 +560,65 @@ export function createAgentViewToolset(input: {
             ? outcome.coverage.reason
             : undefined;
           const complete = coverageReason === undefined;
+          const semantics: EvidenceSemantics = {
+            observations: [{
+              id: `view_query.${view.manifest.key}.${query.key}.observation`,
+              layer: "business_view",
+              scope: `view:${view.manifest.key}:query:${query.key}`,
+              subject: `${view.manifest.label} / ${query.label}`,
+              predicate: "query_returned_result",
+              status: sourceCardIds.length > 0
+                ? "present"
+                : complete
+                  ? "absent"
+                  : "unknown",
+              completeness: complete ? "complete" : "partial",
+              authority: "authoritative",
+              refs: [viewReference.ref, ...sourceCardRefs],
+              summary: sourceCardIds.length > 0
+                ? `该 View Query 基于 ${sourceCardIds.length} 张正式 Card 返回了结果。`
+                : complete
+                  ? "该 View Query 在完整 Snapshot 中没有找到来源 Card。"
+                  : `该 View Query 的返回仍不完整：${coverageReason}`,
+            }],
+            answerability: [{
+              id: `view_query.${view.manifest.key}.${query.key}.answerability`,
+              layer: "business_view",
+              question: query.description,
+              status: complete ? "answerable" : "partially_answerable",
+              reason: complete
+                ? "Query 已在当前正式 View Snapshot 上完成。"
+                : `Query 只完成了部分观察：${coverageReason}`,
+              refs: [viewReference.ref, ...sourceCardRefs],
+            }],
+          };
           input.onQueryResult?.({
             viewKey: view.manifest.key,
+            queryKey: query.key,
             complete,
             sourceCardCount: sourceCardIds.length,
+            semantics,
             ...(coverageReason ? { reason: coverageReason } : {}),
           });
           return {
             ok: true,
             view: {
               ref: viewReference.ref,
-              viewKey: view.manifest.key,
-              viewLabel: view.manifest.label,
-              schemaVersion: snapshot.schemaVersion,
-              stateVersion: snapshot.stateVersion,
+              key: view.manifest.key,
+              label: view.manifest.label,
               observedAt: snapshot.observedAt,
             },
             query: {
               key: query.key,
-              version: query.version,
               label: query.label,
             },
-            input: parsedInput,
             result,
-            coverage: {
-              level: outcome.coverage.level,
-              ...(coverageReason ? { reason: coverageReason } : {}),
-              sourceCardCount: sourceCardIds.length,
-            },
             references: {
               viewRef: viewReference.ref,
               sourceCardRefs: sourceCardRefs.slice(0, VIEW_QUERY_SOURCE_REF_LIMIT),
               sourceRefsTruncated: sourceCardRefs.length > VIEW_QUERY_SOURCE_REF_LIMIT,
             },
+            ...(coverageReason ? { limitations: [coverageReason] } : {}),
           };
         },
       });
@@ -586,27 +628,6 @@ export function createAgentViewToolset(input: {
 
   const tools: ToolSet = {
     ...queryTools,
-    readView: tool({
-      description: [
-        "通过 Sydaris 统一 ViewReadPort 读取指定 View 的完整正式 Card Graph 快照。",
-        "View 职责范围：",
-        orientation(registry),
-        "返回 pluginVersion、schemaVersion、stateVersion、Typed Dimensions、View-local Slots 和 Related Objects。",
-      ].join("\n"),
-      inputSchema: z.object({ viewKey: registeredViewKeySchema(registry) }),
-      execute: async ({ viewKey }) => {
-        const snapshot = await readView(viewKey);
-        return {
-          ...snapshot,
-          cards: presentCards(snapshot.cards),
-          references: snapshot.references.map((reference) => ({
-            ref: reference.ref,
-            label: reference.label,
-            targetKind: reference.target.kind,
-          })),
-        };
-      },
-    }),
     runViewCommand: tool({
       description: [
         "调用某个 View Module 公开声明的 Domain Command。",
@@ -615,8 +636,8 @@ export function createAgentViewToolset(input: {
         "同一用户请求包含多个独立条目时，使用 commands 数组一次提交完整批次；Runtime 会为每个 Domain Command 生成独立、可见、可审批的 Proposal。不要只提交第一项后用文字声称其余项也已完成。",
         "Object 引用唯一只证明目标是谁，不证明它符合 Slot 的业务关系。若 Slot 或 Command 表示当前状态，来源还必须明确支持该对象在当前有效期内具有该关系；历史任职、过期名单、致谢或仅仅共现都不能写入当前 Slot，不确定时应留空并说明。",
         "批次中的 Command 都基于调用前的同一正式 View 状态；前一项产生的待审批 Proposal 不会在批次内创建可供后一项引用的 Card。若后续命令依赖尚未批准创建的 Card，本轮只提交前置 Command。",
-        "调用前必须先 readView。stateVersion 与 Command version 均由 Runtime 自动绑定，模型只填写 commandKey，不得把 @版本号拼进 commandKey。",
-        "Command 中的 Card 引用必须使用本轮 readView 返回的真实 V#。新建关联 Card 时只填写 Command 声明的自然语言实体名称；Runtime 会用本轮 O#、别名或唯一 canonical name 自动绑定 Object，模型禁止填写或索要数据库 UUID。",
+        "调用前必须先 readViewState。stateVersion 与 Command version 均由 Runtime 自动绑定，模型只填写 commandKey，不得把 @版本号拼进 commandKey。",
+        "Command 中的 Card 引用必须使用本轮 readViewState 返回的真实 V#。新建关联 Card 时只填写 Command 声明的自然语言实体名称；Runtime 会用本轮 O#、别名或唯一 canonical name 自动绑定 Object，模型禁止填写或索要数据库 UUID。",
         "只使用 openActions 返回的当前目标 View Command 契约；不要调用其他 View 的 Command。",
       ].join("\n"),
       inputSchema: z.union([z.object({
@@ -633,7 +654,7 @@ export function createAgentViewToolset(input: {
       execute: async (request) => {
         input.onCommandAttempt?.();
         if (!inspectedViews.has(request.viewKey)) {
-          throw new ViewRuntimeError(`调用 ${request.viewKey} Command 前必须先 readView`);
+          throw new ViewRuntimeError(`调用 ${request.viewKey} Command 前必须先 readViewState`);
         }
         const requests = "commands" in request
           ? request.commands.map((command) => ({ ...command, viewKey: request.viewKey }))
@@ -641,7 +662,7 @@ export function createAgentViewToolset(input: {
         const results = [];
         for (const commandRequest of requests) {
           try {
-            const snapshot = await readView(commandRequest.viewKey);
+            const snapshot = await readSnapshot(commandRequest.viewKey);
             const availableCommands = (registry.getView(commandRequest.viewKey)?.commands ?? [])
               .filter((candidate) => candidate.allowedInitiators.includes("ai"));
             const command = availableCommands.find((candidate) =>
@@ -655,7 +676,7 @@ export function createAgentViewToolset(input: {
             }
             if (!(input.skillSession?.canRunCommand(commandRequest.viewKey, command.key) ?? true)) {
               throw new ViewRuntimeError(
-                `已激活 Skill ${input.skillSession?.active()?.extension.id} ` +
+                `已激活 Skills ${input.skillSession?.activeSkillIds().join("、")} ` +
                   `不允许调用 ${commandRequest.viewKey}.${command.key}`,
               );
             }
@@ -670,7 +691,9 @@ export function createAgentViewToolset(input: {
               expectedStateVersion: snapshot.stateVersion,
               actor: input.actor,
               initiator: "ai",
-              skillId: input.skillSession?.active()?.extension.id,
+              skillId: input.skillSession
+                ?.authorizingSkillForCommand(commandRequest.viewKey, command.key)
+                ?.extension.id,
             });
             results.push(result);
             if (result.kind === "proposed") {
@@ -694,7 +717,7 @@ export function createAgentViewToolset(input: {
               viewKey: commandRequest.viewKey,
               commandKey: commandRequest.commandKey,
               error: error.message,
-              next: "根据本轮 readView 的当前状态修正 Command；同一批次中的其他有效 Command 已继续处理。",
+              next: "根据本轮 readViewState 的当前状态修正 Command；同一批次中的其他有效 Command 已继续处理。",
             });
           }
         }
@@ -748,9 +771,10 @@ export function createAgentViewToolset(input: {
 
   return {
     tools,
-    readView,
+    readSnapshot,
     locateObjectViews,
     presentCards,
+    resolveCardReference,
     describeQueries,
     describeCommands,
     queryToolNames(viewKeys: Iterable<string>): string[] {

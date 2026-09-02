@@ -32,6 +32,7 @@ function presentLibraryNode(node: LibraryNodeView, detail: "compact" | "full") {
 
 export function createLibraryToolset(input: {
   onProposal?: (proposal: LibraryPlanPresentation) => void;
+  onList?: () => void;
   onPreview?: (result: {
     requestedCount: number;
     returnedCount: number;
@@ -46,7 +47,8 @@ export function createLibraryToolset(input: {
         description: [
           "查看 Sydaris 资料库的文件夹、文件索引和处理档位。",
           "返回文件名、原始相对路径、格式与 catalog/coarse/deep 状态；full 模式另含大小和哈希等技术字段。它不读取文件内容。",
-          "catalog（仅归档）文件没有被解析，不得从文件名推断其内容事实。",
+          "这是只读能力，不需要先打开 Library Actions。用户询问已有目录结构时应主动读取，不要要求用户重新口述资料库能够直接提供的信息。",
+          "profile 只是选择的处理深度，不代表已经执行或发布。catalog+idle 表示尚未开始；catalog+ready 可能已经完成轻量语义编目。不得从文件名推断正文事实。",
           "盘点多层文件时使用 recursive=true，通常同时设置 kind=file、profile/queries/extensions；多个目录放入 folderIds。不要逐层遍历，也不要从历史文字猜测 UUID。",
           "query/queries 是不区分大小写的文件名或路径字面包含查询，不是正则或通配符；queries 中任意一项命中即返回。extensions 传 docx/pdf 这样的后缀。",
           "默认过滤 .DS_Store、~$ Office 锁文件、desktop.ini 等系统噪音，且 detail=compact 不返回 SHA-256/字节数/更新时间。确实需要时才改用 includeNoise=true 或 detail=full。",
@@ -90,6 +92,7 @@ export function createLibraryToolset(input: {
           offset,
           limit,
         }) => {
+          input.onList?.();
           if (recursive) {
             const listing = await listLibraryDescendants({
               folderId,

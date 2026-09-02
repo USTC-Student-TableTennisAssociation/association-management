@@ -5,7 +5,7 @@ export type EvidenceLayer =
   | "source_document";
 
 export type EvidenceObservation = {
-  /** Stable within one tool protocol; later observations with the same id supersede earlier ones. */
+  /** Stable identity supplied by the producing protocol. Ledger entries are append-only. */
   id: string;
   layer: EvidenceLayer;
   scope: string;

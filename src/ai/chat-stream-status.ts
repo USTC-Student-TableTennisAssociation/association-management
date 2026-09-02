@@ -3,6 +3,12 @@ import { z } from "zod";
 export const chatStreamStatusSchema = z.object({
   status: z.enum(["completed", "incomplete", "failed"]),
   completionKind: z.enum(["answer", "tool_call", "empty", "error"]),
+  interruptionReason: z.enum([
+    "no_progress",
+    "emergency_step_limit",
+    "context_capacity_exhausted",
+    "verification_failed",
+  ]).optional(),
   failureCode: z.enum([
     "stream_aborted",
     "timeout",
@@ -34,6 +40,7 @@ export type ChatStreamObservation = {
   retryCount: number;
   streamEnded: boolean;
   terminalMetadataOnlyToolCalls?: boolean;
+  interruptionReason?: ChatStreamStatus["interruptionReason"];
   failureCode?: ChatStreamStatus["failureCode"];
   error?: ChatStreamStatus["error"];
 };
@@ -116,6 +123,21 @@ export function classifyChatStreamStatus(
     : observation.toolCallCount > 0
       ? "tool_call" as const
       : "empty" as const;
+
+  if (observation.interruptionReason && observation.streamEnded && !observation.error) {
+    return {
+      status: "incomplete",
+      completionKind,
+      interruptionReason: observation.interruptionReason,
+      finishReason: observation.finishReason,
+      reasoningChars: observation.reasoningChars,
+      contentChars: observation.contentChars,
+      toolCallCount: observation.toolCallCount,
+      modelCallCount: observation.modelCallCount,
+      retryCount: observation.retryCount,
+      partial: hasContent,
+    };
+  }
 
   // A tool can fail recoverably during a multi-step response. The final model
   // completion is authoritative when it still produces a complete answer.
