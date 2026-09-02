@@ -186,6 +186,12 @@ curl http://127.0.0.1:8765/health
 AI_API_KEY
 AI_API_BASE_URL
 AI_MODEL
+COLD_START_MINERU_PROVIDER
+MINERU_MODEL
+MINERU_API_KEY
+MINERU_API_BASE_URL
+MINERU_API_FILE_PARSE_URL
+MINERU_API_TIMEOUT_SECONDS
 COLD_START_MINERU_BACKEND
 COLD_START_MINERU_EFFORT
 COLD_START_MINERU_METHOD
@@ -197,5 +203,19 @@ COLD_START_MAX_PARALLEL_COMPILATIONS
 COLD_START_MAX_PARALLEL_REGIONS
 COLD_START_MODEL_MAX_IN_FLIGHT
 ```
+
+### MinerU Provider
+
+`COLD_START_MINERU_PROVIDER` 支持：
+
+- `auto`：存在 `MINERU_API_BASE_URL` 时使用 API，否则使用本地 CLI；
+- `api`：必须使用 multipart `/mineru/file_parse`；
+- `local`：必须使用当前 Python 环境中的 `mineru` 命令。
+
+API Provider 会请求 Markdown、`content_list` 和图片，将响应重新落成标准 MinerU 原始产物目录，
+再复用本地 Provider 相同的 `ParsedDocument` 适配代码。API Key 不会写入日志；解析缓存同时绑定
+文件 SHA-256 与 Provider 配置，因此切换 Provider 或 API 端点后不会错误复用旧结果。学校 API
+使用服务端默认解析引擎；`COLD_START_MINERU_BACKEND`、`EFFORT`、`METHOD` 和
+`IMAGE_ANALYSIS` 只作用于本地 CLI，不会作为 multipart 字段发送给学校接口。
 
 以 `.env.example` 为实际配置入口。命令行参数优先于环境参数。

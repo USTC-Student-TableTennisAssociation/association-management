@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.metadata
 import json
 import os
-import shutil
-import subprocess
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+from cold_start.document.mineru_provider import (
+    LocalMinerUProvider,
+    MinerUExecution,
+    MinerUOptions,
+    MinerUProvider,
+    create_mineru_provider,
+)
 from cold_start.document.models import ParsedBlock, ParsedDocument, ParsedPage
 
 MinerUBackend = Literal["pipeline", "vlm-engine", "hybrid-engine"]
@@ -33,6 +37,7 @@ class MinerUDocumentLoader:
         method: MinerUMethod | None = None,
         image_analysis: bool | None = None,
         progress: Callable[[str], None] | None = None,
+        provider: MinerUProvider | None = None,
     ) -> None:
         self.backend = self._choice(
             backend or os.getenv("COLD_START_MINERU_BACKEND", "hybrid-engine"),
@@ -55,45 +60,28 @@ class MinerUDocumentLoader:
             else image_analysis
         )
         self.progress = progress or (lambda _message: None)
+        self.provider = provider or create_mineru_provider(self._options())
 
     @property
     def parser_name(self) -> str:
-        image_mode = "image-analysis" if self.image_analysis else "no-image-analysis"
-        return f"mineru-{self.backend}-{self.effort}-{image_mode}"
+        return self.provider.cache_key
+
+    @property
+    def cache_key(self) -> str:
+        return self.provider.cache_key
 
     def accelerator_description(self) -> str:
         """报告当前 Python 环境中 MinerU 能看到的主要计算设备。"""
 
-        try:
-            import torch
-        except ImportError:
-            return "未知（当前环境未安装 Torch）"
-        if torch.cuda.is_available():
-            name = torch.cuda.get_device_name(0)
-            return f"cuda:0（{name}，CUDA {torch.version.cuda}）"
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
-        return "cpu"
+        return self.provider.accelerator_description()
 
     def load(self, source_path: Path, *, raw_output_directory: Path) -> ParsedDocument:
         path = source_path.expanduser().resolve()
         self._validate_path(path)
-        executable = shutil.which("mineru")
-        if executable is None:
-            raise RuntimeError("未找到 mineru 命令；请先在 cold-start 目录执行 uv sync")
-
         raw_directory = raw_output_directory.expanduser().resolve()
-        raw_directory.mkdir(parents=True, exist_ok=False)
-        log_path = raw_directory.parent / "mineru.log"
-        command = self._command(executable, path, raw_directory)
-        self.progress(f"MinerU 命令：{subprocess.list2cmdline(command)}")
-        return_code = self._stream_process(command, log_path)
-        if return_code != 0:
-            raise RuntimeError(
-                f"MinerU 解析失败（退出码 {return_code}），完整日志：{log_path}"
-            )
+        execution = self.provider.execute(path, raw_directory, progress=self.progress)
         self.progress("MinerU 推理完成，开始读取稳定 content_list")
-        return self._load_content_list(path, raw_directory)
+        return self._load_content_list(path, raw_directory, execution=execution)
 
     def _command(
         self,
@@ -101,49 +89,18 @@ class MinerUDocumentLoader:
         source_path: Path,
         raw_directory: Path,
     ) -> list[str]:
-        return [
+        return LocalMinerUProvider(self._options()).command(
             executable,
-            "-p",
-            str(source_path),
-            "-o",
-            str(raw_directory),
-            "-b",
-            self.backend,
-            "--effort",
-            self.effort,
-            "-m",
-            self.method,
-            "--image-analysis",
-            str(self.image_analysis).lower(),
-        ]
-
-    def _stream_process(self, command: list[str], log_path: Path) -> int:
-        environment = os.environ.copy()
-        environment.setdefault("PYTHONUTF8", "1")
-        environment.setdefault("PYTHONIOENCODING", "utf-8")
-        with log_path.open("w", encoding="utf-8") as log:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=environment,
-            )
-            assert process.stdout is not None
-            for line in process.stdout:
-                log.write(line)
-                log.flush()
-                message = line.strip()
-                if message:
-                    self.progress(message)
-            return process.wait()
+            source_path,
+            raw_directory,
+        )
 
     def _load_content_list(
         self,
         source_path: Path,
         raw_directory: Path,
+        *,
+        execution: MinerUExecution | None = None,
     ) -> ParsedDocument:
         content_list_path = self._find_content_list(raw_directory)
         raw_items = json.loads(content_list_path.read_text(encoding="utf-8"))
@@ -218,15 +175,15 @@ class MinerUDocumentLoader:
             f"<!-- Page {page.page_number} -->\n\n{page.markdown}" for page in pages
         ).strip()
         file_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
-        try:
-            version = importlib.metadata.version("mineru")
-        except importlib.metadata.PackageNotFoundError:
-            version = "unknown"
+        actual_execution = execution or MinerUExecution("local", "unknown", self.backend)
         return ParsedDocument(
             source_path=source_path,
             title=source_path.stem,
             file_sha256=file_sha256,
-            parser_name=f"mineru-{version}-{self.backend}-{self.effort}",
+            parser_name=(
+                f"mineru-{actual_execution.provider}-{actual_execution.version}-"
+                f"{actual_execution.backend}-{self.effort}"
+            ),
             pages=pages,
             blocks=tuple(blocks),
             markdown=markdown,
@@ -373,6 +330,14 @@ class MinerUDocumentLoader:
         if normalized in {"0", "false", "no", "off"}:
             return False
         raise ValueError(f"{name} 必须是 true 或 false")
+
+    def _options(self) -> MinerUOptions:
+        return MinerUOptions(
+            backend=self.backend,
+            effort=self.effort,
+            method=self.method,
+            image_analysis=self.image_analysis,
+        )
 
     @staticmethod
     def _validate_path(path: Path) -> None:
