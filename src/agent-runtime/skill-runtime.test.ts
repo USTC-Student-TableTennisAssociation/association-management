@@ -12,6 +12,7 @@ import { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
 
 const skillId = "sydaris.test.activity-curator";
+const librarySkillId = "sydaris.test.library-triage";
 
 const skillPlugin: PluginManifest = {
   id: "sydaris.test-skills",
@@ -32,6 +33,16 @@ const skillPlugin: PluginManifest = {
         commands: ["activity.update_activity"],
       }],
       requiresCapabilities: [],
+    }, {
+      id: librarySkillId,
+      version: "1.0.0",
+      label: "资料分诊",
+      description: "为资料库文件建议处理档位。",
+      inputSchema: zodContractSchema(z.object({ phase: z.enum(["recommend", "propose"]) })),
+      instructions: "先完整盘点，再提出有理由的处理档位建议。",
+      viewAccess: [],
+      resourceAccess: [{ resource: "library", operations: ["propose_plan"] }],
+      requiresCapabilities: [],
     }],
   },
 };
@@ -48,6 +59,24 @@ function fixture() {
 }
 
 describe("Agent Skill Runtime", () => {
+  it("publishes a provider-compatible object schema for activateSkill", () => {
+    const { toolset } = fixture();
+    const inputSchema = toolset.tools.activateSkill.inputSchema as unknown as {
+      jsonSchema: Record<string, unknown>;
+    };
+
+    expect(inputSchema.jsonSchema).toMatchObject({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        skillId: { type: "string", enum: expect.arrayContaining([skillId]) },
+        input: { type: "object", additionalProperties: true },
+      },
+      required: ["skillId", "input"],
+    });
+    expect(inputSchema.jsonSchema).not.toHaveProperty("oneOf");
+  });
+
   it("activates a workflow with parsed semantic input", async () => {
     const { session, toolset } = fixture();
     const execute = toolset.tools.activateSkill.execute as unknown as (
@@ -71,6 +100,15 @@ describe("Agent Skill Runtime", () => {
     expect(session.instructions()).not.toContain("知识层：");
   });
 
+  it("still validates input against the selected Skill contract", async () => {
+    const { toolset } = fixture();
+    const execute = toolset.tools.activateSkill.execute as unknown as (
+      input: { skillId: string; input: unknown },
+    ) => Promise<unknown>;
+
+    await expect(execute({ skillId, input: {} })).rejects.toThrow();
+  });
+
   it("enforces the declared View and Command boundary", () => {
     const { session } = fixture();
     session.activate(skillId, { focus: "秋季活动" });
@@ -91,10 +129,31 @@ describe("Agent Skill Runtime", () => {
     expect(session.canOpenAction("library")).toBe(false);
   });
 
-  it("allows idempotent activation but rejects switching workflows mid-turn", () => {
+  it("grants declared non-View Resource operations", () => {
+    const { session } = fixture();
+    session.activate(librarySkillId, { phase: "propose" });
+
+    expect(session.canOpenAction("library")).toBe(true);
+    expect(session.canUseResourceOperation("library", "propose_plan")).toBe(true);
+    expect(session.canUseResourceOperation("library", "start_compilation")).toBe(false);
+    expect(session.canOpenAction("object")).toBe(false);
+    expect(session.canReadView("activity_operations")).toBe(false);
+    expect(session.instructions()).toContain("library (propose_plan)");
+  });
+
+  it("composes different Skills but rejects changing one Skill's input", () => {
     const { session } = fixture();
     const first = session.activate(skillId, { focus: "秋季活动" });
     expect(session.activate(skillId, { focus: "秋季活动" })).toBe(first);
+
+    session.activate(librarySkillId, { phase: "propose" });
+    expect(session.activeSkillIds()).toEqual([skillId, librarySkillId]);
+    expect(session.canRunCommand(
+      "activity_operations",
+      "activity.update_activity",
+    )).toBe(true);
+    expect(session.canOpenAction("library")).toBe(true);
+    expect(session.instructions()).toContain("本轮已激活的可组合 Skills");
 
     expect(() => session.activate(skillId, { focus: "春季活动" }))
       .toThrow(SkillRuntimeError);

@@ -1,6 +1,6 @@
 {
   "name": "@sydaris/plugin-sdk",
-  "version": "0.1.0-alpha.8",
+  "version": "0.1.0-alpha.9",
   "description": "Public contracts and React helpers for Sydaris plugins",
   "keywords": [
     "sydaris",

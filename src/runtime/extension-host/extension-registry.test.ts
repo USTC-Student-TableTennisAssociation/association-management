@@ -116,6 +116,28 @@ describe("ExtensionRegistry", () => {
     expect(registry.listPlugins()).toEqual([]);
   });
 
+  it("validates generic Skill Resource permissions", () => {
+    const registry = new ExtensionRegistry();
+    expect(() => registry.registerPlugin({
+      id: "sydaris.bad-resource-skill",
+      version: "1.0.0",
+      contributes: {
+        skills: [{
+          id: "sydaris.bad-resource-skill.run",
+          version: "1.0.0",
+          label: "Bad Resource Skill",
+          description: "Declares an unusable resource permission.",
+          inputSchema: zodContractSchema(z.object({})),
+          instructions: "Use the declared resource.",
+          viewAccess: [],
+          resourceAccess: [{ resource: "library", operations: [] }],
+          requiresCapabilities: [],
+        }],
+      },
+    })).toThrow("必须声明 operations");
+    expect(registry.listPlugins()).toEqual([]);
+  });
+
   it("rejects duplicate View Queries", () => {
     const querySchema = zodContractSchema(z.object({}));
     const viewModule = view();
