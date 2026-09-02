@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../src/generated/prisma/client.ts";
+import { isLibraryImportNoisePath } from "../src/library/import-filter.ts";
 import { Pool } from "pg";
 
 const ROOT_ID = "00000000-0000-4000-8000-000000000100";
@@ -138,6 +139,7 @@ async function main() {
   const database = new PrismaClient({ adapter: new PrismaPg(pool) });
   let batchId;
   let fileCount = 0;
+  let ignoredCount = 0;
   const uniqueHashes = new Set();
   try {
     await database.libraryNode.upsert({
@@ -189,10 +191,14 @@ async function main() {
       for await (const entry of directory) entries.push(entry);
       entries.sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
       for (const entry of entries) {
-        const localPath = path.join(localDirectory, entry.name);
         const relativePath = relativeDirectory
           ? path.join(relativeDirectory, entry.name)
           : entry.name;
+        if (isLibraryImportNoisePath(relativePath)) {
+          ignoredCount += 1;
+          continue;
+        }
+        const localPath = path.join(localDirectory, entry.name);
         const nodeName = await availableName(database, virtualParentId, entry.name);
         if (entry.isDirectory()) {
           const folder = await database.libraryNode.create({
@@ -230,6 +236,9 @@ async function main() {
       importedName = rootName;
       await importDirectory(options.sourceDirectory, importedRoot.id, "");
     } else {
+      if (isLibraryImportNoisePath(path.basename(options.sourceDirectory))) {
+        throw new Error("系统元数据或临时文件不会被导入");
+      }
       importedName = await importFile(
         options.sourceDirectory,
         ROOT_ID,
@@ -247,6 +256,7 @@ async function main() {
       },
     });
     console.log(`导入完成：${fileCount} 个文件，${uniqueHashes.size} 个唯一内容对象。`);
+    if (ignoredCount) console.log(`已忽略 ${ignoredCount} 个系统元数据或临时项目。`);
     console.log(`资料库项目：${importedName}`);
     console.log(`对象存储：${storageRoot()}`);
   } catch (error) {
