@@ -10,6 +10,7 @@ from cold_start.document.models import ParsedDocument, ParsedPage
 class FakeDocumentLoader:
     calls = 0
     parser_name = "fake-mineru"
+    cache_key = "fake-mineru-v1"
     SUPPORTED_SUFFIXES = frozenset({".pdf", ".docx", ".pptx", ".xlsx"})
 
     def __init__(self, *, progress=None) -> None:
@@ -66,6 +67,33 @@ def test_parse_document_cache_stages_extensionless_blob_and_reuses_result(
     assert (cache / "parsed-pages.json").is_file()
     assert (cache / "parsed-blocks.json").is_file()
     assert (cache / "mineru-raw").is_dir()
+
+
+def test_parse_cache_is_invalidated_when_provider_configuration_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "blob"
+    source.write_bytes(b"docx")
+    cache = tmp_path / "cache"
+    FakeDocumentLoader.calls = 0
+    monkeypatch.setattr(FakeDocumentLoader, "cache_key", "fake-local")
+    monkeypatch.setattr(parse_cache, "MinerUDocumentLoader", FakeDocumentLoader)
+
+    parse_cache.parse_document_to_cache(
+        source_path=source,
+        source_suffix="docx",
+        cache_directory=cache,
+    )
+    monkeypatch.setattr(FakeDocumentLoader, "cache_key", "fake-api")
+    second = parse_cache.parse_document_to_cache(
+        source_path=source,
+        source_suffix="docx",
+        cache_directory=cache,
+    )
+
+    assert second.reused is False
+    assert FakeDocumentLoader.calls == 2
 
 
 def test_parse_document_cache_preserves_incomplete_mineru_attempt(

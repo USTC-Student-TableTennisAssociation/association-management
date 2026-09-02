@@ -103,6 +103,21 @@ AI_API_BASE_URL=https://api.openai.com/v1
 AI_MODEL=
 ```
 
+使用学校 MinerU 文件解析接口时，再配置：
+
+```env
+COLD_START_MINERU_PROVIDER=auto
+MINERU_MODEL=mineru
+MINERU_API_KEY=
+MINERU_API_BASE_URL=https://api.llm.ustc.edu.cn/v1
+```
+
+`MINERU_API_KEY` 留空时会复用 `AI_API_KEY`。配置了 `MINERU_API_BASE_URL` 后，`auto`
+默认调用同一主机的 `/mineru/file_parse`；设置 `COLD_START_MINERU_PROVIDER=local`
+可以显式切回本地 MinerU CLI。API 和本地结果都会归一化为同一个 `ParsedDocument`
+并进入相同的 SHA-256 解析缓存和后续认知编译流程。学校 API 使用服务端默认解析引擎；
+`COLD_START_MINERU_BACKEND` 等质量参数只用于本地 CLI，不会发送给学校接口。
+
 `.env.example` 还包含数据库、模型限速、视觉模型、Library、Shared Brain 与调试选项。
 
 ### 2. 启动数据库

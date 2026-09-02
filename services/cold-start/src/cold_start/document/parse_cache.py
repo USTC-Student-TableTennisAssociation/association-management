@@ -48,7 +48,9 @@ def parse_document_to_cache(
     parsed_pages = cache / "parsed-pages.json"
     parsed_blocks = cache / "parsed-blocks.json"
     metadata_path = cache / "parsing-metadata.json"
-    metadata = _matching_metadata(metadata_path, source_sha256)
+    loader = MinerUDocumentLoader(progress=report)
+    parser_cache_key = getattr(loader, "cache_key", loader.parser_name)
+    metadata = _matching_metadata(metadata_path, source_sha256, parser_cache_key)
     if metadata and all(path.is_file() for path in (parsed_document, parsed_pages, parsed_blocks)):
         parser_name = str(metadata.get("parser_name") or "mineru-cached")
         report(f"复用 MinerU 解析缓存：{parsed_document}")
@@ -59,7 +61,6 @@ def parse_document_to_cache(
     if not staged_source.is_file() or _sha256(staged_source) != source_sha256:
         shutil.copy2(source, staged_source)
 
-    loader = MinerUDocumentLoader(progress=report)
     report(
         f"开始 MinerU 仅解析：{staged_source.name}；"
         f"{loader.parser_name}，计算设备 {loader.accelerator_description()}"
@@ -70,6 +71,7 @@ def parse_document_to_cache(
         "schema_version": "library-mineru-parse.v1",
         "source_sha256": source_sha256,
         "source_suffix": suffix,
+        "parser_cache_key": parser_cache_key,
         "parser_name": document.parser_name,
         "page_count": document.page_count,
         "block_count": len(document.blocks),
@@ -93,7 +95,11 @@ def parse_document_to_cache(
     )
 
 
-def _matching_metadata(path: Path, source_sha256: str) -> dict[str, object] | None:
+def _matching_metadata(
+    path: Path,
+    source_sha256: str,
+    parser_cache_key: str,
+) -> dict[str, object] | None:
     if not path.is_file():
         return None
     try:
@@ -104,7 +110,10 @@ def _matching_metadata(path: Path, source_sha256: str) -> dict[str, object] | No
         return None
     if raw.get("schema_version") != "library-mineru-parse.v1":
         return None
-    return raw if raw.get("source_sha256") == source_sha256 else None
+    return raw if (
+        raw.get("source_sha256") == source_sha256
+        and raw.get("parser_cache_key") == parser_cache_key
+    ) else None
 
 
 def _sha256(path: Path) -> str:
