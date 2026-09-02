@@ -23,6 +23,11 @@ describe("library names", () => {
     expect(() => libraryUploadPathSegments("../策划案.docx")).toThrow("无效层级");
     expect(() => libraryUploadPathSegments("/tmp/策划案.docx")).toThrow("相对路径");
   });
+
+  it("rejects noise files even when a client bypasses browser filtering", () => {
+    expect(() => libraryUploadPathSegments("活动/.DS_Store")).toThrow("不会被导入");
+    expect(() => libraryUploadPathSegments("活动/~$策划案.docx")).toThrow("不会被导入");
+  });
 });
 
 describe("library proposals", () => {

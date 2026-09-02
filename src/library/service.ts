@@ -5,6 +5,10 @@ import {
   storeUploadedFile,
 } from "@/library/object-store-import";
 import {
+  isLibraryImportNoiseName,
+  isLibraryImportNoisePath,
+} from "@/library/import-filter";
+import {
   libraryPlanPayloadSchema,
   type LibraryDeleteResult,
   type LibraryFolderView,
@@ -267,23 +271,8 @@ type LibraryDescendantIndexNode = {
   processingProfile: LibraryProcessingProfile;
 };
 
-const LIBRARY_NOISE_NAMES = new Set([
-  ".ds_store",
-  "desktop.ini",
-  "thumbs.db",
-  "ehthumbs.db",
-  ".localized",
-  "icon\r",
-  "__macosx",
-  "$recycle.bin",
-  ".spotlight-v100",
-  ".trashes",
-  ".temporaryitems",
-]);
-
 export function isLibraryNoiseName(value: string): boolean {
-  const name = value.normalize("NFKC").trim().toLocaleLowerCase("zh-CN");
-  return LIBRARY_NOISE_NAMES.has(name) || name.startsWith("~$") || name.startsWith("._");
+  return isLibraryImportNoiseName(value);
 }
 
 function normalizedLibrarySearchText(value: string): string {
@@ -531,6 +520,9 @@ export function libraryUploadPathSegments(relativePath: string): string[] {
   if (!normalized || normalized.startsWith("/") || /^[a-z]:\//i.test(normalized)) {
     throw new LibraryValidationError("导入文件路径必须是相对路径");
   }
+  if (isLibraryImportNoisePath(normalized)) {
+    throw new LibraryValidationError("系统元数据或临时文件不会被导入");
+  }
   const rawSegments = normalized.split("/");
   if (rawSegments.length > 100 || normalized.length > 4_096) {
     throw new LibraryValidationError("导入文件路径过深或过长");
@@ -624,6 +616,9 @@ export async function importLibraryBrowserFiles(input: {
 }): Promise<LibraryImportFileResult[]> {
   if (!input.files.length || input.files.length > 12) {
     throw new LibraryValidationError("每批请送需包含 1–12 个文件");
+  }
+  if (input.files.some(({ file }) => isLibraryImportNoiseName(file.name))) {
+    throw new LibraryValidationError("系统元数据或临时文件不会被导入");
   }
   const maximumFileBytes = 128 * 1024 * 1024;
   const maximumBatchBytes = 256 * 1024 * 1024;

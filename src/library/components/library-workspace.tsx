@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AIInvocation } from "@sydaris/plugin-sdk";
 
+import { isLibraryImportNoisePath } from "@/library/import-filter";
 import type {
   LibraryDeleteResult,
   LibraryFolderView,
@@ -251,14 +252,23 @@ export function LibraryWorkspace({
       )) {
         throw new Error("一次只能导入一个根文件夹");
       }
-      const relativePaths = browserPaths.map((relativePath, index) => {
-        if (!folderMode) return files[index].name;
-        const insideRoot = relativePath.split("/").slice(1).join("/");
-        if (!insideRoot) throw new Error("文件夹中包含无效文件路径");
-        return insideRoot;
+      const candidates = browserPaths.map((relativePath, index) => {
+        const importPath = folderMode
+          ? relativePath.split("/").slice(1).join("/")
+          : files[index].name;
+        if (!importPath) throw new Error("文件夹中包含无效文件路径");
+        return { file: files[index], relativePath: importPath };
       });
+      const entries = candidates.filter(({ relativePath }) => (
+        !isLibraryImportNoisePath(relativePath)
+      ));
+      const ignoredCount = candidates.length - entries.length;
+      if (!entries.length) {
+        setNotice(`没有可导入的文件；已忽略 ${ignoredCount} 个系统元数据或临时文件。`);
+        return;
+      }
       const maximumFileBytes = 128 * 1024 * 1024;
-      if (files.some((file) => file.size > maximumFileBytes)) {
+      if (entries.some(({ file }) => file.size > maximumFileBytes)) {
         throw new Error("单个文件不能超过 128 MB");
       }
       const started = await requestJson<LibraryImportBatchView>("/api/library/import", {
@@ -266,7 +276,7 @@ export function LibraryWorkspace({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           parentId: listing.folder.id,
-          displayName: rootFolderName ?? `网页导入 ${files.length} 个文件`,
+          displayName: rootFolderName ?? `网页导入 ${entries.length} 个文件`,
           ...(rootFolderName ? { rootFolderName } : {}),
         }),
       });
@@ -274,8 +284,7 @@ export function LibraryWorkspace({
       const chunks: Array<Array<{ file: File; relativePath: string }>> = [];
       let currentChunk: Array<{ file: File; relativePath: string }> = [];
       let currentBytes = 0;
-      for (let index = 0; index < files.length; index += 1) {
-        const entry = { file: files[index], relativePath: relativePaths[index] };
+      for (const entry of entries) {
         if (currentChunk.length && (
           currentChunk.length >= 6 ||
           currentBytes + entry.file.size > 240 * 1024 * 1024
@@ -292,7 +301,7 @@ export function LibraryWorkspace({
       for (const chunk of chunks) {
         setImportProgress({
           completed: completedFiles,
-          total: files.length,
+          total: entries.length,
           label: `正在导入 ${chunk[0].relativePath}`,
         });
         const formData = new FormData();
@@ -307,8 +316,8 @@ export function LibraryWorkspace({
         completedFiles += chunk.length;
         setImportProgress({
           completed: completedFiles,
-          total: files.length,
-          label: `已导入 ${completedFiles} / ${files.length}`,
+          total: entries.length,
+          label: `已导入 ${completedFiles} / ${entries.length}`,
         });
       }
       const finished = await requestJson<{
@@ -319,7 +328,10 @@ export function LibraryWorkspace({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ batchId: started.id }),
       });
-      setNotice(`导入完成：${finished.fileCount} 个文件，${finished.uniqueBlobCount} 个唯一内容。`);
+      setNotice([
+        `导入完成：${finished.fileCount} 个文件，${finished.uniqueBlobCount} 个唯一内容`,
+        ignoredCount ? `已忽略 ${ignoredCount} 个系统元数据或临时文件` : undefined,
+      ].filter(Boolean).join("；") + "。");
       setImportProgress(undefined);
       await load(listing.folder.id);
     } catch (importError) {
