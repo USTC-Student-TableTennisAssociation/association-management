@@ -236,6 +236,24 @@ function validateSkill(
       }
     }
   }
+  const resourceAccess = skill.resourceAccess ?? [];
+  assertUnique(
+    resourceAccess.map((access) => access.resource),
+    "Resource access",
+    skill.id,
+  );
+  for (const access of resourceAccess) {
+    requireIdentifier(`Skill ${skill.id} Resource`, access.resource);
+    if (access.operations.length === 0) {
+      throw new ExtensionRegistrationError(
+        `Skill ${skill.id} 的 Resource ${access.resource} 必须声明 operations`,
+      );
+    }
+    assertUnique(access.operations, "Resource operation", `${skill.id}/${access.resource}`);
+    for (const operation of access.operations) {
+      requireIdentifier(`Skill ${skill.id} Resource operation`, operation);
+    }
+  }
   assertUnique(
     skill.requiresCapabilities.map((requirement) => requirement.key),
     "Capability requirement",

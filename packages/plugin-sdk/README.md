@@ -2,7 +2,7 @@
 
 Sydaris Plugin 的公开 TypeScript 合同、描述文件 Schema 和 React hooks。
 
-> 当前是 `0.1.0-alpha.8` 预发布版，API 可能在后续 alpha 版调整。
+> 当前是 `0.1.0-alpha.9` 预发布版，API 可能在后续 alpha 版调整。
 
 ## 安装
 
@@ -72,8 +72,9 @@ Runtime 返回 `INVALID_VIEW_QUERY_INPUT`、具体 issues 和一次纠正机会�
 ## Skill 执行契约
 
 Skill 是由 Chat Runtime 激活的专用 AI 工作流，不是可以直接修改数据的回调。
-它声明语义输入、执行指令、可读 View、精确到 Command 的写入范围，以及激活前必须可用的外部 Capability。
-Runtime 负责校验依赖、注入指令、限制 Command，并把 `skillId` 记入 Proposal / Execution 审计链。
+它声明语义输入、执行指令、可读 View、精确到 Command 的写入范围、宿主 Resource Operation，
+以及激活前必须可用的外部 Capability。不同 Skill 可以在同一轮组合，Runtime 按声明合并权限，
+并把真正授权某次 Command 的 `skillId` 记入 Proposal / Execution 审计链。
 Skill 不会限制 Runtime 的通用认知工具，也不会绑定某个具体 Capability Provider。
 
 ```ts
@@ -97,6 +98,16 @@ const dailyPlanner: SkillExtension = {
 `mode: "write"` 同时允许读取目标 View，但只能执行 `commands` 中显式列出的
 Domain Command。跨 Plugin 读取 View 时，提供 Skill 的 Plugin 还应通过
 `PluginManifest.requires` 声明对应 Plugin 版本依赖。
+
+`resourceAccess` 用于 Library、Object 等不属于 Business View 的宿主资源。它声明的是
+稳定的语义 Operation，不是具体工具名；Runtime 仍负责将 Operation 映射到实现并执行审批：
+
+```ts
+resourceAccess: [{
+  resource: "library",
+  operations: ["propose_plan"],
+}]
+```
 
 ## Tool 调用方边界
 

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import semver from "semver";
 
-export const PLUGIN_API_VERSION = "0.1.0-alpha.8";
+export const PLUGIN_API_VERSION = "0.1.0-alpha.9";
 export const PLUGIN_DESCRIPTOR_SCHEMA_VERSION = 1;
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
@@ -450,6 +450,17 @@ export type SkillViewAccess =
     };
 
 /**
+ * Host resource permissions used by a Skill outside Business Views.
+ *
+ * Resource and operation identifiers are semantic contracts rather than raw
+ * tool names. The host Runtime decides which concrete tools implement them.
+ */
+export interface SkillResourceAccess {
+  resource: string;
+  operations: readonly string[];
+}
+
+/**
  * A prompt-driven, tool-using workflow that the host chat Runtime can activate.
  *
  * Skills do not mutate state directly. The Runtime enforces their View and
@@ -465,6 +476,8 @@ export interface SkillExtension<Input = unknown> {
   inputSchema: ContractSchema<Input>;
   instructions: string;
   viewAccess: readonly SkillViewAccess[];
+  /** Host resources this workflow may mutate through Runtime approval gates. */
+  resourceAccess?: readonly SkillResourceAccess[];
   /** Activation fails unless a compatible Contract and Provider are installed. */
   requiresCapabilities: readonly ToolCapabilityRequirement[];
 }
