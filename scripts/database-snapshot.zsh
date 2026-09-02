@@ -10,9 +10,11 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-set -a
-source .env
-set +a
+if [[ -z "${DATABASE_URL:-}" ]]; then
+  set -a
+  source .env
+  set +a
+fi
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
   print -u2 ".env 中未配置 DATABASE_URL"
@@ -47,7 +49,8 @@ trap 'rm -f "$SYDARIS_SNAPSHOT_TMP"' EXIT
 
 "$SYDARIS_PG_RESTORE" --list "$SYDARIS_SNAPSHOT_TMP" >/dev/null
 mv "$SYDARIS_SNAPSHOT_TMP" "$SYDARIS_SNAPSHOT_PATH"
-shasum -a 256 "$SYDARIS_SNAPSHOT_PATH" > "$SYDARIS_SNAPSHOT_PATH.sha256"
+(cd "${SYDARIS_SNAPSHOT_PATH:h}" && \
+  shasum -a 256 "${SYDARIS_SNAPSHOT_PATH:t}" > "${SYDARIS_SNAPSHOT_PATH:t}.sha256")
 trap - EXIT
 
 print "数据库快照已保存：$SYDARIS_SNAPSHOT_PATH"

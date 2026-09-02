@@ -137,6 +137,23 @@ pnpm dev
 
 认知编译、Parser 和 embedding 服务的详细说明见 [`services/cold-start`](services/cold-start/README.md) 与 [`services/mineru-parser`](services/mineru-parser/README.md)。
 
+### 保存和切换本机状态
+
+录制、调试或复现流程时，可以把 PostgreSQL、Library 原始文件和冷启动解析产物保存为同一个命名状态：
+
+```bash
+pnpm state:save -- before-import
+pnpm state:list
+pnpm state:verify -- before-import
+pnpm state:load -- before-import --yes
+```
+
+状态默认保存在 `.sydaris-states/<name>`，不会切换 Git。`state:load` 会先创建一个 `autosave-*` 安全状态，再恢复目标数据库与文件目录；失败时会尝试自动回滚。重复使用同名状态需要在保存时添加 `--replace`。
+
+保存或加载前应结束正在提交的聊天与文件写入。命令默认拒绝存在 `queued` / `running` 资料编译任务时操作；确实只想保存当前已经持久化的最佳努力状态时，可以对 `state:save` 添加 `--allow-active`，但加载前仍应先暂停旧 worker。文件复制在 macOS/APFS 上优先使用 copy-on-write clone，其他文件系统会退回普通复制。
+
+完整的使用流程、命令速查、环境准备和故障排查见 [`STATE_MANAGEMENT.md`](STATE_MANAGEMENT.md)。
+
 ## 用 Plugin 扩展 Sydaris
 
 一个 Plugin 可以组合四类 Extension：
