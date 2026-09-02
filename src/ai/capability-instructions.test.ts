@@ -19,6 +19,28 @@ describe("capability instructions", () => {
     expect(instructions).toContain("不要把这些不同口径相加");
   });
 
+  it("treats Library browsing as a read capability", () => {
+    const instructions = buildCapabilityInstructions({
+      preferredKnowledgeLayer: "library",
+      toolNames: ["listLibrary"],
+    });
+
+    expect(instructions).toContain("listLibrary 是只读能力");
+    expect(instructions).toContain("不得要求用户重新介绍已有文件夹");
+  });
+
+  it("separates View-wide discovery from targeted Card reads", () => {
+    const instructions = buildCapabilityInstructions({
+      preferredKnowledgeLayer: "business_view",
+      toolNames: ["listViewCards", "readViewState"],
+    });
+
+    expect(instructions).toContain("整个 View 当前收录了什么");
+    expect(instructions).toContain("不要从 Library 文件名或 Shared Brain 猜测");
+    expect(instructions).toContain("V# 作为 card_ref");
+    expect(instructions).toContain("不开放专业 Query 或写入能力");
+  });
+
   it("teaches proactive but evidence-bound Higher Memory maintenance", () => {
     const instructions = buildCapabilityInstructions({
       preferredKnowledgeLayer: "unknown",

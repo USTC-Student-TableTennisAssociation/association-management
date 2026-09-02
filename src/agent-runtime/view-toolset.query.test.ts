@@ -95,37 +95,32 @@ describe("Agent View Query Toolset", () => {
       .execute as unknown as (input: unknown) => Promise<unknown>;
 
     await expect(execute({ seriesName: "积分赛" })).rejects.toThrow(
-      "必须先用 openBusinessContext 选择并读取该 View",
+      "必须先用 readViewState 读取该 View 的具体业务目标",
     );
   });
 
   it("returns a typed result with Runtime-owned state and evidence references", async () => {
     const { onQueryResult, toolset } = fixture();
-    await toolset.readView("competition_records");
+    await toolset.readSnapshot("competition_records");
     const execute = toolset.tools.query_competition_records_summarize_participation
       .execute as unknown as (input: unknown) => Promise<unknown>;
 
-    await expect(execute({ seriesName: "积分赛" })).resolves.toMatchObject({
+    const output = await execute({ seriesName: "积分赛" }) as Record<string, unknown>;
+    expect(output).toMatchObject({
       ok: true,
       view: {
         ref: "V1",
-        viewKey: "competition_records",
-        schemaVersion: "1",
-        stateVersion: "9",
+        key: "competition_records",
+        label: "赛事档案",
         observedAt: "2026-08-31T00:00:00.000Z",
       },
       query: {
         key: "summarize_participation",
-        version: "1.0.0",
       },
       result: {
         editionCount: 2,
         participantCountSum: 72,
         averageParticipantCountPerEdition: 36,
-      },
-      coverage: {
-        level: "complete",
-        sourceCardCount: 3,
       },
       references: {
         viewRef: "V1",
@@ -133,16 +128,27 @@ describe("Agent View Query Toolset", () => {
         sourceRefsTruncated: false,
       },
     });
+    expect(output).not.toHaveProperty("coverage");
+    expect(output).not.toHaveProperty("semantics");
+    expect(output).not.toHaveProperty("input");
     expect(onQueryResult).toHaveBeenCalledWith({
       viewKey: "competition_records",
+      queryKey: "summarize_participation",
       complete: true,
       sourceCardCount: 3,
+      semantics: expect.objectContaining({
+        observations: [expect.objectContaining({
+          scope: "view:competition_records:query:summarize_participation",
+          predicate: "query_returned_result",
+        })],
+      }),
     });
+    expect(onQueryResult).toHaveBeenCalledTimes(1);
   });
 
   it("returns one structured correction before disabling repeatedly invalid Query input", async () => {
     const { onQueryResult, toolset } = fixture();
-    await toolset.readView("competition_records");
+    await toolset.readSnapshot("competition_records");
     const toolName = "query_competition_records_participation_trend";
     const execute = toolset.tools[toolName].execute as unknown as (
       input: unknown,
@@ -187,7 +193,7 @@ describe("Agent View Query Toolset", () => {
 
   it("accepts a valid correction after one rejected Query input", async () => {
     const { onQueryResult, toolset } = fixture();
-    await toolset.readView("competition_records");
+    await toolset.readSnapshot("competition_records");
     const execute = toolset.tools.query_competition_records_participation_trend
       .execute as unknown as (input: unknown) => Promise<unknown>;
 

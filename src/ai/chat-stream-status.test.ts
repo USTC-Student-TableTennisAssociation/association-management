@@ -67,6 +67,48 @@ describe("classifyChatStreamStatus", () => {
     });
   });
 
+  it("keeps a run-guard handoff explicitly incomplete", () => {
+    expect(classifyChatStreamStatus({
+      streamEnded: true,
+      finishReason: "stop",
+      reasoningChars: 120,
+      contentChars: 240,
+      toolCallCount: 12,
+      modelCallCount: 9,
+      retryCount: 0,
+      interruptionReason: "no_progress",
+    })).toEqual({
+      status: "incomplete",
+      completionKind: "answer",
+      interruptionReason: "no_progress",
+      finishReason: "stop",
+      reasoningChars: 120,
+      contentChars: 240,
+      toolCallCount: 12,
+      modelCallCount: 9,
+      retryCount: 0,
+      partial: true,
+    });
+  });
+
+  it("keeps a failed answer verification explicitly incomplete", () => {
+    expect(classifyChatStreamStatus({
+      streamEnded: true,
+      finishReason: "stop",
+      reasoningChars: 20,
+      contentChars: 80,
+      toolCallCount: 2,
+      modelCallCount: 2,
+      retryCount: 0,
+      interruptionReason: "verification_failed",
+    })).toMatchObject({
+      status: "incomplete",
+      completionKind: "answer",
+      interruptionReason: "verification_failed",
+      partial: true,
+    });
+  });
+
   it("does not call a tool-only turn a completed answer", () => {
     expect(classifyChatStreamStatus({
       streamEnded: true,

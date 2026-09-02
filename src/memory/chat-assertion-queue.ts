@@ -121,9 +121,25 @@ export function createChatAssertionQueueTool(input: {
       };
     },
   });
+  const foregroundTool = tool({
+    description: [
+      "只在同一轮正式 View Proposal 被一个当前用户刚提供、且现有知识中不存在的新实体阻塞时调用。",
+      "它会同步审查当前用户逐字 Evidence，并且只有安全的新 Assertion 发布成功时才创建 Object；随后仍必须调用 runViewCommand 生成 Proposal。",
+      "资料原文、Assistant 历史、普通后台记忆整理和不影响本轮 View Proposal 的事实都不属于这个工具。它不会直接修改 Business View。",
+    ].join(""),
+    inputSchema: z.object({
+      reason: z.string().trim().min(1).max(500)
+        .describe("为什么当前用户原话中的新实体事实是本轮 View Proposal 的必要前置条件"),
+    }),
+    execute: async ({ reason }, options) => queueTool.execute!({
+      reason,
+      execution: "foreground_for_view",
+    }, options),
+  });
 
   return {
     tool: queueTool,
+    foregroundTool,
     decision: () => decision,
     foregroundDecision: () => foregroundDecision,
     foregroundResult: () => foregroundResult,

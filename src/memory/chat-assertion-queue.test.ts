@@ -73,9 +73,8 @@ describe("queueChatAssertionCapture", () => {
       onForegroundResult,
     });
 
-    await expect(toolset.tool.execute!({
+    await expect(toolset.foregroundTool.execute!({
       reason: "用户要求把新会长收录进正式档案",
-      execution: "foreground_for_view",
     }, executionOptions)).resolves.toEqual(expect.objectContaining({
       queued: false,
       completed: true,
@@ -104,9 +103,8 @@ describe("queueChatAssertionCapture", () => {
       }),
     });
 
-    await expect(toolset.tool.execute!({
+    await expect(toolset.foregroundTool.execute!({
       reason: "尝试发布缺失实体",
-      execution: "foreground_for_view",
     }, executionOptions)).resolves.toEqual(expect.objectContaining({
       completed: true,
       message: expect.stringContaining("先前检索到的 O#"),

@@ -13,8 +13,6 @@ import {
 import { createSourceDocumentReferenceRegistry } from "@/memory/source-document-references";
 import type { SourceDocumentReadResult } from "@/memory/source-document-types";
 
-const MAX_SOURCE_READS_PER_ANSWER = 8;
-
 const assertionRefSchema = z.string().regex(/^A\d+$/).describe(
   "本轮 searchMemory/followObject 已返回的真实 Assertion ref；它只用于锚定同一份原文文档",
 );
@@ -120,13 +118,6 @@ export class ChatEvidenceIsNotDocumentError extends Error {
   }
 }
 
-export class SourceReadBudgetError extends Error {
-  constructor() {
-    super(`本轮最多执行 ${MAX_SOURCE_READS_PER_ANSWER} 次原文读取`);
-    this.name = "SourceReadBudgetError";
-  }
-}
-
 export class UnknownSourceContinuationError extends Error {
   constructor() {
     super("原文续读游标无效或不属于本轮对话");
@@ -157,9 +148,8 @@ export function createSourceDocumentToolset(input: {
   const resultBudget = input.sharedResultBudget ??
     new ToolResultTokenBudget(input.resultTokenBudget);
 
-  function reserveRead(): void {
+  function observeRead(): void {
     readCount += 1;
-    if (readCount > MAX_SOURCE_READS_PER_ANSWER) throw new SourceReadBudgetError();
   }
 
   function anchor(assertionRef: string) {
@@ -181,7 +171,7 @@ export function createSourceDocumentToolset(input: {
   }
 
   async function executeRead(rawArgs: z.infer<typeof sourceReadInputSchema>) {
-    reserveRead();
+    observeRead();
     const args: SourceReadInput = sourceReadVariantSchema.parse({
       ...rawArgs,
       beforeBlocks: rawArgs.beforeBlocks ?? 0,

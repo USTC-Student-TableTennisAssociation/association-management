@@ -58,6 +58,18 @@ export type LibraryInventory = InventoryBoundary & {
     ready: number;
     failed: number;
   };
+  processing: {
+    notStarted: number;
+    active: number;
+    completed: number;
+    failed: number;
+    note: string;
+  };
+  publication: {
+    publishedContents: number;
+    sourceDocuments: number;
+    note: string;
+  };
   sourceDocuments: number;
   publishedContents: number;
   failedCurrentRuns: number;
@@ -241,6 +253,28 @@ function libraryProvider(
       ]);
       const files = countBy(nodeGroups, (row) => row.kind === "file");
       const folders = countBy(nodeGroups, (row) => row.kind === "folder");
+      const statuses = {
+        idle: countBy(
+          nodeGroups,
+          (row) => row.kind === "file" && row.processingStatus === "idle",
+        ),
+        queued: countBy(
+          nodeGroups,
+          (row) => row.kind === "file" && row.processingStatus === "queued",
+        ),
+        running: countBy(
+          nodeGroups,
+          (row) => row.kind === "file" && row.processingStatus === "running",
+        ),
+        ready: countBy(
+          nodeGroups,
+          (row) => row.kind === "file" && row.processingStatus === "ready",
+        ),
+        failed: countBy(
+          nodeGroups,
+          (row) => row.kind === "file" && row.processingStatus === "failed",
+        ),
+      };
       return {
         coverage: "complete",
         measurement: "exact",
@@ -262,27 +296,20 @@ function libraryProvider(
             (row) => row.kind === "file" && row.processingProfile === "deep",
           ),
         },
-        statuses: {
-          idle: countBy(
-            nodeGroups,
-            (row) => row.kind === "file" && row.processingStatus === "idle",
-          ),
-          queued: countBy(
-            nodeGroups,
-            (row) => row.kind === "file" && row.processingStatus === "queued",
-          ),
-          running: countBy(
-            nodeGroups,
-            (row) => row.kind === "file" && row.processingStatus === "running",
-          ),
-          ready: countBy(
-            nodeGroups,
-            (row) => row.kind === "file" && row.processingStatus === "ready",
-          ),
-          failed: countBy(
-            nodeGroups,
-            (row) => row.kind === "file" && row.processingStatus === "failed",
-          ),
+        statuses,
+        processing: {
+          notStarted: statuses.idle,
+          active: statuses.queued + statuses.running,
+          completed: statuses.ready,
+          failed: statuses.failed,
+          note:
+            "processing 依据执行 status 汇总；profile 是选择的处理深度，不能替代执行状态。",
+        },
+        publication: {
+          publishedContents,
+          sourceDocuments,
+          note:
+            "发布状态独立于 profile/status；只有这里的计数或具体 run 的 publishedAt 才证明结果已进入 Shared Brain。",
         },
         sourceDocuments,
         publishedContents,

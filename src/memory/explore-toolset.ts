@@ -12,15 +12,6 @@ import {
 } from "@/memory/explore";
 import type { MemoryRetrievalResult, MemorySearchTrace } from "@/memory/types";
 
-const MAX_TOOL_CALLS_PER_ANSWER = 6;
-
-export class MemoryExploreBudgetError extends Error {
-  constructor() {
-    super(`本轮最多执行 ${MAX_TOOL_CALLS_PER_ANSWER} 次记忆检索工具`);
-    this.name = "MemoryExploreBudgetError";
-  }
-}
-
 export class UnknownExploreObjectError extends Error {
   constructor(objectRef: string) {
     super(
@@ -174,11 +165,8 @@ export function createMemoryExploreToolset(input: {
   const resultBudget = input.sharedResultBudget ??
     new ToolResultTokenBudget(input.resultTokenBudget);
 
-  function reserveCall(): void {
+  function observeCall(): void {
     toolCalls += 1;
-    if (toolCalls > MAX_TOOL_CALLS_PER_ANSWER) {
-      throw new MemoryExploreBudgetError();
-    }
   }
 
   function merge(result: MemoryExploreResult) {
@@ -248,7 +236,7 @@ export function createMemoryExploreToolset(input: {
           if (!objectId) throw new UnknownExploreObjectError(objectRef);
           return objectId;
         });
-        reserveCall();
+        observeCall();
         return merge(await searchMemoryIndex({
           query,
           targetHints: targetHints ?? [],
@@ -280,7 +268,7 @@ export function createMemoryExploreToolset(input: {
       execute: async ({ objectRef, focus }) => {
         const globalObjectId = input.evidence.objectIdForRef(objectRef);
         if (!globalObjectId) throw new UnknownExploreObjectError(objectRef);
-        reserveCall();
+        observeCall();
         return merge(
           await followMemoryObject(globalObjectId, focus, {
             signal: input.signal,
@@ -290,7 +278,3 @@ export function createMemoryExploreToolset(input: {
     }),
   };
 }
-
-export const memoryExploreToolLimits = {
-  callsPerAnswer: MAX_TOOL_CALLS_PER_ANSWER,
-} as const;

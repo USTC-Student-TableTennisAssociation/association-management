@@ -2,16 +2,15 @@ import {
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
+  generateText,
   getToolName,
   isToolUIPart,
   type ModelMessage,
   pruneMessages,
   safeValidateUIMessages,
-  stepCountIs,
   streamText,
   tool,
   type ToolSet,
-  type UIMessageChunk,
   zodSchema,
 } from "ai";
 import { z } from "zod";
@@ -22,19 +21,25 @@ import {
 } from "@/ai/chat-policy";
 import { citedRefs } from "@/ai/citation-refs";
 import {
-  auditGroundedAnswer,
-  GroundingState,
-  type GroundingAudit,
-} from "@/ai/grounding-gates";
+  buildAnswerRepairPrompt,
+  verificationFailureAnswer,
+  verifyGroundedAnswer,
+  type AnswerVerification,
+} from "@/ai/answer-verifier";
+import { ANSWER_PRESENTATION_INSTRUCTIONS } from "@/ai/answer-presentation";
+import { governFinalAnswerStream } from "@/ai/answer-stream-governor";
 import {
-  activeCapabilityToolNames,
-  capabilityGatewayToolNames,
   createCapabilityGatewayTools,
   createOpenedCapabilities,
-  detailedToolNames,
   TURN_KERNEL_INSTRUCTIONS,
 } from "@/ai/capability-gates";
+import { CapabilityLedger } from "@/ai/capability-ledger";
 import { aiInvocationSchema } from "@/ai/ai-invocation";
+import {
+  evaluateAgentRunGuard,
+  incompleteRunInstruction,
+  type AgentRunInterruptionReason,
+} from "@/ai/agent-run-guard";
 import { buildCapabilityInstructions } from "@/ai/capability-instructions";
 import { ContextPackingError, packContext } from "@/ai/context-packer";
 import { buildCurrentTimeInstruction } from "@/ai/current-time-context";
@@ -57,14 +62,15 @@ import {
   type ChatStreamObservation,
 } from "@/ai/chat-stream-status";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
-import { resolveTurnHandoff } from "@/ai/turn-handoff";
+import {
+  buildRuntimeAnswerContract,
+  runtimeAnswerContractInstruction,
+} from "@/ai/runtime-answer-contract";
+import { compileActiveToolNames } from "@/ai/tool-policy";
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import { modelHistoryMessageText } from "@/ai/ui-message-text";
-import { buildViewContext } from "@/agent-runtime/view-context";
-import {
-  buildViewOrientationContext,
-  loadViewHigherMemory,
-} from "@/agent-runtime/view-orientation";
+import { buildViewCatalogContext } from "@/agent-runtime/view-catalog";
+import { createViewStateRuntime } from "@/agent-runtime/view-state-runtime";
 import { createAgentViewToolset, registeredViewKeySchema } from "@/agent-runtime/view-toolset";
 import { createAgentToolProviderToolset } from "@/agent-runtime/tool-provider-toolset";
 import {
@@ -88,6 +94,7 @@ import {
   artifactSearchEvidenceSemantics,
   retrievalEvidenceSemantics,
 } from "@/evidence/tool-semantics";
+import { TurnEvidenceContext } from "@/evidence/turn-context";
 import {
   findArtifactsByTitle,
   getArtifactPublishedKnowledge,
@@ -156,19 +163,8 @@ import { emptySeedMap } from "@/memory/types";
 
 export const maxDuration = 3_600;
 
-// View → Search → optional original-source reads/continuations → Proposal → final answer.
-const MAX_EXPLORE_STEPS = 12;
 const EXPLORE_PROTOCOL_RESERVE_TOKENS = 4_000;
-
-
-const FINAL_ANSWER_INSTRUCTION =
-  "当前是本轮最后的回答 step，工具已停用。请立即基于现有正式 View、Assertion、已经读取的原文或资料库索引完成最终回答；若证据不足则明确说明，并保留正确的 [V#]/[A#]/[S#]/[F#] 引用。";
-
-const TURN_HANDOFF_TOOL = "submitTurnHandoff";
-const turnHandoffSchema = z.object({
-  reviewNeeded: z.boolean(),
-  candidateQuotes: z.array(z.string().trim().min(1).max(300)).max(3),
-});
+const LEGACY_TURN_HANDOFF_TOOL = "submitTurnHandoff";
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null
@@ -176,11 +172,22 @@ function objectValue(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function isContextCapacityError(error: unknown): boolean {
+  const record = objectValue(error);
+  const name = error instanceof Error
+    ? error.name
+    : typeof record?.name === "string"
+      ? record.name
+      : "";
+  return name === "MemoryExploreContextBudgetError" ||
+    name === "SourceDocumentContextBudgetError";
+}
+
 function withoutTurnHandoff(message: ClubChatMessage): ClubChatMessage {
   return {
     ...message,
     parts: message.parts.filter((part) =>
-      !isToolUIPart(part) || getToolName(part) !== TURN_HANDOFF_TOOL
+      !isToolUIPart(part) || getToolName(part) !== LEGACY_TURN_HANDOFF_TOOL
     ),
   };
 }
@@ -270,64 +277,6 @@ function searchBundle(
       ? { trace }
       : {}),
   };
-}
-
-/** Buffer model prose until the final server-side grounding audit has passed. */
-function bufferFinalAnswerStream<T extends UIMessageChunk>(
-  stream: ReadableStream<UIMessageChunk>,
-  resolveFinalText: (rawText: string) => string,
-): ReadableStream<T> {
-  let currentStepText = "";
-  let lastCompletedText = "";
-  let pendingFinishStep: UIMessageChunk | undefined;
-  let answerEmitted = false;
-
-  const emitAnswer = (controller: TransformStreamDefaultController<UIMessageChunk>) => {
-    if (answerEmitted) return;
-    answerEmitted = true;
-    const text = resolveFinalText(lastCompletedText || currentStepText);
-    const id = "grounded-final-answer";
-    controller.enqueue({ type: "text-start", id });
-    if (text) controller.enqueue({ type: "text-delta", id, delta: text });
-    controller.enqueue({ type: "text-end", id });
-  };
-
-  return stream.pipeThrough(new TransformStream<UIMessageChunk, UIMessageChunk>({
-    transform(chunk, controller) {
-      if (pendingFinishStep && chunk.type !== "finish") {
-        controller.enqueue(pendingFinishStep);
-        pendingFinishStep = undefined;
-      }
-      switch (chunk.type) {
-        case "start-step":
-          currentStepText = "";
-          controller.enqueue(chunk);
-          return;
-        case "text-start":
-        case "text-end":
-          return;
-        case "text-delta":
-          currentStepText += chunk.delta;
-          return;
-        case "finish-step":
-          lastCompletedText = currentStepText;
-          pendingFinishStep = chunk;
-          return;
-        case "finish":
-          emitAnswer(controller);
-          if (pendingFinishStep) controller.enqueue(pendingFinishStep);
-          pendingFinishStep = undefined;
-          controller.enqueue(chunk);
-          return;
-        default:
-          controller.enqueue(chunk);
-      }
-    },
-    flush(controller) {
-      if (!answerEmitted && (lastCompletedText || currentStepText)) emitAnswer(controller);
-      if (pendingFinishStep) controller.enqueue(pendingFinishStep);
-    },
-  })) as ReadableStream<T>;
 }
 
 function compactExploreStepMessages(messages: ModelMessage[]): ModelMessage[] {
@@ -471,6 +420,7 @@ export async function POST(request: Request) {
         version: activation.extension.version,
         input: activation.input,
         viewAccess: activation.extension.viewAccess,
+        resourceAccess: activation.extension.resourceAccess ?? [],
       });
     } catch (error) {
       await debugTrace.appendError("Skill 预激活失败", error);
@@ -544,7 +494,7 @@ export async function POST(request: Request) {
     console.error("[chat.ambient-higher-memory.load]", error);
     await debugTrace.appendError("Ambient Higher Memory 加载失败", error);
   }
-  const viewOrientationContext = buildViewOrientationContext(extensionRegistry);
+  const viewCatalogContext = buildViewCatalogContext(extensionRegistry);
 
   let model;
   try {
@@ -615,9 +565,10 @@ export async function POST(request: Request) {
     originalMessages: messages,
     execute: async ({ writer }) => {
       const evidence = new MemoryEvidenceAccumulator(context.retrieval);
-      const groundingState = new GroundingState(query, pageContext);
+      const turnEvidence = new TurnEvidenceContext(pageContext);
+      const capabilityLedger = new CapabilityLedger();
       if (actorPrivateMemory.higherMemories.length > 0) {
-        groundingState.observeActorPrivateMemory();
+        turnEvidence.observeActorPrivateMemory();
       }
       const artifactReferences = createArtifactReferenceRegistry();
       const openedCapabilities = createOpenedCapabilities();
@@ -629,6 +580,8 @@ export async function POST(request: Request) {
             version: activation.extension.version,
             input: activation.input,
             viewAccess: activation.extension.viewAccess,
+            resourceAccess: activation.extension.resourceAccess ?? [],
+            activeSkills: skillSession.activeSkillIds(),
           });
         },
       });
@@ -658,11 +611,15 @@ export async function POST(request: Request) {
       let hasSearchedMemory = false;
       const coldHigherMemoryTargetIds = new Set<string>();
       let latestLocateTrace: MemorySearchTrace | undefined;
-      let turnHandoffSubmitted = false;
       let proposalReceiptCount = 0;
       let viewCommandAttemptCount = 0;
       let finalRawText = "";
-      let finalAudit: GroundingAudit | undefined;
+      let finalAnswer = "";
+      let finalVerification: AnswerVerification | undefined;
+      let verificationRepairAttempted = false;
+      let verificationRepairSucceeded = false;
+      let answerWasStreamed = false;
+      let streamedVerificationWarning = false;
       const actorHigherMemoryWriteToolset = createActorHigherMemoryWriteToolset({
         actorId: requestActor.id,
         currentMessageId: latestUserMessage.id,
@@ -670,10 +627,10 @@ export async function POST(request: Request) {
         trace: debugTrace,
         onCommitted: (summary) => {
           if (summary.replacedScopes.length + summary.clearedScopes.length > 0) {
-            groundingState.observeDurableMemoryWrite();
+            turnEvidence.observeDurableMemoryWrite();
           }
           if (summary.replacedScopes.length > 0) {
-            groundingState.observeActorPrivateMemory();
+            turnEvidence.observeActorPrivateMemory();
           }
         },
       });
@@ -687,6 +644,19 @@ export async function POST(request: Request) {
         modelCallCount: 0,
         retryCount: 0,
         streamEnded: false,
+      };
+      let runInterruption: {
+        reason: AgentRunInterruptionReason;
+        detail: string;
+      } | undefined;
+      const interruptRun = (
+        reason: AgentRunInterruptionReason,
+        detail: string,
+      ) => {
+        if (runInterruption) return;
+        runInterruption = { reason, detail };
+        streamObservation.interruptionReason = runInterruption.reason;
+        void debugTrace.appendJsonSection("Agent RunGuard 熔断", runInterruption);
       };
       const modelCallAttempts = createModelCallAttemptTracker();
       let currentStepTextChars = 0;
@@ -718,11 +688,17 @@ export async function POST(request: Request) {
         onEvidence: (current, discovered) => {
           openedCapabilities.sharedBrain = true;
           hasSearchedMemory = true;
-          groundingState.observeSharedBrainTarget();
+          turnEvidence.observeSharedBrainTarget();
           if (discovered.coverage) {
-            groundingState.observeCoverage("shared_brain", discovered.coverage);
+            turnEvidence.observeCoverage({
+              layer: "shared_brain",
+              scope: discovered.globalObjectId
+                ? `object:${discovered.globalObjectId}`
+                : `query:${discovered.query ?? discovered.focus ?? "unknown"}`,
+              coverage: discovered.coverage,
+            });
           }
-          groundingState.observeSemantics(discovered.semantics);
+          turnEvidence.observeSemantics(discovered.semantics);
           if (discovered.knowledgeState?.higherMemory === "absent") {
             coldHigherMemoryTargetIds.add(discovered.knowledgeState.targetObjectId);
           }
@@ -750,7 +726,7 @@ export async function POST(request: Request) {
               [],
               [],
               latestLocateTrace,
-              groundingState.contract().coverageByLayer,
+              turnEvidence.contract().coverageByLayer,
             ),
           });
         },
@@ -785,21 +761,33 @@ export async function POST(request: Request) {
         resolveObjectReference: (reference) => {
           return evidence.objectForModelReference(reference);
         },
-        onQueryResult: ({ complete, sourceCardCount, reason }) => {
-          groundingState.observeCoverage("business_view", {
-            level: complete ? "complete" : "partial",
-            missingAspects: reason ? [reason] : [],
-            observationComplete: complete,
-            contentPresence: sourceCardCount > 0
-              ? "present"
-              : complete
-                ? "absent"
-                : "unknown",
+        onQueryResult: ({
+          viewKey,
+          queryKey,
+          complete,
+          sourceCardCount,
+          semantics,
+          reason,
+        }) => {
+          turnEvidence.observeCoverage({
+            layer: "business_view",
+            scope: `view:${viewKey}:query:${queryKey}`,
+            coverage: {
+              level: complete ? "complete" : "partial",
+              missingAspects: reason ? [reason] : [],
+              observationComplete: complete,
+              contentPresence: sourceCardCount > 0
+                ? "present"
+                : complete
+                  ? "absent"
+                  : "unknown",
+            },
           });
+          turnEvidence.observeSemantics(semantics);
         },
         onCommandAttempt: () => {
           viewCommandAttemptCount += 1;
-          groundingState.observeBusinessViewActionRequest();
+          turnEvidence.observeViewActionRequest();
         },
         onProposal: (proposal) => {
           proposalReceiptCount += 1;
@@ -813,11 +801,14 @@ export async function POST(request: Request) {
         },
       });
       const libraryToolset = createLibraryToolset({
+        onList: () => {
+          openedCapabilities.libraryIndexRead = true;
+        },
         onProposal: (proposal) => {
           proposalReceiptCount += 1;
           writer.write({ type: "data-libraryProposal", data: proposal });
         },
-        onPreview: (preview) => groundingState.observeLibraryPreview(preview),
+        onPreview: (preview) => turnEvidence.observeLibraryPreview(preview),
       });
       const knowledgeEnvironmentTool = createKnowledgeEnvironmentTool({
         dependencies: {
@@ -827,44 +818,56 @@ export async function POST(request: Request) {
         },
         onInspect: (inventory) => {
           firstAuthoritativeTool ??= "inspectKnowledgeEnvironment";
-          groundingState.observeKnowledgeInventory();
+          turnEvidence.observeKnowledgeInventory();
           if (inventory.sharedBrain) {
             sourceLayersUsed.add("shared_brain");
-            groundingState.observeCoverage("shared_brain", {
-              level: "complete",
-              missingAspects: [],
-              observationComplete: true,
-              contentPresence:
-                inventory.sharedBrain.objects +
-                    inventory.sharedBrain.assertions.total +
-                    inventory.sharedBrain.higherMemories.object +
-                    inventory.sharedBrain.higherMemories.ambient > 0
-                  ? "present"
-                  : "absent",
+            turnEvidence.observeCoverage({
+              layer: "shared_brain",
+              scope: "inventory",
+              coverage: {
+                level: "complete",
+                missingAspects: [],
+                observationComplete: true,
+                contentPresence:
+                  inventory.sharedBrain.objects +
+                      inventory.sharedBrain.assertions.total +
+                      inventory.sharedBrain.higherMemories.object +
+                      inventory.sharedBrain.higherMemories.ambient > 0
+                    ? "present"
+                    : "absent",
+              },
             });
           }
           if (inventory.library) {
             sourceLayersUsed.add("library");
-            groundingState.observeCoverage("library", {
-              level: "complete",
-              missingAspects: [],
-              observationComplete: true,
-              contentPresence: inventory.library.files + inventory.library.folders > 0
-                ? "present"
-                : "absent",
+            turnEvidence.observeCoverage({
+              layer: "library",
+              scope: "inventory",
+              coverage: {
+                level: "complete",
+                missingAspects: [],
+                observationComplete: true,
+                contentPresence: inventory.library.files + inventory.library.folders > 0
+                  ? "present"
+                  : "absent",
+              },
             });
           }
           if (inventory.businessViews) {
             sourceLayersUsed.add("business_view");
-            groundingState.observeCoverage("business_view", {
-              level: "complete",
-              missingAspects: [],
-              observationComplete: true,
-              contentPresence:
-                inventory.businessViews.totalCards +
-                    inventory.businessViews.views.filter((view) => view.higherMemory).length > 0
-                  ? "present"
-                  : "absent",
+            turnEvidence.observeCoverage({
+              layer: "business_view",
+              scope: "inventory",
+              coverage: {
+                level: "complete",
+                missingAspects: [],
+                observationComplete: true,
+                contentPresence:
+                  inventory.businessViews.totalCards +
+                      inventory.businessViews.views.filter((view) => view.higherMemory).length > 0
+                    ? "present"
+                    : "absent",
+              },
             });
           }
         },
@@ -874,8 +877,8 @@ export async function POST(request: Request) {
         resultTokenBudget: exploreResultTokenBudget,
         sharedResultBudget,
         onRead: (sourceRead) => {
-          groundingState.observeSourceDocument(sourceRead);
-          groundingState.observeSemantics(sourceRead.semantics);
+          turnEvidence.observeSourceDocument(sourceRead);
+          turnEvidence.observeSemantics(sourceRead.semantics);
         },
       });
       const globalToolProviderToolset = createAgentToolProviderToolset({
@@ -899,27 +902,24 @@ export async function POST(request: Request) {
           ...artifactReferences.availableRefs(),
         ];
       };
-      const auditAnswer = (rawText: string): GroundingAudit => {
-        if (finalAudit && rawText.trim() === finalRawText.trim()) return finalAudit;
-        return auditGroundedAnswer({
-          text: rawText,
-          contract: groundingState.contract(),
-          validRefs: validReferenceRefs(),
-        });
-      };
+      const resolvedAnswerText = (rawText: string) =>
+        finalAnswer && rawText.trim() === finalRawText.trim()
+          ? finalAnswer
+          : rawText;
       const exploreSystem = [
         context.system,
         currentTimeInstruction,
         authenticatedUserInstruction(authenticatedUser),
         pageContextInstruction(pageContext),
         TURN_KERNEL_INSTRUCTIONS,
-        viewOrientationContext,
+        ANSWER_PRESENTATION_INSTRUCTIONS,
+        viewCatalogContext,
       ].filter(Boolean).join("\n\n");
       await debugTrace.appendJsonSection("服务端 View 预读取", {
         requestedViewKeys: [],
         prefetchedViewKeys: [],
         durationMs: 0,
-        note: "首轮只注入短 View Compass；Higher Memory 和精确状态在打开业务能力后读取。",
+        note: "首轮注入权威静态 View Catalog；当前 Card 清单由 listViewCards 读取，Higher Memory 和具体 Card 的详细状态只在 readViewState 后读取。",
       });
       const assertionQueueToolset = createChatAssertionQueueTool({
         trace: debugTrace,
@@ -983,73 +983,43 @@ export async function POST(request: Request) {
         },
         onForegroundResult: (captureResult) => {
           if (captureResult.publishedAssertions > 0) {
-            groundingState.observeDurableMemoryWrite();
+            turnEvidence.observeDurableMemoryWrite();
           }
           objectManagementToolset.registerPublishedMemory(captureResult);
           viewToolset.registerPublishedObjects(captureResult.affectedObjects);
         },
       });
       const knownArtifactNodeIds = new Set<string>();
+      const viewStateRuntime = createViewStateRuntime({
+        registry: extensionRegistry,
+        evidence,
+        userQuery: query,
+        pageContext,
+        readSnapshot: viewToolset.readSnapshot,
+        resolveCardReference: viewToolset.resolveCardReference,
+        presentCards: viewToolset.presentCards,
+        onObserved: (observation) => turnEvidence.observeViewState(observation),
+        onListObserved: (observation) => turnEvidence.observeViewCardList(observation),
+      });
       const gatewayTools = createCapabilityGatewayTools(openedCapabilities, {
         viewKeySchema: registeredViewKeySchema(extensionRegistry),
         describeBusinessViewActions: (viewKey) => viewToolset.describeCommands(viewKey),
         locateObjectViews: ({ objectRef }) => viewToolset.locateObjectViews(objectRef),
-        authorizeAction: (area, businessViewKey) => ({
-          allowed: skillSession.canOpenAction(area, businessViewKey),
-          reason: skillSession.active()
-            ? `已激活 Skill ${skillSession.active()!.extension.id} 未声明该 Action 权限。`
+        authorizeAction: (area, viewKey) => ({
+          allowed: skillSession.canOpenAction(area, viewKey),
+          reason: skillSession.activations().length
+            ? `已激活 Skills ${skillSession.activeSkillIds().join("、")} 未声明该 Action 权限。`
             : undefined,
         }),
-        openBusinessContext: async ({
-          viewKey,
-          focus,
-          targetHints,
-          targetObjectRefs,
-        }) => {
-          const viewModule = extensionRegistry.getView(viewKey)!;
-          const targetObjects = targetObjectRefs.map((objectRef) => {
-            const object = evidence.objectForModelReference(objectRef);
-            if (!object) {
-              throw new Error(
-                `Object 引用 ${objectRef} 尚未出现在本轮知识或业务上下文中；请先检索并使用真实 O#`,
-              );
-            }
-            return object;
-          });
-          const [snapshot, viewHigherMemory] = await Promise.all([
-            viewToolset.readView(viewKey),
-            loadViewHigherMemory(viewKey),
-          ]);
-          const refersToCurrentPage = /(这个|这份|这里|当前|该节点|该对象|此处|本页)/u.test(query);
-          const pageTargetHints = [...new Set([
-            ...targetHints,
-            ...targetObjects.map((object) => object.canonicalName),
-            ...(refersToCurrentPage && pageContext?.activeObjectName
-              ? [pageContext.activeObjectName]
-              : []),
-          ])];
-          const businessContext = await buildViewContext({
-            snapshot,
-            viewLabel: viewModule.manifest.label,
-            viewDescription: viewModule.manifest.description,
-            aiSemanticInstructions: viewModule.manifest.aiSemanticInstructions,
-            cardTypes: viewModule.schema.cardTypes,
-            focus,
-            targetHints: pageTargetHints,
-            targetObjectIds: targetObjects.map((object) => object.id),
-            activeCardId: refersToCurrentPage
-              ? pageContext?.activeCardId
-              : undefined,
-          });
-          groundingState.observeBusinessContext({
-            view: businessContext.view,
-            targetHints: pageTargetHints,
-            relevantCards: businessContext.relevantCards,
-            coverage: businessContext.evidence.coverage,
-            semantics: businessContext.semantics,
-          });
-          const discovered = evidence.merge(businessContext.evidence);
-          firstAuthoritativeTool ??= "openBusinessContext";
+        listViewCards: async (request) => {
+          const { output } = await viewStateRuntime.list(request);
+          firstAuthoritativeTool ??= "listViewCards";
+          sourceLayersUsed.add("business_view");
+          return output;
+        },
+        readViewState: async (request) => {
+          const { output, discovered } = await viewStateRuntime.read(request);
+          firstAuthoritativeTool ??= "readViewState";
           sourceLayersUsed.add("business_view");
           if (discovered.higherMemories?.length) {
             sourceLayersUsed.add("shared_brain");
@@ -1060,42 +1030,19 @@ export async function POST(request: Request) {
                 [],
                 [],
                 latestLocateTrace,
-                groundingState.contract().coverageByLayer,
+                turnEvidence.contract().coverageByLayer,
               ),
             });
           }
-          const objectRefById = new Map(
-            discovered.objects.map((object) => [object.id, object.ref] as const),
-          );
-          return {
-            view: businessContext.view,
-            queries: viewToolset.describeQueries(viewKey),
-            cardTypes: viewModule.schema.cardTypes,
-            viewHigherMemory: viewHigherMemory ?? null,
-            relevantCards: viewToolset.presentCards(
-              businessContext.relevantCards,
-              objectRefById,
-            ),
-            cardObjects: discovered.objects,
-            objectHigherMemories: discovered.higherMemories ?? [],
-            formalCardMissing: businessContext.formalCardMissing,
-            unresolvedAspects: businessContext.unresolvedAspects,
-            coverage: businessContext.evidence.coverage,
-            semantics: businessContext.semantics,
-            next: businessContext.formalCardMissing
-              ? "当前正式 View 的存在性与收录状态已经可以直接回答：没有匹配 Card。只有用户还要求相关业务事实或补建依据时，才使用 expandEvidence；相关资料不得冒充正式 View。"
-              : businessContext.unresolvedAspects.length
-                ? "需要筛选、汇总、比较或趋势时，先使用匹配的 View Query；如果知识缺口会影响回答，再使用 expandEvidence。用户确认或后续可靠证据足以填补稳定 View 缺口时，使用 openActions(business_view) 生成待审批 Proposal。"
-              : "当前 View 没有 schema-required 缺口。需要专业读取时使用匹配的 View Query；否则依据用户目标和 relevantCards 直接回答，只有需要修改时才打开 Actions。",
-          };
+          return output;
         },
         findArtifacts: async ({ title, purpose }) => {
           const result = await findArtifactsByTitle({ title });
           const referencedResult = artifactReferences.attachSearchReferences(result);
           const semantics = artifactSearchEvidenceSemantics(referencedResult);
           referencedResult.items.forEach((item) => knownArtifactNodeIds.add(item.nodeId));
-          groundingState.observeArtifactSearch({ ...referencedResult, purpose });
-          groundingState.observeSemantics(semantics);
+          turnEvidence.observeArtifactSearch({ ...referencedResult, purpose });
+          turnEvidence.observeSemantics(semantics);
           firstAuthoritativeTool ??= "openArtifacts";
           sourceLayersUsed.add("library");
           return { ...referencedResult, semantics };
@@ -1152,12 +1099,12 @@ export async function POST(request: Request) {
             absentSummary: "该文件当前页没有返回可用的已发布 Assertion。",
             unknownSummary: "该文件的已发布知识尚未被完整观察。",
           });
-          groundingState.observeArtifactKnowledge({
+          turnEvidence.observeArtifactKnowledge({
             nodeId,
             assertionCount: result.evidence.assertions.length,
             coverage: result.evidence.coverage,
           });
-          groundingState.observeSemantics(semantics);
+          turnEvidence.observeSemantics(semantics);
           sourceLayersUsed.add("library");
           if (discovered.assertions.length || discovered.higherMemories?.length) {
             sourceLayersUsed.add("shared_brain");
@@ -1168,7 +1115,7 @@ export async function POST(request: Request) {
                 [],
                 [],
                 latestLocateTrace,
-                groundingState.contract().coverageByLayer,
+                turnEvidence.contract().coverageByLayer,
               ),
             });
           }
@@ -1189,15 +1136,6 @@ export async function POST(request: Request) {
           };
         },
       });
-      const submitTurnHandoff = tool({
-        description:
-          "与本轮完整最终回答在同一次响应中调用。只判断当前用户原话是否包含值得独立知识审查的新事实、纠正、决定、计划或状态变化；纯问题和检索过程不审查。",
-        inputSchema: turnHandoffSchema,
-        execute: async (handoff) => {
-          turnHandoffSubmitted = true;
-          return { accepted: true, ...handoff };
-        },
-      });
       const allTools: ToolSet = {
         ...skillToolset.tools,
         ...gatewayTools,
@@ -1215,53 +1153,49 @@ export async function POST(request: Request) {
         inspectKnowledgeEnvironment: knowledgeEnvironmentTool,
         ...globalToolProviderToolset.tools,
         openArtifactKnowledge,
-        queueChatAssertionCapture: assertionQueueToolset.tool,
-        queueHigherMemoryMaintenance: higherMemoryQueueToolset.tool,
+        publishUserFactForView: assertionQueueToolset.foregroundTool,
         updateActorHigherMemory: actorHigherMemoryWriteToolset.tool,
-        queueActorHigherMemoryMaintenance: actorHigherMemoryQueueToolset.tool,
-        submitTurnHandoff,
       };
-      const alwaysAvailableToolNames = [
-        ...skillToolset.toolNames,
-        "searchMemory",
-        "inspectKnowledgeEnvironment",
-        "readMemoryWriteStatus",
-        "queueChatAssertionCapture",
-        "queueHigherMemoryMaintenance",
-        "updateActorHigherMemory",
-        "queueActorHigherMemoryMaintenance",
-        TURN_HANDOFF_TOOL,
-        ...globalToolProviderToolset.toolNames,
-      ];
       const activeViewQueryToolNames = () =>
-        viewToolset.queryToolNames(openedCapabilities.businessViewKeys);
-      const exposedToolNames = [
-        ...capabilityGatewayToolNames,
-        ...alwaysAvailableToolNames,
-      ].filter((name) =>
-        Boolean(allTools[name])
-      );
+        viewToolset.queryToolNames(openedCapabilities.openedViewKeys);
+      const compiledActiveToolNames = () => compileActiveToolNames({
+        availableToolNames: Object.keys(allTools),
+        state: {
+          viewStateOpened: openedCapabilities.viewStateOpened,
+          artifactsOpened: openedCapabilities.artifacts,
+          libraryIndexRead: openedCapabilities.libraryIndexRead,
+          sharedBrainOpened: openedCapabilities.sharedBrain,
+          memoryPurpose: openedCapabilities.memoryPurpose,
+          actionAreas: openedCapabilities.actionAreas,
+          objectEvidenceAvailable: evidence.snapshot().seedMap.objects.length > 0,
+        },
+        skillToolNames: skillToolset.toolNames,
+        viewQueryToolNames: activeViewQueryToolNames(),
+        providerToolNames: globalToolProviderToolset.toolNames,
+      });
+      const exposedToolNames = compiledActiveToolNames();
+      capabilityLedger.recordExposure(exposedToolNames);
+      const currentRuntimeAnswerContract = () => buildRuntimeAnswerContract({
+        evidence: turnEvidence.contract(),
+        capabilities: capabilityLedger.snapshot(),
+      });
       const stepSystem = () => {
-        const enabledDetails = [...new Set([
-          ...detailedToolNames(openedCapabilities),
-          ...activeViewQueryToolNames(),
-          ...alwaysAvailableToolNames,
-        ])]
-          .filter((name) => Boolean(allTools[name]));
+        const enabledDetails = compiledActiveToolNames();
         if (!enabledDetails.length) {
-          return [
-            exploreSystem,
-            groundingState.instruction(),
-          ].filter(Boolean).join("\n\n");
+          return exploreSystem;
         }
-        const preferredKnowledgeLayer = openedCapabilities.artifacts &&
-            !openedCapabilities.businessContext && !openedCapabilities.sharedBrain
+        const preferredKnowledgeLayer = (openedCapabilities.artifacts ||
+            openedCapabilities.libraryIndexRead) &&
+            !openedCapabilities.viewStateOpened && !openedCapabilities.sharedBrain
           ? "library" as const
-          : openedCapabilities.businessContext
+          : openedCapabilities.viewStateOpened
             ? "business_view" as const
             : openedCapabilities.sharedBrain
               ? "shared_brain" as const
               : "unknown" as const;
+        const answerContract = runtimeAnswerContractInstruction(
+          currentRuntimeAnswerContract(),
+        );
         return [
           exploreSystem,
           skillSession.instructions(),
@@ -1269,12 +1203,12 @@ export async function POST(request: Request) {
             preferredKnowledgeLayer,
             toolNames: enabledDetails,
           }),
-          groundingState.instruction(),
+          answerContract,
         ].join("\n\n");
       };
       await debugTrace.appendJsonSection("本轮工具暴露", {
         exposedToolNames,
-        note: "首次调用提供知识环境库存、业务上下文、Object 跨 View 定位、资料与 Action 入口，以及主题语义搜索、记忆状态、Higher Memory 维护意图与 Handoff；其他详细工具按需开放。",
+        note: "主模型负责语义工具选择；Runtime Capability Compiler 只暴露满足权限、Evidence 和工作流前置条件的能力。后台记忆治理与 Handoff 不进入前台工具面。",
       });
       const result = streamText({
         model,
@@ -1282,42 +1216,62 @@ export async function POST(request: Request) {
         messages: context.messages,
         tools: allTools,
         toolChoice: "auto",
-        stopWhen: [
-          stepCountIs(MAX_EXPLORE_STEPS),
-          ({ steps }) => {
-            const finalStep = steps.at(-1);
-            if (!finalStep?.text.trim()) return false;
-            // Tool-calling steps always get a following answer step. A short
-            // pre-tool preamble is not a completed action plan.
-            if (finalStep.toolCalls.length > 0) return false;
-            if (
-              openedCapabilities.actionAreas.has("business_view") &&
-              viewCommandAttemptCount === 0
-            ) return false;
-            return true;
-          },
-        ],
-        prepareStep: ({ stepNumber, messages: stepMessages }) => {
+        stopWhen: ({ steps }) => {
+          const finalStep = steps.at(-1);
+          if (runInterruption && finalStep?.toolCalls.length === 0) return true;
+          if (!finalStep?.text.trim()) return false;
+          // Tool-calling steps always get a following answer step. A short
+          // pre-tool preamble is not a completed action plan.
+          if (finalStep.toolCalls.length > 0) return false;
+          if (
+            openedCapabilities.actionAreas.has("business_view") &&
+            viewCommandAttemptCount === 0 &&
+            !runInterruption
+          ) return false;
+          return true;
+        },
+        prepareStep: ({ stepNumber, steps, messages: stepMessages }) => {
           const instructions = stepSystem();
-          if (stepNumber === MAX_EXPLORE_STEPS - 1 || exploreResultTokenBudget === 0) {
+          if (!runInterruption && exploreResultTokenBudget === 0) {
+            interruptRun(
+              "context_capacity_exhausted",
+              "当前请求已没有可安全容纳工具结果的上下文容量",
+            );
+          }
+          if (!runInterruption) {
+            const guardDecision = evaluateAgentRunGuard({
+              stepNumber,
+              toolCalls: steps.flatMap((step) => step.toolCalls.map((call) => ({
+                toolName: call.toolName,
+                input: call.input,
+              }))),
+              emergencyStepLimit: profile.agentEmergencyStepLimit,
+              repeatedToolCallLimit: profile.agentRepeatedToolCallLimit,
+            });
+            if (guardDecision.interrupted) {
+              interruptRun(guardDecision.reason, guardDecision.detail);
+            }
+          }
+          if (runInterruption) {
             return {
               ...(stepNumber > 0
                 ? { messages: compactExploreStepMessages(stepMessages) }
                 : {}),
               activeTools: [] as const,
               toolChoice: "none" as const,
-              instructions: stepNumber === MAX_EXPLORE_STEPS - 1
-                ? `${instructions}\n\n${FINAL_ANSWER_INSTRUCTION}${
-                    openedCapabilities.actionAreas.has("business_view") && viewCommandAttemptCount === 0
-                    ? "\n本轮已打开 Business View 写入能力，但没有实际调用 View Command；必须明确说明没有生成 Proposal。"
-                    : ""}`
-                : instructions,
+              instructions: `${instructions}\n\n${incompleteRunInstruction({
+                ...runInterruption,
+                missingProposal:
+                  openedCapabilities.actionAreas.has("business_view") &&
+                  viewCommandAttemptCount === 0,
+              })}`,
             };
           }
           if (
             openedCapabilities.actionAreas.has("business_view") &&
             viewCommandAttemptCount === 0
           ) {
+            capabilityLedger.recordExposure(["runViewCommand"]);
             return {
               ...(stepNumber > 0
                 ? { messages: compactExploreStepMessages(stepMessages) }
@@ -1331,26 +1285,13 @@ export async function POST(request: Request) {
               ].join("\n\n"),
             };
           }
-          if (turnHandoffSubmitted) {
-            return {
-              ...(stepNumber > 0
-                ? { messages: compactExploreStepMessages(stepMessages) }
-                : {}),
-              activeTools: [] as const,
-              toolChoice: "none" as const,
-              instructions: `${instructions}\n\n${FINAL_ANSWER_INSTRUCTION}`,
-            };
-          }
+          const activeTools = compiledActiveToolNames();
+          capabilityLedger.recordExposure(activeTools);
           return {
             ...(stepNumber > 0
               ? { messages: compactExploreStepMessages(stepMessages) }
               : {}),
-            activeTools: [
-              ...activeCapabilityToolNames(openedCapabilities),
-              ...activeViewQueryToolNames(),
-              ...alwaysAvailableToolNames,
-            ]
-              .filter((name) => Boolean(allTools[name])),
+            activeTools,
             toolChoice: "auto" as const,
             instructions,
           };
@@ -1468,11 +1409,26 @@ export async function POST(request: Request) {
           const output = event.toolOutput.type === "tool-result"
             ? event.toolOutput.output
             : event.toolOutput.error;
+          if (
+            event.toolOutput.type !== "tool-result" &&
+            isContextCapacityError(event.toolOutput.error)
+          ) {
+            interruptRun(
+              "context_capacity_exhausted",
+              "工具结果已达到本轮可安全使用的上下文容量",
+            );
+          }
           const toolName = event.toolCall.toolName;
           const queryRejected = toolName.startsWith("query_") &&
             event.toolOutput.type === "tool-result" &&
             objectValue(objectValue(output)?.error)?.code === "INVALID_VIEW_QUERY_INPUT";
           const toolSucceeded = event.toolOutput.type === "tool-result" && !queryRejected;
+          capabilityLedger.recordExecution(
+            toolName,
+            toolSucceeded,
+            output,
+            globalToolProviderToolset.toolNames.includes(toolName) ? "none" : undefined,
+          );
           if (toolName === "listLibrary" || toolName === "openArtifacts") {
             libraryQueryCount += 1;
           }
@@ -1480,7 +1436,7 @@ export async function POST(request: Request) {
             memoryQueryCount += 1;
           }
           if (event.toolOutput.type === "tool-result" && !queryRejected) {
-            const toolLayer = toolName === "readView" || toolName === "openBusinessContext" ||
+            const toolLayer = toolName === "readViewState" || toolName === "listViewCards" ||
                 toolName === "locateObjectViews" || toolName.startsWith("query_")
               ? "business_view"
               : toolName === "searchMemory" || toolName === "expandEvidence" ||
@@ -1523,18 +1479,17 @@ export async function POST(request: Request) {
           const semanticToolOutput = ["searchMemory", "expandEvidence", "followObject"]
               .includes(toolName)
             ? { note: "完整合并结果见本轮 retrieval snapshot。" }
-            : toolName === "openBusinessContext" && objectValue(output)
+            : toolName === "readViewState" && objectValue(output)
               ? (() => {
                   const businessResult = objectValue(output)!;
                   const view = objectValue(businessResult.view);
                   return {
-                    viewKey: view?.viewKey,
+                    viewKey: view?.key,
+                    targets: businessResult.targets,
                     viewHigherMemory: businessResult.viewHigherMemory,
-                    relevantCards: businessResult.relevantCards,
-                    formalCardMissing: businessResult.formalCardMissing,
-                    unresolvedAspects: businessResult.unresolvedAspects,
-                    semantics: businessResult.semantics,
-                    next: businessResult.next,
+                    matchingCards: businessResult.matchingCards,
+                    relatedObjects: businessResult.relatedObjects,
+                    missingDetails: businessResult.missingDetails,
                   };
                 })()
               : output;
@@ -1579,16 +1534,9 @@ export async function POST(request: Request) {
             }),
           );
         },
-        onFinish: async ({ text, finishReason, totalUsage, steps }) => {
+        onFinish: async ({ text, finishReason, totalUsage }) => {
           finalRawText = text;
-          const terminalStep = steps.at(-1);
-          streamObservation.terminalMetadataOnlyToolCalls = Boolean(
-            text.trim() &&
-            finishReason === "tool-calls" &&
-            terminalStep?.toolCalls.length &&
-            terminalStep.toolCalls.every((call) => call.toolName === TURN_HANDOFF_TOOL) &&
-            terminalStep.toolResults.length === terminalStep.toolCalls.length,
-          );
+          streamObservation.terminalMetadataOnlyToolCalls = false;
           streamObservation.finishReason = finishReason;
           streamObservation.streamEnded = true;
           streamObservation.contentChars = text.length;
@@ -1608,12 +1556,75 @@ export async function POST(request: Request) {
             });
             return;
           }
-          finalAudit = auditGroundedAnswer({
+          const evidenceContract = turnEvidence.contract();
+          const validRefs = validReferenceRefs();
+          finalVerification = verifyGroundedAnswer({
             text,
-            contract: groundingState.contract(),
-            validRefs: validReferenceRefs(),
+            contract: evidenceContract,
+            validRefs,
           });
-          const finalAnswer = finalAudit.text;
+          finalAnswer = text.trim();
+          if (!finalVerification.accepted && !answerWasStreamed) {
+            verificationRepairAttempted = true;
+            try {
+              const repaired = await generateText({
+                model,
+                system: [
+                  "你是 Sydaris Answer Verifier 的修正步骤。只能依据提供的 Evidence Contract 和真实引用修正答案，不得调用工具或引入新事实。",
+                  ANSWER_PRESENTATION_INSTRUCTIONS,
+                ].join("\n\n"),
+                prompt: buildAnswerRepairPrompt({
+                  originalText: text,
+                  verification: finalVerification,
+                  contract: evidenceContract,
+                  validRefs,
+                }),
+                temperature: 0.1,
+                maxOutputTokens: profile.maxOutputTokens,
+                maxRetries: profile.maxRetries,
+                timeout: {
+                  firstChunkMs: profile.modelFirstChunkTimeoutMs,
+                  chunkMs: profile.modelChunkTimeoutMs,
+                },
+                abortSignal: request.signal,
+              });
+              const repairedVerification = verifyGroundedAnswer({
+                text: repaired.text,
+                contract: evidenceContract,
+                validRefs,
+              });
+              await debugTrace.appendSection(
+                "Answer Verifier · 修正尝试",
+                [
+                  "### 修正后回答",
+                  "",
+                  debugCodeBlock(repaired.text),
+                  "",
+                  "### 再验证",
+                  "",
+                  debugCodeBlock(debugJson(repairedVerification), "json"),
+                ].join("\n"),
+              );
+              finalVerification = repairedVerification;
+              if (repairedVerification.accepted) {
+                verificationRepairSucceeded = true;
+                finalAnswer = repaired.text.trim();
+              }
+            } catch (error) {
+              await debugTrace.appendError("Answer Verifier 修正调用失败", error);
+            }
+          }
+          if (!finalVerification.accepted && answerWasStreamed) {
+            streamedVerificationWarning = true;
+            await debugTrace.appendJsonSection("Answer Verifier · 流式回答告警", {
+              mode: currentRuntimeAnswerContract().mode,
+              violations: finalVerification.violations,
+              note: "direct/evidence_envelope 已发送，Verifier 只记录告警，不执行不可见替换。",
+            });
+          } else if (!finalVerification.accepted) {
+            finalAnswer = verificationFailureAnswer(finalVerification);
+            streamObservation.interruptionReason = "verification_failed";
+          }
           streamObservation.finishReason = finishReason;
           streamObservation.streamEnded = true;
           streamObservation.contentChars = finalAnswer.length;
@@ -1632,13 +1643,15 @@ export async function POST(request: Request) {
               "",
               debugCodeBlock(text),
               "",
-              "### Grounding Gate",
+              "### Answer Verifier",
               "",
               debugCodeBlock(debugJson({
-                contract: groundingState.contract(),
-                changed: finalAudit.changed,
-                mode: finalAudit.mode,
-                issues: finalAudit.issues,
+                contract: evidenceContract,
+                verification: finalVerification,
+                repairAttempted: verificationRepairAttempted,
+                repairSucceeded: verificationRepairSucceeded,
+                answerWasStreamed,
+                streamedVerificationWarning,
               }), "json"),
               "",
               "### 实际发送回答",
@@ -1646,6 +1659,10 @@ export async function POST(request: Request) {
               debugCodeBlock(finalAnswer),
             ].join("\n"),
           );
+          if (!finalVerification.accepted && !streamedVerificationWarning) {
+            memoryMaintenance.cancel("主回答未通过证据校验，因此后台记忆线路未启动。");
+            return;
+          }
           const citedSourceReferences = sourceDocumentToolset.citedReferences(finalAnswer);
           if (citedSourceReferences.references.length) {
             writer.write({
@@ -1668,35 +1685,18 @@ export async function POST(request: Request) {
             });
           }
           const accumulatedRetrieval = evidence.snapshot();
-          const assertionQueueDecision = assertionQueueToolset.decision();
           const foregroundAssertionDecision = assertionQueueToolset.foregroundDecision();
           const foregroundAssertionResult = assertionQueueToolset.foregroundResult();
           let higherMemoryQueueDecision = higherMemoryQueueToolset.decision();
           const actorHigherMemoryQueueDecision = actorHigherMemoryWriteToolset.hasCommit()
             ? undefined
             : actorHigherMemoryQueueToolset.decision();
-          const handoffCall = steps
-            .flatMap((step) => step.toolCalls)
-            .findLast((call) => call.toolName === TURN_HANDOFF_TOOL);
-          const parsedHandoff = turnHandoffSchema.safeParse(handoffCall?.input);
-          const handoff = parsedHandoff.success ? parsedHandoff.data : undefined;
-          const {
-            handoffIsValid,
-            reviewNeeded,
-            candidateQuotes,
-            reviewSource,
-          } = resolveTurnHandoff({
-            handoff,
-            currentUserText: query,
-          });
-          await debugTrace.appendJsonSection("Turn Handoff", {
-            valid: handoffIsValid,
-            reviewNeeded,
-            candidateQuotes,
-            reviewSource,
-            rejectedReason: reviewSource === "missing_or_invalid"
-              ? "未提交有效 Handoff；本轮不会启动自动 Assertion 审查。"
-              : null,
+          await debugTrace.appendJsonSection("Post-turn Runtime Policy", {
+            modelHandoff: "disabled",
+            assertionReviewSource: foregroundAssertionResult
+              ? "completed_foreground_tool_receipt"
+              : "automatic_post_turn_sidecar",
+            note: "普通事实审查由 Post-turn Runtime 自动执行并允许空结果，不依赖主模型提交 Handoff 或后台排队意图。",
           });
           const semanticContext = {
             conversation: semanticConversation.slice(-8),
@@ -1706,12 +1706,12 @@ export async function POST(request: Request) {
             toolExecutions: mainToolExecutions,
             finalAnswer,
           };
-          const automaticWritebackDecision = !foregroundAssertionResult && reviewNeeded
-            ? {
-                reason: `主模型 Handoff 建议审查用户原话：${candidateQuotes.join("；")}`,
-              }
-            : undefined;
-          const backgroundAssertionDecision = assertionQueueDecision ?? automaticWritebackDecision;
+          const backgroundAssertionDecision = foregroundAssertionResult
+            ? undefined
+            : {
+                reason:
+                  "Post-turn Runtime 自动审查当前用户原话是否包含可安全固化的组织事实；允许提交空结果。",
+              };
           const consolidationNeeded = Boolean(
             foregroundAssertionResult ||
             backgroundAssertionDecision,
@@ -1743,9 +1743,9 @@ export async function POST(request: Request) {
                 retrieval: accumulatedRetrieval,
               }
             : undefined;
-          let writebackStatus = !reviewNeeded
-            ? handoffIsValid ? "skipped_by_handoff" : "skipped_invalid_handoff"
-            : "eligible";
+          let writebackStatus = backgroundAssertionDecision
+            ? "eligible"
+            : "not_requested";
           let durableBackgroundReceipt = false;
           let writebackPersistenceDurationMs = 0;
           if (latestUserMessage && backgroundAssertionDecision) {
@@ -1891,14 +1891,13 @@ export async function POST(request: Request) {
             prefetchedViewKeys: [],
             exposedToolNames,
             exposedToolCount: exposedToolNames.length,
-            finalActiveToolNames: [
-              ...activeCapabilityToolNames(openedCapabilities),
-              ...alwaysAvailableToolNames,
-            ],
+            finalActiveToolNames: compiledActiveToolNames(),
             openedCapabilities: {
-              businessContext: openedCapabilities.businessContext,
+              viewStateOpened: openedCapabilities.viewStateOpened,
               artifacts: openedCapabilities.artifacts,
+              libraryIndexRead: openedCapabilities.libraryIndexRead,
               sharedBrain: openedCapabilities.sharedBrain,
+              memoryPurpose: openedCapabilities.memoryPurpose ?? null,
               actionAreas: [...openedCapabilities.actionAreas],
             },
             exposedToolSchemaBytes,
@@ -1911,9 +1910,8 @@ export async function POST(request: Request) {
             sourceLayerUsedForAnswer,
             fileExistenceClaim,
             fileExistenceEvidence,
-            writebackEligibility: reviewNeeded ? "possible" : "none",
-            handoffValid: handoffIsValid,
-            handoffCandidateCount: candidateQuotes.length,
+            writebackEligibility: backgroundAssertionDecision ? "automatic_sidecar" : "foreground_completed",
+            handoffMode: "disabled",
             proposalReceiptCount,
             viewCommandAttemptCount,
             writebackStatus,
@@ -1966,7 +1964,7 @@ export async function POST(request: Request) {
                 usedRefs,
                 usedHigherMemoryRefs,
                 latestLocateTrace,
-                groundingState.contract().coverageByLayer,
+                turnEvidence.contract().coverageByLayer,
               ),
             });
           }
@@ -1999,8 +1997,17 @@ export async function POST(request: Request) {
           return "AI 服务响应失败，请稍后重试。";
         },
       });
-      writer.merge(bufferFinalAnswerStream(modelUIStream, (rawText) =>
-        auditAnswer(rawText).text
+      writer.merge(governFinalAnswerStream(
+        modelUIStream,
+        resolvedAnswerText,
+        () => {
+          const mode = currentRuntimeAnswerContract().mode;
+          return mode === "claim_frame" || mode === "proposal_receipt" ||
+            mode === "write_receipt";
+        },
+        () => {
+          answerWasStreamed = true;
+        },
       ));
     },
     onEnd: async ({ messages: completedMessages, responseMessage }) => {

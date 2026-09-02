@@ -13,23 +13,23 @@ function copyAnswerability(item: EvidenceAnswerability): EvidenceAnswerability {
 
 /** Request-local, passive record of evidence already returned by tools. */
 export class EvidenceLedger {
-  private readonly observations = new Map<string, EvidenceObservation>();
-  private readonly answerability = new Map<string, EvidenceAnswerability>();
+  private readonly observations: EvidenceObservation[] = [];
+  private readonly answerability: EvidenceAnswerability[] = [];
 
   record(semantics: EvidenceSemantics | undefined): void {
     if (!semantics) return;
     for (const item of semantics.observations) {
-      this.observations.set(item.id, copyObservation(item));
+      this.observations.push(copyObservation(item));
     }
     for (const item of semantics.answerability) {
-      this.answerability.set(item.id, copyAnswerability(item));
+      this.answerability.push(copyAnswerability(item));
     }
   }
 
   snapshot(): EvidenceSemantics {
     return {
-      observations: [...this.observations.values()].map(copyObservation),
-      answerability: [...this.answerability.values()].map(copyAnswerability),
+      observations: this.observations.map(copyObservation),
+      answerability: this.answerability.map(copyAnswerability),
     };
   }
 }

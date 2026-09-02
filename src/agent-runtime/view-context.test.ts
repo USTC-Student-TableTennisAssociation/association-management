@@ -6,9 +6,12 @@ vi.mock("@/db", () => ({
   getDatabase: () => ({ memoryGlobalObject: { findMany: databaseState.findMany } }),
 }));
 
-import { buildViewContext } from "@/agent-runtime/view-context";
+import {
+  buildViewCardListContext,
+  buildViewStateContext,
+} from "@/agent-runtime/view-context";
 
-describe("buildViewContext", () => {
+describe("buildViewStateContext", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -23,7 +26,7 @@ describe("buildViewContext", () => {
       higherMemory: null,
     }]);
 
-    const result = await buildViewContext({
+    const result = await buildViewStateContext({
       snapshot: {
         viewKey: "society_information",
         pluginVersion: "1.0.0",
@@ -72,6 +75,86 @@ describe("buildViewContext", () => {
     ]);
   });
 
+  it("lists and paginates Cards using authoritative Card and Object metadata", async () => {
+    const firstObjectId = "00000000-0000-4000-8000-000000000051";
+    const secondObjectId = "00000000-0000-4000-8000-000000000052";
+    const firstCardId = "00000000-0000-4000-8000-000000000061";
+    const secondCardId = "00000000-0000-4000-8000-000000000062";
+    databaseState.findMany.mockResolvedValue([{
+      id: firstObjectId,
+      globalObjectKey: "activity:weekly-training",
+      canonicalName: "周常训练",
+    }, {
+      id: secondObjectId,
+      globalObjectKey: "activity:cup",
+      canonicalName: "院系杯",
+    }]);
+
+    const result = await buildViewCardListContext({
+      snapshot: {
+        viewKey: "activity_operations",
+        pluginVersion: "1.0.0",
+        schemaVersion: "1",
+        stateVersion: "state-1",
+        observedAt: "2026-09-02T00:00:00.000Z",
+        cards: [{
+          id: firstCardId,
+          viewKey: "activity_operations",
+          cardTypeKey: "ActivityCard",
+          dimensions: {},
+          slots: {},
+          relatedObjectIds: [firstObjectId],
+        }, {
+          id: secondCardId,
+          viewKey: "activity_operations",
+          cardTypeKey: "ActivityCard",
+          dimensions: {},
+          slots: {},
+          relatedObjectIds: [secondObjectId],
+        }],
+        references: [{
+          ref: "V1",
+          label: "活动运营",
+          target: { kind: "view", viewKey: "activity_operations" },
+        }, {
+          ref: "V2",
+          label: "周常训练",
+          target: { kind: "card", viewKey: "activity_operations", cardId: firstCardId },
+        }, {
+          ref: "V3",
+          label: "院系杯",
+          target: { kind: "card", viewKey: "activity_operations", cardId: secondCardId },
+        }],
+      },
+      viewLabel: "活动运营",
+      viewDescription: "活动业务状态",
+      cardTypes: [{
+        key: "ActivityCard",
+        label: "活动",
+        description: "一次真实活动",
+        dimensions: [],
+        slots: [],
+      }],
+      query: "activity",
+      offset: 0,
+      limit: 1,
+    });
+
+    expect(result.matchedCount).toBe(2);
+    expect(result.cards).toEqual([expect.objectContaining({ id: firstCardId })]);
+    expect(result.truncated).toBe(true);
+    expect(result.nextOffset).toBe(1);
+    expect(result.evidence.objects).toEqual([
+      expect.objectContaining({ id: firstObjectId, canonicalName: "周常训练" }),
+    ]);
+    expect(result.semantics.observations[0]).toMatchObject({
+      predicate: "lists_cards",
+      completeness: "partial",
+      status: "present",
+      refs: ["V1", "V2"],
+    });
+  });
+
   it("uses an exact Object identity instead of including a same-named Card", async () => {
     const targetObjectId = "00000000-0000-4000-8000-000000000003";
     const sameNamedObjectId = "00000000-0000-4000-8000-000000000004";
@@ -92,7 +175,7 @@ describe("buildViewContext", () => {
       },
     ]);
 
-    const result = await buildViewContext({
+    const result = await buildViewStateContext({
       snapshot: {
         viewKey: "activity_operations",
         pluginVersion: "1.0.0",
@@ -167,7 +250,7 @@ describe("buildViewContext", () => {
       higherMemory: null,
     }]);
 
-    const result = await buildViewContext({
+    const result = await buildViewStateContext({
       snapshot: {
         viewKey: "society_information",
         pluginVersion: "1.0.0",
@@ -241,7 +324,7 @@ describe("buildViewContext", () => {
       higherMemory: null,
     }]);
 
-    const result = await buildViewContext({
+    const result = await buildViewStateContext({
       snapshot: {
         viewKey: "society_information",
         pluginVersion: "1.0.0",

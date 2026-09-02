@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { EvidenceLedger } from "@/evidence/ledger";
 import { artifactSearchEvidenceSemantics } from "@/evidence/tool-semantics";
-import { describeViewContextEvidence } from "@/agent-runtime/view-context";
+import { describeViewStateEvidence } from "@/agent-runtime/view-context";
 
 describe("EvidenceLedger", () => {
   it("records completed observations without creating a retrieval plan", () => {
     const ledger = new EvidenceLedger();
-    ledger.record(describeViewContextEvidence({
+    ledger.record(describeViewStateEvidence({
       viewRef: "V1",
       viewKey: "activity_operations",
       viewLabel: "Activity Operations",
@@ -50,5 +50,24 @@ describe("EvidenceLedger", () => {
         status: "not_answerable",
       }),
     ]));
+  });
+
+  it("is append-only even when a producer reuses an observation id", () => {
+    const ledger = new EvidenceLedger();
+    const first = describeViewStateEvidence({
+      viewRef: "V1",
+      viewKey: "activity_operations",
+      viewLabel: "活动运营",
+      totalCardCount: 0,
+      targetHints: ["活动甲"],
+      relevantCards: [],
+      references: [],
+      unresolvedAspects: [],
+    });
+    ledger.record(first);
+    ledger.record(first);
+
+    expect(ledger.snapshot().observations).toHaveLength(2);
+    expect(ledger.snapshot().answerability).toHaveLength(4);
   });
 });

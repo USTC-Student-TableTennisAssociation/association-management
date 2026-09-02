@@ -9,9 +9,9 @@ import {
 } from "@/ai/capability-gates";
 
 describe("capability gates", () => {
-  it("exposes only implemented Business Context follow-up tools", () => {
+  it("exposes only implemented View state follow-up tools", () => {
     const capabilities = createOpenedCapabilities();
-    capabilities.businessContext = true;
+    capabilities.viewStateOpened = true;
 
     const names = detailedToolNames(capabilities);
 
@@ -19,12 +19,42 @@ describe("capability gates", () => {
     expect(names).not.toContain("readSemanticView");
   });
 
+  it("keeps Library reads outside the Action capability and opens memory explicitly", async () => {
+    const capabilities = createOpenedCapabilities();
+    capabilities.libraryIndexRead = true;
+    const names = detailedToolNames(capabilities);
+
+    expect(names).toEqual(["inspectLibraryNodes", "previewLibraryFiles"]);
+    expect(names).not.toContain("proposeLibraryPlan");
+
+    const tools = createCapabilityGatewayTools(capabilities, {
+      viewKeySchema: z.string(),
+      locateObjectViews: vi.fn(),
+      listViewCards: vi.fn(),
+      readViewState: vi.fn(),
+      findArtifacts: vi.fn(),
+      describeBusinessViewActions: vi.fn(),
+    });
+    const execute = tools.openMemory.execute as unknown as (input: {
+      purpose: "check_write_status" | "update_actor_memory";
+    }) => Promise<unknown>;
+
+    await execute({ purpose: "check_write_status" });
+
+    expect(detailedToolNames(capabilities)).toEqual([
+      "inspectLibraryNodes",
+      "previewLibraryFiles",
+      "readMemoryWriteStatus",
+    ]);
+  });
+
   it("keeps Object View discovery available as a read-only gateway", async () => {
     const locateObjectViews = vi.fn().mockResolvedValue({ matches: [] });
     const tools = createCapabilityGatewayTools(createOpenedCapabilities(), {
       viewKeySchema: z.string(),
       locateObjectViews,
-      openBusinessContext: vi.fn(),
+      listViewCards: vi.fn(),
+      readViewState: vi.fn(),
       findArtifacts: vi.fn(),
       describeBusinessViewActions: vi.fn(),
     });
@@ -37,39 +67,65 @@ describe("capability gates", () => {
     expect(capabilityGatewayToolNames).toContain("locateObjectViews");
   });
 
-  it("passes exact Object references into Business Context without opening Actions", async () => {
+  it("browses a View without unlocking targeted state or Actions", async () => {
     const state = createOpenedCapabilities();
-    const openBusinessContext = vi.fn().mockResolvedValue({ relevantCards: [] });
+    const listViewCards = vi.fn().mockResolvedValue({ cards: [] });
     const tools = createCapabilityGatewayTools(state, {
       viewKeySchema: z.string(),
       locateObjectViews: vi.fn(),
-      openBusinessContext,
+      listViewCards,
+      readViewState: vi.fn(),
       findArtifacts: vi.fn(),
       describeBusinessViewActions: vi.fn(),
     });
-    const execute = tools.openBusinessContext.execute as unknown as (input: {
+    const execute = tools.listViewCards.execute as unknown as (input: {
       viewKey: string;
-      focus: string;
-      targetHints: string[];
-      targetObjectRefs: string[];
+      offset?: number;
+      limit?: number;
+    }) => Promise<unknown>;
+
+    await expect(execute({ viewKey: "society_information" })).resolves.toEqual({ cards: [] });
+    expect(listViewCards).toHaveBeenCalledWith({
+      viewKey: "society_information",
+      offset: 0,
+      limit: 50,
+    });
+    expect(state.viewStateOpened).toBe(false);
+    expect(state.actionAreas.size).toBe(0);
+    expect(capabilityGatewayToolNames).toContain("listViewCards");
+  });
+
+  it("passes typed entity targets into View state without opening Actions", async () => {
+    const state = createOpenedCapabilities();
+    const readViewState = vi.fn().mockResolvedValue({ relevantCards: [] });
+    const tools = createCapabilityGatewayTools(state, {
+      viewKeySchema: z.string(),
+      locateObjectViews: vi.fn(),
+      listViewCards: vi.fn(),
+      readViewState,
+      findArtifacts: vi.fn(),
+      describeBusinessViewActions: vi.fn(),
+    });
+    const execute = tools.readViewState.execute as unknown as (input: {
+      viewKey: string;
+      question: string;
+      targets: Array<{ kind: "name" | "object_ref" | "card_ref"; value: string }>;
     }) => Promise<unknown>;
 
     await execute({
       viewKey: "activity_operations",
-      focus: "读取这项活动的当前状态",
-      targetHints: [],
-      targetObjectRefs: ["O1"],
+      question: "读取这项活动的当前状态",
+      targets: [{ kind: "object_ref", value: "O1" }],
     });
 
-    expect(openBusinessContext).toHaveBeenCalledWith({
+    expect(readViewState).toHaveBeenCalledWith({
       viewKey: "activity_operations",
-      focus: "读取这项活动的当前状态",
-      targetHints: [],
-      targetObjectRefs: ["O1"],
+      question: "读取这项活动的当前状态",
+      targets: [{ kind: "object_ref", value: "O1" }],
     });
-    expect(state.businessContext).toBe(true);
-    expect(state.businessViewKey).toBe("activity_operations");
-    expect([...state.businessViewKeys]).toEqual(["activity_operations"]);
+    expect(state.viewStateOpened).toBe(true);
+    expect(state.lastViewKey).toBe("activity_operations");
+    expect([...state.openedViewKeys]).toEqual(["activity_operations"]);
     expect(state.actionAreas.size).toBe(0);
   });
 
@@ -78,7 +134,8 @@ describe("capability gates", () => {
     const tools = createCapabilityGatewayTools(createOpenedCapabilities(), {
       viewKeySchema: z.string(),
       locateObjectViews: vi.fn(),
-      openBusinessContext: vi.fn(),
+      listViewCards: vi.fn(),
+      readViewState: vi.fn(),
       findArtifacts,
       describeBusinessViewActions: vi.fn(),
     });

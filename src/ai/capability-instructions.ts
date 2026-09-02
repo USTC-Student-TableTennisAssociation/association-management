@@ -1,17 +1,9 @@
-import { extensionRegistry } from "@/shell/composition-root";
-
-function businessViewRetrievalDescriptions(): string {
-  return extensionRegistry.listViews().map((view) =>
-    `${view.manifest.key}（${view.manifest.label}）：` +
-    (view.manifest.retrievalDescription ?? view.manifest.description)
-  ).join("\n");
-}
-
 type PreferredKnowledgeLayer = "business_view" | "shared_brain" | "library" | "unknown";
 
 export const knownRuntimeToolNames = [
   "inspectKnowledgeEnvironment",
-  "readView",
+  "listViewCards",
+  "openMemory",
   "expandEvidence",
   "searchMemory",
   "followObject",
@@ -26,7 +18,7 @@ export const knownRuntimeToolNames = [
   "readLibraryCompilation",
   "openArtifactKnowledge",
   "proposeLibraryPlan",
-  "queueChatAssertionCapture",
+  "publishUserFactForView",
   "queueHigherMemoryMaintenance",
   "updateActorHigherMemory",
   "queueActorHigherMemoryMaintenance",
@@ -76,19 +68,20 @@ export function buildCapabilityInstructions(input: {
     ].join("\n"));
   }
 
-  if (has(toolNames, "readView")) {
+  if (has(toolNames, "listViewCards")) {
     sections.push([
-      "【Business View 读取】",
-      `正式 View 的职责范围：\n${businessViewRetrievalDescriptions()}`,
-      "问题命中上述范围时，使用 readView；若服务端已经预读取完整快照，不要重复调用。Snapshot 是统一 ViewReadPort 在 observedAt 的完整读取，空 Slot 不证明现实中不存在。",
-      "View 足以覆盖用户所问的当前正式状态时直接回答；不足、陈旧或用户要求历史/来源细节时，再读其他知识层。",
+      "【Business View 当前内容浏览】",
+      "用户问整个 View 当前收录了什么、有哪些 Card，或尚不知道具体业务实体名称时，使用 listViewCards；不要从 Library 文件名或 Shared Brain 猜测正式 View 实体。静态职责和 Card 类型仍直接依据 View Catalog 回答。",
+      "listViewCards 返回当前权威 Snapshot 上的精确 matchedCount、Card 类型分布和一页 Card 摘要。truncated=true 时继续使用 nextOffset 翻页；未读完前不能声称已列出全部内容。",
+      "需要某张 Card 的详细当前状态时，把列表返回的真实 V# 作为 card_ref 传给 readViewState。listViewCards 本身不读取 Higher Memory，也不开放专业 Query 或写入能力。",
     ].join("\n"));
   }
 
   if (has(toolNames, "listLibrary")) {
     sections.push([
       "【Library 文件权威规则】",
-      "用户询问文件是否存在、在哪个目录、有哪些版本、处理档位或具体文件名时，先使用 listLibrary，不要先用组织记忆搜索代替文件索引。用户询问文件内容时，也先用它定位真实文件，再读取少量候选。",
+      "用户询问资料库目录、文件夹结构、文件是否存在、在哪个目录、有哪些版本、处理档位或具体文件名时，先使用 listLibrary，不要先用组织记忆搜索代替文件索引。用户询问文件内容时，也先用它定位真实文件，再读取少量候选。",
+      "listLibrary 是只读能力，不需要先调用 openActions。系统能够读取目录时应主动读取，不得要求用户重新介绍已有文件夹。",
       "有具体完整标题时，优先把去掉扩展名的最长、最有区分度标题放入 query。只有引号、空格或字面差异可能导致漏检时，才用 queries 提供几个较长的标题变体并在结果中核对完整文件名；queries 是 OR 匹配，不要只放“第十七届”这类宽词。盘点优先使用 recursive=true、kind=file、detail=compact，并设置合理 limit。",
       "searchMemory 未命中只代表 Shared Brain 没有相应 Assertion，不能证明文件不存在、没有上传或没有保留。文件名、路径和格式只证明索引元数据，不能当作文件正文。",
       "只有在至少执行一次合理的 listLibrary 查询、将 nextOffset 继续翻页直至最后结果 truncated=false、且完整查询 matchedCount=0 后，才可说“当前 Library 索引未匹配到该文件”。truncated=true 或只做过局部/模糊查询时，结论必须保持 unknown，不能宣称没有文件。",
@@ -128,7 +121,7 @@ export function buildCapabilityInstructions(input: {
         ? "searchMemory 是跨文件、跨对象的主题语义检索入口，可独立于 Business View 或 Library 使用。文件标题查询未命中、只打开了单个文件、或只读到前一页 Assertion，都不能替代这次检索。"
         : "",
       has(toolNames, "expandEvidence")
-        ? "openBusinessContext 已完成正式 View、相关 Card 和 Card Object Higher Memory 的第一次读取。其 unresolvedAspects/formalCardMissing 未覆盖问题或用户要求来源细节时，使用 expandEvidence。"
+        ? "readViewState 已完成具体业务目标的正式 View 状态读取。其 missingDetails 未覆盖问题或用户要求来源细节时，使用 expandEvidence。"
         : "",
       "targetHints 只保留同一个主体 Object 的名称/别名，主名称放第一个；成员、子项、活动、平台等相关实体必须留在 query 中，不能取代主体。不要重复相同查询。",
       "searchMemory 必须选择 taskShape。模型主动提出 query；目标 Object 的 Operational Memory Index 与 Object 关系会在 Runtime 内参与候选召回，但不会自动读取原文。单次 coverage 不足不能解释为知识不存在。",
@@ -180,7 +173,7 @@ export function buildCapabilityInstructions(input: {
 
   if (has(toolNames, "runViewCommand")) {
     sections.push([
-      "正式修改 Business View 时，先读取当前 View，再用 runViewCommand 调用已声明 Domain Command。不得伪造原始 Card Graph mutation。approval_required 模式会生成 Proposal，不能把用户对事实的确认当作对尚未展示 Proposal 的批准。",
+      "正式修改 Business View 时，先用 readViewState 读取具体目标的当前状态，再用 runViewCommand 调用已声明 Domain Command。不得伪造原始 Card Graph mutation。approval_required 模式会生成 Proposal，不能把用户对事实的确认当作对尚未展示 Proposal 的批准。",
       "runViewCommand 的 stateVersion 由服务端绑定；Card/Object 使用本轮真实 V#/O# 引用或唯一 canonical name，不要复制数据库 UUID。",
       "Proposal 本身就是可审阅草稿。用户明确表示“先填、先做一版、之后再改”时，应完整提交证据支持的明确对象；可选细节缺失不构成停下或少做的理由，可以留空或把合理推断清楚写进待审批内容。只有对象身份歧义、相互冲突的当前状态或 Command 必填字段确实无法确定时才询问。",
       "synthesis 已发现具名、可复用实体但当前结果没有对应 O# 时，先用其精确名称做一次聚焦检索；唯一匹配的既有 Object 可由 Runtime 按 canonical name 绑定。不得因为宽检索未返回 Object ID 就静默丢弃该项。",
@@ -189,11 +182,11 @@ export function buildCapabilityInstructions(input: {
     ].join("\n"));
   }
 
-  if (has(toolNames, "queueChatAssertionCapture")) {
+  if (has(toolNames, "publishUserFactForView")) {
     sections.push([
-      "只有当前用户原话本身陈述了值得长期检索的新组织事实时，才调用一次 queueChatAssertionCapture；问题、假设、头脑风暴、纯操作指令和只来自 Assistant 历史的事实不要调用。",
+      "只有本轮正式 View Proposal 被一个当前用户刚提供、且现有知识中确实不存在的新实体阻塞时，才调用一次 publishUserFactForView。它不是普通记忆工具。",
       "只属于当前用户的称呼、语言、回复风格、互动边界和私人工作偏好不属于共享组织事实，应使用 Actor 私有记忆能力，不得发布为 Assertion 或连接到用户的 GlobalObject。",
-      "普通事实使用 background。只有当前用户原话同时提供了正式 View 所需的缺失实体及其新事实时，才在打开 business_view actions 前用 foreground_for_view；来源文档中的实体不得经由 Chat Assertion Capture 重新发布。前台没有新发布内容不会使本轮先前检索到的 O# 或唯一 canonical name 失效。",
+      "在打开 business_view actions 前调用；来源文档和 Assistant 历史中的实体不得经由它重新发布。没有新发布内容不会使本轮先前检索到的 O#、别名或唯一 canonical name 失效，仍应提交所有可绑定的 Proposal。",
     ].join("\n"));
   }
 

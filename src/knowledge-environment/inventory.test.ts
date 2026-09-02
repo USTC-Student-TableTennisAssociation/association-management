@@ -126,6 +126,16 @@ describe("inspectKnowledgeEnvironment", () => {
       duplicateFileNodes: 1,
       profiles: { catalog: 2, coarse: 1, deep: 1 },
       statuses: { idle: 0, queued: 1, running: 0, ready: 2, failed: 1 },
+      processing: {
+        notStarted: 0,
+        active: 1,
+        completed: 2,
+        failed: 1,
+      },
+      publication: {
+        publishedContents: 2,
+        sourceDocuments: 2,
+      },
       sourceDocuments: 2,
       publishedContents: 2,
       failedCurrentRuns: 1,

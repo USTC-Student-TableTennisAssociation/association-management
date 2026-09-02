@@ -63,7 +63,7 @@ async function runCreateActivity(
   toolset: ReturnType<typeof createAgentViewToolset>,
   input: Record<string, unknown>,
 ) {
-  await toolset.readView("activity_operations");
+  await toolset.readSnapshot("activity_operations");
   const execute = toolset.tools.runViewCommand.execute as unknown as (
     request: Record<string, unknown>,
   ) => Promise<unknown>;
@@ -96,7 +96,7 @@ describe("Agent View Toolset foreground Object binding", () => {
     const { readPort, toolset } = fixture();
 
     await expect(toolset.locateObjectViews("O99")).rejects.toThrow(
-      "尚未出现在本轮知识或业务上下文中",
+      "尚未出现在本轮知识或 View 状态中",
     );
     expect(readPort.locateObject).not.toHaveBeenCalled();
   });
@@ -194,7 +194,7 @@ describe("Agent View Toolset foreground Object binding", () => {
 
   it("resolves model-facing View/Object references and binds state on the server", async () => {
     const { commandBus, proposals, toolset } = fixture();
-    await toolset.readView("activity_operations");
+  await toolset.readSnapshot("activity_operations");
     const execute = toolset.tools.runViewCommand.execute as unknown as (
       request: Record<string, unknown>,
     ) => Promise<unknown>;
@@ -217,7 +217,8 @@ describe("Agent View Toolset foreground Object binding", () => {
 
   it("resolves a View Card reference without exposing its database ID to the model", async () => {
     const { commandBus, proposals, toolset } = fixture();
-    await toolset.readView("activity_operations");
+    const snapshot = await toolset.readSnapshot("activity_operations");
+    toolset.presentCards(snapshot.cards);
     const execute = toolset.tools.runViewCommand.execute as unknown as (
       request: Record<string, unknown>,
     ) => Promise<unknown>;
@@ -251,9 +252,23 @@ describe("Agent View Toolset foreground Object binding", () => {
     }]);
   });
 
+  it("only resolves card_refs that have actually been presented to the model", async () => {
+    const { toolset } = fixture();
+    const snapshot = await toolset.readSnapshot("activity_operations");
+
+    expect(toolset.resolveCardReference("V2")).toBeUndefined();
+    toolset.presentCards(snapshot.cards);
+    expect(toolset.resolveCardReference("V2")).toEqual({
+      ref: "V2",
+      label: "活动运营 / ActivityCard",
+      viewKey: "activity_operations",
+      cardId,
+    });
+  });
+
   it("returns a recoverable invalid result for a Card database UUID", async () => {
     const { commandBus, toolset } = fixture();
-    await toolset.readView("activity_operations");
+  await toolset.readSnapshot("activity_operations");
     const execute = toolset.tools.runViewCommand.execute as unknown as (
       request: Record<string, unknown>,
     ) => Promise<unknown>;
@@ -265,7 +280,7 @@ describe("Agent View Toolset foreground Object binding", () => {
       input: { activityId: cardId, progress: "已完成报名" },
     })).resolves.toMatchObject({
       kind: "invalid",
-      error: expect.stringContaining("必须使用本轮 readView 返回的真实 V# Card 引用"),
+      error: expect.stringContaining("必须使用本轮 readViewState 返回的真实 V# Card 引用"),
     });
 
     expect(commandBus.dispatch).not.toHaveBeenCalled();
@@ -317,7 +332,7 @@ describe("Agent View Toolset foreground Object binding", () => {
         viewKey: "activity_operations",
         stateVersion: "3",
       });
-    await toolset.readView("activity_operations");
+  await toolset.readSnapshot("activity_operations");
     const execute = toolset.tools.runViewCommand.execute as unknown as (
       request: Record<string, unknown>,
     ) => Promise<unknown>;
@@ -374,7 +389,7 @@ describe("Agent View Toolset foreground Object binding", () => {
         viewKey: "activity_operations",
         stateVersion: "3",
       });
-    await toolset.readView("activity_operations");
+  await toolset.readSnapshot("activity_operations");
     const execute = toolset.tools.runViewCommand.execute as unknown as (
       request: Record<string, unknown>,
     ) => Promise<unknown>;
@@ -416,7 +431,7 @@ describe("Agent View Toolset foreground Object binding", () => {
 
   it("rejects a version-suffixed Command key instead of normalizing it", async () => {
     const { commandBus, proposals, toolset } = fixture();
-    await toolset.readView("activity_operations");
+  await toolset.readSnapshot("activity_operations");
     const execute = toolset.tools.runViewCommand.execute as unknown as (
       request: Record<string, unknown>,
     ) => Promise<unknown>;

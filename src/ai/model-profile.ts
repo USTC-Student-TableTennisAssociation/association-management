@@ -7,6 +7,8 @@ export type ModelProfile = {
   memoryMaxTokens: number;
   maxRequestBytes: number;
   maxRetries: number;
+  agentEmergencyStepLimit: number;
+  agentRepeatedToolCallLimit: number;
   modelFirstChunkTimeoutMs: number;
   modelChunkTimeoutMs: number;
 };
@@ -103,6 +105,20 @@ export function createModelProfile(
       2,
       0,
       5,
+    ),
+    agentEmergencyStepLimit: environmentInteger(
+      environment,
+      "AI_AGENT_EMERGENCY_STEP_LIMIT",
+      64,
+      16,
+      256,
+    ),
+    agentRepeatedToolCallLimit: environmentInteger(
+      environment,
+      "AI_AGENT_REPEATED_TOOL_CALL_LIMIT",
+      3,
+      2,
+      8,
     ),
     modelFirstChunkTimeoutMs: environmentInteger(
       environment,
