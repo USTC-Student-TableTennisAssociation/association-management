@@ -7,6 +7,10 @@ import type {
   ViewModule,
   ViewChangePolicy,
 } from "@/contracts";
+import {
+  assertModelToolInputSchema,
+  ModelToolSchemaError,
+} from "@/contracts/model-tool-schema";
 import { isVersionCompatible } from "@sydaris/plugin-sdk";
 
 type ExtensionKind = "view" | "presentation" | "skill" | "tool";
@@ -51,6 +55,17 @@ function assertUnique(
       throw new ExtensionRegistrationError(`${owner} 中存在重复的 ${label}：${value}`);
     }
     seen.add(value);
+  }
+}
+
+function validateModelFacingInputSchema(label: string, schema: unknown): void {
+  try {
+    assertModelToolInputSchema(schema, label);
+  } catch (error) {
+    if (error instanceof ModelToolSchemaError) {
+      throw new ExtensionRegistrationError(error.message);
+    }
+    throw error;
   }
 }
 
@@ -111,6 +126,10 @@ function validateViewModule(view: ViewModule): void {
         `View ${view.manifest.key} Query ${query.key} description 不能为空`,
       );
     }
+    validateModelFacingInputSchema(
+      `View ${view.manifest.key} Query ${query.key}`,
+      query.inputSchema.jsonSchema,
+    );
   }
   for (const command of view.commands) {
     if (command.allowedInitiators.length === 0) {
@@ -278,6 +297,12 @@ function validateToolCapability(contract: ToolCapabilityContract): void {
   if (!contract.semanticContract.trim()) {
     throw new ExtensionRegistrationError(
       `Tool Capability ${contract.key} semanticContract 不能为空`,
+    );
+  }
+  if (contract.allowedCallers.includes("agent")) {
+    validateModelFacingInputSchema(
+      `Tool Capability ${contract.key}`,
+      contract.inputSchema.jsonSchema,
     );
   }
   if (contract.allowedCallers.length === 0) {

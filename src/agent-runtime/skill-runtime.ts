@@ -1,5 +1,6 @@
-import { jsonSchema, tool, type JSONSchema7, type ToolSet } from "ai";
+import { tool, type JSONSchema7, type ToolSet } from "ai";
 
+import { createModelToolSchema } from "@/ai/model-tool-schema";
 import type { SkillExtension } from "@/contracts";
 import type { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import type { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
@@ -204,7 +205,23 @@ export function createAgentSkillToolset(input: {
         "当用户明确点名 Skill，或当前任务与某个 Skill 的职责高度匹配时调用。不同 Skill 可以在同一轮组合；同一 Skill 不能用不同输入重复激活。",
         `已安装 Skills：\n${catalog}`,
       ].join("\n"),
-      inputSchema: jsonSchema<ActivationRequest>(activationJsonSchema(skills)),
+      inputSchema: createModelToolSchema<ActivationRequest>({
+        name: "activateSkill",
+        jsonSchema: activationJsonSchema(skills),
+        parse(value) {
+          if (!value || typeof value !== "object" || Array.isArray(value)) {
+            throw new SkillRuntimeError("activateSkill 输入必须是 Object");
+          }
+          const request = value as Record<string, unknown>;
+          if (typeof request.skillId !== "string") {
+            throw new SkillRuntimeError("activateSkill.skillId 必须是字符串");
+          }
+          if (!request.input || typeof request.input !== "object" || Array.isArray(request.input)) {
+            throw new SkillRuntimeError("activateSkill.input 必须是 Object");
+          }
+          return { skillId: request.skillId, input: request.input };
+        },
+      }),
       execute: async ({ skillId, input: skillInput }) => {
         const activation = input.session.activate(skillId, skillInput);
         input.onActivate?.(activation);

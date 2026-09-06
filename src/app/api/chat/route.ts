@@ -53,6 +53,7 @@ import {
   renderDebugTools,
 } from "@/ai/debug-trace";
 import { createModelProfile } from "@/ai/model-profile";
+import { assertModelToolSet } from "@/ai/model-tool-schema";
 import { getChatModel } from "@/ai/provider";
 import {
   chatStreamStatusSchema,
@@ -1267,6 +1268,12 @@ export async function POST(request: Request) {
         publishUserFactForView: assertionQueueToolset.foregroundTool,
         updateActorHigherMemory: actorHigherMemoryWriteToolset.tool,
       };
+      try {
+        await assertModelToolSet(allTools);
+      } catch (error) {
+        await debugTrace.appendError("Model Tool ABI 预检失败", error);
+        throw error;
+      }
       const activeViewQueryToolNames = () =>
         viewToolset.queryToolNames(openedCapabilities.openedViewKeys);
       const compiledActiveToolNames = () => compileActiveToolNames({

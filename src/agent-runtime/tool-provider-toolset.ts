@@ -1,5 +1,6 @@
-import { jsonSchema, tool, type ToolSet } from "ai";
+import { tool, type ToolSet } from "ai";
 
+import { createContractModelToolSchema } from "@/ai/model-tool-schema";
 import type { ActorContext } from "@/contracts";
 import { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
 
@@ -43,7 +44,10 @@ export function createAgentToolProviderToolset(input: {
           `Provider: ${provider.id}@${provider.version}`,
           "这是已安装 Plugin 提供的全局只读 Tool，可在任意聊天和 View 上下文中使用。",
         ].join("\n"),
-        inputSchema: jsonSchema(contract.inputSchema.jsonSchema),
+        inputSchema: createContractModelToolSchema(
+          `Tool Capability ${contract.key}`,
+          contract.inputSchema,
+        ),
         execute: (value) => input.runtime.execute({
           capabilityKey: contract.key,
           capabilityVersion: contract.version,

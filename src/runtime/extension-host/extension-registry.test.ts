@@ -190,6 +190,30 @@ describe("ExtensionRegistry", () => {
     expect(registry.listPlugins()).toEqual([]);
   });
 
+  it("rejects a View Query whose model-facing input is a root union", () => {
+    const viewModule = view();
+    viewModule.queries = [{
+      key: "broken_query",
+      version: "1.0.0",
+      label: "Broken Query",
+      description: "Uses a provider-incompatible input contract.",
+      inputSchema: zodContractSchema(z.union([
+        z.object({ first: z.string() }),
+        z.object({ second: z.string() }),
+      ])),
+      outputSchema: zodContractSchema(z.object({})),
+      execute: () => ({ data: {}, sourceCardIds: [], coverage: { level: "complete" } }),
+    }];
+
+    const registry = new ExtensionRegistry();
+    expect(() => registry.registerPlugin({
+      id: "sydaris.invalid-query-schema",
+      version: "1.0.0",
+      contributes: { views: [viewModule] },
+    })).toThrow(/Model Tool 输入契约/);
+    expect(registry.listPlugins()).toEqual([]);
+  });
+
   it("rejects a Slot target that is not declared inside the same View", () => {
     const viewModule = view();
     viewModule.schema.cardTypes[0].slots = [{
