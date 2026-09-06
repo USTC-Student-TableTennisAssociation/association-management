@@ -1185,7 +1185,6 @@ export async function captureChatAssertions(
     description: "选择一次只读身份查询，或直接提交 Chat Assertion 提取结果",
     prompt,
     temperature: 0.1,
-    maxOutputTokens: 8_000,
     abortSignal: searchSignal,
     timeout: { totalMs: 1_800_000, stepMs: 1_800_000, toolMs: 120_000 },
     onLanguageModelCallStart: async (event) => {
@@ -1271,7 +1270,6 @@ export async function captureChatAssertions(
         }),
       ].join("\n\n"),
       temperature: 0.1,
-      maxOutputTokens: 8_000,
       abortSignal: searchSignal,
       timeout: { totalMs: 1_800_000, stepMs: 1_800_000 },
       onLanguageModelCallStart: async (event) => {
@@ -1347,7 +1345,6 @@ export async function captureChatAssertions(
           }),
         ].join("\n\n"),
         temperature: 0.1,
-        maxOutputTokens: 4_000,
         abortSignal: AbortSignal.timeout(90_000),
         timeout: { totalMs: 1_800_000, stepMs: 1_800_000 },
         onLanguageModelCallStart: async (event) => {

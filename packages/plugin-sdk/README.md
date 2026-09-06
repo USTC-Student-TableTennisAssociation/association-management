@@ -99,6 +99,48 @@ const dailyPlanner: SkillExtension = {
 Domain Command。跨 Plugin 读取 View 时，提供 Skill 的 Plugin 还应通过
 `PluginManifest.requires` 声明对应 Plugin 版本依赖。
 
+## View Operation
+
+需要由用户直接触发、又必须在服务端组合 Tool Capability 与 Domain Command 的流程，
+应声明为 View Operation。Operation 属于 View Module；Presentation 通过
+`useViewOperation` 调用，不能依赖宿主中的业务专用 API route。
+
+```ts
+const refreshNotes: ViewOperationDefinition<RefreshInput, RefreshResult> = {
+  key: "notes.refresh_from_source",
+  version: "1.0.0",
+  label: "从来源刷新",
+  description: "读取已声明的数据来源并刷新 Notes View。",
+  requiredPermissions: ["view.write"],
+  requiresCapabilities: [{ key: "notes.source.read", versions: "^1.0.0" }],
+  commands: ["notes.replace_from_source"],
+  inputSchema,
+  outputSchema,
+  async execute(context, input) {
+    const source = await context.executeTool({
+      capabilityKey: "notes.source.read",
+      capabilityVersion: "1.0.0",
+      providerId: "notes.default-source",
+      input,
+    });
+    const write = await context.dispatchCommand({
+      commandKey: "notes.replace_from_source",
+      input: source,
+    });
+    return { write };
+  },
+};
+```
+
+Runtime 只允许 Operation 调用 `requiresCapabilities` 和 `commands` 中声明的能力，
+并统一完成用户权限、Tool caller、输入输出 Schema 与 View 状态校验。Domain Command
+仍然是唯一正式写入边界，Operation 不接触数据库或宿主 Runtime 实现。
+
+```tsx
+const runOperation = useViewOperation(viewKey);
+await runOperation("notes.refresh_from_source", input, "1.0.0");
+```
+
 `resourceAccess` 用于 Library、Object 等不属于 Business View 的宿主资源。它声明的是
 稳定的语义 Operation，不是具体工具名；Runtime 仍负责将 Operation 映射到实现并执行审批：
 

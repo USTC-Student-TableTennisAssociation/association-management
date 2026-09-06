@@ -254,6 +254,13 @@ export function createAgentViewToolset(input: {
   commandBus: ViewCommandBus;
   skillSession?: AgentSkillSession;
   onCommandAttempt?: () => void;
+  onCommandResult?: (result: {
+    viewKey: string;
+    attemptedCount: number;
+    proposedCount: number;
+    executedCount: number;
+    invalidCount: number;
+  }) => void;
   onProposal?: (proposal: ViewCommandProposalNotice) => void;
   onQueryResult?: (result: {
     viewKey: string;
@@ -492,6 +499,14 @@ export function createAgentViewToolset(input: {
     });
     snapshots.set(viewKey, pending);
     return pending;
+  };
+
+  const refreshSnapshot = (viewKey: string) => {
+    snapshots.delete(viewKey);
+    for (const [ref, reference] of referenceByRef) {
+      if (reference.target.viewKey === viewKey) presentedCardRefs.delete(ref);
+    }
+    return readSnapshot(viewKey);
   };
 
   const presentCards = (
@@ -777,6 +792,10 @@ export function createAgentViewToolset(input: {
             if (!(error instanceof ViewRuntimeError) && !(error instanceof z.ZodError)) {
               throw error;
             }
+            if (error.message.includes("stateVersion")) {
+              snapshots.delete(commandRequest.viewKey);
+              inspectedViews.delete(commandRequest.viewKey);
+            }
             results.push({
               kind: "invalid",
               viewKey: commandRequest.viewKey,
@@ -786,6 +805,14 @@ export function createAgentViewToolset(input: {
             });
           }
         }
+        const outcome = {
+          viewKey: request.viewKey,
+          attemptedCount: results.length,
+          proposedCount: results.filter((result) => result?.kind === "proposed").length,
+          executedCount: results.filter((result) => result?.kind === "executed").length,
+          invalidCount: results.filter((result) => result?.kind === "invalid").length,
+        };
+        input.onCommandResult?.(outcome);
         if (!("commands" in request)) return results[0];
         const resultEntries = results.map((result, index) => ({
           request: requests[index],
@@ -837,6 +864,7 @@ export function createAgentViewToolset(input: {
   return {
     tools,
     readSnapshot,
+    refreshSnapshot,
     locateObjectViews,
     presentCards,
     resolveCardReference,

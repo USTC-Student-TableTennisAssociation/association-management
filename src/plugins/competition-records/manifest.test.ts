@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { societyInformationPlugin } from "@/plugins/society-information/dist/manifest";
 import { ExtensionRegistry } from "@/runtime/extension-host/extension-registry";
 import { competitionRecordsPlugin } from "@sydaris/competition-records-plugin/server";
 
 describe("competition records Plugin", () => {
   it("registers the view, AI commands, and executable series-curation skill", () => {
     const registry = new ExtensionRegistry();
-    registry.registerPlugin(societyInformationPlugin);
     registry.registerPlugin(competitionRecordsPlugin);
 
     const view = registry.getView("competition_records");
@@ -16,7 +14,6 @@ describe("competition records Plugin", () => {
       "competition.organize_series",
     ]);
     expect(registry.listSkills().map((skill) => skill.id)).toEqual([
-      "sydaris.society-information.maintain-overview",
       "sydaris.competition-records.curate-series",
     ]);
     expect(registry.listToolCapabilityContracts().map((contract) => contract.key)).toEqual([
@@ -37,6 +34,11 @@ describe("competition records Plugin", () => {
     expect(view?.commands.find((command) =>
       command.key === "competition.sync_editions"
     )).toMatchObject({ version: "2", allowedInitiators: ["system"] });
+    expect(view?.operations).toMatchObject([{
+      key: "competition.sync_from_source",
+      version: "1.0.0",
+      commands: ["competition.sync_editions"],
+    }]);
     expect(view?.commands.filter((command) =>
       command.allowedInitiators.includes("ai")
     ).map((command) => command.key)).toEqual(["competition.organize_series"]);

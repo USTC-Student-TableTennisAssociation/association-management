@@ -3,7 +3,7 @@
   "id": "sydaris.competition-records",
   "version": "0.4.0",
   "engines": {
-    "sydaris": ">=0.1.0-alpha.8 <0.2.0-0"
+    "sydaris": ">=0.1.0-alpha.9 <0.2.0-0"
   },
   "server": {
     "entry": "./dist/manifest.js",

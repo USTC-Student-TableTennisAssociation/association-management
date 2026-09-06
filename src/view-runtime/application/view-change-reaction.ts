@@ -15,6 +15,7 @@ export function presentViewChangeReaction(row: ViewChangeReaction): ViewReaction
     attention: {
       policy: row.attentionPolicy as ViewReaction["attention"]["policy"],
       status: row.attentionStatus,
+      evidenceStatus: row.evidenceStatus as ViewReaction["attention"]["evidenceStatus"],
       ...(row.message ? { message: row.message } : {}),
       ...(row.reason ? { reason: row.reason } : {}),
       ...(row.attentionCompletedAt

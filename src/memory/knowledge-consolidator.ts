@@ -95,7 +95,6 @@ export async function consolidateTurnKnowledge(
     description: "提交本轮需要维护的 Ambient Higher Memory scope",
     prompt,
     temperature: 0.1,
-    maxOutputTokens: 2_000,
     timeout: { totalMs: 1_800_000, stepMs: 1_800_000 },
   });
   const ambientUpdates = output.ambientUpdates.filter((update, index, all) =>

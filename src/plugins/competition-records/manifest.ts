@@ -16,10 +16,6 @@ import { competitionRecordsViewModule } from "./view/schema.js";
 export const competitionRecordsPlugin = definePlugin({
   id: "sydaris.competition-records",
   version: "0.4.0",
-  requires: [{
-    pluginId: "sydaris.society-information",
-    versions: "^1.10.0",
-  }],
   contributes: {
     views: [competitionRecordsViewModule],
     presentations: [competitionRecordsPresentation],

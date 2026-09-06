@@ -231,16 +231,21 @@ export function createMemoryExploreToolset(input: {
   ) => {
     const { query, targetHints, targetObjectRefs, taskShape } =
       memorySearchToolInputSchema.parse(request);
-    const targetObjectIds = targetObjectRefs?.map((objectRef) => {
+    const targetObjectIds = targetObjectRefs?.flatMap((objectRef) => {
       const objectId = input.evidence.objectIdForRef(objectRef);
-      if (!objectId) throw new UnknownExploreObjectError(objectRef);
-      return objectId;
+      if (objectId) return [objectId];
+
+      // O# references are request-local. Conversation history can still contain
+      // an O# from an earlier request, so use the supplied name as the durable
+      // fallback instead of turning a recoverable search into a failed tool call.
+      if (targetHints?.length) return [];
+      throw new UnknownExploreObjectError(objectRef);
     });
     observeCall();
     return merge(await searchMemoryIndex({
       query,
       targetHints: targetHints ?? [],
-      targetObjectIds,
+      targetObjectIds: targetObjectIds?.length ? targetObjectIds : undefined,
       taskShape,
     }, {
       signal: input.signal,

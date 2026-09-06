@@ -108,16 +108,18 @@ export function WorkViewWorkspace({
                     );
                     if (!reaction) return null;
                     const active = reaction.attention.status === "queued" ||
-                      reaction.attention.status === "running" ||
-                      reaction.knowledge.status === "queued" ||
-                      reaction.knowledge.status === "running";
+                      reaction.attention.status === "running";
                     const label = active
                       ? "Sydaris 正在核对"
                       : reaction.attention.status === "needs_confirmation"
-                      ? "需要确认"
+                      ? reaction.attention.evidenceStatus === "conflict"
+                        ? "发现知识冲突"
+                        : reaction.attention.evidenceStatus === "insufficient"
+                        ? "缺少核对证据"
+                        : "需要确认"
                       : reaction.attention.status === "inform"
                       ? "Sydaris 有一条说明"
-                      : reaction.attention.status === "failed" || reaction.knowledge.status === "failed"
+                      : reaction.attention.status === "failed"
                       ? "核对暂不可用"
                       : undefined;
                     return label ? (

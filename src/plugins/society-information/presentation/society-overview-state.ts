@@ -17,27 +17,26 @@ export function presentSocietyReaction(
 ): SocietyReactionPresentation | undefined {
   if (!reaction) return undefined;
   const active = reaction.attention.status === "queued" ||
-    reaction.attention.status === "running" ||
-    reaction.knowledge.status === "queued" ||
-    reaction.knowledge.status === "running";
+    reaction.attention.status === "running";
   if (active) return { label: "Sydaris 正在核对", tone: "checking" };
-  if (
-    reaction.attention.status === "failed" ||
-    reaction.knowledge.status === "failed"
-  ) {
-    return { label: "核对暂不可用", tone: "failed" };
+  if (reaction.attention.status === "failed") {
+    return { label: "核对失败，可重试", tone: "failed" };
   }
   if (reaction.attention.status === "needs_confirmation") {
-    return { label: "需要确认", tone: "attention" };
+    return {
+      label: reaction.attention.evidenceStatus === "conflict"
+        ? "发现知识冲突"
+        : reaction.attention.evidenceStatus === "insufficient"
+        ? "缺少核对证据"
+        : "需要确认",
+      tone: "attention",
+    };
   }
   if (reaction.attention.status === "inform") {
     return { label: "Sydaris 有一条说明", tone: "inform" };
   }
-  if (
-    reaction.attention.status === "silent" ||
-    reaction.knowledge.status === "completed"
-  ) {
-    return { label: "已核对", tone: "verified" };
+  if (reaction.attention.status === "silent" && reaction.attention.evidenceStatus === "consistent") {
+    return { label: "证据一致", tone: "verified" };
   }
   return undefined;
 }
@@ -55,7 +54,7 @@ function reactionPriority(reaction: ViewReaction): number {
     : presentation?.tone === "verified"
     ? 1
     : 0;
-  return (reaction.seenAt ? 0 : 10) + tonePriority;
+  return tonePriority;
 }
 
 export function reactionsByCard(
@@ -63,6 +62,9 @@ export function reactionsByCard(
 ): ReadonlyMap<string, ViewReaction> {
   const byCard = new Map<string, ViewReaction>();
   for (const reaction of reactions) {
+    // A seen reaction has been explicitly dismissed. Keep the audit record,
+    // but do not keep rendering it as an active notice on the card.
+    if (reaction.seenAt || !presentSocietyReaction(reaction)) continue;
     for (const target of reaction.targets) {
       const current = byCard.get(target.cardId);
       if (!current || reactionPriority(reaction) > reactionPriority(current)) {

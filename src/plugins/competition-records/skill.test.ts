@@ -52,7 +52,7 @@ describe("competition series curator Skill", () => {
     session.activate(skillId, {});
 
     expect(session.canReadView("competition_records")).toBe(true);
-    expect(session.canReadView("society_information")).toBe(true);
+    expect(session.canReadView("society_information")).toBe(false);
     expect(session.canReadView("activity_operations")).toBe(false);
     expect(session.canRunCommand(
       "competition_records",

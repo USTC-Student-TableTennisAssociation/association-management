@@ -149,12 +149,41 @@ function scrollParent(element: HTMLElement): HTMLElement | Window {
   let candidate = element.parentElement;
   while (candidate) {
     const overflowY = window.getComputedStyle(candidate).overflowY;
-    if ((overflowY === "auto" || overflowY === "scroll") && candidate.scrollHeight > candidate.clientHeight) {
+    // The shell owns scrolling even before async content has made it overflow.
+    // Requiring scrollHeight > clientHeight here creates a first-render race:
+    // the listener can be bound to window while the user later scrolls this element.
+    if (overflowY === "auto" || overflowY === "scroll") {
       return candidate;
     }
     candidate = candidate.parentElement;
   }
   return window;
+}
+
+function scrollHeroToPurpose(hero: HTMLElement): void {
+  const root = scrollParent(hero);
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reducedMotion) {
+    hero.scrollIntoView({ behavior: "auto", block: "start" });
+    return;
+  }
+
+  const rootBounds = root === window
+    ? { top: 0, height: window.innerHeight, scrollTop: window.scrollY }
+    : {
+        top: (root as HTMLElement).getBoundingClientRect().top,
+        height: (root as HTMLElement).clientHeight,
+        scrollTop: (root as HTMLElement).scrollTop,
+      };
+  const heroTop = rootBounds.scrollTop + hero.getBoundingClientRect().top - rootBounds.top;
+  const travel = Math.max(1, hero.offsetHeight - rootBounds.height);
+  const targetTop = heroTop + travel * 0.79;
+
+  if (root === window) {
+    window.scrollTo({ top: targetTop, behavior: "smooth" });
+  } else {
+    (root as HTMLElement).scrollTo({ top: targetTop, behavior: "smooth" });
+  }
 }
 
 function ArrowUpRightIcon() {
@@ -267,15 +296,26 @@ function ReactionNotice({
   reaction,
   expanded,
   onToggle,
+  onHandle,
+  onRetry,
+  onDismiss,
   compact = false,
 }: {
   reaction?: ViewReaction;
   expanded: boolean;
   onToggle: () => void;
+  onHandle?: () => void;
+  onRetry?: () => void;
+  onDismiss?: () => void;
   compact?: boolean;
 }) {
   const presentation = presentSocietyReaction(reaction);
   if (!reaction || !presentation) return null;
+  const detail = reaction.attention.message ?? (
+    reaction.attention.status === "failed"
+      ? "这次后台核对没有生成有效结果，可以重新发起核对。"
+      : undefined
+  );
   return (
     <div className={`${styles.reactionNotice} ${compact ? styles.compactReactionNotice : ""}`}>
       <button
@@ -283,15 +323,32 @@ function ReactionNotice({
         className={styles.reactionStatus}
         data-tone={presentation.tone}
         aria-expanded={expanded}
-        disabled={!reaction.attention.message}
+        disabled={!detail}
         onClick={onToggle}
       >
         <SydarisIcon />
         {presentation.label}
       </button>
-      {expanded && reaction.attention.message ? (
+      {expanded && detail ? (
         <div className={styles.reactionDetail} role="status">
-          <p>{reaction.attention.message}</p>
+          <p>{detail}</p>
+          <div className={styles.reactionDetailActions}>
+            {reaction.attention.status === "needs_confirmation" && onHandle ? (
+              <button type="button" onClick={onHandle}>
+                在对话中回复
+              </button>
+            ) : null}
+            {reaction.attention.status === "failed" && onRetry ? (
+              <button type="button" onClick={onRetry}>
+                重新核对
+              </button>
+            ) : null}
+            {onDismiss ? (
+              <button type="button" data-variant="dismiss" onClick={onDismiss}>
+                关闭提示
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>
@@ -304,6 +361,7 @@ export function SocietyOverviewWorkspace({
   focusCardId,
   onOpenInspector,
   onInvokeAI,
+  onOpenConversationNotice,
 }: WorkspaceProps) {
   const [heroReady, setHeroReady] = useState(false);
   const [editorTarget, setEditorTarget] = useState<EditorTarget>();
@@ -326,6 +384,7 @@ export function SocietyOverviewWorkspace({
     reactions,
     refresh: refreshReactions,
     markSeen: markReactionSeen,
+    retryAttention,
   } = useViewReactions(viewKey);
   const { snapshot, error, loading, refresh } = useView(viewKey, refreshRevision);
   const runViewCommand = useViewCommand(viewKey);
@@ -334,7 +393,6 @@ export function SocietyOverviewWorkspace({
   const heroBadgeRef = useRef<HTMLDivElement>(null);
   const heroWordmarkRef = useRef<HTMLDivElement>(null);
   const activityGalleryRef = useRef<HTMLDivElement>(null);
-  const overviewContentRef = useRef<HTMLDivElement>(null);
   const activityDragSessionRef = useRef<ActivityDragSession | undefined>(undefined);
   const lastFocusedCardIdRef = useRef<string | undefined>(undefined);
   const objectNames = useMemo(() => new Map(
@@ -396,14 +454,24 @@ export function SocietyOverviewWorkspace({
 
   const toggleReaction = useCallback((reaction: ViewReaction) => {
     setExpandedReactionId((current) => current === reaction.id ? undefined : reaction.id);
+  }, []);
+
+  const dismissReaction = useCallback((reaction: ViewReaction) => {
+    setExpandedReactionId((current) => current === reaction.id ? undefined : current);
     if (!reaction.seenAt) void markReactionSeen(reaction.id);
   }, [markReactionSeen]);
 
-  const scrollToOverview = useCallback(() => {
-    overviewContentRef.current?.scrollIntoView({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-      block: "start",
+  const handleReactionInChat = useCallback((reaction: ViewReaction) => {
+    onOpenConversationNotice({
+      kind: "view_reaction",
+      viewKey,
+      reactionId: reaction.id,
     });
+  }, [onOpenConversationNotice, viewKey]);
+
+  const scrollToOverview = useCallback(() => {
+    const hero = heroScrollRef.current;
+    if (hero) scrollHeroToPurpose(hero);
   }, []);
 
   const openFirstAttentionReaction = useCallback(() => {
@@ -411,16 +479,18 @@ export function SocietyOverviewWorkspace({
     if (!reaction) return;
     const targetCardId = reaction.targets[0]?.cardId;
     const target = targetCardId
-      ? document.getElementById(`society-card-${targetCardId}`) ??
-        document.getElementById("society-purpose-anchor")
-      : overviewContentRef.current;
-    target?.scrollIntoView({
-      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-      block: "center",
-    });
+      ? document.getElementById(`society-card-${targetCardId}`)
+      : undefined;
+    if (target) {
+      target.scrollIntoView({
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+        block: "center",
+      });
+    } else if (heroScrollRef.current) {
+      scrollHeroToPurpose(heroScrollRef.current);
+    }
     setExpandedReactionId(reaction.attention.message ? reaction.id : undefined);
-    if (!reaction.seenAt) void markReactionSeen(reaction.id);
-  }, [attentionReactions, markReactionSeen]);
+  }, [attentionReactions]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -533,12 +603,15 @@ export function SocietyOverviewWorkspace({
     if (!snapshot || lastFocusedCardIdRef.current === focusCardId) return;
     window.requestAnimationFrame(() => {
       const focusedCard = document.getElementById(`society-card-${focusCardId}`);
-      const target = focusedCard ?? document.getElementById("society-purpose-anchor");
-      if (focusedCard) lastFocusedCardIdRef.current = focusCardId;
-      target?.scrollIntoView({
-        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
-        block: "center",
-      });
+      lastFocusedCardIdRef.current = focusCardId;
+      if (focusedCard) {
+        focusedCard.scrollIntoView({
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+          block: "center",
+        });
+      } else if (heroScrollRef.current) {
+        scrollHeroToPurpose(heroScrollRef.current);
+      }
     });
   }, [focusCardId, snapshot]);
 
@@ -1044,6 +1117,9 @@ export function SocietyOverviewWorkspace({
                 reaction={societyReaction}
                 expanded={expandedReactionId === societyReaction?.id}
                 onToggle={() => societyReaction && toggleReaction(societyReaction)}
+                onHandle={() => societyReaction && handleReactionInChat(societyReaction)}
+                onRetry={() => societyReaction && void retryAttention(societyReaction.id)}
+                onDismiss={() => societyReaction && dismissReaction(societyReaction)}
               />
               {society ? (
                 <button
@@ -1064,7 +1140,7 @@ export function SocietyOverviewWorkspace({
           </div>
         </section>
 
-        <div ref={overviewContentRef} id="society-overview-content" className={styles.lightStory}>
+        <div id="society-overview-content" className={styles.lightStory}>
           <div className={styles.brandRail}>
             <div className={styles.contentBrand} aria-hidden="true">
               <Image src={badgeImage} alt="" width={52} height={55} />
@@ -1161,6 +1237,9 @@ export function SocietyOverviewWorkspace({
                       reaction={activityReaction}
                       expanded={expandedReactionId === activityReaction?.id}
                       onToggle={() => activityReaction && toggleReaction(activityReaction)}
+                      onHandle={() => activityReaction && handleReactionInChat(activityReaction)}
+                      onRetry={() => activityReaction && void retryAttention(activityReaction.id)}
+                      onDismiss={() => activityReaction && dismissReaction(activityReaction)}
                     />
                     <h3>{activityName}</h3>
                     <div className={styles.activityCardBottom}>
@@ -1259,6 +1338,9 @@ export function SocietyOverviewWorkspace({
                         reaction={advisorReaction}
                         expanded={expandedReactionId === advisorReaction?.id}
                         onToggle={() => advisorReaction && toggleReaction(advisorReaction)}
+                        onHandle={() => advisorReaction && handleReactionInChat(advisorReaction)}
+                        onRetry={() => advisorReaction && void retryAttention(advisorReaction.id)}
+                        onDismiss={() => advisorReaction && dismissReaction(advisorReaction)}
                       />
                       <h4>{objectName(advisor, "姓名待补充")}</h4>
                       <div className={styles.cardActions}>
@@ -1335,6 +1417,9 @@ export function SocietyOverviewWorkspace({
                         reaction={memberReaction}
                         expanded={expandedReactionId === memberReaction?.id}
                         onToggle={() => memberReaction && toggleReaction(memberReaction)}
+                        onHandle={() => memberReaction && handleReactionInChat(memberReaction)}
+                        onRetry={() => memberReaction && void retryAttention(memberReaction.id)}
+                        onDismiss={() => memberReaction && dismissReaction(memberReaction)}
                       />
                       <h4>{memberName}</h4>
                       <span className={styles.memberPosition}>{text(member, "position") ?? "职位待补充"}</span>
@@ -1418,6 +1503,9 @@ export function SocietyOverviewWorkspace({
                     reaction={platformReaction}
                     expanded={expandedReactionId === platformReaction?.id}
                     onToggle={() => platformReaction && toggleReaction(platformReaction)}
+                    onHandle={() => platformReaction && handleReactionInChat(platformReaction)}
+                    onRetry={() => platformReaction && void retryAttention(platformReaction.id)}
+                    onDismiss={() => platformReaction && dismissReaction(platformReaction)}
                   />
                   <h3>{label}</h3>
                   <span>{accessInstructions ?? text(platform, "description") ?? (platformStatus === "UNKNOWN" ? "访问或加入方式待确认" : "查看平台信息")}</span>

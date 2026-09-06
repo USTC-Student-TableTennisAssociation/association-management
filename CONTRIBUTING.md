@@ -53,8 +53,10 @@ View Module 的本体是 Card Schema 与业务运行规则。
 ### Presentation
 
 - Generic Inspector 始终只读。
-- 专属 Presentation 可以提供业务操作 UI，但只能调用 Domain Command。
+- 专属 Presentation 可以提供业务操作 UI，但只能通过 SDK 调用 Domain Command 或 View Operation。
+- 需要组合 Tool 与 system Command 的直接用户操作必须声明为 View Operation，并通过 SDK Hook 调用。
 - Presentation 不得直接写数据库、Card Graph 或构造 Raw Graph Mutation。
+- Presentation 不得依赖宿主中的业务专用 API route。
 - Presentation 通过目标 `ViewManifest.version` 表达它所面向的 View Module 合同。
 
 ### Skill 与 AI
@@ -69,6 +71,13 @@ View Module 的本体是 Card Schema 与业务运行规则。
 - Capability Contract 由 Sydaris 定义 key、version、input/output schema、语义和权限。
 - Provider 只提供 `execute` 实现，不得重新声明同名 Contract Schema。
 - Tool Provider 不得直接修改 View State。Tool 结果需要进入业务状态时，应再调用 Domain Command。
+
+### View Operation
+
+- View Operation 是 Plugin 自己拥有的服务端编排，不是新的写入原语。
+- Operation 必须显式声明可调用的 Tool Capabilities、同 View system Commands 和用户权限。
+- Runtime 提供受限执行上下文；Operation 不得导入 ToolRuntime、CommandBus、Prisma 或 Shell。
+- 宿主只提供通用 `/api/views/:viewKey/operations/:operationKey`，不得为具体业务 View 添加 route。
 
 ### Composition Root
 

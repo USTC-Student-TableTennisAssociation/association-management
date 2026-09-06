@@ -65,6 +65,27 @@ function input(): ViewChangeObserverInput {
     }],
     attentionPolicy: "evaluate",
     reactionGuidance: ["社团星级是正式评价事实。"],
+    evidence: {
+      version: "view-change-evidence.v1",
+      basis: "preexisting_shared_brain",
+      relatedObjects: ["中国科学技术大学学生乒乓球协会"],
+      changedFields: [{
+        cardType: "社团",
+        field: "社团星级",
+        definition: "正式评级",
+        before: "三星级社团",
+        after: "四星级社团",
+      }],
+      assertions: [{
+        ref: "E1",
+        statement: "中国科学技术大学学生乒乓球协会目前为三星级社团。",
+        sources: ["乒协生存手册 · 基本面"],
+      }],
+      coverage: "relevant_assertions_found",
+      semanticRetrieval: "used",
+      warnings: [],
+      truncated: false,
+    },
     conversation: [{
       id: "user-1",
       role: "user",
@@ -85,7 +106,8 @@ describe("View Change Observer", () => {
     expect(prompt).toContain("三星级社团");
     expect(prompt).toContain("社团在当前评价体系中正式获评的等级");
     expect(prompt).toContain("旧资料仍记录为三星级社团");
-    expect(prompt).toContain("不得把本次修改所生成的派生知识");
+    expect(prompt).toContain("修改前 grounded Assertions");
+    expect(prompt).toContain("E1");
     expect(prompt).toContain("不是纯展示文字");
     expect(prompt).not.toContain(societyCardId);
     expect(prompt).not.toContain(societyObjectId);
@@ -94,6 +116,8 @@ describe("View Change Observer", () => {
   it("requires a structured intervention decision", async () => {
     aiState.generateText.mockResolvedValue({
       output: {
+        evidenceStatus: "conflict",
+        usedEvidenceRefs: ["E1"],
         action: "request_confirmation",
         message: "四星级对应的评审结果是否还需要同步到公开平台简介？",
         reason: "正式等级变化可能影响对外展示口径",
@@ -113,6 +137,8 @@ describe("View Change Observer", () => {
   it("represents silence explicitly without a user-visible message", async () => {
     aiState.generateText.mockResolvedValue({
       output: {
+        evidenceStatus: "not_applicable",
+        usedEvidenceRefs: [],
         action: "silent",
         message: "",
         reason: "本次变化只是展示层微调",
@@ -120,6 +146,8 @@ describe("View Change Observer", () => {
     });
 
     await expect(observeViewChanges(input())).resolves.toEqual({
+      evidenceStatus: "not_applicable",
+      usedEvidenceRefs: [],
       action: "silent",
       message: "",
       reason: "本次变化只是展示层微调",
@@ -129,6 +157,8 @@ describe("View Change Observer", () => {
   it("makes silence invalid in the tool schema for an always-visible review", async () => {
     aiState.generateText.mockResolvedValue({
       output: {
+        evidenceStatus: "consistent",
+        usedEvidenceRefs: ["E1"],
         action: "silent",
         message: "",
         reason: "没有发现冲突",

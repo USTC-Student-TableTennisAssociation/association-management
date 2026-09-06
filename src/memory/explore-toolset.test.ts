@@ -122,6 +122,41 @@ describe("createMemoryExploreToolset", () => {
     );
   });
 
+  it("falls back to a name hint when an O# comes from an earlier request", async () => {
+    const tools = createMemoryExploreToolset({
+      evidence: new MemoryEvidenceAccumulator(initial()),
+      resultTokenBudget: 1_000,
+    });
+
+    await expect(tools.searchMemory.execute!({
+      query: "目标人物的任期与贡献",
+      targetHints: ["魏汉东"],
+      targetObjectRefs: ["O1"],
+      taskShape: "synthesis",
+    }, executionOptions)).resolves.toEqual(expect.objectContaining({ kind: "search-memory" }));
+    expect(exploreMocks.searchMemory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetHints: ["魏汉东"],
+        targetObjectIds: undefined,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("still rejects an unknown O# when no name fallback is available", async () => {
+    const tools = createMemoryExploreToolset({
+      evidence: new MemoryEvidenceAccumulator(initial()),
+      resultTokenBudget: 1_000,
+    });
+
+    await expect(tools.searchMemory.execute!({
+      query: "目标人物的任期与贡献",
+      targetObjectRefs: ["O1"],
+      taskShape: "synthesis",
+    }, executionOptions)).rejects.toBeInstanceOf(UnknownExploreObjectError);
+    expect(exploreMocks.searchMemory).not.toHaveBeenCalled();
+  });
+
   it("allows an internal fact agent to receive IDs while still following O#", async () => {
     exploreMocks.followObject.mockResolvedValue({
       ...explored(),

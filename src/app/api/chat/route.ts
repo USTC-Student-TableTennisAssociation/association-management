@@ -61,7 +61,9 @@ import {
   classifyChatStreamStatus,
   createModelCallAttemptTracker,
   summarizeChatStreamError,
+  userFacingChatStreamError,
   type ChatStreamObservation,
+  type ChatStreamStatus,
 } from "@/ai/chat-stream-status";
 import { ToolResultTokenBudget } from "@/ai/tool-result-budget";
 import {
@@ -91,7 +93,12 @@ import {
   viewCommandBus,
   viewReadPort,
 } from "@/shell/composition-root";
-import { hasPersistableChatContent, saveChatMessage } from "@/chat/persistence";
+import {
+  hasPersistableChatContent,
+  reserveChatTurn,
+  saveChatMessage,
+  withTerminalChatState,
+} from "@/chat/persistence";
 import {
   artifactSearchEvidenceSemantics,
   retrievalEvidenceSemantics,
@@ -272,9 +279,9 @@ function createAssistantHistoryPersistence(
   };
 
   try {
-    // Register while the request context is definitely active. The callback
-    // starts only after the response closes, while onEnd merely publishes the
-    // compact message and returns immediately.
+    // Register while the request context is active. Persistence may continue
+    // after the response closes; server-reserved positions keep a following
+    // turn ordered without holding this stream open.
     after(async () => {
       const input = await inputReady;
       if (input) await persist(input);
@@ -434,11 +441,11 @@ export async function POST(request: Request) {
   const messages = validation.data;
   const query = latestUserQuery(messages);
   if (!query) return jsonError("消息内容不能为空。", 400);
-  const latestUserMessageIndex = messages.findLastIndex((message) => message.role === "user");
-  const latestUserMessage = messages[latestUserMessageIndex];
-  const invocationParts = latestUserMessage?.parts.filter((part) =>
+  const latestUserMessage = messages.findLast((message) => message.role === "user");
+  if (!latestUserMessage) return jsonError("缺少用户消息。", 400);
+  const invocationParts = latestUserMessage.parts.filter((part) =>
     part.type === "data-aiInvocation"
-  ) ?? [];
+  );
   if (invocationParts.length > 1) return jsonError("一条消息只能发起一个 AI Action。", 400);
   const requestedInvocation = invocationParts[0]?.data;
   if (requestedInvocation && requestedInvocation.message !== query.trim()) {
@@ -454,7 +461,7 @@ export async function POST(request: Request) {
     return jsonError("环境时区或 Actor 配置无效，请联系管理员。", 500);
   }
   const debugTrace = createDebugTrace({
-    clientMessageId: latestUserMessage?.id ?? "unknown-message",
+    clientMessageId: latestUserMessage.id,
     submittedAt,
     timezone: requestTimezone,
     actorId: requestActor.id,
@@ -488,19 +495,18 @@ export async function POST(request: Request) {
       return jsonError(error instanceof Error ? error.message : "Skill 无法激活。", 400);
     }
   }
-  if (latestUserMessage) {
-    try {
-      await saveChatMessage({
-        actor: requestActor,
-        conversationId,
-        message: latestUserMessage,
-        position: latestUserMessageIndex,
-      });
-    } catch (error) {
-      console.error("[chat.history.write-user]", error);
-      await debugTrace.appendError("保存用户消息失败", error);
-      return jsonError("无法保存对话，请稍后重试。", 503);
-    }
+  let assistantResponsePosition: number;
+  try {
+    const reservedTurn = await reserveChatTurn({
+      actor: requestActor,
+      conversationId,
+      userMessage: latestUserMessage,
+    });
+    assistantResponsePosition = reservedTurn.assistantPosition;
+  } catch (error) {
+    console.error("[chat.history.write-user]", error);
+    await debugTrace.appendError("保存用户消息失败", error);
+    return jsonError("无法保存对话，请稍后重试。", 503);
   }
   const currentTimeInstruction = buildCurrentTimeInstruction(
     submittedAt,
@@ -665,6 +671,8 @@ export async function POST(request: Request) {
     console.error("[chat.history.write-assistant]", error);
     await debugTrace.appendError("保存助手消息失败", error);
   });
+  let terminalStreamStatusForPersistence: ChatStreamStatus | undefined;
+  let lastUserFacingStreamError: unknown;
   const stream = createUIMessageStream<ClubChatMessage>({
     originalMessages: messages,
     execute: async ({ writer }) => {
@@ -717,6 +725,7 @@ export async function POST(request: Request) {
       let latestLocateTrace: MemorySearchTrace | undefined;
       let proposalReceiptCount = 0;
       let viewCommandAttemptCount = 0;
+      let consecutiveViewCommandNoProgress = 0;
       let finalRawText = "";
       let finalAnswer = "";
       let finalVerification: AnswerVerification | undefined;
@@ -768,6 +777,7 @@ export async function POST(request: Request) {
       let lastStreamStatusJson: string | undefined;
       const writeStreamStatus = () => {
         const status = classifyChatStreamStatus(streamObservation);
+        terminalStreamStatusForPersistence = status;
         const statusJson = JSON.stringify(status);
         if (statusJson === lastStreamStatusJson) return;
         lastStreamStatusJson = statusJson;
@@ -892,6 +902,19 @@ export async function POST(request: Request) {
         onCommandAttempt: () => {
           viewCommandAttemptCount += 1;
           turnEvidence.observeViewActionRequest();
+        },
+        onCommandResult: (outcome) => {
+          if (outcome.proposedCount + outcome.executedCount > 0) {
+            consecutiveViewCommandNoProgress = 0;
+            return;
+          }
+          consecutiveViewCommandNoProgress += 1;
+          if (consecutiveViewCommandNoProgress >= 3) {
+            interruptRun(
+              "no_progress",
+              `${outcome.viewKey} 的 View Command 已连续 ${consecutiveViewCommandNoProgress} 次没有产生 Proposal 或执行结果`,
+            );
+          }
         },
         onProposal: (proposal) => {
           proposalReceiptCount += 1;
@@ -1119,16 +1142,20 @@ export async function POST(request: Request) {
         authorizeAction: (area, viewKey) => ({
           allowed: skillSession.canOpenAction(area, viewKey),
           reason: skillSession.activations().length
-            ? `已激活 Skills ${skillSession.activeSkillIds().join("、")} 未声明该 Action 权限。`
+            ? area === "business_view" && viewKey
+              ? `已激活 Skills ${skillSession.activeSkillIds().join("、")} 在当前激活模式下不允许修改 View ${viewKey}。`
+              : `已激活 Skills ${skillSession.activeSkillIds().join("、")} 在当前激活模式下未开放该 Action 区域。`
             : undefined,
         }),
         listViewCards: async (request) => {
+          await viewToolset.refreshSnapshot(request.viewKey);
           const { output } = await viewStateRuntime.list(request);
           firstAuthoritativeTool ??= "listViewCards";
           sourceLayersUsed.add("business_view");
           return output;
         },
         readViewState: async (request) => {
+          await viewToolset.refreshSnapshot(request.viewKey);
           const { output, discovered } = await viewStateRuntime.read(request);
           firstAuthoritativeTool ??= "readViewState";
           sourceLayersUsed.add("business_view");
@@ -1415,7 +1442,6 @@ export async function POST(request: Request) {
           };
         },
         temperature: 0.3,
-        maxOutputTokens: profile.maxOutputTokens,
         maxRetries: profile.maxRetries,
         timeout: {
           firstChunkMs: profile.modelFirstChunkTimeoutMs,
@@ -1430,6 +1456,7 @@ export async function POST(request: Request) {
               // supplied the tool result back to the model for repair.
               streamObservation.error = undefined;
               streamObservation.failureCode = undefined;
+              lastUserFacingStreamError = undefined;
               break;
             case "text-delta":
               currentStepTextChars += chunk.text.length;
@@ -1698,7 +1725,6 @@ export async function POST(request: Request) {
                   validRefs,
                 }),
                 temperature: 0.1,
-                maxOutputTokens: profile.maxOutputTokens,
                 maxRetries: profile.maxRetries,
                 timeout: {
                   firstChunkMs: profile.modelFirstChunkTimeoutMs,
@@ -2104,6 +2130,7 @@ export async function POST(request: Request) {
       const modelUIStream = result.toUIMessageStream({
         sendReasoning: true,
         onError: (error) => {
+          lastUserFacingStreamError = error;
           streamObservation.error = summarizeChatStreamError(error);
           streamObservation.failureCode = classifyChatStreamFailureCode(error);
           streamObservation.streamEnded = false;
@@ -2113,7 +2140,7 @@ export async function POST(request: Request) {
             JSON.stringify(summarizeChatStreamError(error)),
           );
           void debugTrace.appendError("主回答流错误事件（可能由后续步骤恢复）", error);
-          return "AI 服务响应失败，请稍后重试。";
+          return userFacingChatStreamError(error);
         },
       });
       writer.merge(governFinalAnswerStream(
@@ -2121,7 +2148,8 @@ export async function POST(request: Request) {
         resolvedAnswerText,
         () => {
           const mode = currentRuntimeAnswerContract().mode;
-          return mode === "claim_frame" || mode === "proposal_receipt" ||
+          return skillSession.hasActionIntent() ||
+            mode === "claim_frame" || mode === "proposal_receipt" ||
             mode === "write_receipt";
         },
         () => {
@@ -2130,12 +2158,15 @@ export async function POST(request: Request) {
       ));
     },
     onEnd: async ({ messages: completedMessages, responseMessage }) => {
-      const persistedResponse = withoutTurnHandoff(responseMessage);
+      const responseWithTerminalState = terminalStreamStatusForPersistence
+        ? withTerminalChatState(responseMessage, terminalStreamStatusForPersistence)
+        : responseMessage;
+      const persistedResponse = withoutTurnHandoff(responseWithTerminalState);
       if (!hasPersistableChatContent(persistedResponse)) {
         assistantHistoryPersistence.cancel();
         return;
       }
-      const responsePosition = completedMessages.findLastIndex(
+      const responsePosition = assistantResponsePosition ?? completedMessages.findLastIndex(
         (message) => message.id === responseMessage.id,
       );
       if (responsePosition < 0) {
@@ -2157,7 +2188,7 @@ export async function POST(request: Request) {
       );
       void debugTrace.appendError("Chat UI 流失败", error);
       memoryMaintenance.cancel("主回答流失败，因此后台记忆线路未启动。");
-      return "AI 服务响应失败，请稍后重试。";
+      return userFacingChatStreamError(lastUserFacingStreamError ?? error);
     },
   });
 

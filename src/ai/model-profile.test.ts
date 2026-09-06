@@ -9,7 +9,7 @@ describe("createModelProfile", () => {
     expect(profile).toMatchObject({
       contextWindowTokens: 200_000,
       preferredInputTokens: 128_000,
-      maxOutputTokens: 16_384,
+      outputReserveTokens: 16_384,
       safetyTokens: 12_000,
       historyMaxTokens: 40_000,
       memoryMaxTokens: 64_000,
@@ -36,7 +36,7 @@ describe("createModelProfile", () => {
     expect(() =>
       createModelProfile({
         AI_CONTEXT_WINDOW_TOKENS: "16384",
-        AI_MAX_OUTPUT_TOKENS: "12000",
+        AI_CONTEXT_OUTPUT_RESERVE_TOKENS: "12000",
         AI_CONTEXT_SAFETY_TOKENS: "5000",
       }),
     ).toThrow("必须大于输出预留");

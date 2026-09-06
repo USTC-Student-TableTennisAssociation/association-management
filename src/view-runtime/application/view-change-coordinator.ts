@@ -12,6 +12,7 @@ import type {
   ViewChangeExecution,
   ViewRelatedObject,
 } from "@/view-runtime/application/view-change-context";
+import type { ViewChangeEvidenceEnvelope } from "@/view-runtime/application/view-change-evidence";
 
 const STALE_REACTION_AFTER_MS = 10 * 60 * 1_000;
 
@@ -24,6 +25,7 @@ export type ViewAttentionEvaluator = (input: {
   conversation: readonly [];
   attentionPolicy: ViewReactionAttentionPolicy;
   reactionGuidance: readonly string[];
+  evidence: ViewChangeEvidenceEnvelope;
 }) => Promise<ViewChangeAttentionDecision>;
 
 type ViewKnowledgeReconciliationInput = {
@@ -32,7 +34,14 @@ type ViewKnowledgeReconciliationInput = {
   executions: readonly ViewChangeExecution[];
   events: readonly ViewChangeEvent[];
   objects: readonly ViewRelatedObject[];
+  signal?: AbortSignal;
 };
+
+export type ViewChangeEvidenceRetriever = (input: {
+  viewModule: NonNullable<ReturnType<ExtensionRegistry["getView"]>>;
+  executions: readonly ViewChangeExecution[];
+  objects: readonly ViewRelatedObject[];
+}) => Promise<ViewChangeEvidenceEnvelope>;
 
 export type ObjectHigherMemoryReconciler = (
   input: ViewKnowledgeReconciliationInput,
@@ -89,13 +98,18 @@ function targetCardIds(value: Prisma.JsonValue): Set<string> {
 
 export class ViewChangeCoordinator {
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly knowledgeChains = new Map<string, Promise<void>>();
+  private readonly knowledgeRuns = new Map<string, {
+    reactionId: string;
+    stateVersion: bigint;
+    controller: AbortController;
+  }>();
 
   constructor(private readonly dependencies: {
     database: PrismaClient;
     registry: ExtensionRegistry;
     readPort: ViewReadPort;
     evaluate: ViewAttentionEvaluator;
+    retrieveEvidence: ViewChangeEvidenceRetriever;
     reconcileObjectHigherMemory: ObjectHigherMemoryReconciler;
     reconcileViewHigherMemory: ViewHigherMemoryReconciler;
   }) {}
@@ -103,11 +117,21 @@ export class ViewChangeCoordinator {
   async enqueue(input: { reactionId: string }): Promise<boolean> {
     const reaction = await this.dependencies.database.viewChangeReaction.findUnique({
       where: { id: input.reactionId },
-      select: { id: true, settleUntil: true, attentionStatus: true, knowledgeStatus: true },
+      select: {
+        id: true,
+        viewKey: true,
+        stateVersion: true,
+        settleUntil: true,
+        attentionStatus: true,
+        knowledgeStatus: true,
+      },
     });
     if (!reaction) return false;
     if (reaction.attentionStatus !== "queued" && reaction.knowledgeStatus !== "queued") {
       return false;
+    }
+    if (reaction.knowledgeStatus === "queued") {
+      await this.supersedeOlderKnowledge(reaction);
     }
     this.schedule(reaction.id, reaction.settleUntil);
     return true;
@@ -158,9 +182,43 @@ export class ViewChangeCoordinator {
     return reactions.length;
   }
 
+  async retryAttention(input: {
+    reactionId: string;
+    viewKey: string;
+    actorId: string;
+  }): Promise<boolean> {
+    const settleUntil = new Date();
+    const reset = await this.dependencies.database.viewChangeReaction.updateMany({
+      where: {
+        id: input.reactionId,
+        viewKey: input.viewKey,
+        actorId: input.actorId,
+        attentionStatus: "failed",
+      },
+      data: {
+        attentionStatus: "queued",
+        evidenceStatus: "not_checked",
+        message: null,
+        reason: null,
+        attentionErrorMessage: null,
+        attentionStartedAt: null,
+        attentionCompletedAt: null,
+        settleUntil,
+        seenAt: null,
+      },
+    });
+    if (reset.count !== 1) return false;
+    this.schedule(input.reactionId, settleUntil);
+    return true;
+  }
+
   dispose(): void {
     this.timers.forEach((timer) => clearTimeout(timer));
     this.timers.clear();
+    this.knowledgeRuns.forEach(({ controller }) => controller.abort(
+      new Error("View Change Coordinator 已停止"),
+    ));
+    this.knowledgeRuns.clear();
   }
 
   private schedule(reactionId: string, settleUntil: Date): void {
@@ -170,16 +228,48 @@ export class ViewChangeCoordinator {
     this.timers.set(reactionId, setTimeout(() => void this.flush(reactionId), delay));
   }
 
-  private enqueueKnowledge(viewKey: string, job: () => Promise<void>): Promise<void> {
-    const previous = this.knowledgeChains.get(viewKey) ?? Promise.resolve();
-    const scheduled = previous.catch(() => undefined).then(job);
-    this.knowledgeChains.set(viewKey, scheduled);
-    void scheduled.finally(() => {
-      if (this.knowledgeChains.get(viewKey) === scheduled) {
-        this.knowledgeChains.delete(viewKey);
-      }
+  private async supersedeOlderKnowledge(input: {
+    id: string;
+    viewKey: string;
+    stateVersion: bigint;
+  }): Promise<void> {
+    const running = this.knowledgeRuns.get(input.viewKey);
+    if (running && running.stateVersion < input.stateVersion) {
+      running.controller.abort(new Error("已有更新的 View 状态，停止旧 Higher Memory 维护"));
+    }
+    await this.dependencies.database.viewChangeReaction.updateMany({
+      where: {
+        id: { not: input.id },
+        viewKey: input.viewKey,
+        stateVersion: { lt: input.stateVersion },
+        knowledgePolicy: "reconcile",
+        knowledgeStatus: { in: ["queued", "running"] },
+      },
+      data: {
+        knowledgeStatus: "completed",
+        knowledgeCompletedAt: new Date(),
+        knowledgeErrorMessage: null,
+      },
     });
-    return scheduled;
+  }
+
+  private beginKnowledgeRun(input: {
+    reactionId: string;
+    viewKey: string;
+    stateVersion: bigint;
+  }) {
+    const existing = this.knowledgeRuns.get(input.viewKey);
+    if (existing && existing.stateVersion >= input.stateVersion) return undefined;
+    existing?.controller.abort(new Error("已有更新的 View 状态，停止旧 Higher Memory 维护"));
+    const run = { ...input, controller: new AbortController() };
+    this.knowledgeRuns.set(input.viewKey, run);
+    return run;
+  }
+
+  private finishKnowledgeRun(viewKey: string, reactionId: string): void {
+    if (this.knowledgeRuns.get(viewKey)?.reactionId === reactionId) {
+      this.knowledgeRuns.delete(viewKey);
+    }
   }
 
   private async flush(reactionId: string): Promise<void> {
@@ -253,16 +343,33 @@ export class ViewChangeCoordinator {
 
       const jobs: Promise<void>[] = [];
       if (attentionClaimed) {
-        jobs.push(this.dependencies.evaluate({
-          viewModule,
-          snapshot: reactionSnapshot,
-          executions: [execution],
-          events,
-          objects: priorObjects,
-          conversation: [],
-          attentionPolicy: reaction.attentionPolicy as ViewReactionAttentionPolicy,
-          reactionGuidance: guidance,
-        }).then(async (decision) => {
+        jobs.push((async () => {
+          const evidence = await this.dependencies.retrieveEvidence({
+            viewModule,
+            executions: [execution],
+            objects: priorObjects,
+          });
+          await database.viewChangeReaction.updateMany({
+            where: {
+              id: reaction.id,
+              attentionStatus: "running",
+              attentionStartedAt: startedAt,
+            },
+            data: {
+              evidenceJson: JSON.parse(JSON.stringify(evidence)) as Prisma.InputJsonValue,
+            },
+          });
+          const decision = await this.dependencies.evaluate({
+            viewModule,
+            snapshot: reactionSnapshot,
+            executions: [execution],
+            events,
+            objects: priorObjects,
+            conversation: [],
+            attentionPolicy: reaction.attentionPolicy as ViewReactionAttentionPolicy,
+            reactionGuidance: guidance,
+            evidence,
+          });
           const attentionStatus = decision.action === "request_confirmation"
             ? "needs_confirmation"
             : decision.action;
@@ -274,6 +381,7 @@ export class ViewChangeCoordinator {
             },
             data: {
               attentionStatus,
+              evidenceStatus: decision.evidenceStatus,
               message: decision.message || null,
               reason: decision.reason,
               attentionCompletedAt: new Date(),
@@ -284,8 +392,9 @@ export class ViewChangeCoordinator {
             reactionId: reaction.id,
             status: attentionStatus,
             reason: decision.reason,
+            evidenceStatus: decision.evidenceStatus,
           }));
-        }).catch(async (error: unknown) => {
+        })().catch(async (error: unknown) => {
           await database.viewChangeReaction.updateMany({
             where: {
               id: reaction.id,
@@ -294,6 +403,7 @@ export class ViewChangeCoordinator {
             },
             data: {
               attentionStatus: "failed",
+              evidenceStatus: "failed",
               attentionErrorMessage: error instanceof Error ? error.message : String(error),
               attentionCompletedAt: new Date(),
             },
@@ -302,7 +412,17 @@ export class ViewChangeCoordinator {
         }));
       }
       if (knowledgeClaimed) {
-        jobs.push(this.enqueueKnowledge(reaction.viewKey, async () => {
+        const run = this.beginKnowledgeRun({
+          reactionId: reaction.id,
+          viewKey: reaction.viewKey,
+          stateVersion: reaction.stateVersion,
+        });
+        if (!run) {
+          jobs.push(database.viewChangeReaction.updateMany({
+            where: { id: reaction.id, knowledgeStatus: "running" },
+            data: { knowledgeStatus: "completed", knowledgeCompletedAt: new Date() },
+          }).then(() => undefined));
+        } else jobs.push((async () => {
           try {
             const newerReconciliation = await database.viewChangeReaction.count({
               where: {
@@ -328,6 +448,7 @@ export class ViewChangeCoordinator {
               }));
               return;
             }
+            run.controller.signal.throwIfAborted();
             const [objectMemories, viewMemories] = await Promise.all([
               this.dependencies.reconcileObjectHigherMemory({
                 viewModule,
@@ -335,6 +456,7 @@ export class ViewChangeCoordinator {
                 executions: [execution],
                 events,
                 objects: priorObjects,
+                signal: run.controller.signal,
               }),
               this.dependencies.reconcileViewHigherMemory({
                 viewModule,
@@ -342,8 +464,10 @@ export class ViewChangeCoordinator {
                 executions: [execution],
                 events,
                 objects: priorObjects,
+                signal: run.controller.signal,
               }),
             ]);
+            run.controller.signal.throwIfAborted();
             await database.viewChangeReaction.updateMany({
               where: {
                 id: reaction.id,
@@ -359,6 +483,7 @@ export class ViewChangeCoordinator {
               viewMemories,
             }));
           } catch (error) {
+            const superseded = run.controller.signal.aborted;
             await database.viewChangeReaction.updateMany({
               where: {
                 id: reaction.id,
@@ -366,14 +491,18 @@ export class ViewChangeCoordinator {
                 knowledgeStartedAt: startedAt,
               },
               data: {
-                knowledgeStatus: "failed",
-                knowledgeErrorMessage: error instanceof Error ? error.message : String(error),
+                knowledgeStatus: superseded ? "completed" : "failed",
+                knowledgeErrorMessage: superseded
+                  ? null
+                  : error instanceof Error ? error.message : String(error),
                 knowledgeCompletedAt: new Date(),
               },
             });
-            console.error("[view.reaction.knowledge]", error);
+            if (!superseded) console.error("[view.reaction.knowledge]", error);
+          } finally {
+            this.finishKnowledgeRun(reaction.viewKey, reaction.id);
           }
-        }));
+        })());
       }
       await Promise.all(jobs);
     } catch (error) {
@@ -390,6 +519,7 @@ export class ViewChangeCoordinator {
               },
               data: {
                 attentionStatus: "failed",
+                evidenceStatus: "failed",
                 attentionErrorMessage: message,
                 attentionCompletedAt: completedAt,
               },

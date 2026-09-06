@@ -69,6 +69,40 @@ export function summarizeChatStreamError(
   };
 }
 
+export function userFacingChatStreamError(error: unknown): string {
+  const summary = summarizeChatStreamError(error);
+  const description = `${summary.name} ${summary.message}`.toLowerCase();
+  const networkMarkers = [
+    "cannot connect",
+    "connecterror",
+    "connection reset",
+    "connection refused",
+    "econn",
+    "enotfound",
+    "dns",
+    "fetch failed",
+    "network",
+    "socket",
+    "ssl",
+    "tls",
+    "terminated",
+    "连接失败",
+    "网络错误",
+  ];
+  if (networkMarkers.some((marker) => description.includes(marker))) {
+    return "网络连接失败：无法连接外部 AI 或文档解析服务，请检查网络或 VPN 后重试。";
+  }
+  if (
+    summary.name.toLowerCase().includes("timeout") ||
+    description.includes("timeout") ||
+    description.includes("timed out") ||
+    description.includes("请求超时")
+  ) {
+    return "网络请求超时：外部 AI 或文档解析服务暂未及时响应，请稍后重试。";
+  }
+  return "AI 服务响应失败，请稍后重试。";
+}
+
 export function classifyChatStreamFailureCode(
   error: unknown,
 ): NonNullable<ChatStreamStatus["failureCode"]> {

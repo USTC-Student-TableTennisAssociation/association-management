@@ -115,7 +115,6 @@ export async function generateStructuredResult<Schema extends z.ZodType>(input: 
   description: string;
   prompt: string;
   temperature?: number;
-  maxOutputTokens?: number;
   abortSignal?: AbortSignal;
   timeout?: TimeoutConfiguration<Record<string, never>>;
   onLanguageModelCallStart?: OnLanguageModelCallStartCallback;
@@ -137,7 +136,6 @@ export async function generateStructuredResult<Schema extends z.ZodType>(input: 
         description: input.description,
       }),
       temperature: input.temperature,
-      maxOutputTokens: input.maxOutputTokens,
       maxRetries: 0,
       abortSignal: input.abortSignal,
       timeout: input.timeout,
@@ -167,7 +165,6 @@ export async function generateStructuredResult<Schema extends z.ZodType>(input: 
     model: input.model,
     prompt: fallbackPrompt,
     temperature: input.temperature,
-    maxOutputTokens: input.maxOutputTokens,
     maxRetries: 0,
     abortSignal: input.abortSignal,
     timeout: input.timeout,
@@ -175,10 +172,14 @@ export async function generateStructuredResult<Schema extends z.ZodType>(input: 
     onLanguageModelCallEnd: input.onLanguageModelCallEnd,
   });
   const fallbackText = fallback.text ?? "";
-  const output = parseStructuredText(fallbackText, input.schema);
-  if (output !== undefined) return output;
+  for (const candidate of [fallbackText, fallback.reasoningText]) {
+    if (!candidate) continue;
+    const output = parseStructuredText(candidate, input.schema);
+    if (output !== undefined) return output;
+  }
   throw new StructuredSubmissionError(
     `结构化结果 ${input.name} 在 clean retry 后仍未通过 Schema；` +
-      `firstError=${reason.slice(0, 1_000)}；rawResponse=${fallbackText.slice(0, 2_000)}`,
+      `firstError=${reason.slice(0, 1_000)}；rawResponse=${fallbackText.slice(0, 2_000)}；` +
+      `reasoningChars=${fallback.reasoningText?.length ?? 0}`,
   );
 }

@@ -6,6 +6,7 @@ import type {
   ViewReactionAttentionPolicy,
 } from "@/contracts";
 import { policyForViewChange } from "@/view-runtime/application/view-change-policy";
+import type { ViewChangeEvidenceEnvelope } from "@/view-runtime/application/view-change-evidence";
 
 export type ViewChangeExecution = {
   id: string;
@@ -39,6 +40,7 @@ export type ViewChangeContextInput = {
   attentionPolicy?: ViewReactionAttentionPolicy;
   reactionGuidance?: readonly string[];
   recentConversation?: readonly { role: string; text: string }[];
+  evidence?: ViewChangeEvidenceEnvelope;
 };
 
 const databaseId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -209,6 +211,7 @@ export function buildViewChangeContext(input: ViewChangeContextInput) {
       canonicalName: object.canonicalName,
       cognitiveHigherMemory: object.cognitiveMemory ?? null,
     })),
+    evidence: input.evidence ?? null,
     commandExecutions: input.executions.map((execution) => ({
       command: commandsByKey.get(execution.commandKey)?.label ?? execution.commandKey,
       fromStateVersion: execution.stateVersionBefore,

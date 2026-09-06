@@ -190,6 +190,31 @@ describe("ExtensionRegistry", () => {
     expect(registry.listPlugins()).toEqual([]);
   });
 
+  it("rejects a View Operation that requests an unknown system Command", () => {
+    const operationSchema = zodContractSchema(z.object({}));
+    const viewModule = view();
+    viewModule.operations = [{
+      key: "test.refresh",
+      version: "1.0.0",
+      label: "Refresh",
+      description: "Refreshes the View from its source.",
+      requiredPermissions: ["view.write"],
+      requiresCapabilities: [],
+      commands: ["test.missing"],
+      inputSchema: operationSchema,
+      outputSchema: operationSchema,
+      execute: async () => ({}),
+    }];
+
+    const registry = new ExtensionRegistry();
+    expect(() => registry.registerPlugin({
+      id: "sydaris.bad-operation",
+      version: "1.0.0",
+      contributes: { views: [viewModule] },
+    })).toThrow("引用了未声明的 Commands");
+    expect(registry.listPlugins()).toEqual([]);
+  });
+
   it("rejects a View Query whose model-facing input is a root union", () => {
     const viewModule = view();
     viewModule.queries = [{

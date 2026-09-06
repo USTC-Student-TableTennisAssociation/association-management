@@ -231,7 +231,7 @@ export function packContext(input: {
   const { history, current } = splitCurrentMessage(input.messages);
   const hardInput =
     input.profile.contextWindowTokens -
-    input.profile.maxOutputTokens -
+    input.profile.outputReserveTokens -
     input.profile.safetyTokens;
   const emptyRetrieval = {
     ...input.retrieval,
@@ -347,7 +347,7 @@ export function packContext(input: {
         hardInput,
         history: input.profile.historyMaxTokens,
         memory: input.profile.memoryMaxTokens,
-        outputReserve: input.profile.maxOutputTokens,
+        outputReserve: input.profile.outputReserveTokens,
         safetyReserve: input.profile.safetyTokens,
       },
     },

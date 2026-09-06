@@ -167,7 +167,6 @@ export async function maintainAmbientHigherMemories(
     description: "提交重建后的 identity/narrative/working_set Ambient Higher Memory",
     prompt,
     temperature: 0.2,
-    maxOutputTokens: 8_000,
     timeout: { totalMs: 1_800_000, stepMs: 1_800_000 },
     onLanguageModelCallStart: async (event) => {
       callNumber += 1;

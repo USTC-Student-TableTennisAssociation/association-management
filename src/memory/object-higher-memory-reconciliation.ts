@@ -7,7 +7,7 @@ import {
 export type ObjectHigherMemoryReconciliationInput = Omit<
   ViewChangeContextInput,
   "recentConversation"
->;
+> & { signal?: AbortSignal };
 
 function runtimeTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -61,6 +61,7 @@ export async function reconcileObjectHigherMemoryFromViewChange(
         "请依据本轮权威 View 状态刷新当前认知，同时保留未被推翻的历史叙事、结构和运行模型。",
     },
     existingObjectMemoriesOnly: true,
+    signal: input.signal,
   });
   return result.objectMemories;
 }

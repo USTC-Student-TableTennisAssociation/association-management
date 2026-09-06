@@ -88,7 +88,7 @@ describe("capability gates", () => {
     expect(detailedToolNames(state)).toContain("proposeActorObjectBinding");
   });
 
-  it("still requires the concrete current View before opening Business View actions", async () => {
+  it("requires an explicit target View before opening Business View actions", async () => {
     const state = createOpenedCapabilities();
     const tools = createCapabilityGatewayTools(state, {
       viewKeySchema: z.string(),
@@ -100,6 +100,7 @@ describe("capability gates", () => {
     });
     const execute = tools.openActions.execute as unknown as (input: {
       area: "business_view";
+      viewKey?: string;
       reason: string;
     }) => Promise<unknown>;
 
@@ -108,7 +109,7 @@ describe("capability gates", () => {
     expect(state.actionAreas.size).toBe(0);
   });
 
-  it("browses a View without unlocking targeted state or Actions", async () => {
+  it("uses a View listing as sufficient observation for creating its first Card", async () => {
     const state = createOpenedCapabilities();
     const listViewCards = vi.fn().mockResolvedValue({ cards: [] });
     const tools = createCapabilityGatewayTools(state, {
@@ -132,8 +133,21 @@ describe("capability gates", () => {
       limit: 50,
     });
     expect(state.viewStateOpened).toBe(false);
+    expect([...state.observedViewKeys]).toEqual(["society_information"]);
     expect(state.actionAreas.size).toBe(0);
     expect(capabilityGatewayToolNames).toContain("listViewCards");
+
+    const open = tools.openActions.execute as unknown as (input: {
+      area: "business_view";
+      viewKey: string;
+      reason: string;
+    }) => Promise<unknown>;
+    await expect(open({
+      area: "business_view",
+      viewKey: "society_information",
+      reason: "建立首张 Card",
+    })).resolves.toMatchObject({ opened: "actions", area: "business_view" });
+    expect(state.actionAreas.has("business_view")).toBe(true);
   });
 
   it("passes typed entity targets into View state without opening Actions", async () => {
@@ -167,6 +181,7 @@ describe("capability gates", () => {
     expect(state.viewStateOpened).toBe(true);
     expect(state.lastViewKey).toBe("activity_operations");
     expect([...state.openedViewKeys]).toEqual(["activity_operations"]);
+    expect([...state.observedViewKeys]).toEqual(["activity_operations"]);
     expect(state.actionAreas.size).toBe(0);
   });
 

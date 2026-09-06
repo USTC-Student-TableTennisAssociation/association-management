@@ -19,6 +19,10 @@ export const libraryTriageSkill: SkillExtension = {
     jobId: z.string().uuid().optional(),
     focus: z.string().trim().min(1).max(500).optional(),
   })),
+  actionActivation: {
+    inputField: "phase",
+    allowedValues: ["propose"],
+  },
   instructions: [
     "目标是帮助用户把已上传文件转化为可控、可审批的基础编译计划，而不是泛泛让用户重新介绍文件夹。",
     "1. assess/recommend/propose 阶段先读取目标文件夹；input.folderId 存在时以它为范围，否则使用页面当前文件夹或资料库根目录。盘点文件时使用 listLibrary 的 recursive=true、kind=file、detail=compact、limit=1000，并在 truncated=true 时用 nextOffset 继续，不能用单页结果代表全部文件。",
