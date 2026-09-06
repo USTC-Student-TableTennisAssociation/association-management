@@ -4,6 +4,7 @@ from cold_start.region_tree.models import (
     RegionDecisionOutput,
     RegionNode,
     RegionTreeSnapshot,
+    RegionTreeWorkingCheckpoint,
 )
 from cold_start.region_tree.runtime import RegionRuntime
 
@@ -12,4 +13,5 @@ __all__ = [
     "RegionNode",
     "RegionRuntime",
     "RegionTreeSnapshot",
+    "RegionTreeWorkingCheckpoint",
 ]

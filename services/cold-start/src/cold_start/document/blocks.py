@@ -56,13 +56,28 @@ def format_blocks(blocks: tuple[ParsedBlock, ...] | list[ParsedBlock]) -> str:
     """渲染供模型阅读的带稳定锚点原文。"""
 
     return "\n\n".join(
-        (
-            f"[{block.block_id} | {block.block_type} | "
-            f"第 {'、'.join(str(page) for page in block.source_pages)} 页]\n"
-            f"{block.markdown}"
-        )
+        _format_block(block)
         for block in blocks
     )
+
+
+def _format_block(block: ParsedBlock) -> str:
+    metadata = [
+        block.block_id,
+        block.block_type,
+        f"第 {'、'.join(str(page) for page in block.source_pages)} 页",
+    ]
+    if block.source_type and block.source_type != block.block_type:
+        metadata.append(f"source_type={block.source_type}")
+    if block.attached_evidence:
+        metadata.append(
+            "附加证据="
+            + ",".join(
+                f"{item.kind}:{item.marker}->{item.block_id}"
+                for item in block.attached_evidence
+            )
+        )
+    return f"[{' | '.join(metadata)}]\n{block.markdown}"
 
 
 def render_heading_outline(

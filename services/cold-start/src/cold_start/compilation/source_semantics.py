@@ -22,10 +22,12 @@ from pydantic import (
 )
 
 from cold_start.document.blocks import format_blocks
+from cold_start.document.evidence_links import attached_evidence_block_ids
 from cold_start.document.models import ParsedBlock
 from cold_start.global_exploration.models import GlobalExplorationSnapshot, SourceMetadata
-from cold_start.llm.base import ChatModel
+from cold_start.llm.base import ChatModel, commit_model_turn, reject_model_turn
 from cold_start.llm.openai_compatible import ModelRepetitionError
+from cold_start.llm.structured_output import ModelOutputError, normalize_json_document
 from cold_start.progress import NullProgressReporter, ProgressReporter
 from cold_start.region_tree.models import BlockId, RegionNode
 from cold_start.region_tree.runtime import BlockIndex
@@ -36,6 +38,16 @@ class StrictModel(BaseModel):
 
 
 AssertionKind = Literal["grounded", "reference"]
+IdentityModeHint = Literal[
+    "named_person",
+    "role_type",
+    "entity_type",
+    "named_entity",
+    "undetermined",
+]
+CLAIM_POLICY_VERSION = "source-claims-policy.v3"
+FRAGMENT_POLICY_VERSION = "source-fragments-policy.v5"
+SOURCE_SEMANTIC_POLICY_VERSION = "source-semantics-policy.v5"
 
 
 def _normalize_source_time_text(value: str) -> str:
@@ -58,23 +70,8 @@ class AtomicClaimDraft(StrictModel):
     context_dependent: bool
 
 
-class SameReferentMentionDraft(StrictModel):
-    """首遍来源扫描定位出的一个同指称字面表达。"""
-
-    span_text: str = Field(min_length=1, max_length=150)
-    occurrence_index: int = Field(ge=0, le=1_000)
-
-
-class SameReferentDraft(StrictModel):
-    """来源明确表达的同指称，不引用尚未建立的 Object。"""
-
-    mentions: list[SameReferentMentionDraft] = Field(min_length=2, max_length=100)
-    supporting_block_ids: list[BlockId] = Field(min_length=1, max_length=32)
-
-
 class AtomicClaimSubmission(StrictModel):
     claims: list[AtomicClaimDraft] = Field(default_factory=list, max_length=1_000)
-    same_referent_drafts: list[SameReferentDraft] = Field(default_factory=list, max_length=500)
 
 
 class MissingClaimSubmission(StrictModel):
@@ -85,15 +82,12 @@ class SourceClaim(AtomicClaimDraft):
     claim_id: str = Field(pattern=r"^claim-\d+$")
 
 
-class SourceSameReferentDraft(SameReferentDraft):
-    same_referent_draft_id: str = Field(pattern=r"^same-ref-draft-\d+$")
-
-
 class ObjectFragmentDraft(StrictModel):
     """模型在一次 SourceRegion 内提交的临时同指称名称组。"""
 
     fragment_key: str = Field(pattern=r"^F\d+$")
     surface_forms: list[str] = Field(min_length=1, max_length=100)
+    identity_mode_hint: IdentityModeHint
 
     @model_validator(mode="after")
     def validate_surface_forms(self) -> ObjectFragmentDraft:
@@ -127,6 +121,7 @@ class ObjectFragment(StrictModel):
     fragment_id: str = Field(pattern=r"^fragment-\d+$")
     source_region_id: str = Field(pattern=r"^region-\d{4,}$")
     surface_forms: list[str] = Field(min_length=1, max_length=100)
+    identity_mode_hint: IdentityModeHint
 
     @model_validator(mode="after")
     def validate_surface_forms(self) -> ObjectFragment:
@@ -190,16 +185,17 @@ class SourceTimeSubmission(StrictModel):
 
 
 class SourceClaimCheckpoint(StrictModel):
-    schema_version: Literal["source-claims.v7"] = "source-claims.v7"
+    schema_version: Literal["source-claims.v8"] = "source-claims.v8"
+    policy_version: Literal["source-claims-policy.v3"]
     source_sha256: str
     region_node_id: str = Field(pattern=r"^region-\d{4,}$")
     claims: list[SourceClaim]
-    same_referent_drafts: list[SourceSameReferentDraft]
     model_calls: int = Field(ge=0)
 
 
 class SourceObjectFragmentCheckpoint(StrictModel):
-    schema_version: Literal["source-object-fragments.v5"] = "source-object-fragments.v5"
+    schema_version: Literal["source-object-fragments.v6"] = "source-object-fragments.v6"
+    policy_version: Literal["source-fragments-policy.v5"]
     source_sha256: str
     region_node_id: str = Field(pattern=r"^region-\d{4,}$")
     fragments: list[ObjectFragment]
@@ -223,7 +219,8 @@ class SourceStageStatus(StrictModel):
 
 
 class FullSourceSemanticWorking(StrictModel):
-    schema_version: Literal["source-semantics-working.v9"] = "source-semantics-working.v9"
+    schema_version: Literal["source-semantics-working.v10"] = "source-semantics-working.v10"
+    policy_version: Literal["source-semantics-policy.v5"]
     source_sha256: str
     source_node_ids: list[str]
     source_time: bool
@@ -233,7 +230,8 @@ class FullSourceSemanticWorking(StrictModel):
 class SourceSemanticSnapshot(StrictModel):
     """来源 Assertion、Leaf Object Fragment 与来源锚定时间。"""
 
-    schema_version: Literal["source-semantics.v9"] = "source-semantics.v9"
+    schema_version: Literal["source-semantics.v10"] = "source-semantics.v10"
+    policy_version: Literal["source-semantics-policy.v5"]
     created_at: datetime
     source: SourceMetadata
     region_tree_schema_version: str
@@ -252,7 +250,8 @@ class SourceSemanticSnapshot(StrictModel):
 
 
 class FullSourceSemanticSnapshot(StrictModel):
-    schema_version: Literal["source-semantics-full.v9"] = "source-semantics-full.v9"
+    schema_version: Literal["source-semantics-full.v10"] = "source-semantics-full.v10"
+    policy_version: Literal["source-semantics-policy.v5"]
     created_at: datetime
     source: SourceMetadata
     source_time_text: str | None
@@ -312,319 +311,81 @@ class FullSourceSemanticPaths:
     report_markdown: Path
 
 
-CLAIM_EXTRACTION_SYSTEM_PROMPT = """
-你只负责从当前来源原文提取三类基础语义：可独立理解的 grounded Assertion、
-指向明确来源区域的 Reference Assertion，以及来源明确表达的同指称字面称呼。
-一次有限扫描完成它们，处理完最后一个 block 后立即提交。
+ASSERTION_STAGE_CONTRACT = """
+本阶段只决定当前 SourceRegion 明确表达了哪些 Assertion，不决定 Object、名称同指或跨来源身份。
 
-一次只做这一个核心判断：原文对现实中的人物、组织、产品、项目、场所、活动、工作、制度、历史、状态、
-做法、结果、目标或观点明确说了什么。目录、章节导航、承接语和“本章将介绍……”之类
-只描述文档结构的文字不形成命题。
+- grounded：一个能被独立检索和理解的内聚知识单元。共享主体、条件、例外或步骤链且通常共同被
+  查询的内容保持在一起；主题、来源或生命周期明显不同时再拆分。
+- reference：指向表格、名单、分工或流程清单原文的检索入口，只说明可在那里继续读取什么，
+  不复写全部内容。
+- supporting_block_ids 只列直接支持该 Assertion 的当前原文块，并保持原文顺序。
+- 保留条件、否定、数量、时间以及建议、计划、可能等语气。能够从当前句自然补全主语时写成
+  context_dependent=false；需要跨句身份推断或复杂重建时保留原表达并写 true。
 
-一、grounded Assertion 的颗粒度：
-- 目标不是“一个最小事实一条”，而是一个语义边界清晰、上下文完整、能被下游 AI
-  直接理解的知识单元；可以是一句，也可以是相互依赖的数句；
-- 同一规则、机制、流程步骤链、完整表格行或共享条件/例外的内容，如果理解其中一句
-  需要另一句、它们通常会一起被查询，应优先保持在一条 Assertion 中；
-- 只在主题、来源或变化边界明显不同时拆分。例如长期运行规则与“本届负责人”
-  生命周期不同，应分开；
-- 不要默认按句、每个谓词、列表项或表格单元格切分；不要用字数阈值作为主要标准；
-- 能用当前句子或 block 明确无歧义的信息自然补齐主语时，可整理为独立知识
-  单元并标记 context_dependent=false；
-- 如果独立化需要明显的代词消解、跨句或跨 block 身份推断、省略补全、复制大段前文或复杂
-  语义重建，不要强行解决。保留合理的上下文依赖表达，并标记 context_dependent=true；该字段
-  只表示阅读这条 Claim 时需要回到所属 SourceRegion，不要求输出 antecedent 或 context span；
-- 例如“当前负责人认为有必要改变这一现状。”是可接受的 context_dependent=true Claim，
-  不要为展开“这一现状”复制前文，也不要跨 block 把“当前负责人”解析成具体人物；
-- 条件、否定、例外、数量、时间表达和“建议”“计划”“可能”等原文语气必须保留，
-  不能擅自补足。
+名称括注、简称和脚注身份说明继续留在原文中，交给 Fragment Construction。输出只包含 schema
+规定的 JSON 字段；正文优先使用中文弯引号，字符串中的 ASCII 双引号必须合法转义。
 
-二、Reference Assertion：
-- kind=reference 不承载表格/章节的全部事实，而用自然语言说明“关于什么信息，
-  应去哪个当前来源区域继续读取”；
-- 只对表格、名单、人员分工、流程清单等明显适合导航的区域生成，不按每个文件或
-  每个 Object 机械生成；
-- 颗粒度是“用户可能独立询问的信息主题 + 足够小、能直接继续读取的来源区域”。
-  拆分后没有产生不同检索路径时，就保持一条；允许覆盖范围重叠；
-- 对一组同类 Object 的表格或名单，正文优先使用“主要服务项目”“当前岗位安排”等集合性
-  主题描述，不要为了关联成员而在 Reference 正文中逐一枚举所有 Object 名称；
-- supporting_block_ids 必须精确指向要回看的表格/列表/章节原文块；如果信息全部在表格 block，
-  不要仅因标题提供主题就额外把 heading block 列为依据；
-- 此阶段只写导航描述，Object 的 semantic links 由后续 Fragment 阶段基于当前来源确定。
-
-三、共同规则：
-- supporting_block_ids 只列直接支持该命题的当前来源块；
-- 如果来源明确通过名称括注、简称、英文名、又称、以下简称、即、别名等方式，把两个或多个
-  字面表达作为同一 referent 使用，不要把这层名称共指改写成 factual claim，而应提交到
-  same_referent_drafts；这些表达方式只是例子，是否共指必须根据当前来源语义判断；
-- same_referent_drafts 的每个 mention 只提交 span_text 和 occurrence_index。span_text 必须逐字
-  存在于该 draft 的 supporting_block_ids 原文中；occurrence_index 是它在这些块按列出顺序
-  拼接的原文中从左到右第几次出现，从 0 开始；至少提交两个不同字面称呼；
-- 混合句同时包含名称共指和普通事实时，共指进入 same_referent_drafts，claim 只保留去掉名称
-  说明后仍完整成立的事实。例如“A（B）成立于2005年”应得到 A/B 共指草稿与“A成立于2005年”；
-- 只保存当前来源明确表达的 referential equivalence。不得因为名称相似、常识、主题相近、共同
-  出现或未来可能相连而推断；不得补充原文没有写出的全称、简称或标准名；
-- 即使来源使用“以下简称”明确建立文内共指，也只提交能够脱离当前句子、独立指向同一对象的
-  真实名称、简称、缩写或别名；“该对象”“本项目”“当前负责人”等依赖语境的代称或临时角色
-  不能成为 same_referent_drafts mention。明确的“远航计划”“Project Voyager”“PV”
-  可以保留；“项目负责人”“负责人”和“林岚”“主管”不能因此组成同指称名称组；
-- “明确表达”要求同一处直接命名构式把这些字面称呼作为等价名称呈现。先出现全称，后文另句
-  使用一个看似简称的词，只属于语篇指代，不足以进入 same_referent_drafts；不要跨句搜集别称；
-- 例如来源写“远航计划（Project Voyager）”，后文另写“该计划”，只提交
-  “远航计划”与“Project Voyager”；不得把“该计划”加入该草稿；
-- 不寻找跨来源 identity，不重新讨论 Objecthood，不生成 alias、canonical label 或 Object ID；
-- 不判断全局 Object identity，不建立 Relation，不分类 record/viewpoint，不结构化时间，
-  不评价长期价值；
-- 不分配任何 ID，不输出最终数据库协议，也不进行全局自检；
-- context_dependent 不是质量或重要性评价；不要为了把它改成 false 而重新打开已经完成的
-  Claim 判断。处理完最后一个 block 后立即提交。
-
-JSON 字符串要求：
-- 原文使用中文弯引号“”时优先保留，不要主动转换成 ASCII 双引号 \"；
-- statement_markdown 中确实需要 ASCII 双引号时，必须按 JSON string 规则写成 \\\"；
-- JSON 结构边界的双引号与自然语言内容中的 ASCII 双引号必须区分；
-- 输出必须是标准 JSON parser 可以直接解析的完整对象。
-
-错误：
-{"statement_markdown":"项目呈现"两极化"结构"}
-
-正确之一：
-{"statement_markdown":"项目呈现“两极化”结构"}
-
-或合法转义：
-{"statement_markdown":"项目呈现\\\"两极化\\\"结构"}
-
-只输出一个 JSON 对象，不要输出 Markdown 代码块、说明或其他正文：
-{
-  "claims":[
-    {
-      "kind":"grounded",
-      "statement_markdown":"可用事实命题",
-      "supporting_block_ids":["p0001-b0001"],
-      "context_dependent":false
-    }
-  ],
-  "same_referent_drafts":[
-    {
-      "mentions":[
-        {"span_text":"来源中的完整名称","occurrence_index":0},
-        {"span_text":"来源中的简称","occurrence_index":0}
-      ],
-      "supporting_block_ids":["p0001-b0001"]
-    }
-  ]
-}
+只输出一个 JSON 对象：
+{"claims":[{"kind":"grounded","statement_markdown":"完整命题","supporting_block_ids":["p0001-b0001"],"context_dependent":false}]}
 """.strip()
 
 
-CONSERVATIVE_ATOMIC_FALLBACK_SYSTEM_PROMPT = """
-上一轮来源语义推理发生重复。本轮只使用保守策略稳定完成第一次抽取，
-不寻找唯一最优的拆分方案。
+CLAIM_EXTRACTION_SYSTEM_PROMPT = f"""
+{ASSERTION_STAGE_CONTRACT}
 
-按当前 source 原文 block 的顺序处理，每个 block 只处理一次。提取原文明确支持的
-grounded Assertion，并对适合导航的表格、名单、分工或流程清单提取 Reference Assertion。
-纯标题、目录和承接语自身不形成 grounded Assertion。
-
-如果进一步拆分需要判断以下任何问题，立即停止拆分并保留较完整、较接近原文的表达：
-- 是否因为信息能够分别成立或分别变化而继续拆分；
-- 是否需要重复共享条件或重建省略主语；
-- 是否需要继续拆解目的链、因果链或手段→目标链；
-- 是否需要比较两个都合理的粒度方案；
-- 是否需要反复处理代词回指；
-- 是否需要判断文档元数据还能否继续细拆。
-
-不追求最小粒度。同一规则、机制、流程链或表格行应优先保持内聚；只有主题、来源或
-生命周期边界明显不同时拆分。两种表达都合理时，选择更接近原文、更完整的一种。
-不要返回已经处理过的 block，不做第二轮全局检查，不证明是否还有遗漏；遗漏事实由后续 Missing
-阶段检查。处理完最后一个 block 后立即提交。
-
-能自然、低成本独立化的命题标记 context_dependent=false。需要代词消解、跨句或跨 block
-身份推断、省略补全、复制前文或复杂语义重建时，不进行这些工作，直接保留较完整的上下文依赖
-表达并标记 context_dependent=true。
-
-除 factual claims 外，只顺手记录当前来源明确表达的同指称：名称括注、简称、英文名、又称、
-以下简称、即、别名等把两个或多个字面表达明确作为同一 referent 使用的情况。不要把名称共指
-改写成 factual claim。混合句的普通事实仍进入 claims，但去掉名称说明后必须完整成立。
-same_referent_drafts 只提交原文连续 span、按 supporting blocks 顺序计算的 occurrence_index 和
-真实 supporting_block_ids。只认同一处直接命名构式；后文另句使用的疑似简称不算显式共指。
-不得根据相似性、常识或跨来源背景猜测，不补全名称，不生成 Object ID。只保存脱离当前句子后
-仍能独立指向同一对象的名称；代词、“该对象”“本项目”等语境指代，以及只在当前时期成立的
-临时角色称呼，即使在当前语境中共指，也不要提交。
-
-粒度示例一：
-原文：随着业务规模的发展，长期存在的组织架构不合理、经验传承断层等问题日益凸显，
-制约了团队进一步服务客户的能力，也消耗了核心成员的热情。
-可以输出：
-- 随着业务规模的发展，长期存在的组织架构不合理、经验传承断层等问题日益凸显。
-- 这些问题制约了团队进一步服务客户的能力。
-- 这些问题消耗了核心成员的热情。
-不要为了理论原子性，把组织架构不合理和经验传承断层拆成两套带重复条件的命题。
-
-粒度示例二：
-原文：记录过去的探索、改革思路及教训，为后来者提供可复用的参考，终结“代际失忆”。
-可以保留为一条完整目标命题，不再讨论记录→提供参考→终结失忆是否需要拆成三条。
-
-每条 claim 只使用：
-- kind：grounded 或 reference；
-- statement_markdown：忠实、可用的现实命题；
-- supporting_block_ids：直接支持该命题的当前来源块。
-- context_dependent：是否必须回到所属 SourceRegion 才能正确理解命题中的代词、省略或身份指代。
-
-JSON 字符串要求：
-- 原文使用中文弯引号“”时优先保留，不要主动转换成 ASCII 双引号 "；
-- statement_markdown 中确实需要 ASCII 双引号时，必须按 JSON string 规则写成 \\\"；
-- 输出必须是标准 JSON parser 可以直接解析的完整对象。
-
-只输出一个 JSON 对象，不要输出 Markdown 代码块、说明或其他正文：
-{
-  "claims":[
-    {
-      "kind":"grounded",
-      "statement_markdown":"较完整且贴近原文的命题",
-      "supporting_block_ids":["p0001-b0001"],
-      "context_dependent":false
-    }
-  ],
-  "same_referent_drafts":[
-    {
-      "mentions":[
-        {"span_text":"来源中的完整名称","occurrence_index":0},
-        {"span_text":"来源中的简称","occurrence_index":0}
-      ],
-      "supporting_block_ids":["p0001-b0001"]
-    }
-  ]
-}
+按原文顺序完成第一次覆盖。目录、纯标题、承接语或只描述文档结构的文字自身不形成 grounded
+Assertion。完成最后一个 block 后立即提交完整 JSON，不要解释判断过程。
 """.strip()
 
 
-MISSING_CLAIMS_SYSTEM_PROMPT = """
-你只负责检查已有 Assertion 是否遗漏了当前来源明确支持的完整知识单元，
-或者适合指向表格、名单、人员分工、流程清单的 Reference Assertion。
+CONSERVATIVE_ATOMIC_FALLBACK_SYSTEM_PROMPT = f"""
+{ASSERTION_STAGE_CONTRACT}
 
-已有命题已经冻结：不得删除、改写、合并、重排或重新分类它们。只提交原文明确支持、
-且现有命题尚未表达的增量命题；没有遗漏时提交空数组。不要为了覆盖标题、目录、承接语、
-例子标签或文档说明而制造命题。
+上一轮在粒度选择上发生重复。本轮按 block 顺序处理一次，采用稳定的保守边界：两个拆法都合理时，
+选择更接近原文、更完整的一种；不要继续拆解共享条件、目的链、因果链或省略主语。遗漏交给下一遍
+检查。完成最后一个 block 后立即提交完整 JSON，不要寻找唯一最优方案。
+""".strip()
 
-一个 cohesive grounded Assertion 已经完整表达的列表项、条件、步骤和子结论都视为 covered。
-不要因为一条 Assertion 包含多个相互依赖的事实，就把其中每个 bullet 再次作为遗漏提交。
-只有确实未表达的条件、例外、新事实内容或重要关系才能新增。
 
-新增 grounded Assertion 沿用轻量上下文规则：能自然、低成本独立化时标记 context_dependent=false；
-需要明显代词消解、跨句/跨 block 身份推断、省略补全或复杂语义重建时，保留可用的上下文依赖
-表达并标记 context_dependent=true，不要为了得到独立命题而重新求解整段上下文。
+MISSING_CLAIMS_SYSTEM_PROMPT = f"""
+{ASSERTION_STAGE_CONTRACT}
 
-不判断 Object、Relation、record/viewpoint、结构化时间或业务价值，不重新输出已有命题。
-每个 claims 元素只能使用 kind、statement_markdown、supporting_block_ids 和 context_dependent，不得
-输出 id、claim_id、text、content、source，也不得自行发明其他字段。
-
-只输出一个 JSON 对象，不要输出 Markdown 代码块、说明或其他正文。
-
-无遗漏：
-{"claims":[]}
-
-有遗漏：
-{
-  "claims": [
-    {
-      "kind": "grounded",
-      "statement_markdown": "完整、内聚的知识单元",
-      "supporting_block_ids": ["p0001-b0001"],
-      "context_dependent": false
-    }
-  ]
-}
+本遍只做覆盖差分。已有 Assertion 已冻结；只返回原文明确支持、但尚未表达的完整新增 Assertion，
+没有遗漏时返回空数组。已被内聚 Assertion 覆盖的列表项、条件、步骤和子结论不重复提交，也不重新
+评价已有 Assertion 的写法、顺序或分类。完成检查后立即提交完整 JSON。
 """.strip()
 
 
 OBJECT_FRAGMENT_SYSTEM_PROMPT = """
-你只负责把一个 SourceRegion 中已经冻结的 Assertion 与名称语境编译成 Leaf Object Fragment IR。
-一次调用同时完成两件高度相关的工作：构造 source-local ObjectFragment，并直接为每条 frozen
-claim 生成引用 Fragment 的 Assertion template。处理完成后立即提交，不做全局 identity 判断。
+你负责从当前 SourceRegion 与 frozen Assertions 中提取需要跨命题维持同一身份的 source-local
+referent，并生成 Assertion templates。Fragment 只是交给 Resolver 的候选，不是最终 Global Object。
 
-ObjectFragment 的含义：当前 SourceRegion 中，我们认为未来应归属于同一个 Global Object 的
-一包局部 reusable naming forms。它不是长期 Object，也不是完整 NLP coreference。
+只有当两次出现是否指向“同一个对象或同一种业务类型”是有意义的问题时，才提取 Fragment。
+人物、组织、角色、活动、地点、实物、设备、文件、制度、流程和稳定群体通常适用。仅作为其他
+对象的属性、状态、情绪、评价或程度出现的内容保留在 Assertion 正文中。边界不清楚但确实可能
+具有长期身份时才提交候选；不要把所有名词或可讨论的抽象概念都提升为 Fragment。
 
-Fragment 构造规则：
-- 只保留脱离当前句子后，在其他材料、记录或查询中仍可能再次用于识别同一对象的名称表达；
-- 人物、组织、角色、具名活动、活动类别、流程、工作事项、制度、档案、历史事件、平台、
-  稳定群体等都可以形成 Fragment；明显只是数量、时间、属性、结果、程度、评价或修辞不形成；
-- “它”“该对象”“本项目”“这个组织”“上述活动”“该系统”等临时代词通常不是 reusable name，
-  不要求成为 surface form；
-- 同一 SourceRegion 中明确称呼同一个对象的 reusable names 放入同一 Fragment；surface forms
-  必须能够脱离当前句子后，仍作为同一实体的名称或别名独立指向它。一个 span 即使在当前句子中
-  最终 referent 相同，只要必须依赖省略补全、临时角色、上下文或当前文档范围才能完成指代，
-  就不是 surface form。一个 span 即使最终 referent 相同，
-  只要相比实体名称还包含角色、任期、时间、关系、状态、数量、范围或描述性限定，就不是 alias，
-  不得与实体名称合并；只做局部名称同指整合，不因语义相似、主题相关、业务关系或可能连接而
-  合并不同对象；
-- 真实全称、稳定简称、缩写和明确别名可以共同保留，例如“远航计划”“Project Voyager”
-  “PV”可以属于同一 Fragment；但“项目负责人”在后文被省略为“负责人”时，“负责人”
-  不能独立识别该角色，不得加入 surface_forms；“林岚”在当前语境中被称为“主管”时，
-  “主管”也不是人物别名；“远航计划”被称为“本项目”“该计划”时同理；
-- “负责人”“主管”“项目”“系统”等泛称只有在它本身就是当前命题讨论的独立角色或类别 Object
-  时，才可以单独形成只包含自身的 Fragment；不得作为更具体 Object 的附加别名；
-- 输入中的 source naming hints 是 hard grouping hint：同一 hint 内所有名称必须完整进入同一个
-  Fragment，不得遗漏或拆开；不需要重新判断这些名称是否同指；
-- 在 hard hint 之外，可以根据当前 SourceRegion 整体语境，把“PV”等后续 reusable name 加入
-  已有 Fragment；
-- surface_forms 必须有当前编译上下文依据：逐字出现在当前 SourceRegion、reviewed/frozen claims
-  或 source naming hint 中。不得发明新别名、纠错名称或输出 canonical/preferred label；
-- 每个 surface form 只能属于一个 Fragment；发布者与审阅者等相关但不同的角色必须分开；
-- fragment_key 只使用本次输出内临时键 F1、F2、F3……，不得输出 Global Object ID。
+同一局部 referent 的真实全称、稳定简称、缩写或明确别名进入同一 Fragment。人物、角色、类别与
+实例分别表达。原文明示的全称、简称、别名和脚注身份关系在本阶段直接判断。surface_forms 必须逐字
+来自当前输入。
+如果附加脚注明确说明某个称呼所指的人物，模板可把正文称呼绑定到脚注中的人物 Fragment；
+surface_forms 只保留可脱离该句复用的名称。
 
-Assertion template 与 Object link 规则：
-- assertions 必须覆盖输入中的每个 claim_id，恰好一次，顺序与 frozen claims 相同；
-- kind 必须与 frozen claim 一致，只能是 grounded 或 reference；
-- grounded Assertion 由你直接输出完整 statement_template_markdown，不提交 span、start、end
-  或 occurrence_index；
-- grounded Assertion 中具有明确语义位置的 Fragment 名称应改写成 {{fragment:F1}} 形式；同一条可以引用
-  零个、一个或多个 Fragment；未被 Fragment 化的其余命题内容保留为可理解的完整命题；
-- 模板不要求替换后逐字还原 frozen claim，可以做不改变事实含义的轻微语法整理，但不得新增、
-  删除或改变原命题的事实、数量、条件、否定、例外、时间与语气；
-- context_dependent=true 的 frozen claim 允许继续依赖所属 SourceRegion；不要在本阶段消解代词、
-  补全省略或跨 block 绑定身份，程序会原样继承该标记；
-- grounded Assertion 的 semantic_fragment_keys 必须为 []；它与 Object 的连接仍只来自正文
-  {{fragment:...}} 的 anchored references；
-- Reference Assertion 的 statement_template_markdown 是可检索的导航描述，不需要写入被关联
-  Object 的名称，也不要为了建立关联强行加入 {{fragment:...}}；有集合性主题描述可用时，
-  不得逐一枚举成员名称来替代 semantic links；
-- Reference Assertion 的 semantic_fragment_keys 必须列出该来源区域的检索覆盖对象，至少一个；
-  它不是对象级事实关系。除表格/名单直接编目且用户会通过其反查来源的成员外，如果当前区域
-  明确把项目、成员或活动呈现为某个命名主体的集合，并且用户会通过该主体检索这份集合，也应
-  包含该主体 Fragment。不得加入仅作为归属背景、只偶然出现或仅属于某一单元格属性的 Object；
-  这些名称必须由当前来源支持，但无需出现在 Reference 正文中；
-- 例如某组织的一张表有五个服务项目，可以保留五个服务 Fragment，但只产生一条说明
-  “主要服务的名称、形式和定位记录于该表”的 Reference，并将五个项目和被明确呈现为集合主体
-  的组织 key 放入 semantic_fragment_keys；不要加入某行历史定位中偶然出现的背景群体 Fragment；
-- 名称只存在于 SourceRegion、frozen claim 或 naming hint，没有出现在其他 factual claim 中，
-  也仍可合法进入 Fragment；不得为它制造 fake claim；
-- 不输出 supporting blocks、时间、Relation、Object type、business role、alias evidence
-  graph、Global identity 或长期价值判断。
+identity_mode_hint 只描述候选如果最终成为 Object 时适用的身份判断方式，不证明 Objecthood：
+- named_person：具体人物身份；
+- role_type：可由不同人物担任的稳定角色；
+- entity_type：活动、实物或其他可复用类别；
+- named_entity：其他具名实例或稳定对象。
+- undetermined：候选可能具有长期身份，但当前 Region 不足以判断其身份方式。
+属性、状态、情绪、评价或程度不得仅因难以分类而标为 undetermined。
 
-JSON 字符串要求：
-- statement_template_markdown 等自然语言字段需要引用文字时，统一优先使用中文弯引号“”；
-- 如果字符串内容确实需要 ASCII 双引号，必须按 JSON string 规则写成 \"；
-- 不得在 JSON 字符串内部直接写未转义的 ASCII 双引号 "；
-- 输出必须是标准 JSON parser 可以直接解析的完整对象。
+grounded Assertion 中已识别的 referent 用 {{fragment:F1}} 标记，semantic_fragment_keys 为 []。
+Reference Assertion 保持导航正文，并用 semantic_fragment_keys 列出它实际覆盖的 Fragment。
+assertions 按输入顺序恰好覆盖全部 claim_id，保留原命题的事实、条件、时间和语气。
 
-示例：
-输入命题“审阅者协助发布者工作。”，两个角色不是同一对象：
-{
-  "fragments":[
-    {"fragment_key":"F1","surface_forms":["审阅者"]},
-    {"fragment_key":"F2","surface_forms":["发布者"]}
-  ],
-  "assertions":[
-    {"claim_id":"claim-1","kind":"grounded","statement_template_markdown":"{{fragment:F1}}协助{{fragment:F2}}工作。","semantic_fragment_keys":[]}
-  ]
-}
-
-只输出一个严格 JSON 对象，不要输出 Markdown 代码块、说明或其他正文：
-{
-  "fragments":[{"fragment_key":"F1","surface_forms":["来源名称","来源简称"]}],
-  "assertions":[{"claim_id":"claim-1","kind":"grounded","statement_template_markdown":"{{fragment:F1}}成立于……","semantic_fragment_keys":[]}]
-}
+完成当前 Region 后立即提交 JSON 正文，只包含：
+- fragments：fragment_key、surface_forms、identity_mode_hint；
+- assertions：claim_id、kind、statement_template_markdown、semantic_fragment_keys。
 """.strip()
 
 
@@ -703,17 +464,13 @@ class SourceSemanticCompiler:
             initial = self._claim_checkpoint(
                 node,
                 submission.claims,
-                same_referent_drafts=submission.same_referent_drafts,
                 source_blocks=source_blocks,
                 model_calls=initial_calls,
             )
             self._write_json(self.paths.initial_claims_json, initial)
         self.progress.report(
             label,
-            (
-                f"第一遍完成：{len(initial.claims)} 条命题，"
-                f"{len(initial.same_referent_drafts)} 条来源明示同指称草稿"
-            ),
+            f"第一遍完成：{len(initial.claims)} 条命题",
         )
 
         reviewed = None
@@ -721,11 +478,6 @@ class SourceSemanticCompiler:
             reviewed = self._load_claim_checkpoint(
                 self.paths.reviewed_claims_json, node, source_blocks
             )
-            if (
-                reviewed is not None
-                and reviewed.same_referent_drafts != initial.same_referent_drafts
-            ):
-                reviewed = None
         rebuilt_reviewed = reviewed is None
         if reviewed is None:
             self.progress.report(label, "第二遍：只检查遗漏命题")
@@ -741,7 +493,6 @@ class SourceSemanticCompiler:
             reviewed = self._claim_checkpoint(
                 node,
                 _merge_claims(initial.claims, additions.claims),
-                same_referent_drafts=initial.same_referent_drafts,
                 source_blocks=source_blocks,
                 model_calls=review_calls,
             )
@@ -757,7 +508,6 @@ class SourceSemanticCompiler:
             object_fragments = self._load_object_fragments_checkpoint(
                 node,
                 reviewed.claims,
-                reviewed.same_referent_drafts,
                 source_blocks,
             )
         if object_fragments is None:
@@ -767,14 +517,12 @@ class SourceSemanticCompiler:
                 user_prompt=_fragment_prompt(
                     source_prompt,
                     reviewed.claims,
-                    reviewed.same_referent_drafts,
                 ),
                 output_model=ObjectFragmentSubmission,
                 request_label=f"{label}·Object Fragment Construction",
                 validate=lambda value: _validate_fragment_submission(
                     value,
                     reviewed.claims,
-                    same_referent_drafts=reviewed.same_referent_drafts,
                     source_blocks=source_blocks,
                 ),
             )
@@ -784,6 +532,7 @@ class SourceSemanticCompiler:
                 source_region_id=node.node_id,
             )
             object_fragments = SourceObjectFragmentCheckpoint(
+                policy_version=FRAGMENT_POLICY_VERSION,
                 source_sha256=self.exploration.source.sha256,
                 region_node_id=node.node_id,
                 fragments=fragments,
@@ -802,11 +551,11 @@ class SourceSemanticCompiler:
         covered = _covered_block_ids(
             reviewed.claims,
             source_blocks,
-            same_referent_drafts=reviewed.same_referent_drafts,
         )
         source_ids = [block.block_id for block in source_blocks]
         model_calls = initial.model_calls + reviewed.model_calls + object_fragments.model_calls
         snapshot = SourceSemanticSnapshot(
+            policy_version=SOURCE_SEMANTIC_POLICY_VERSION,
             created_at=datetime.now(UTC),
             source=self.exploration.source,
             region_tree_schema_version=self.exploration.region_tree.schema_version,
@@ -872,7 +621,7 @@ class SourceSemanticCompiler:
                     validate=validate,
                 )
             except (ModelRepetitionError, ValueError) as error:
-                raise ValueError(
+                raise ModelOutputError(
                     f"{fallback_label}失败且不再重试：{_short_validation_error(error)}"
                 ) from error
             return parsed, 2
@@ -895,7 +644,7 @@ class SourceSemanticCompiler:
                     validate=validate,
                 )
             except (ModelRepetitionError, ValueError) as error:
-                raise ValueError(
+                raise ModelOutputError(
                     f"{request_label}初次输出和唯一一次 clean retry 均失败："
                     f"{_short_validation_error(error)}"
                 ) from error
@@ -940,7 +689,7 @@ class SourceSemanticCompiler:
             except (ModelRepetitionError, ValueError) as error:
                 last_error = error
         assert last_error is not None
-        raise ValueError(
+        raise ModelOutputError(
             f"{request_label}初次输出和唯一一次 clean retry 均失败："
             f"{_short_validation_error(last_error)}"
         ) from last_error
@@ -962,12 +711,17 @@ class SourceSemanticCompiler:
             request_label=request_label,
             thinking="enabled",
         )
-        if turn.tool_calls or not turn.content:
-            raise ValueError(f"{request_label}没有返回 JSON 正文")
-        normalized = normalize_json_fence(turn.content)
-        parsed = output_model.model_validate_json(normalized)
-        if validate is not None:
-            validate(parsed)
+        try:
+            if turn.tool_calls or not turn.content:
+                raise ValueError(f"{request_label}没有返回 JSON 正文")
+            normalized = normalize_json_document(turn.content)
+            parsed = output_model.model_validate_json(normalized)
+            if validate is not None:
+                validate(parsed)
+        except Exception:
+            reject_model_turn(self.model, turn)
+            raise
+        commit_model_turn(self.model, turn)
         return parsed
 
     def _source_node(self, node_id: str) -> RegionNode:
@@ -988,17 +742,13 @@ class SourceSemanticCompiler:
         return list(reversed(lineage))
 
     def _owned_blocks(self, node: RegionNode) -> tuple[ParsedBlock, ...]:
-        blocks: list[ParsedBlock] = []
-        for segment in node.owned_segments:
-            blocks.extend(self.index.slice(segment.start_block_id, segment.end_block_id))
-        return tuple(blocks)
+        return _semantic_blocks_for_node(self.index, node)
 
     def _claim_checkpoint(
         self,
         node: RegionNode,
         claims: Sequence[AtomicClaimDraft | SourceClaim],
         *,
-        same_referent_drafts: Sequence[SameReferentDraft | SourceSameReferentDraft],
         source_blocks: Sequence[ParsedBlock],
         model_calls: int,
     ) -> SourceClaimCheckpoint:
@@ -1013,20 +763,11 @@ class SourceSemanticCompiler:
             for position, item in enumerate(claims, start=1)
         ]
         _validate_claim_blocks(normalized, source_blocks)
-        normalized_same_referent = [
-            SourceSameReferentDraft(
-                same_referent_draft_id=f"same-ref-draft-{position}",
-                mentions=item.mentions,
-                supporting_block_ids=list(dict.fromkeys(item.supporting_block_ids)),
-            )
-            for position, item in enumerate(same_referent_drafts, start=1)
-        ]
-        _validate_same_referent_drafts(normalized_same_referent, source_blocks)
         return SourceClaimCheckpoint(
+            policy_version=CLAIM_POLICY_VERSION,
             source_sha256=self.exploration.source.sha256,
             region_node_id=node.node_id,
             claims=normalized,
-            same_referent_drafts=normalized_same_referent,
             model_calls=model_calls,
         )
 
@@ -1039,27 +780,33 @@ class SourceSemanticCompiler:
         if not path.exists():
             return None
         raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or raw.get("schema_version") != "source-claims.v7":
+        if (
+            not isinstance(raw, dict)
+            or raw.get("schema_version") != "source-claims.v8"
+            or raw.get("policy_version") != CLAIM_POLICY_VERSION
+        ):
             return None
         checkpoint = SourceClaimCheckpoint.model_validate(raw)
         self._validate_checkpoint_identity(
             checkpoint.source_sha256, checkpoint.region_node_id, node
         )
         _validate_claim_blocks(checkpoint.claims, source_blocks)
-        _validate_same_referent_drafts(checkpoint.same_referent_drafts, source_blocks)
         return checkpoint
 
     def _load_object_fragments_checkpoint(
         self,
         node: RegionNode,
         claims: Sequence[SourceClaim],
-        same_referent_drafts: Sequence[SourceSameReferentDraft],
         source_blocks: Sequence[ParsedBlock],
     ) -> SourceObjectFragmentCheckpoint | None:
         if not self.paths.object_fragments_json.exists():
             return None
         raw = json.loads(self.paths.object_fragments_json.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict) or raw.get("schema_version") != "source-object-fragments.v5":
+        if (
+            not isinstance(raw, dict)
+            or raw.get("schema_version") != "source-object-fragments.v6"
+            or raw.get("policy_version") != FRAGMENT_POLICY_VERSION
+        ):
             return None
         try:
             checkpoint = SourceObjectFragmentCheckpoint.model_validate(raw)
@@ -1069,7 +816,6 @@ class SourceSemanticCompiler:
             _validate_fragment_checkpoint(
                 checkpoint,
                 claims,
-                same_referent_drafts=same_referent_drafts,
                 source_blocks=source_blocks,
             )
             return checkpoint
@@ -1118,6 +864,7 @@ class FullSourceSemanticRunner:
         self.on_available = on_available
         self.progress = progress or NullProgressReporter()
         self.nodes = {node.node_id: node for node in exploration.region_tree.nodes}
+        self.index = BlockIndex(blocks)
         self.errors: dict[str, str] = {}
         self._working_lock = asyncio.Lock()
         self._availability_lock = asyncio.Lock()
@@ -1144,6 +891,7 @@ class FullSourceSemanticRunner:
             for node_id in self.exploration.region_tree.content_node_ids
             if self.nodes[node_id].owned_source_role == "content_source"
             and self.nodes[node_id].owned_segments
+            and _semantic_blocks_for_node(self.index, self.nodes[node_id])
         ]
         source_ids = self._select_source_ids(available_source_ids)
         self._validate_resume(source_ids)
@@ -1212,14 +960,18 @@ class FullSourceSemanticRunner:
             ),
             return_exceptions=True,
         )
-        failures = [
-            f"{node_id}：{outcome}"
+        failed_outcomes = [
+            (node_id, outcome)
             for node_id, outcome in zip(source_ids, outcomes, strict=True)
             if isinstance(outcome, BaseException)
         ]
         self._write_working(source_ids)
-        if failures:
-            raise RuntimeError("来源语义编译失败：" + "；".join(failures))
+        if failed_outcomes:
+            summary = "；".join(
+                f"{node_id}：{outcome}" for node_id, outcome in failed_outcomes
+            )
+            # Keep a concrete leaf failure in the cause chain so the CLI can classify it.
+            raise RuntimeError("来源语义编译失败：" + summary) from failed_outcomes[0][1]
 
         snapshots = [outcome for outcome in outcomes if isinstance(outcome, SourceSemanticSnapshot)]
         full = self._full_snapshot(source_ids, snapshots, source_time)
@@ -1267,6 +1019,7 @@ class FullSourceSemanticRunner:
         source_time: SourceTimeCheckpoint,
     ) -> FullSourceSemanticSnapshot:
         return FullSourceSemanticSnapshot(
+            policy_version=SOURCE_SEMANTIC_POLICY_VERSION,
             created_at=datetime.now(UTC),
             source=self.exploration.source,
             source_time_text=source_time.source_time_text,
@@ -1312,12 +1065,17 @@ class FullSourceSemanticRunner:
                     request_label=("Source Time" if attempt == 1 else "Source Time·clean-retry"),
                     thinking="enabled",
                 )
-                if turn.tool_calls or not turn.content:
-                    raise ValueError("Source Time 没有返回 JSON 正文")
-                submission = SourceTimeSubmission.model_validate_json(
-                    normalize_json_fence(turn.content)
-                )
-                _validate_source_time(submission, self.blocks)
+                try:
+                    if turn.tool_calls or not turn.content:
+                        raise ValueError("Source Time 没有返回 JSON 正文")
+                    submission = SourceTimeSubmission.model_validate_json(
+                        normalize_json_document(turn.content)
+                    )
+                    _validate_source_time(submission, self.blocks)
+                except Exception:
+                    reject_model_turn(self.model, turn)
+                    raise
+                commit_model_turn(self.model, turn)
                 return SourceTimeCheckpoint(
                     source_sha256=self.exploration.source.sha256,
                     source_time_text=submission.source_time_text,
@@ -1327,7 +1085,7 @@ class FullSourceSemanticRunner:
             except (ModelRepetitionError, ValidationError, ValueError) as error:
                 last_error = error
         assert last_error is not None
-        raise ValueError(
+        raise ModelOutputError(
             "Source Time 初次输出和唯一一次 clean retry 均失败："
             + _short_validation_error(last_error)
         ) from last_error
@@ -1360,8 +1118,10 @@ class FullSourceSemanticRunner:
             return
         raw = json.loads(self.paths.working_json.read_text(encoding="utf-8"))
         version = raw.get("schema_version") if isinstance(raw, dict) else None
-        if version != "source-semantics-working.v9":
+        if version != "source-semantics-working.v10":
             raise ValueError(f"不支持的来源语义工作断点版本：{version}")
+        if raw.get("policy_version") != SOURCE_SEMANTIC_POLICY_VERSION:
+            raise ValueError("来源语义工作断点使用了不同的编译策略版本")
         if raw.get("source_sha256") != self.exploration.source.sha256:
             raise ValueError("批量恢复目录属于另一份来源文件")
         if raw.get("source_node_ids") != list(source_ids):
@@ -1383,6 +1143,7 @@ class FullSourceSemanticRunner:
                 )
             )
         working = FullSourceSemanticWorking(
+            policy_version=SOURCE_SEMANTIC_POLICY_VERSION,
             source_sha256=self.exploration.source.sha256,
             source_node_ids=list(source_ids),
             source_time=self._load_source_time_checkpoint() is not None,
@@ -1479,13 +1240,16 @@ def _load_current_source_snapshot(
     if not paths.initial_claims_json.exists() or not paths.reviewed_claims_json.exists():
         return None
     initial_raw = json.loads(paths.initial_claims_json.read_text(encoding="utf-8"))
-    if not isinstance(initial_raw, dict) or initial_raw.get("schema_version") != "source-claims.v7":
+    if (
+        not isinstance(initial_raw, dict)
+        or initial_raw.get("schema_version") != "source-claims.v8"
+        or initial_raw.get("policy_version") != CLAIM_POLICY_VERSION
+    ):
         return None
     try:
         initial = SourceClaimCheckpoint.model_validate(initial_raw)
         if source_blocks is not None:
             _validate_claim_blocks(initial.claims, source_blocks)
-            _validate_same_referent_drafts(initial.same_referent_drafts, source_blocks)
     except ValidationError:
         return None
     except ValueError:
@@ -1493,7 +1257,8 @@ def _load_current_source_snapshot(
     reviewed_raw = json.loads(paths.reviewed_claims_json.read_text(encoding="utf-8"))
     if (
         not isinstance(reviewed_raw, dict)
-        or reviewed_raw.get("schema_version") != "source-claims.v7"
+        or reviewed_raw.get("schema_version") != "source-claims.v8"
+        or reviewed_raw.get("policy_version") != CLAIM_POLICY_VERSION
     ):
         return None
     try:
@@ -1502,17 +1267,18 @@ def _load_current_source_snapshot(
             return None
         if reviewed.region_node_id != initial.region_node_id:
             return None
-        if reviewed.same_referent_drafts != initial.same_referent_drafts:
-            return None
         if source_blocks is not None:
             _validate_claim_blocks(reviewed.claims, source_blocks)
-            _validate_same_referent_drafts(reviewed.same_referent_drafts, source_blocks)
     except ValidationError:
         return None
     except ValueError:
         return None
     raw = json.loads(paths.snapshot_json.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict) or raw.get("schema_version") != "source-semantics.v9":
+    if (
+        not isinstance(raw, dict)
+        or raw.get("schema_version") != "source-semantics.v10"
+        or raw.get("policy_version") != SOURCE_SEMANTIC_POLICY_VERSION
+    ):
         return None
     try:
         snapshot = SourceSemanticSnapshot.model_validate(raw)
@@ -1528,7 +1294,11 @@ def _load_current_full_snapshot(path: Path) -> FullSourceSemanticSnapshot | None
     if not path.exists():
         return None
     raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict) or raw.get("schema_version") != "source-semantics-full.v9":
+    if (
+        not isinstance(raw, dict)
+        or raw.get("schema_version") != "source-semantics-full.v10"
+        or raw.get("policy_version") != SOURCE_SEMANTIC_POLICY_VERSION
+    ):
         return None
     try:
         return FullSourceSemanticSnapshot.model_validate(raw)
@@ -1560,6 +1330,37 @@ def _source_prompt(
 """.strip()
 
 
+def _semantic_blocks_for_node(
+    index: BlockIndex,
+    node: RegionNode,
+) -> tuple[ParsedBlock, ...]:
+    """Return primary Region blocks plus parser-linked auxiliary evidence."""
+
+    physical: list[ParsedBlock] = []
+    for segment in node.owned_segments:
+        physical.extend(index.slice(segment.start_block_id, segment.end_block_id))
+    linked_evidence_ids = attached_evidence_block_ids(index.blocks)
+    by_id = {block.block_id: block for block in index.blocks}
+    semantic: list[ParsedBlock] = []
+    seen: set[str] = set()
+    for block in physical:
+        if block.block_id in linked_evidence_ids or block.block_id in seen:
+            continue
+        semantic.append(block)
+        seen.add(block.block_id)
+        for evidence in block.attached_evidence:
+            if evidence.block_id in seen:
+                continue
+            target = by_id.get(evidence.block_id)
+            if target is None:
+                raise ValueError(
+                    f"{block.block_id} 引用了不存在的附加证据 {evidence.block_id}"
+                )
+            semantic.append(target)
+            seen.add(target.block_id)
+    return tuple(semantic)
+
+
 def _review_prompt(source_prompt: str, claims: Sequence[SourceClaim]) -> str:
     rendered = (
         "\n".join(
@@ -1588,7 +1389,6 @@ def _review_prompt(source_prompt: str, claims: Sequence[SourceClaim]) -> str:
 def _fragment_prompt(
     source_prompt: str,
     claims: Sequence[SourceClaim],
-    same_referent_drafts: Sequence[SourceSameReferentDraft],
 ) -> str:
     rendered = (
         "\n".join(
@@ -1600,16 +1400,6 @@ def _fragment_prompt(
         )
         or "（当前来源没有现实命题；assertions 必须为空，但仍可从命名语境构造 Fragment）"
     )
-    naming_hints = (
-        "\n".join(
-            (
-                f"- {item.same_referent_draft_id}｜必须同组："
-                + " = ".join(mention.span_text for mention in item.mentions)
-            )
-            for item in same_referent_drafts
-        )
-        or "（没有 source hard grouping hint）"
-    )
     return f"""
 [STAGE: construct_object_fragments]
 
@@ -1619,12 +1409,8 @@ def _fragment_prompt(
 已经冻结的命题：
 {rendered}
 
-source naming hints（同一行中的名称必须进入同一个 Fragment）：
-{naming_hints}
-
-一次完成 reusable names 的 source-local 同指分组与所有命题的 Fragment template。
-surface_forms 只能来自当前 SourceRegion、reviewed/frozen claims 或 source naming hints 中已有的
-名称表达；不得发明当前编译上下文没有的名称。
+一次完成 source-local referent 分组与所有命题的 Fragment template。名称括注、简称和
+附加脚注都直接在当前原文中判断，不依赖上一阶段提供身份结论。
 """.strip()
 
 
@@ -1680,13 +1466,14 @@ def _validate_snapshot_fragments(
     *,
     source_blocks: Sequence[ParsedBlock] | None = None,
 ) -> None:
-    """确认当前快照仍满足 reviewed claims 与 naming hints。"""
+    """确认当前快照仍满足 reviewed claims 与当前 Fragment 协议。"""
 
     if snapshot.source.sha256 != reviewed.source_sha256:
         raise ValueError("最终快照与 reviewed claims 断点属于不同来源")
     if snapshot.region_node_id != reviewed.region_node_id:
         raise ValueError("最终快照与 reviewed claims 断点属于不同来源节点")
     checkpoint = SourceObjectFragmentCheckpoint(
+        policy_version=FRAGMENT_POLICY_VERSION,
         source_sha256=snapshot.source.sha256,
         region_node_id=snapshot.region_node_id,
         fragments=snapshot.object_fragments,
@@ -1706,7 +1493,6 @@ def _validate_snapshot_fragments(
     _validate_fragment_checkpoint(
         checkpoint,
         reviewed.claims,
-        same_referent_drafts=reviewed.same_referent_drafts,
         source_blocks=source_blocks or (),
         validate_surface_grounding=source_blocks is not None,
     )
@@ -1731,55 +1517,6 @@ def _validate_atomic_submission(
     source_blocks: Sequence[ParsedBlock],
 ) -> None:
     _validate_claim_blocks(submission.claims, source_blocks)
-    _validate_same_referent_drafts(submission.same_referent_drafts, source_blocks)
-
-
-def _validate_same_referent_drafts(
-    drafts: Sequence[SameReferentDraft | SourceSameReferentDraft],
-    source_blocks: Sequence[ParsedBlock],
-) -> None:
-    block_map = {block.block_id: block for block in source_blocks}
-    seen: set[tuple[tuple[tuple[str, int], ...], tuple[str, ...]]] = set()
-    for position, draft in enumerate(drafts, start=1):
-        draft_label = getattr(draft, "same_referent_draft_id", f"第 {position} 条同指称草稿")
-        block_ids = list(dict.fromkeys(draft.supporting_block_ids))
-        unknown = sorted(set(block_ids) - set(block_map))
-        if unknown:
-            raise ValueError(f"{draft_label} 引用了当前来源之外的原文块：" + ", ".join(unknown))
-        distinct_span_texts = {item.span_text for item in draft.mentions}
-        if len(distinct_span_texts) < 2:
-            raise ValueError(f"{draft_label} 至少需要两个不同字面称呼")
-        _validate_independent_surface_forms(
-            list(distinct_span_texts),
-            declared_equivalence_pairs=_declared_equivalence_pairs([draft]),
-        )
-        mention_keys = [(item.span_text, item.occurrence_index) for item in draft.mentions]
-        if len(set(mention_keys)) != len(mention_keys):
-            raise ValueError(f"{draft_label} 重复提交了同一字面 mention")
-        source_text = "\n".join(block_map[block_id].markdown for block_id in block_ids)
-        for mention in draft.mentions:
-            occurrences = _claim_occurrences(source_text, mention.span_text)
-            if mention.occurrence_index >= len(occurrences):
-                raise ValueError(
-                    f"{draft_label} 的 span {mention.span_text!r} 在 supporting blocks 中"
-                    f"不存在第 {mention.occurrence_index} 次出现"
-                )
-        signature = (tuple(mention_keys), tuple(block_ids))
-        if signature in seen:
-            raise ValueError(f"{draft_label} 与先前同指称草稿重复")
-        seen.add(signature)
-
-
-def normalize_json_fence(content: str) -> str:
-    """只剥除包裹整个正文的单层 Markdown JSON fence。"""
-
-    stripped = content.strip()
-    match = re.fullmatch(
-        r"```(?:json)?[ \t]*\r?\n(?P<body>[\s\S]*?)\r?\n```[ \t]*",
-        stripped,
-        flags=re.IGNORECASE,
-    )
-    return match.group("body").strip() if match else stripped
 
 
 def _short_validation_error(error: Exception) -> str:
@@ -1791,18 +1528,6 @@ def _short_validation_error(error: Exception) -> str:
         message = str(first.get("msg", first.get("type", "校验失败")))
         return f"{location}: {message}"[:500]
     return re.sub(r"\s+", " ", str(error)).strip()[:500] or type(error).__name__
-
-
-def _claim_occurrences(statement: str, span_text: str) -> list[tuple[int, int]]:
-    positions: list[tuple[int, int]] = []
-    cursor = 0
-    while True:
-        start = statement.find(span_text, cursor)
-        if start < 0:
-            return positions
-        end = start + len(span_text)
-        positions.append((start, end))
-        cursor = start + 1
 
 
 _FRAGMENT_REFERENCE_PATTERN = re.compile(r"\{\{fragment:([^{}]+)\}\}")
@@ -1821,96 +1546,19 @@ def _fragment_reference_ids(template: str) -> list[str]:
 def _fragment_grounding_texts(
     source_blocks: Sequence[ParsedBlock],
     claims: Sequence[SourceClaim],
-    same_referent_drafts: Sequence[SourceSameReferentDraft],
 ) -> tuple[str, ...]:
     """返回 Fragment surface form 允许逐字取自的当前编译上下文。"""
 
     return (
         *(block.markdown for block in source_blocks),
         *(claim.statement_markdown for claim in claims),
-        *(mention.span_text for draft in same_referent_drafts for mention in draft.mentions),
     )
-
-
-_CONTEXT_ONLY_SURFACE_FORMS = {
-    "他",
-    "她",
-    "它",
-    "他们",
-    "她们",
-    "它们",
-    "其",
-    "该对象",
-    "这个对象",
-    "那个对象",
-}
-
-_CONTEXTUAL_REFERENCE_PREFIXES = (
-    "该",
-    "这个",
-    "那个",
-    "这位",
-    "上述",
-    "前述",
-)
-
-_TEMPORAL_ROLE_PREFIXES = ("当前", "现任", "前任", "时任", "本届", "上届", "下届")
-
-
-def _declared_equivalence_pairs(
-    drafts: Sequence[SameReferentDraft | SourceSameReferentDraft],
-) -> set[frozenset[str]]:
-    """把来源明确的同指称转成可校验的名称对，不引入领域词表。"""
-
-    pairs: set[frozenset[str]] = set()
-    for draft in drafts:
-        names = list(dict.fromkeys(mention.span_text for mention in draft.mentions))
-        for index, left in enumerate(names):
-            for right in names[index + 1 :]:
-                pairs.add(frozenset((left, right)))
-    return pairs
-
-
-def _validate_independent_surface_forms(
-    surface_forms: Sequence[str],
-    *,
-    declared_equivalence_pairs: set[frozenset[str]] | None = None,
-) -> None:
-    """拒绝语境指代和无来源同指证据的宽泛缩写，不依赖领域角色词表。"""
-
-    declared_pairs = declared_equivalence_pairs or set()
-
-    for surface_form in surface_forms:
-        if surface_form in _CONTEXT_ONLY_SURFACE_FORMS or any(
-            surface_form.startswith(prefix) and len(surface_form) > len(prefix)
-            for prefix in _CONTEXTUAL_REFERENCE_PREFIXES + _TEMPORAL_ROLE_PREFIXES
-        ):
-            raise ValueError(
-                f"surface form {surface_form!r} 只能依赖当前语境指代，不能作为独立名称或别名"
-            )
-
-    if len(surface_forms) <= 1:
-        return
-    for index, left in enumerate(surface_forms):
-        for right in surface_forms[index + 1 :]:
-            shorter, longer = sorted((left, right), key=len)
-            undeclared_substring = (
-                shorter != longer
-                and shorter in longer
-                and frozenset((left, right)) not in declared_pairs
-            )
-            if undeclared_substring:
-                raise ValueError(
-                    f"surface form {shorter!r} 是 {longer!r} 的宽泛子串，"
-                    "没有来源明确的同指证据时不能当作该 Object 的别名"
-                )
 
 
 def _validate_fragment_submission(
     submission: ObjectFragmentSubmission,
     claims: Sequence[SourceClaim],
     *,
-    same_referent_drafts: Sequence[SourceSameReferentDraft] = (),
     source_blocks: Sequence[ParsedBlock] = (),
 ) -> None:
     expected_claim_ids = [item.claim_id for item in claims]
@@ -1923,13 +1571,8 @@ def _validate_fragment_submission(
         raise ValueError("fragment_key 不能重复")
     allowed_keys = set(fragment_keys)
     surface_to_key: dict[str, str] = {}
-    grounding_texts = _fragment_grounding_texts(source_blocks, claims, same_referent_drafts)
-    declared_pairs = _declared_equivalence_pairs(same_referent_drafts)
+    grounding_texts = _fragment_grounding_texts(source_blocks, claims)
     for fragment in submission.fragments:
-        _validate_independent_surface_forms(
-            fragment.surface_forms,
-            declared_equivalence_pairs=declared_pairs,
-        )
         for surface_form in fragment.surface_forms:
             previous = surface_to_key.setdefault(surface_form, fragment.fragment_key)
             if previous != fragment.fragment_key:
@@ -1937,7 +1580,7 @@ def _validate_fragment_submission(
             if source_blocks and not any(surface_form in text for text in grounding_texts):
                 raise ValueError(
                     f"surface form {surface_form!r} 未在当前 SourceRegion、"
-                    "frozen claims 或 source naming hints 出现"
+                    "或 frozen claims 出现"
                 )
 
     for assertion in submission.assertions:
@@ -1976,29 +1619,6 @@ def _validate_fragment_submission(
                 assertion.claim_id,
             )
 
-    _validate_hard_grouping_hints(same_referent_drafts, surface_to_key)
-
-
-def _validate_hard_grouping_hints(
-    drafts: Sequence[SourceSameReferentDraft],
-    surface_to_fragment: dict[str, str],
-) -> None:
-    for draft in drafts:
-        missing = [
-            item.span_text for item in draft.mentions if item.span_text not in surface_to_fragment
-        ]
-        if missing:
-            raise ValueError(
-                f"{draft.same_referent_draft_id} 的 hard grouping 名称未进入 Fragment："
-                + ", ".join(missing)
-            )
-        fragment_ids = {surface_to_fragment[item.span_text] for item in draft.mentions}
-        if len(fragment_ids) != 1:
-            raise ValueError(
-                f"{draft.same_referent_draft_id} 的 hard grouping 名称被拆到不同 Fragment"
-            )
-
-
 def _materialize_fragments(
     submission: ObjectFragmentSubmission,
     claims: Sequence[SourceClaim],
@@ -2017,6 +1637,7 @@ def _materialize_fragments(
             fragment_id=key_to_id[item.fragment_key],
             source_region_id=source_region_id,
             surface_forms=item.surface_forms,
+            identity_mode_hint=item.identity_mode_hint,
         )
         for item in submission.fragments
     ]
@@ -2045,7 +1666,6 @@ def _validate_fragment_checkpoint(
     checkpoint: SourceObjectFragmentCheckpoint,
     claims: Sequence[SourceClaim],
     *,
-    same_referent_drafts: Sequence[SourceSameReferentDraft] = (),
     source_blocks: Sequence[ParsedBlock] = (),
     validate_surface_grounding: bool = True,
 ) -> None:
@@ -2059,13 +1679,8 @@ def _validate_fragment_checkpoint(
         raise ValueError("Object Fragment 断点包含其他 SourceRegion 的 Fragment")
 
     surface_to_fragment: dict[str, str] = {}
-    grounding_texts = _fragment_grounding_texts(source_blocks, claims, same_referent_drafts)
-    declared_pairs = _declared_equivalence_pairs(same_referent_drafts)
+    grounding_texts = _fragment_grounding_texts(source_blocks, claims)
     for fragment in checkpoint.fragments:
-        _validate_independent_surface_forms(
-            fragment.surface_forms,
-            declared_equivalence_pairs=declared_pairs,
-        )
         for surface_form in fragment.surface_forms:
             previous = surface_to_fragment.setdefault(surface_form, fragment.fragment_id)
             if previous != fragment.fragment_id:
@@ -2075,7 +1690,7 @@ def _validate_fragment_checkpoint(
             ):
                 raise ValueError(
                     f"surface form {surface_form!r} 未在当前 SourceRegion、"
-                    "frozen claims 或 source naming hints 出现"
+                    "或 frozen claims 出现"
                 )
 
     expected_claim_ids = [item.claim_id for item in claims]
@@ -2114,7 +1729,6 @@ def _validate_fragment_checkpoint(
                 assertion.statement_template_markdown,
                 assertion.claim_id,
             )
-    _validate_hard_grouping_hints(same_referent_drafts, surface_to_fragment)
 
 
 def _merge_claims(
@@ -2179,13 +1793,8 @@ def _claim_signature(
 def _covered_block_ids(
     claims: Sequence[SourceClaim],
     blocks: Sequence[ParsedBlock],
-    *,
-    same_referent_drafts: Sequence[SourceSameReferentDraft] = (),
 ) -> list[str]:
     covered = {block_id for claim in claims for block_id in claim.supporting_block_ids}
-    covered.update(
-        block_id for draft in same_referent_drafts for block_id in draft.supporting_block_ids
-    )
     return [block.block_id for block in blocks if block.block_id in covered]
 
 

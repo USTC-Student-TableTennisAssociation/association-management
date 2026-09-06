@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +13,9 @@ from cold_start.config import ExplorationSettings
 from cold_start.document.blocks import build_document_blocks
 from cold_start.document.models import ParsedDocument
 from cold_start.global_exploration.models import (
+    GLOBAL_EXPLORATION_POLICY_VERSION,
     GlobalExplorationSnapshot,
+    GlobalExplorationWorkingCheckpoint,
     SourceMetadata,
 )
 from cold_start.global_exploration.prompts import (
@@ -64,10 +65,45 @@ class GlobalExplorationRunner:
         self.progress = progress or NullProgressReporter()
         self.run_directory = run_directory
         self.embedder = embedder
+        self.working_source_sha256 = ""
+        self.working_document_context = ""
+        self.working_context_calls = 0
         self.graph = self._graph()
 
     async def run(self, document: ParsedDocument) -> GlobalExplorationSnapshot:
         return (await self.graph.ainvoke({"document": document}))["snapshot"]
+
+    async def resume(
+        self,
+        document: ParsedDocument,
+        checkpoint: GlobalExplorationWorkingCheckpoint,
+    ) -> GlobalExplorationSnapshot:
+        if checkpoint.source_sha256 != document.file_sha256:
+            raise ValueError("区域树 checkpoint 与当前来源 SHA-256 不一致")
+        if not document.blocks:
+            document = document.model_copy(
+                update={"blocks": build_document_blocks(document.pages)}
+            )
+        self.working_source_sha256 = document.file_sha256
+        self.working_document_context = checkpoint.document_context_markdown
+        self.working_context_calls = checkpoint.context_model_calls
+        runtime = RegionRuntime(
+            model=self.model,
+            blocks=document.blocks,
+            context=checkpoint.document_context_markdown,
+            settings=self.settings,
+            progress=self.progress,
+            embedder=self.embedder,
+            checkpoint=self._checkpoint,
+        )
+        await runtime.resume(checkpoint.region_tree)
+        await runtime.calibrate_structure()
+        return self._snapshot(
+            document=document,
+            document_context=checkpoint.document_context_markdown,
+            context_calls=checkpoint.context_model_calls,
+            runtime=runtime,
+        )
 
     def _graph(self):
         graph = StateGraph(State)
@@ -142,6 +178,9 @@ class GlobalExplorationRunner:
     async def _build_region_tree(self, state: State) -> State:
         document = state["document"]
         root = state["root_result"]
+        self.working_source_sha256 = document.file_sha256
+        self.working_document_context = state["document_context"]
+        self.working_context_calls = state["context_calls"]
         runtime = RegionRuntime(
             model=self.model,
             blocks=document.blocks,
@@ -164,21 +203,13 @@ class GlobalExplorationRunner:
 
     def _finalize_exploration(self, state: State) -> State:
         document = state["document"]
-        tree = state["region_runtime"].tree.snapshot()
-        snapshot = GlobalExplorationSnapshot(
-            created_at=datetime.now(UTC),
-            source=SourceMetadata(
-                path=str(document.source_path),
-                title=document.title,
-                sha256=document.file_sha256,
-                parser=document.parser_name,
-                page_count=document.page_count,
-                block_count=len(document.blocks),
-            ),
-            document_context_markdown=state["document_context"],
-            context_model_calls=state["context_calls"],
-            region_tree=tree,
+        snapshot = self._snapshot(
+            document=document,
+            document_context=state["document_context"],
+            context_calls=state["context_calls"],
+            runtime=state["region_runtime"],
         )
+        tree = snapshot.region_tree
         self.progress.report(
             "汇总",
             (
@@ -189,6 +220,30 @@ class GlobalExplorationRunner:
         )
         return {"snapshot": snapshot}
 
+    @staticmethod
+    def _snapshot(
+        *,
+        document: ParsedDocument,
+        document_context: str,
+        context_calls: int,
+        runtime: RegionRuntime,
+    ) -> GlobalExplorationSnapshot:
+        return GlobalExplorationSnapshot(
+            policy_version=GLOBAL_EXPLORATION_POLICY_VERSION,
+            created_at=datetime.now(UTC),
+            source=SourceMetadata(
+                path=str(document.source_path),
+                title=document.title,
+                sha256=document.file_sha256,
+                parser=document.parser_name,
+                page_count=document.page_count,
+                block_count=len(document.blocks),
+            ),
+            document_context_markdown=document_context,
+            context_model_calls=context_calls,
+            region_tree=runtime.tree.snapshot(),
+        )
+
     def _checkpoint(
         self,
         tree: RegionTree,
@@ -196,17 +251,16 @@ class GlobalExplorationRunner:
     ) -> None:
         if self.run_directory is None:
             return
-        payload = {
-            "root_node_id": tree.root_node_id,
-            "nodes": [node.model_dump() for node in tree.nodes.values()],
-            "pending_groups": groups,
-            "issues": tree.issues,
-            "source_issues": [issue.model_dump() for issue in tree.source_issues],
-            "model_calls": tree.model_calls,
-            "tool_calls": tree.tool_calls,
-        }
+        if not self.working_source_sha256:
+            raise ValueError("写入区域树 checkpoint 前缺少来源身份")
+        payload = GlobalExplorationWorkingCheckpoint(
+            source_sha256=self.working_source_sha256,
+            document_context_markdown=self.working_document_context,
+            context_model_calls=self.working_context_calls,
+            region_tree=tree.working_checkpoint(groups),
+        )
         (self.run_directory / "region-tree-working.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
+            payload.model_dump_json(indent=2),
             encoding="utf-8",
         )
 

@@ -162,8 +162,10 @@ def test_api_provider_keeps_a_safe_failure_log(tmp_path: Path) -> None:
         ),
     )
 
-    with pytest.raises(RuntimeError, match="HTTP 503"):
+    with pytest.raises(RuntimeError, match="HTTP 503") as captured:
         provider.execute(source, tmp_path / "mineru-raw", progress=lambda _message: None)
+    assert isinstance(captured.value.__cause__, httpx.HTTPStatusError)
+    assert captured.value.__cause__.response.status_code == 503
     log = (tmp_path / "mineru.log").read_text(encoding="utf-8")
     assert "secret-key" not in log
     assert '"status": 503' in log

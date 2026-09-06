@@ -198,7 +198,8 @@ async def test_context_and_root_start_as_parallel_routes_then_tree_recurses() ->
     assert len(node_prompts) == 4
     assert all("根节点到直接父节点" in prompt for prompt in node_prompts)
 
-    assert snapshot.schema_version == "global-exploration.v9"
+    assert snapshot.schema_version == "global-exploration.v10"
+    assert snapshot.policy_version == "global-exploration-policy.v1"
     assert snapshot.authority == "preliminary-low-authority"
     assert snapshot.region_tree.status == "frozen"
     assert max(node.depth for node in snapshot.region_tree.nodes) == 2

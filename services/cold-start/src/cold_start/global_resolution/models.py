@@ -9,7 +9,19 @@ from typing import Literal, TypeVar
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ResolutionAction = Literal["create", "attach", "merge", "split"]
+FragmentDispositionAction = Literal["reject", "defer"]
+FragmentResolutionAction = Literal["create", "attach", "reject", "defer", "joint"]
+ObjecthoodDecision = Literal["accepted", "rejected", "uncertain"]
+ObjectAdmissionAction = Literal["admit", "demote", "defer"]
 ResolutionTargetKind = Literal["existing", "new"]
+IdentityModeHint = Literal[
+    "named_person",
+    "role_type",
+    "entity_type",
+    "named_entity",
+    "undetermined",
+]
+GLOBAL_RESOLUTION_POLICY_VERSION = "global-resolution-policy.v2"
 
 
 class StrictModel(BaseModel):
@@ -87,6 +99,7 @@ class ReferenceAtom(StrictModel):
 class SourceFragmentDossier(StrictModel):
     source_node_id: str = Field(min_length=1)
     source_fragment_id: str = Field(min_length=1)
+    identity_mode_hint: IdentityModeHint
     surface_atoms: list[SurfaceAtom] = Field(min_length=1)
     reference_atoms: list[ReferenceAtom] = Field(default_factory=list)
     assertions: list[AssertionEvidence] = Field(default_factory=list)
@@ -215,6 +228,9 @@ class RegistryState(StrictModel):
     source_node_ids: list[str]
     next_source_region_ordinal: int = Field(default=0, ge=0)
     objects: list[ActiveGlobalObject] = Field(default_factory=list)
+    rejected_fragment_keys: list[str] = Field(default_factory=list)
+    deferred_fragment_keys: list[str] = Field(default_factory=list)
+    admission_records: list[ObjectAdmissionRecord] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_registry(self) -> RegistryState:
@@ -224,6 +240,15 @@ class RegistryState(StrictModel):
         keys = [item.global_object_key for item in self.objects]
         if len(set(ids)) != len(ids) or len(set(keys)) != len(keys):
             raise ValueError("Registry 不能重复 Global Object ID 或 key")
+        if len(set(self.rejected_fragment_keys)) != len(self.rejected_fragment_keys):
+            raise ValueError("Registry 不能重复 rejected Fragment")
+        if len(set(self.deferred_fragment_keys)) != len(self.deferred_fragment_keys):
+            raise ValueError("Registry 不能重复 deferred Fragment")
+        if set(self.rejected_fragment_keys) & set(self.deferred_fragment_keys):
+            raise ValueError("同一个 Fragment 不能同时 reject 和 defer")
+        reviewed_ids = [item.global_object_id for item in self.admission_records]
+        if len(set(reviewed_ids)) != len(reviewed_ids):
+            raise ValueError("同一个 Global Object 不能重复准入审查")
         owners: dict[str, str] = {}
         for item in self.objects:
             for atom_id in item.atom_ids:
@@ -237,22 +262,32 @@ class RegistryState(StrictModel):
 
 
 class GlobalResolutionWorking(StrictModel):
-    schema_version: Literal["global-resolution-working.v3"] = "global-resolution-working.v3"
-    source_semantics_schema_version: Literal["source-semantics-full.v9"]
+    schema_version: Literal["global-resolution-working.v6"] = "global-resolution-working.v6"
+    resolution_policy_version: Literal["global-resolution-policy.v2"]
+    source_semantics_schema_version: Literal["source-semantics-full.v10"]
+    source_semantics_policy_version: str = Field(min_length=1)
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
     next_source_region_ordinal: int = Field(ge=0)
     global_objects: list[StoredGlobalObject]
+    rejected_fragment_keys: list[str] = Field(default_factory=list)
+    deferred_fragment_keys: list[str] = Field(default_factory=list)
+    admission_records: list[ObjectAdmissionRecord] = Field(default_factory=list)
 
 
 class GlobalResolutionArtifact(StrictModel):
-    schema_version: Literal["global-resolution.v3"] = "global-resolution.v3"
+    schema_version: Literal["global-resolution.v6"] = "global-resolution.v6"
     created_at: datetime
-    source_semantics_schema_version: Literal["source-semantics-full.v9"]
+    resolution_policy_version: Literal["global-resolution-policy.v2"]
+    source_semantics_schema_version: Literal["source-semantics-full.v10"]
+    source_semantics_policy_version: str = Field(min_length=1)
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
     source_region_count: int = Field(ge=0)
     global_objects: list[StoredGlobalObject]
+    rejected_fragment_keys: list[str] = Field(default_factory=list)
+    deferred_fragment_keys: list[str] = Field(default_factory=list)
+    admission_records: list[ObjectAdmissionRecord] = Field(default_factory=list)
     total_surface_atoms: int = Field(ge=0)
     total_reference_atoms: int = Field(ge=0)
 
@@ -294,18 +329,19 @@ class GlobalizedAssertion(StrictModel):
             raise ValueError("linked_global_object_ids 不能重复")
         if self.kind == "grounded" and self.linked_global_object_ids:
             raise ValueError("grounded Assertion 不能使用 semantic Object links")
-        if self.kind == "reference" and not self.linked_global_object_ids:
-            raise ValueError("Reference Assertion 至少需要一个 semantic Object link")
         if self.kind == "reference" and self.reference_atoms:
             raise ValueError("Reference Assertion 不能使用 anchored reference atoms")
         return self
 
 
 class GlobalAssertionsArtifact(StrictModel):
-    schema_version: Literal["global-assertions.v3"] = "global-assertions.v3"
+    schema_version: Literal["global-assertions.v5"] = "global-assertions.v5"
     created_at: datetime
-    source_semantics_schema_version: Literal["source-semantics-full.v9"]
-    global_resolution_schema_version: Literal["global-resolution.v3"]
+    finalization_policy_version: str = Field(min_length=1)
+    source_semantics_schema_version: Literal["source-semantics-full.v10"]
+    source_semantics_policy_version: str = Field(min_length=1)
+    global_resolution_schema_version: Literal["global-resolution.v6"]
+    global_resolution_policy_version: Literal["global-resolution-policy.v2"]
     source_sha256: str = Field(min_length=1)
     source_node_ids: list[str]
     assertions: list[GlobalizedAssertion]
@@ -430,8 +466,101 @@ class RegionResolutionOperation(StrictModel):
         return self
 
 
+class FragmentDisposition(StrictModel):
+    action: FragmentDispositionAction
+    fragment_keys: list[str] = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def validate_fragment_keys(self) -> FragmentDisposition:
+        if len(set(self.fragment_keys)) != len(self.fragment_keys):
+            raise ValueError("Fragment disposition 不能重复 fragment_key")
+        return self
+
+
+class FragmentIdentityDecision(StrictModel):
+    """一个 Fragment 的轻量身份裁决；Atom 由 Runtime 确定性展开。"""
+
+    fragment_key: str = Field(min_length=1)
+    objecthood: ObjecthoodDecision
+    action: FragmentResolutionAction
+    target_global_object_id: str | None = Field(default=None, min_length=1)
+    canonical_name: str | None = Field(default=None, min_length=1, max_length=300)
+    joint_fragment_keys: list[str] = Field(default_factory=list)
+    reason: str = Field(min_length=1, max_length=1_000)
+
+    @model_validator(mode="after")
+    def validate_action_shape(self) -> FragmentIdentityDecision:
+        if len(set(self.joint_fragment_keys)) != len(self.joint_fragment_keys):
+            raise ValueError("joint_fragment_keys 不能重复")
+        if self.fragment_key in self.joint_fragment_keys:
+            raise ValueError("joint_fragment_keys 不要重复当前 fragment_key")
+        expected_objecthood = {
+            "create": "accepted",
+            "attach": "accepted",
+            "reject": "rejected",
+            "defer": "uncertain",
+            "joint": "uncertain",
+        }[self.action]
+        if self.objecthood != expected_objecthood:
+            raise ValueError(
+                f"Fragment {self.action} 必须使用 objecthood={expected_objecthood}"
+            )
+        if self.action == "create":
+            valid = (
+                self.canonical_name is not None
+                and self.target_global_object_id is None
+                and not self.joint_fragment_keys
+            )
+        elif self.action == "attach":
+            valid = (
+                self.target_global_object_id is not None
+                and self.canonical_name is None
+                and not self.joint_fragment_keys
+            )
+        elif self.action in {"reject", "defer"}:
+            valid = (
+                self.target_global_object_id is None
+                and self.canonical_name is None
+                and not self.joint_fragment_keys
+            )
+        else:
+            valid = self.target_global_object_id is None and self.canonical_name is None
+        if not valid:
+            raise ValueError(f"Fragment {self.action} 的 target/canonical/joint 结构不合法")
+        return self
+
+
+class ObjectAdmissionDecision(StrictModel):
+    """低证据 provisional Object 的发布前 Objecthood 复审。"""
+
+    global_object_id: str = Field(min_length=1)
+    action: ObjectAdmissionAction
+    reason: str = Field(min_length=1, max_length=1_000)
+
+
+class ObjectAdmissionRecord(ObjectAdmissionDecision):
+    canonical_name: str = Field(min_length=1, max_length=300)
+    fragment_keys: list[str] = Field(min_length=1)
+    source_region_count: int = Field(ge=1)
+    assertion_count: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_fragment_keys(self) -> ObjectAdmissionRecord:
+        if len(set(self.fragment_keys)) != len(self.fragment_keys):
+            raise ValueError("Object admission record 不能重复 fragment_key")
+        return self
+
+
 class RegionIntegrationPlan(StrictModel):
-    operations: list[RegionResolutionOperation] = Field(min_length=1)
+    operations: list[RegionResolutionOperation] = Field(default_factory=list)
+    dispositions: list[FragmentDisposition] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_non_empty(self) -> RegionIntegrationPlan:
+        if not self.operations and not self.dispositions:
+            raise ValueError("Region integration plan 不能为空")
+        return self
 
 
 class ValidatedResolutionGroup(StrictModel):
@@ -451,6 +580,8 @@ class ValidatedRegionPlan(StrictModel):
     plan: RegionIntegrationPlan
     incoming: SourceRegionDossier
     operations: list[ValidatedRegionOperation]
+    rejected_fragment_keys: list[str] = Field(default_factory=list)
+    deferred_fragment_keys: list[str] = Field(default_factory=list)
 
 
 def validate_region_integration_plan(
@@ -479,6 +610,18 @@ def validate_region_integration_plan(
     source_owner: dict[str, int] = {}
     incoming_usage: list[str] = []
     operations: list[ValidatedRegionOperation] = []
+    disposition_owner: dict[str, FragmentDispositionAction] = {}
+    for disposition in plan.dispositions:
+        for fragment_key in disposition.fragment_keys:
+            if fragment_key not in expected_fragment_keys:
+                raise ValueError("Fragment disposition 引用了当前 Region 之外的 Fragment")
+            if fragment_key in disposition_owner:
+                raise ValueError("同一个 Fragment 不能被多次处置")
+            disposition_owner[fragment_key] = disposition.action
+            fragment = next(
+                item for item in incoming.fragments if item.fragment_key == fragment_key
+            )
+            incoming_usage.extend(fragment.atom_ids)
     for operation_index, operation in enumerate(plan.operations):
         existing_target_ids = [
             group.target.global_object_id
@@ -571,7 +714,17 @@ def validate_region_integration_plan(
         }
     }:
         raise ValueError("source Global Object 不能被其他 operation 同时作为 target")
-    return ValidatedRegionPlan(plan=plan, incoming=incoming, operations=operations)
+    return ValidatedRegionPlan(
+        plan=plan,
+        incoming=incoming,
+        operations=operations,
+        rejected_fragment_keys=sorted(
+            key for key, action in disposition_owner.items() if action == "reject"
+        ),
+        deferred_fragment_keys=sorted(
+            key for key, action in disposition_owner.items() if action == "defer"
+        ),
+    )
 
 
 def source_fragment_key(source_node_id: str, source_fragment_id: str) -> str:
@@ -626,11 +779,19 @@ def _validate_partition(actual: Sequence[str], expected: set[str], label: str) -
 __all__ = [
     "ActiveGlobalObject",
     "AssertionEvidence",
+    "FragmentDisposition",
+    "FragmentDispositionAction",
+    "FragmentIdentityDecision",
+    "FragmentResolutionAction",
     "GlobalAssertionReferenceAtom",
     "GlobalAssertionsArtifact",
     "GlobalResolutionArtifact",
     "GlobalResolutionWorking",
     "GlobalizedAssertion",
+    "ObjectAdmissionAction",
+    "ObjectAdmissionDecision",
+    "ObjectAdmissionRecord",
+    "ObjecthoodDecision",
     "ReferenceAtom",
     "RegionIntegrationPlan",
     "RegionResolutionOperation",
