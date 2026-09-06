@@ -219,3 +219,19 @@ pnpm state:save -- before-import --replace
 | 活跃任务期间尽力保存 | `pnpm state:save -- <名称> --allow-active` |
 | 加载状态 | `pnpm state:load -- <名称> --yes` |
 | 加载干净基线 | `pnpm state:load -- c0-empty --yes` |
+
+## 同时运行独立解析实例
+
+如果需要让学校 API 在后台持续解析，同时让 3000 端口的主实例加载其他快照并使用 DeepSeek API，
+不能只另开一个 shell：两个进程还必须隔离数据库、Library 与 cold-start 目录。
+
+仓库提供 `.env.<实例名>` 覆盖文件和实例管理命令。完整配置见
+[`INSTANCE_MANAGEMENT.md`](INSTANCE_MANAGEMENT.md)。常用命令：
+
+```bash
+pnpm instance:init -- parsing --database echo_parsing
+pnpm instance:state -- parsing load c0-empty --yes
+pnpm instance:start -- parsing --port 3001 --background --caffeinate
+pnpm instance:status -- parsing
+pnpm instance:stop -- parsing
+```
