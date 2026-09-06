@@ -192,8 +192,8 @@ export const activityOperationsCardTypes = [
   card(
     "WorkPackageDefinitionCard",
     "工作包定义",
-    "描述某一类完整业务工作通常是什么。",
-    [text("name", "名称", "可复用工作包的名称。", true), rich("description", "说明", "常见边界、结果和适用条件。")],
+    "可独立理解、分配和跟踪的一组可复用工作，套用后生成真实活动的工作包。",
+    [text("name", "名称", "以明确结果命名的可复用工作包。", true), rich("description", "说明", "说明工作边界、主要产出和适用条件。")],
     [
       slot("tasks", "典型任务", "完成该工作包通常包含的任务定义。", ["TaskDefinitionCard"]),
       slot("dependencies", "前置工作包定义", "套用 Playbook 后应先完成的其他工作包定义。", ["WorkPackageDefinitionCard"]),
@@ -202,10 +202,10 @@ export const activityOperationsCardTypes = [
   card(
     "TaskDefinitionCard",
     "任务定义",
-    "描述值得复用的典型任务。",
+    "工作包中可由一个角色执行并能明确验收的典型行动。",
     [
       text("name", "名称", "典型任务的名称。", true),
-      rich("description", "说明", "常见操作、输入和交付结果。"),
+      rich("description", "说明", "执行动作、必要输入与关键注意事项。"),
       text("role_hint", "建议角色", "通常适合承担这项任务的角色。"),
       text("duration_hint", "时间建议", "常见持续时间或提前量，例如活动前两周。"),
       rich("deliverable", "完成标志", "怎样判断这项任务已经真正完成。"),
@@ -221,14 +221,14 @@ export const activityOperationsCardTypes = [
   card(
     "ActivityPlaybookCard",
     "活动操作手册",
-    "组织一张给人和 AI 阅读的建议型流程地图。",
+    "可被人照着执行、也可由 AI 套用为任务版图的建议型组织方法。",
     [
       text("name", "名称", "操作手册的名称。", true),
-      rich("description", "简介", "手册解决什么问题。"),
-      rich("applicable_scenario", "适用场景", "何时适合使用这份手册。"),
-      rich("overview", "整体说明", "对整条流程的高层概括。"),
-      rich("notes", "注意事项", "执行时需要特别注意的边界。"),
-      text("lanes", "泳道顺序", "用于稳定展示的泳道顺序。"),
+      rich("description", "目的与范围", "这份方法要解决什么问题，以及不覆盖什么。"),
+      rich("applicable_scenario", "适用场景", "触发这份方法的条件、适用对象与使用边界。"),
+      rich("overview", "整体说明", "核心路径、完成结果和重要协作关系。"),
+      rich("notes", "注意事项", "证据边界、例外、风险、升级或恢复方式。"),
+      text("lanes", "责任域顺序", "稳定的责任领域或角色顺序；不是筹备时间阶段。"),
       enumeration("status", "成熟度", "这份方法是否仍在整理、可直接使用或已归档。", [["DRAFT", "整理中"], ["READY", "可使用"], ["ARCHIVED", "已归档"]], "DRAFT"),
     ],
     [
@@ -239,18 +239,18 @@ export const activityOperationsCardTypes = [
   card(
     "GuideNodeCard",
     "操作指南节点",
-    "流程地图中的一个建议、判断、资料入口或结果。",
+    "方法图中的可执行工作、路线判断、复用入口或明确终局。",
     [
       text("name", "名称", "节点名称。", true),
-      enumeration("node_type", "节点类型", "节点在流程中的作用。", [["ACTION", "操作"], ["DECISION", "判断"], ["REFERENCE", "参考"], ["END", "结束"]], "ACTION"),
-      text("lane", "泳道", "节点所属的责任或阶段泳道。"),
+      enumeration("node_type", "节点类型", "ACTION 生成工作包；DECISION 改变路线；REFERENCE 指向资料或子方法；END 表示终局。", [["ACTION", "操作"], ["DECISION", "判断"], ["REFERENCE", "参考"], ["END", "结束"]], "ACTION"),
+      text("lane", "责任域", "负责推动此节点的稳定职能或角色领域。"),
       { key: "row", label: "纵向位置", description: "节点在泳道中的顺序。", type: "integer", constraints: { min: 0 }, changePolicy: operationalChange },
-      rich("guide", "操作指南", "建议怎样执行。"),
-      rich("applicable_condition", "适用条件", "何时应该进入这个节点。"),
-      rich("required_information", "所需信息", "进入操作前需要掌握的信息。"),
-      rich("expected_outcome", "预期结果", "完成节点后应得到的结果。"),
+      rich("guide", "操作指南", "具体怎样执行，以及关键判断或注意事项。"),
+      rich("applicable_condition", "进入条件", "什么事件或条件触发此节点。"),
+      rich("required_information", "输入与前提", "开始前需要具备的信息、批准、材料或上游结果。"),
+      rich("expected_outcome", "产出与完成标志", "节点交付什么，以及怎样验证它已经完成。"),
       rich("ai_assistance", "AI 协助说明", "AI 可以在这一步提供的协助。"),
-      rich("resources", "资源与入口", "相关模板、系统、文件或联系入口。"),
+      rich("resources", "资源与入口", "执行所需的模板、系统、文件、联系人或备用入口。"),
       text("duration_hint", "时间建议", "这一步通常需要的时间或相对活动日期。"),
     ],
     [
@@ -464,10 +464,20 @@ export const activityOperationsViewModule: ViewModule = {
     schemaVersion: "3",
     description: "把可复用、可嵌套的活动组织方法套用为真实 Activity 的工作包、任务和依赖版图。",
     retrievalDescription:
-      "用于设计活动组织 Playbook、嵌套流程、判断分支，并管理真实活动中的工作包、任务、负责人、截止日和前置依赖。",
+      "当用户准备负责、筹办、举办或推进一次真实活动，想了解应该怎么做、沉淀可复用流程，或建立工作包、任务、负责人、截止日、里程碑和依赖关系时使用。",
+    aiWriteCapabilities: [
+      "设计和维护可复用的活动组织方法",
+      "建立并维护具体活动的工作包、任务、里程碑、负责人和依赖",
+      "将组织方法套用到具体活动",
+    ],
+    dataBoundaries: [
+      "Playbook 是建议型组织方法，只有套用后才会生成具体活动的工作包和任务",
+      "历史资料只作为计划参考，不自动成为当届负责人、日期、进度或金额",
+    ],
     aiSemanticInstructions:
       "ActivityCard 表示某一届或某一次真实活动，不是长期活动类别；应通过 Related Object 关联已稳定识别的活动 Object。" +
-      "ActivityPlaybookCard 是建议型组织方法，不代表任何一届已经执行；GuideNode 可通过 subplaybook 嵌套另一份方法。只有 activity.apply_playbook 才会把行动节点转成当前 Activity 的 WorkPackage 和 Task。" +
+      "用户准备筹办真实活动但尚未选定可用 Playbook 时，先确定可复用组织方法，再建立或完善当届任务版图；沿用往届框架只是方法来源。" +
+      "ActivityPlaybookCard 是建议型组织方法，不代表任何一届已经执行；责任域不是时间阶段。ACTION 应对应可独立负责的工作包，DECISION 只表达改变路线的判断，REFERENCE 可通过 subplaybook 复用另一份方法，END 表达明确终局。READY 方法的节点应从起点可达且所有路径结束于 END。只有 activity.apply_playbook 才会把行动节点转成当前 Activity 的 WorkPackage 和 Task。" +
       "当届的时间、负责人、任务、进度、金额和材料以本 View 正式状态为准；历史 Assertion 和 Higher Memory 只作计划参考，不能自动写成当届状态。" +
       "WorkPackage 是可以独立理解、分配和跟踪的完整工作；Task 是其中可单独执行的行动。不要为二课、场地或宣传发明特殊状态结构。" +
       "Assignment 只关联可稳定指认的人物 Object，并通过目标工作项的 assignments Slot 表达本次具体分工。" +

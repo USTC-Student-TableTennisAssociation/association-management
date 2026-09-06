@@ -1,6 +1,6 @@
 {
   "name": "@sydaris/activity-operations-plugin",
-  "version": "1.3.1",
+  "version": "1.3.3",
   "description": "Reusable activity methods and execution maps for Sydaris",
   "type": "module",
   "files": [

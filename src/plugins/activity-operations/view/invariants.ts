@@ -150,6 +150,7 @@ const playbookStructure: BusinessInvariant = {
     const cards = await transaction.queryCards();
     const playbooks = cards.filter((card) => card.cardTypeKey === "ActivityPlaybookCard");
     const nodes = cards.filter((card) => card.cardTypeKey === "GuideNodeCard");
+    const cardById = new Map(cards.map((card) => [card.id, card]));
     requireExactlyOneOwner(nodes, ownershipCounts(playbooks, "nodes"), " Playbook");
 
     for (const playbook of playbooks) {
@@ -189,6 +190,63 @@ const playbookStructure: BusinessInvariant = {
         visited.add(node.id);
       };
       for (const node of nodeById.values()) visit(node);
+
+      if (text(playbook, "status") !== "READY") continue;
+      if (nodeById.size === 0 || !(playbook.slots.start_nodes ?? []).length) {
+        throw new Error(`${cardLabel(playbook)} 标记为可使用前必须具有节点和起点`);
+      }
+      const reachable = new Set<string>();
+      const markReachable = (node: ViewCardState): void => {
+        if (reachable.has(node.id)) return;
+        reachable.add(node.id);
+        for (const targetId of [
+          ...(node.slots.next ?? []),
+          ...(node.slots.when_yes ?? []),
+          ...(node.slots.when_no ?? []),
+        ]) {
+          const target = nodeById.get(targetId);
+          if (target) markReachable(target);
+        }
+      };
+      for (const startNodeId of playbook.slots.start_nodes ?? []) {
+        const start = nodeById.get(startNodeId);
+        if (start) markReachable(start);
+      }
+      if (reachable.size !== nodeById.size) {
+        throw new Error(`${cardLabel(playbook)} 标记为可使用前，全部节点必须能从起点到达`);
+      }
+
+      for (const node of nodeById.values()) {
+        const nodeType = text(node, "node_type") ?? "ACTION";
+        const nextCount = node.slots.next?.length ?? 0;
+        const yesCount = node.slots.when_yes?.length ?? 0;
+        const noCount = node.slots.when_no?.length ?? 0;
+        const outgoingCount = nextCount + yesCount + noCount;
+        if (nodeType === "END") {
+          if (outgoingCount) throw new Error(`${cardLabel(node)} 是 END，不能还有后续路径`);
+          continue;
+        }
+        if (!outgoingCount) throw new Error(`${cardLabel(node)} 不是 END，必须具有后续路径`);
+        if (nodeType === "DECISION") {
+          if (nextCount || yesCount !== 1 || noCount !== 1) {
+            throw new Error(`${cardLabel(node)} 是 DECISION，必须且只能各有一条 YES 和 NO 分支`);
+          }
+        } else if (yesCount || noCount) {
+          throw new Error(`${cardLabel(node)} 不是 DECISION，不能使用 YES/NO 分支`);
+        }
+        if (nodeType === "ACTION") {
+          const definition = cardById.get(node.slots.definition?.[0] ?? "");
+          if (definition?.cardTypeKey !== "WorkPackageDefinitionCard") {
+            throw new Error(`${cardLabel(node)} 标记为可使用前必须具有工作包定义`);
+          }
+          const tasks = (definition.slots.tasks ?? [])
+            .map((taskId) => cardById.get(taskId))
+            .filter((task) => task?.cardTypeKey === "TaskDefinitionCard");
+          if (!tasks.length) {
+            throw new Error(`${cardLabel(node)} 标记为可使用前必须具有至少一项任务定义`);
+          }
+        }
+      }
     }
   },
 };

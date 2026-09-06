@@ -172,6 +172,318 @@ const createPlaybookSchema = z.object({
   status: playbookStatusSchema.default("DRAFT"),
 });
 
+const localKeySchema = z.string().trim()
+  .regex(/^[a-z][a-z0-9_-]{0,63}$/, "局部 key 必须以小写字母开头，只包含小写字母、数字、_ 或 -");
+
+const playbookTaskSchema = z.object({
+  key: localKeySchema,
+  name: z.string().trim().min(1).max(200),
+  description: optionalText(5_000),
+  roleHint: optionalText(200),
+  durationHint: optionalText(500),
+  deliverable: z.string().trim().min(1).max(5_000),
+  dependsOnTaskKeys: z.array(localKeySchema).max(20).default([]),
+});
+
+const playbookWorkPackageSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  description: z.string().trim().min(1).max(5_000),
+  tasks: z.array(playbookTaskSchema).min(1).max(20),
+});
+
+const playbookGraphNodeSchema = z.object({
+  key: localKeySchema,
+  name: z.string().trim().min(1).max(200),
+  nodeType: guideNodeTypeSchema,
+  lane: z.string().trim().min(1).max(200),
+  row: z.number().int().min(0).optional(),
+  guide: optionalText(5_000),
+  applicableCondition: optionalText(5_000),
+  requiredInformation: optionalText(5_000),
+  expectedOutcome: optionalText(5_000),
+  aiAssistance: optionalText(5_000),
+  resources: optionalText(5_000),
+  durationHint: optionalText(500),
+  workPackage: playbookWorkPackageSchema.optional(),
+});
+
+const playbookGraphEdgeSchema = z.object({
+  fromNodeKey: localKeySchema,
+  toNodeKey: localKeySchema,
+  branch: z.enum(["NEXT", "YES", "NO"]),
+});
+
+const createPlaybookGraphSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  description: z.string().trim().min(1).max(5_000),
+  applicableScenario: z.string().trim().min(1).max(5_000),
+  overview: z.string().trim().min(1).max(5_000),
+  notes: optionalText(5_000),
+  lanes: z.array(z.string().trim().min(1).max(200)).min(1).max(20),
+  status: playbookStatusSchema.default("DRAFT"),
+  startNodeKeys: z.array(localKeySchema).min(1).max(20),
+  nodes: z.array(playbookGraphNodeSchema).min(2).max(60),
+  edges: z.array(playbookGraphEdgeSchema).max(120),
+}).superRefine((input, context) => {
+  const addIssue = (path: Array<string | number>, message: string) => context.addIssue({
+    code: z.ZodIssueCode.custom,
+    path,
+    message,
+  });
+  const unique = (values: readonly string[]) => new Set(values).size === values.length;
+
+  if (!unique(input.lanes)) addIssue(["lanes"], "泳道名称不能重复");
+  const nodeKeys = input.nodes.map(({ key }) => key);
+  if (!unique(nodeKeys)) addIssue(["nodes"], "节点 key 不能重复");
+  const nodeByKey = new Map(input.nodes.map((node) => [node.key, node]));
+  const laneSet = new Set(input.lanes);
+  const outgoing = new Map<string, z.infer<typeof playbookGraphEdgeSchema>[]>();
+  const edgeKeys = new Set<string>();
+
+  for (const [index, startNodeKey] of input.startNodeKeys.entries()) {
+    if (!nodeByKey.has(startNodeKey)) {
+      addIssue(["startNodeKeys", index], `起点 ${startNodeKey} 不存在`);
+    }
+  }
+  if (!unique(input.startNodeKeys)) addIssue(["startNodeKeys"], "起点不能重复");
+
+  for (const [index, node] of input.nodes.entries()) {
+    if (!laneSet.has(node.lane)) {
+      addIssue(["nodes", index, "lane"], `泳道 ${node.lane} 未在 lanes 中声明`);
+    }
+    if (node.nodeType === "ACTION") {
+      if (!node.guide) addIssue(["nodes", index, "guide"], "ACTION 必须说明怎样执行");
+      if (!node.expectedOutcome) {
+        addIssue(["nodes", index, "expectedOutcome"], "ACTION 必须说明完成结果");
+      }
+      if (!node.workPackage) {
+        addIssue(["nodes", index, "workPackage"], "ACTION 必须包含可套用的工作包与任务");
+      }
+    } else if (node.workPackage) {
+      addIssue(["nodes", index, "workPackage"], "只有 ACTION 可以包含工作包定义");
+    }
+
+    const tasks = node.workPackage?.tasks ?? [];
+    const taskKeys = tasks.map(({ key }) => key);
+    if (!unique(taskKeys)) addIssue(["nodes", index, "workPackage", "tasks"], "同一工作包中的任务 key 不能重复");
+    const taskKeySet = new Set(taskKeys);
+    const taskDependencies = new Map(tasks.map((task) => [task.key, task.dependsOnTaskKeys]));
+    for (const [taskIndex, task] of tasks.entries()) {
+      if (!unique(task.dependsOnTaskKeys)) {
+        addIssue(["nodes", index, "workPackage", "tasks", taskIndex, "dependsOnTaskKeys"], "任务依赖不能重复");
+      }
+      for (const dependency of task.dependsOnTaskKeys) {
+        if (!taskKeySet.has(dependency)) {
+          addIssue(["nodes", index, "workPackage", "tasks", taskIndex, "dependsOnTaskKeys"], `任务依赖 ${dependency} 不存在于当前工作包`);
+        } else if (dependency === task.key) {
+          addIssue(["nodes", index, "workPackage", "tasks", taskIndex, "dependsOnTaskKeys"], "任务不能依赖自身");
+        }
+      }
+    }
+    const taskVisiting = new Set<string>();
+    const taskVisited = new Set<string>();
+    const visitTask = (key: string): boolean => {
+      if (taskVisiting.has(key)) return false;
+      if (taskVisited.has(key)) return true;
+      taskVisiting.add(key);
+      for (const dependency of taskDependencies.get(key) ?? []) {
+        if (!visitTask(dependency)) return false;
+      }
+      taskVisiting.delete(key);
+      taskVisited.add(key);
+      return true;
+    };
+    if (tasks.some(({ key }) => !visitTask(key))) {
+      addIssue(["nodes", index, "workPackage", "tasks"], "任务依赖不能形成循环");
+    }
+  }
+
+  for (const [index, edge] of input.edges.entries()) {
+    if (!nodeByKey.has(edge.fromNodeKey)) {
+      addIssue(["edges", index, "fromNodeKey"], `来源节点 ${edge.fromNodeKey} 不存在`);
+    }
+    if (!nodeByKey.has(edge.toNodeKey)) {
+      addIssue(["edges", index, "toNodeKey"], `目标节点 ${edge.toNodeKey} 不存在`);
+    }
+    if (edge.fromNodeKey === edge.toNodeKey) {
+      addIssue(["edges", index], "节点不能连接自身");
+    }
+    const edgeKey = `${edge.fromNodeKey}:${edge.branch}:${edge.toNodeKey}`;
+    if (edgeKeys.has(edgeKey)) addIssue(["edges", index], "流程连接不能重复");
+    edgeKeys.add(edgeKey);
+    outgoing.set(edge.fromNodeKey, [...(outgoing.get(edge.fromNodeKey) ?? []), edge]);
+  }
+
+  for (const [index, node] of input.nodes.entries()) {
+    const nodeEdges = outgoing.get(node.key) ?? [];
+    const branches = nodeEdges.map(({ branch }) => branch);
+    if (node.nodeType === "END" && nodeEdges.length) {
+      addIssue(["nodes", index], "END 不能有后续节点");
+    } else if (node.nodeType === "DECISION") {
+      if (branches.filter((branch) => branch === "YES").length !== 1 ||
+        branches.filter((branch) => branch === "NO").length !== 1 ||
+        branches.some((branch) => branch === "NEXT")) {
+        addIssue(["nodes", index], "DECISION 必须且只能各有一条 YES 和 NO 分支");
+      }
+    } else if (branches.some((branch) => branch !== "NEXT")) {
+      addIssue(["nodes", index], "只有 DECISION 可以使用 YES/NO 分支");
+    }
+    if (node.nodeType !== "END" && nodeEdges.length === 0) {
+      addIssue(["nodes", index], "非 END 节点必须有后续路径");
+    }
+  }
+
+  const reachable = new Set<string>();
+  const visitReachable = (key: string): void => {
+    if (reachable.has(key)) return;
+    reachable.add(key);
+    for (const edge of outgoing.get(key) ?? []) visitReachable(edge.toNodeKey);
+  };
+  for (const start of input.startNodeKeys) if (nodeByKey.has(start)) visitReachable(start);
+  for (const [index, node] of input.nodes.entries()) {
+    if (!reachable.has(node.key)) addIssue(["nodes", index], "节点必须能从某个起点到达");
+  }
+
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visitNode = (key: string): boolean => {
+    if (visiting.has(key)) return false;
+    if (visited.has(key)) return true;
+    visiting.add(key);
+    for (const edge of outgoing.get(key) ?? []) {
+      if (!visitNode(edge.toNodeKey)) return false;
+    }
+    visiting.delete(key);
+    visited.add(key);
+    return true;
+  };
+  if (nodeKeys.some((key) => !visitNode(key))) addIssue(["edges"], "流程连接不能形成循环");
+  if (!input.nodes.some(({ nodeType }) => nodeType === "END")) {
+    addIssue(["nodes"], "Playbook 至少需要一个 END");
+  }
+});
+
+const playbookBlueprintTaskSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  deliverable: z.string().trim().min(1).max(1_000),
+  afterTaskIndexes: z.array(z.number().int().min(0).max(19)).max(20).default([]),
+});
+
+const playbookBlueprintNodeSchema = z.object({
+  key: localKeySchema,
+  name: z.string().trim().min(1).max(200),
+  nodeType: guideNodeTypeSchema,
+  lane: z.string().trim().min(1).max(200),
+  instruction: optionalText(1_000),
+  doneWhen: optionalText(1_000),
+  durationHint: optionalText(300),
+  taskTemplates: z.array(playbookBlueprintTaskSchema).max(8).default([]),
+});
+
+const playbookBlueprintBaseSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  purpose: z.string().trim().min(1).max(2_000),
+  appliesWhen: z.string().trim().min(1).max(2_000),
+  summary: optionalText(2_000),
+  notes: optionalText(2_000),
+  lanes: z.array(z.string().trim().min(1).max(200)).min(1).max(20),
+  status: playbookStatusSchema.default("DRAFT"),
+  startNodeKeys: z.array(localKeySchema).min(1).max(20),
+  nodes: z.array(playbookBlueprintNodeSchema).min(2).max(60),
+  edges: z.array(playbookGraphEdgeSchema).max(120),
+});
+
+type PlaybookBlueprintInput = z.infer<typeof playbookBlueprintBaseSchema>;
+type PlaybookGraphInput = z.infer<typeof createPlaybookGraphSchema>;
+
+function expandPlaybookBlueprint(input: PlaybookBlueprintInput): PlaybookGraphInput {
+  return {
+    name: input.name,
+    description: input.purpose,
+    applicableScenario: input.appliesWhen,
+    overview: input.summary ?? input.purpose,
+    notes: input.notes,
+    lanes: input.lanes,
+    status: input.status,
+    startNodeKeys: input.startNodeKeys,
+    nodes: input.nodes.map((node) => ({
+      key: node.key,
+      name: node.name,
+      nodeType: node.nodeType,
+      lane: node.lane,
+      guide: node.instruction,
+      expectedOutcome: node.doneWhen,
+      durationHint: node.durationHint,
+      ...(node.nodeType === "ACTION"
+        ? {
+            workPackage: {
+              name: node.name,
+              description: node.instruction ?? node.doneWhen ?? node.name,
+              tasks: node.taskTemplates.map((task, taskIndex) => ({
+                key: `task_${taskIndex + 1}`,
+                name: task.name,
+                deliverable: task.deliverable,
+                dependsOnTaskKeys: task.afterTaskIndexes.flatMap((dependencyIndex) =>
+                  node.taskTemplates[dependencyIndex]
+                    ? [`task_${dependencyIndex + 1}`]
+                    : []
+                ),
+              })),
+            },
+          }
+        : {}),
+    })),
+    edges: input.edges,
+  };
+}
+
+const createPlaybookBlueprintSchema = playbookBlueprintBaseSchema.superRefine((input, context) => {
+  input.nodes.forEach((node, nodeIndex) => {
+    if (node.nodeType === "ACTION" && node.taskTemplates.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["nodes", nodeIndex, "taskTemplates"],
+        message: "ACTION 至少需要一个可套用任务",
+      });
+    }
+    if (node.nodeType !== "ACTION" && node.taskTemplates.length > 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["nodes", nodeIndex, "taskTemplates"],
+        message: "只有 ACTION 可以包含任务模板",
+      });
+    }
+    node.taskTemplates.forEach((task, taskIndex) => {
+      for (const dependencyIndex of task.afterTaskIndexes) {
+        if (dependencyIndex >= node.taskTemplates.length) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["nodes", nodeIndex, "taskTemplates", taskIndex, "afterTaskIndexes"],
+            message: `任务索引 ${dependencyIndex} 不存在`,
+          });
+        }
+        if (dependencyIndex === taskIndex) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["nodes", nodeIndex, "taskTemplates", taskIndex, "afterTaskIndexes"],
+            message: "任务不能依赖自身",
+          });
+        }
+      }
+    });
+  });
+  const expanded = createPlaybookGraphSchema.safeParse(expandPlaybookBlueprint(input));
+  if (!expanded.success) {
+    for (const issue of expanded.error.issues) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: issue.path,
+        message: issue.message,
+      });
+    }
+  }
+});
+
 const updatePlaybookSchema = z.object({
   playbookId: uuid,
   name: z.string().trim().min(1).max(200).optional(),
@@ -861,6 +1173,161 @@ const createPlaybook: CommandDefinition<z.infer<typeof createPlaybookSchema>> = 
   },
 };
 
+async function createPlaybookGraphCards(
+  transaction: ViewTransaction,
+  input: PlaybookGraphInput,
+) {
+    const playbookId = await transaction.createCard({
+      cardTypeKey: "ActivityPlaybookCard",
+      dimensions: compact({
+        name: input.name,
+        description: input.description,
+        applicable_scenario: input.applicableScenario,
+        overview: input.overview,
+        notes: input.notes,
+        lanes: input.lanes.join("\n"),
+        status: input.status,
+      }),
+    });
+
+    const nodeIdByKey = new Map<string, string>();
+    const laneRows = new Map<string, number>();
+    let workPackageDefinitionCount = 0;
+    let taskDefinitionCount = 0;
+
+    for (const node of input.nodes) {
+      const inferredRow = laneRows.get(node.lane) ?? 0;
+      laneRows.set(node.lane, Math.max(inferredRow, node.row ?? inferredRow) + 1);
+      const nodeId = await transaction.createCard({
+        cardTypeKey: "GuideNodeCard",
+        dimensions: compact({
+          name: node.name,
+          node_type: node.nodeType,
+          lane: node.lane,
+          row: node.row ?? inferredRow,
+          guide: node.guide,
+          applicable_condition: node.applicableCondition,
+          required_information: node.requiredInformation,
+          expected_outcome: node.expectedOutcome,
+          ai_assistance: node.aiAssistance,
+          resources: node.resources,
+          duration_hint: node.durationHint,
+        }),
+      });
+      nodeIdByKey.set(node.key, nodeId);
+
+      if (node.nodeType !== "ACTION" || !node.workPackage) continue;
+      const definitionId = await transaction.createCard({
+        cardTypeKey: "WorkPackageDefinitionCard",
+        dimensions: {
+          name: node.workPackage.name ?? node.name,
+          description: node.workPackage.description,
+        },
+      });
+      workPackageDefinitionCount += 1;
+      const taskIdByKey = new Map<string, string>();
+      for (const task of node.workPackage.tasks) {
+        const taskId = await transaction.createCard({
+          cardTypeKey: "TaskDefinitionCard",
+          dimensions: compact({
+            name: task.name,
+            description: task.description,
+            role_hint: task.roleHint,
+            duration_hint: task.durationHint,
+            deliverable: task.deliverable,
+          }),
+        });
+        taskIdByKey.set(task.key, taskId);
+        taskDefinitionCount += 1;
+      }
+      for (const task of node.workPackage.tasks) {
+        if (!task.dependsOnTaskKeys.length) continue;
+        await transaction.setSlot(
+          taskIdByKey.get(task.key)!,
+          "dependencies",
+          task.dependsOnTaskKeys.map((key) => taskIdByKey.get(key)!),
+        );
+      }
+      await transaction.setSlot(
+        definitionId,
+        "tasks",
+        node.workPackage.tasks.map(({ key }) => taskIdByKey.get(key)!),
+      );
+      await transaction.setSlot(nodeId, "definition", [definitionId]);
+    }
+
+    for (const node of input.nodes) {
+      const nodeId = nodeIdByKey.get(node.key)!;
+      const outgoing = input.edges.filter(({ fromNodeKey }) => fromNodeKey === node.key);
+      const next = outgoing
+        .filter(({ branch }) => branch === "NEXT")
+        .map(({ toNodeKey }) => nodeIdByKey.get(toNodeKey)!);
+      const yes = outgoing.find(({ branch }) => branch === "YES");
+      const no = outgoing.find(({ branch }) => branch === "NO");
+      if (next.length) await transaction.setSlot(nodeId, "next", next);
+      if (yes) await transaction.setSlot(nodeId, "when_yes", [nodeIdByKey.get(yes.toNodeKey)!]);
+      if (no) await transaction.setSlot(nodeId, "when_no", [nodeIdByKey.get(no.toNodeKey)!]);
+    }
+
+    await transaction.setSlot(
+      playbookId,
+      "nodes",
+      input.nodes.map(({ key }) => nodeIdByKey.get(key)!),
+    );
+    await transaction.setSlot(
+      playbookId,
+      "start_nodes",
+      input.startNodeKeys.map((key) => nodeIdByKey.get(key)!),
+    );
+    return {
+      summary: {
+        cardId: playbookId,
+        createdNodes: input.nodes.length,
+        createdWorkPackageDefinitions: workPackageDefinitionCount,
+        createdTaskDefinitions: taskDefinitionCount,
+      },
+      events: [{
+        type: "activity.playbook_graph_created",
+        version: "1",
+        payload: {
+          cardId: playbookId,
+          createdNodes: input.nodes.length,
+          createdWorkPackageDefinitions: workPackageDefinitionCount,
+          createdTaskDefinitions: taskDefinitionCount,
+        },
+      }],
+    };
+}
+
+const createPlaybookFromBlueprint: CommandDefinition<z.infer<typeof createPlaybookBlueprintSchema>> = {
+  key: "activity.create_playbook_from_blueprint",
+  version: "1",
+  label: "从紧凑蓝图创建活动组织方法",
+  allowedInitiators: ["human", "ai"],
+  requiredPermissions: ["view.write"],
+  inputSchema: zodContractSchema(createPlaybookBlueprintSchema),
+  proposalApprovalConflictPolicy: () => "revalidate_latest",
+  async execute(context, input) {
+    return createPlaybookGraphCards(
+      context.transaction,
+      createPlaybookGraphSchema.parse(expandPlaybookBlueprint(input)),
+    );
+  },
+};
+
+const createPlaybookGraph: CommandDefinition<z.infer<typeof createPlaybookGraphSchema>> = {
+  key: "activity.create_playbook_graph",
+  version: "1",
+  label: "创建完整活动组织方法",
+  allowedInitiators: ["human", "ai"],
+  requiredPermissions: ["view.write"],
+  inputSchema: zodContractSchema(createPlaybookGraphSchema),
+  proposalApprovalConflictPolicy: () => "revalidate_latest",
+  async execute(context, input) {
+    return createPlaybookGraphCards(context.transaction, input);
+  },
+};
+
 const updatePlaybook: CommandDefinition<z.infer<typeof updatePlaybookSchema>> = {
   key: "activity.update_playbook",
   version: "1",
@@ -1115,6 +1582,9 @@ const applyPlaybook: CommandDefinition<z.infer<typeof applyPlaybookSchema>> = {
       await context.transaction.getCard(input.playbookId),
       "ActivityPlaybookCard",
     );
+    if (playbook.dimensions.status !== "READY") {
+      throw new Error("只有成熟度为 READY 的活动组织方法可以套用到真实 Activity");
+    }
     const nodes = (await Promise.all(
       (playbook.slots.nodes ?? []).map((cardId) => context.transaction.getCard(cardId)),
     )).filter((card): card is ViewCardState => card?.cardTypeKey === "GuideNodeCard");
@@ -1388,6 +1858,8 @@ export const activityOperationsCommands: readonly CommandDefinition[] = [
   addMilestone,
   updateMilestone,
   createPlaybook,
+  createPlaybookFromBlueprint,
+  createPlaybookGraph,
   updatePlaybook,
   addGuideNode,
   updateGuideNode,
