@@ -102,7 +102,24 @@ View Core 必须能在没有专属 Presentation 和 Skill 的情况下通过 Gen
 必须包含 `engines.sydaris` SemVer 范围。
 
 `packages/example-plugin` 是可复制的最小完整示例。发布前应改用自己拥有的 npm scope，
-先发布 SDK，再发布 Plugin，并用 tarball 做一次不依赖 registry 的发布前测试：
+先发布 SDK，再发布 Plugin，并用 tarball 做一次不依赖 registry 的发布前测试。
+仓库内四个正式发布包使用下面的统一预检；它会运行完整测试、构建、检查 tarball
+和 npm 版本冲突，但不会发布：
+
+```bash
+pnpm plugins:release:check
+```
+
+确认 npm 已登录、完整测试通过且工作区已提交后，按 SDK、社团信息、活动运营、
+比赛记录的顺序发布到 `next`：
+
+```bash
+npm whoami
+pnpm plugins:release:next
+```
+
+发布命令会再次执行完整预检，并拒绝脏工作区或 npm 上已经存在的版本。单独验证
+示例 Plugin 时仍可使用原有 tarball 流程：
 
 ```bash
 pnpm plugins:build

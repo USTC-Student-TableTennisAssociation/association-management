@@ -24,3 +24,9 @@ pnpm pack
 
 生成的 tarball 包含编译后的 server、Presentation、CSS、同步 contracts 与
 `sydaris.plugin.json`。
+
+npm 预发布版本使用 `next` 标签安装：
+
+```bash
+pnpm add @sydaris/competition-records-plugin@next
+```
