@@ -153,8 +153,14 @@ export function sliceSeedMapAssertions(
       .filter((connection) => assertionRefs.has(connection.assertionRef))
       .map((connection) => connection.objectRef),
   );
+  const higherMemoryObjectIds = new Set(
+    (seedMap.higherMemories ?? []).map((memory) => memory.globalObjectId),
+  );
   const objects = seedMap.objects.filter(
-    (item) => item.lexicalMatch || relevantObjectRefs.has(item.ref),
+    (item) =>
+      item.lexicalMatch ||
+      relevantObjectRefs.has(item.ref) ||
+      higherMemoryObjectIds.has(item.id),
   );
   const objectRefs = new Set(objects.map((item) => item.ref));
   return {

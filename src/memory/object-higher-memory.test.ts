@@ -75,8 +75,15 @@ beforeEach(() => {
   const upsert = vi.fn().mockResolvedValue({ id: "memory-row" });
   const update = vi.fn().mockResolvedValue({ id: "memory-row" });
   const transaction = {
+    $queryRaw: vi.fn().mockResolvedValue([{ locked: 1 }]),
     memoryGlobalObject: { count: vi.fn().mockResolvedValue(1) },
-    memoryObjectHigherMemory: { upsert, update },
+    memoryObjectHigherMemory: {
+      findMany: vi.fn().mockResolvedValue([]),
+      create: vi.fn().mockResolvedValue({ id: "memory-row" }),
+      updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      upsert,
+      update,
+    },
   };
   databaseState.database = {
     memoryGlobalObject: {
@@ -104,21 +111,16 @@ beforeEach(() => {
     warnings: [],
   });
   aiState.generateText.mockResolvedValue({
-    toolCalls: [{
-      toolName: "submitObjectHigherMemory",
-      input: {
-      memories: [{
+    output: { memories: [{
         globalObjectId: objectId,
-        cognitiveMemory: {
+        cognitivePatch: {
           identityAndBoundaries: "测试社团是本轮讨论的长期组织对象。",
-          narrativeAndMeaning: "",
-          structuralModel: "",
           operatingModel: "团队通过正式业务视图和共享知识持续整理协作方式。",
           currentSituation: "当前资料仍有需要核对的时间边界和状态缺口。",
           openQuestions: ["哪些近期状态已有正式证据确认？"],
         },
-        operationalIndex: {
-          aspects: [{
+        operationalIndexPatch: {
+          upsertAspects: [{
             key: "current-state",
             label: "当前状态",
             summary: "通过当前状态与近期进展检索继续核对。",
@@ -129,15 +131,14 @@ beforeEach(() => {
             recommendedQueries: ["测试社团 当前状态 近期进展"],
             unresolvedAspects: ["正式状态尚待核对"],
           }],
+          removeAspectKeys: [],
         },
-      }],
-      },
-    }],
+      }] },
   });
 });
 
 describe("maintainObjectHigherMemories", () => {
-  it("stores only the rebuilt cognition document and maintenance metadata", async () => {
+  it("creates the first memory from an incremental patch", async () => {
     await expect(maintainObjectHigherMemories(input())).resolves.toBe(1);
 
     expect(exploreState.followObject).toHaveBeenCalledWith(
@@ -149,21 +150,16 @@ describe("maintainObjectHigherMemories", () => {
     expect(call.prompt).toContain("main system");
     expect(call.prompt).toContain("这是本轮回答");
     expect(call.prompt).toContain("Operational Memory Index");
-    expect(call.prompt).toContain("Operating Model 不是第二套 Work View");
-    expect(call.tools).toHaveProperty("submitObjectHigherMemory");
-    expect(call.tools).not.toHaveProperty("searchMemory");
-    expect(call.tools).not.toHaveProperty("followObject");
-    expect(call.toolChoice).toEqual({
-      type: "tool",
-      toolName: "submitObjectHigherMemory",
-    });
+    expect(call.prompt).toContain("只输出确有证据变化的 Patch");
+    expect(call.output).toBeDefined();
+    expect(call.tools).toBeUndefined();
+    expect(call.toolChoice).toBeUndefined();
 
     const transaction = (databaseState.database as {
-      __transaction: { memoryObjectHigherMemory: { upsert: ReturnType<typeof vi.fn> } };
+      __transaction: { memoryObjectHigherMemory: { create: ReturnType<typeof vi.fn> } };
     }).__transaction;
-    expect(transaction.memoryObjectHigherMemory.upsert).toHaveBeenCalledWith({
-      where: { globalObjectId: objectId },
-      create: expect.objectContaining({
+    expect(transaction.memoryObjectHigherMemory.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
         globalObjectId: objectId,
         cognitiveMemory: expect.objectContaining({
           identityAndBoundaries: expect.stringContaining("测试社团"),
@@ -174,22 +170,13 @@ describe("maintainObjectHigherMemories", () => {
         triggerMessageId: "message-current",
         maintenanceReason: "本轮围绕测试社团形成了实质理解",
       }),
-      update: expect.objectContaining({
-        cognitiveMemory: expect.any(Object),
-        operationalIndex: expect.any(Object),
-      }),
     });
-    expect(JSON.stringify(transaction.memoryObjectHigherMemory.upsert.mock.calls))
+    expect(JSON.stringify(transaction.memoryObjectHigherMemory.create.mock.calls))
       .not.toContain("AssertionId");
   });
 
   it("preserves old memory when the agent cannot form useful new cognition", async () => {
-    aiState.generateText.mockResolvedValue({
-      toolCalls: [{
-        toolName: "submitObjectHigherMemory",
-        input: { memories: [] },
-      }],
-    });
+    aiState.generateText.mockResolvedValue({ output: { memories: [] } });
 
     await expect(maintainObjectHigherMemories(input())).resolves.toBe(0);
 
@@ -209,13 +196,15 @@ describe("maintainObjectHigherMemories", () => {
     expect(database.$transaction).not.toHaveBeenCalled();
   });
 
-  it("uses update instead of upsert in existing-only mode", async () => {
+  it("uses versioned update instead of create in existing-only mode", async () => {
+    const updatedAt = new Date("2026-08-01T00:00:00.000Z");
     const database = databaseState.database as {
       memoryObjectHigherMemory: { findMany: ReturnType<typeof vi.fn> };
       __transaction: {
         memoryObjectHigherMemory: {
-          update: ReturnType<typeof vi.fn>;
-          upsert: ReturnType<typeof vi.fn>;
+          findMany: ReturnType<typeof vi.fn>;
+          updateMany: ReturnType<typeof vi.fn>;
+          create: ReturnType<typeof vi.fn>;
         };
       };
     };
@@ -231,6 +220,11 @@ describe("maintainObjectHigherMemories", () => {
       },
       operationalIndex: { aspects: [] },
       maintainedAt: new Date("2026-08-01T00:00:00.000Z"),
+      updatedAt,
+    }]);
+    database.__transaction.memoryObjectHigherMemory.findMany.mockResolvedValue([{
+      globalObjectId: objectId,
+      updatedAt,
     }]);
 
     await expect(maintainObjectHigherMemories({
@@ -238,32 +232,22 @@ describe("maintainObjectHigherMemories", () => {
       existingOnly: true,
     })).resolves.toBe(1);
 
-    expect(database.__transaction.memoryObjectHigherMemory.update)
+    expect(database.__transaction.memoryObjectHigherMemory.updateMany)
       .toHaveBeenCalledWith(expect.objectContaining({
-        where: { globalObjectId: objectId },
+        where: { globalObjectId: objectId, updatedAt },
       }));
-    expect(database.__transaction.memoryObjectHigherMemory.upsert).not.toHaveBeenCalled();
+    expect(database.__transaction.memoryObjectHigherMemory.create).not.toHaveBeenCalled();
   });
 
   it("rejects a structurally empty cognition document", async () => {
     aiState.generateText.mockResolvedValue({
-      toolCalls: [{
-        toolName: "submitObjectHigherMemory",
-        input: {
-          memories: [{
+      output: { memories: [{
             globalObjectId: objectId,
-            cognitiveMemory: {
+            cognitivePatch: {
               identityAndBoundaries: "",
-              narrativeAndMeaning: "",
-              structuralModel: "",
-              operatingModel: "",
-              currentSituation: "",
-              openQuestions: [],
             },
-            operationalIndex: { aspects: [] },
-          }],
-        },
-      }],
+            operationalIndexPatch: { upsertAspects: [], removeAspectKeys: [] },
+          }] },
     });
 
     await expect(maintainObjectHigherMemories(input())).rejects.toThrow("identityAndBoundaries");

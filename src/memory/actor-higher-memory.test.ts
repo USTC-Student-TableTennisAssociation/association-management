@@ -42,15 +42,10 @@ beforeEach(() => {
     __transaction: transaction,
   };
   aiState.generateText.mockResolvedValue({
-    toolCalls: [{
-      toolName: "submitActorHigherMemory",
-      input: {
-        memories: [{
+    output: { memories: [{
           scope: "interaction",
           contentMarkdown: "用户明确要求在讨论不确定事项时先说明证据边界，再给出可执行建议；这一约定适用于后续协作，但不能覆盖正式事实核验。",
-        }],
-      },
-    }],
+        }] },
   });
 });
 

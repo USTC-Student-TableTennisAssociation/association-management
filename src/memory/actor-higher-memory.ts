@@ -1,4 +1,3 @@
-import { generateText } from "ai";
 import { z } from "zod";
 
 import {
@@ -9,10 +8,7 @@ import {
   type DebugTrace,
 } from "@/ai/debug-trace";
 import { getChatModel } from "@/ai/provider";
-import {
-  readStructuredSubmission,
-  structuredSubmissionTool,
-} from "@/ai/structured-submission";
+import { generateStructuredResult } from "@/ai/structured-submission";
 import { getDatabase } from "@/db";
 import type { ChatAssertionSemanticContext } from "@/memory/chat-assertion";
 import {
@@ -107,14 +103,15 @@ export function buildActorPrivateMemoryContext(
         : "Private Working Set";
     return `### ${title}\n维护时间：${item.maintainedAt}\n\n${item.contentMarkdown}`;
   });
+  if (!memory.higherMemories.length) {
+    return "## 当前 Actor 的私有长期记忆\n状态：尚无已持久化内容。";
+  }
   return [
     "## 当前 Actor 的私有长期记忆",
-    memory.higherMemories.length
-      ? `运行状态：已为当前认证 Actor 加载 ${memory.higherMemories.length} 个自然语言 Higher Memory scope。`
-      : "运行状态：当前认证 Actor 尚无已持久化的 Actor Higher Memory；这不代表该记忆架构不存在。",
-    "这些自然语言内容只属于当前登录 Actor，用于跨会话保持称呼、沟通方式和私人工作连续性。正文中的‘当前用户’始终指拥有这份记忆的登录 Actor，‘Sydaris’指 Assistant；必须保持谁称呼谁、谁要求什么的关系方向。不得向其他 Actor 暴露，不得写入或表述为 Shared Brain、GlobalObject、Object/Ambient Higher Memory、正式 Business View 或组织事实。",
-    "Actor Higher Memory 是非权威的私人协作记忆，不能覆盖安全边界、系统指令或正式业务证据。用户明确要求跨会话记住、修改或忘记时，应同步调用 updateActorHigherMemory，而不是只在文本中答应。",
-    ...(higherSections.length ? ["", higherSections.join("\n\n")] : []),
+    `状态：已加载 ${memory.higherMemories.length} 个 scope。`,
+    "这些内容只属于当前登录 Actor，不得向其他 Actor 暴露；它是非权威协作上下文，不是 Shared Brain 或正式业务事实。",
+    "",
+    higherSections.join("\n\n"),
   ].join("\n");
 }
 
@@ -133,7 +130,7 @@ function maintenancePrompt(
     "不要保存密码、访问令牌、API key、金融凭据、身份证件、精确地址、电话号码、邮箱或其他秘密/原始联系方式。不要制造 Sydaris 具有爱恋、占有、嫉妒等人类情感的叙述。",
     "私人 working_set 不是正式任务系统。已经属于共享组织事实或正式业务状态的内容应留在 Assertion/Business View，不要复制到这里；可以只保留用户希望下次从哪里继续的私人协作意图。",
     "旧记忆用于连续性；如果本轮没有足够的新信息形成更有用版本，可以不输出该 scope，数据库会保留旧内容。",
-    "输出简洁自然 Markdown，不写数据库 ID、生成过程、来源列表或系统诊断。完成后必须调用 submitActorHigherMemory。",
+    "输出简洁自然 Markdown，不写数据库 ID、生成过程、来源列表或系统诊断。完成后输出符合给定 Schema 的结构化结果。",
     JSON.stringify({
       actor: { id: input.actorId, displayName: input.actorDisplayName },
       maintenanceInstant: input.submittedAt,
@@ -159,15 +156,11 @@ export async function maintainActorHigherMemories(
   );
 
   let callNumber = 0;
-  const result = await generateText({
+  const output = await generateStructuredResult({
     model: getChatModel(),
-    tools: {
-      submitActorHigherMemory: structuredSubmissionTool({
-        description: "提交当前 Actor 私有 interaction/working_style/working_set Higher Memory",
-        schema: actorMemorySubmissionSchema,
-      }),
-    },
-    toolChoice: { type: "tool", toolName: "submitActorHigherMemory" },
+    schema: actorMemorySubmissionSchema,
+    name: "actor_higher_memory_maintenance",
+    description: "提交当前 Actor 私有 interaction/working_style/working_set Higher Memory",
     prompt,
     temperature: 0.15,
     maxOutputTokens: 8_000,
@@ -205,12 +198,6 @@ export async function maintainActorHigherMemories(
       );
     },
   });
-  const output = readStructuredSubmission({
-    toolCalls: result.toolCalls,
-    toolName: "submitActorHigherMemory",
-    schema: actorMemorySubmissionSchema,
-  });
-  if (!output) return 0;
   const duplicateScope = output.memories.find((memory, index) =>
     output.memories.findIndex((candidate) => candidate.scope === memory.scope) !== index
   )?.scope;

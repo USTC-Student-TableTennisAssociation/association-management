@@ -13,6 +13,7 @@ import {
   type ToolSet,
   zodSchema,
 } from "ai";
+import { after } from "next/server";
 import { z } from "zod";
 
 import {
@@ -119,10 +120,12 @@ import {
 } from "@/memory/chat-assertion";
 import { createChatAssertionQueueTool } from "@/memory/chat-assertion-queue";
 import {
+  buildChatAssertionReceiptInstruction,
   claimChatAssertionReceipt,
   completeChatAssertionReceipt,
   createMemoryWriteStatusTool,
   failChatAssertionReceipt,
+  listChatAssertionReceipts,
   queueChatAssertionReceipt,
 } from "@/memory/chat-assertion-receipt";
 import {
@@ -143,6 +146,7 @@ import {
 } from "@/memory/actor-higher-memory-queue";
 import { createActorHigherMemoryWriteToolset } from "@/memory/actor-higher-memory-write";
 import { createMemoryExploreToolset } from "@/memory/explore-toolset";
+import { loadIdentityBoundObjectMemory } from "@/memory/identity-bound-memory";
 import {
   addObjectTargetsToQueueDecision,
   createHigherMemoryQueueTool,
@@ -236,15 +240,70 @@ function pageContextInstruction(context?: ChatPageContext): string {
 function authenticatedUserInstruction(user: Awaited<ReturnType<typeof currentAuthUser>>): string {
   if (!user) return "";
   return [
-    `当前登录用户：${user.actor.displayName}。`,
+    `当前登录身份显示名（不是用户本轮陈述）：${user.actor.displayName}。`,
     user.actorObject
-      ? `用户对自身的指称对应已认证 Actor Object“${user.actorObject.canonicalName}”；内部 ID 由服务端处理。`
-      : "当前账号尚未关联 Actor Object，不要猜测用户对自身的指称对应哪个 Object。",
+      ? `共享知识身份锚点（当前权威状态）：已认证关联 Actor Object“${user.actorObject.canonicalName}”；用户的自我指称可解析到该 Object。历史对话或记忆中的旧流程状态不能覆盖此状态。`
+      : "共享知识身份锚点：未绑定；相同显示名本身不能证明某个知识库 Object 就是当前用户。",
+    "只有当前问题涉及用户身份归属时才说明这一绑定状态。",
   ].join("\n");
 }
 
 function jsonError(error: string, status: number) {
   return Response.json({ error }, { status });
+}
+
+type AssistantMessagePersistence = Parameters<typeof saveChatMessage>[0];
+
+function createAssistantHistoryPersistence(
+  onError: (error: unknown) => Promise<void>,
+) {
+  let resolveInput: (input: AssistantMessagePersistence | undefined) => void = () => undefined;
+  let settled = false;
+  const inputReady = new Promise<AssistantMessagePersistence | undefined>((resolve) => {
+    resolveInput = resolve;
+  });
+  const persist = async (input: AssistantMessagePersistence) => {
+    try {
+      await saveChatMessage(input);
+    } catch (error) {
+      await onError(error);
+    }
+  };
+
+  try {
+    // Register while the request context is definitely active. The callback
+    // starts only after the response closes, while onEnd merely publishes the
+    // compact message and returns immediately.
+    after(async () => {
+      const input = await inputReady;
+      if (input) await persist(input);
+    });
+    return {
+      publish(input: AssistantMessagePersistence) {
+        if (settled) return Promise.resolve();
+        settled = true;
+        resolveInput(input);
+        return Promise.resolve();
+      },
+      cancel() {
+        if (settled) return;
+        settled = true;
+        resolveInput(undefined);
+      },
+    };
+  } catch {
+    // Unit tests and non-Next callers have no request-scoped after() context.
+    return {
+      async publish(input: AssistantMessagePersistence) {
+        if (settled) return;
+        settled = true;
+        await persist(input);
+      },
+      cancel() {
+        settled = true;
+      },
+    };
+  }
 }
 
 function actualSeedTrace(result: MemoryRetrievalResult) {
@@ -366,6 +425,7 @@ export async function POST(request: Request) {
       objectChangeProposal: zodSchema(objectChangeProposalPresentationSchema),
       libraryProposal: zodSchema(libraryPlanPresentationSchema),
       streamStatus: zodSchema(chatStreamStatusSchema),
+      answerLifecycle: zodSchema(z.object({ phase: z.literal("answer_complete") })),
     },
   });
   if (!validation.success) return jsonError("消息格式错误。", 400);
@@ -466,6 +526,31 @@ export async function POST(request: Request) {
     }));
   const memoryMaintenance = createChatMemoryMaintenanceScheduler(debugTrace);
   await resumePendingChatAssertionReceipts({ actorId: requestActor.id });
+  let memoryStateInstruction = "";
+  try {
+    const priorUserMessages = conversationUserMessages
+      .filter((message) => message.messageId !== latestUserMessage?.id)
+      .slice(-20);
+    const receipts = await listChatAssertionReceipts({
+      actorId: requestActor.id,
+      clientMessageIds: priorUserMessages.map((message) => message.messageId),
+      limit: 3,
+    });
+    memoryStateInstruction = buildChatAssertionReceiptInstruction({
+      receipts,
+      messageTextById: new Map(
+        priorUserMessages.map((message) => [message.messageId, message.text]),
+      ),
+    });
+    await debugTrace.appendJsonSection("主 Chat 自动加载的 Memory State Envelope", {
+      receiptCount: receipts.length,
+      receiptMessageIds: receipts.map((receipt) => receipt.clientMessageId),
+      note: "只注入持久化后台回执摘要；它不是业务事实，也不替代 Shared Brain 检索。",
+    });
+  } catch (error) {
+    console.error("[chat.memory-state-envelope.load]", error);
+    await debugTrace.appendError("Memory State Envelope 加载失败", error);
+  }
   let actorPrivateMemory: ActorPrivateMemorySnapshot = emptyActorPrivateMemory();
   try {
     actorPrivateMemory = await loadActorPrivateMemory(requestActor.id);
@@ -504,10 +589,24 @@ export async function POST(request: Request) {
     return jsonError("AI 服务暂不可用，请联系管理员。", 500);
   }
 
+  let identitySeedMap = emptySeedMap();
+  if (authenticatedUser.actorObject) {
+    try {
+      identitySeedMap = await loadIdentityBoundObjectMemory(authenticatedUser.actorObject.id);
+      await debugTrace.appendJsonSection("主 Chat 自动加载的身份对象记忆", {
+        globalObjectId: authenticatedUser.actorObject.id,
+        objectLoaded: identitySeedMap.objects.length === 1,
+        higherMemoryLoaded: (identitySeedMap.higherMemories?.length ?? 0) === 1,
+      });
+    } catch (error) {
+      console.error("[chat.identity-bound-object-memory.load]", error);
+      await debugTrace.appendError("身份对象记忆加载失败", error);
+    }
+  }
   const retrieval: MemoryRetrievalResult = {
     query,
     mode: getMemoryRetriever().mode,
-    seedMap: emptySeedMap(),
+    seedMap: identitySeedMap,
   };
 
   let context;
@@ -560,6 +659,10 @@ export async function POST(request: Request) {
   await debugTrace.appendJsonSection("主 Chat 上下文裁剪报告", {
     ...context.report,
     exploreResultTokenBudget,
+  });
+  const assistantHistoryPersistence = createAssistantHistoryPersistence(async (error) => {
+    console.error("[chat.history.write-assistant]", error);
+    await debugTrace.appendError("保存助手消息失败", error);
   });
   const stream = createUIMessageStream<ClubChatMessage>({
     originalMessages: messages,
@@ -795,6 +898,12 @@ export async function POST(request: Request) {
         },
       });
       const objectManagementToolset = createObjectManagementToolset({
+        authUser: {
+          userId: authenticatedUser.userId,
+        },
+        resolveObjectReference: (reference) =>
+          evidence.objectForModelReference(reference),
+        conversationUserMessages,
         onProposal: (proposal) => {
           proposalReceiptCount += 1;
           writer.write({ type: "data-objectChangeProposal", data: proposal });
@@ -910,6 +1019,7 @@ export async function POST(request: Request) {
         context.system,
         currentTimeInstruction,
         authenticatedUserInstruction(authenticatedUser),
+        memoryStateInstruction,
         pageContextInstruction(pageContext),
         TURN_KERNEL_INSTRUCTIONS,
         ANSWER_PRESENTATION_INSTRUCTIONS,
@@ -1139,7 +1249,8 @@ export async function POST(request: Request) {
       const allTools: ToolSet = {
         ...skillToolset.tools,
         ...gatewayTools,
-        ...memoryTools,
+        searchMemory: memoryTools.searchMemory,
+        followObject: memoryTools.followObject,
         expandEvidence: memoryTools.searchMemory,
         readMemoryWriteStatus: createMemoryWriteStatusTool({
           actorId: requestActor.id,
@@ -1277,7 +1388,7 @@ export async function POST(request: Request) {
                 ? { messages: compactExploreStepMessages(stepMessages) }
                 : {}),
               activeTools: ["runViewCommand"] as const,
-              toolChoice: "required" as const,
+              toolChoice: "auto" as const,
               instructions: [
                 instructions,
                 "已经打开 Business View 写入能力，但尚未实际调用 View Command。文字说明不能代替真实 Proposal。",
@@ -1828,6 +1939,7 @@ export async function POST(request: Request) {
             )
           ) {
             memoryMaintenance.publish({
+              ...(receiptKey ? { maintenanceReceipt: receiptKey } : {}),
               ...(hasBackgroundWork && receiptKey
                 ? {
                     assertionReceipt: receiptKey,
@@ -2012,23 +2124,24 @@ export async function POST(request: Request) {
     },
     onEnd: async ({ messages: completedMessages, responseMessage }) => {
       const persistedResponse = withoutTurnHandoff(responseMessage);
-      if (!hasPersistableChatContent(persistedResponse)) return;
+      if (!hasPersistableChatContent(persistedResponse)) {
+        assistantHistoryPersistence.cancel();
+        return;
+      }
       const responsePosition = completedMessages.findLastIndex(
         (message) => message.id === responseMessage.id,
       );
-      if (responsePosition < 0) return;
-
-      try {
-        await saveChatMessage({
-          actor: requestActor,
-          conversationId,
-          message: persistedResponse,
-          position: responsePosition,
-        });
-      } catch (error) {
-        console.error("[chat.history.write-assistant]", error);
-        await debugTrace.appendError("保存助手消息失败", error);
+      if (responsePosition < 0) {
+        assistantHistoryPersistence.cancel();
+        return;
       }
+
+      await assistantHistoryPersistence.publish({
+        actor: requestActor,
+        conversationId,
+        message: persistedResponse,
+        position: responsePosition,
+      });
     },
     onError: (error) => {
       console.error(
