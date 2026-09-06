@@ -49,8 +49,29 @@ export const objectChangePayloadSchema = z.object({
   changes: z.array(objectChangeSchema).min(1).max(20),
 });
 
+/**
+ * Internal payload for an authenticated account identity proposal. The model
+ * can only choose the request-local target Object reference; account ids and
+ * the optimistic-concurrency anchor are filled by the Runtime.
+ */
+export const actorObjectBindingPayloadSchema = z.object({
+  kind: z.literal("actor_object_binding"),
+  reason: z.string().trim().min(1).max(1_000),
+  confirmationQuote: z.string().trim().min(1).max(1_000),
+  authUserId: z.string().uuid(),
+  expectedActorObjectId: z.string().uuid().nullable(),
+  targetObjectId: z.string().uuid(),
+});
+
+export const persistedObjectChangePayloadSchema = z.union([
+  objectChangePayloadSchema,
+  actorObjectBindingPayloadSchema,
+]);
+
 export type ObjectChangePayload = z.infer<typeof objectChangePayloadSchema>;
 export type ObjectChange = z.infer<typeof objectChangeSchema>;
+export type ActorObjectBindingPayload = z.infer<typeof actorObjectBindingPayloadSchema>;
+export type PersistedObjectChangePayload = z.infer<typeof persistedObjectChangePayloadSchema>;
 
 export type ObjectIdentitySurface = {
   id: string;
@@ -97,6 +118,7 @@ export const objectChangeProposalPresentationSchema = z.object({
       "SET_CANONICAL_NAME",
       "MERGE_OBJECTS",
       "SPLIT_OBJECT",
+      "BIND_ACTOR_OBJECT",
     ]),
     title: z.string(),
     details: z.array(z.string()),

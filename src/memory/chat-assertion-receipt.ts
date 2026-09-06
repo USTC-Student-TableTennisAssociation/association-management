@@ -19,6 +19,13 @@ export type ChatAssertionReceiptStatus =
 
 export type ChatAssertionExecution = "background" | "foreground_for_view";
 
+export type HigherMemoryReceiptStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "skipped"
+  | "failed";
+
 export type ChatAssertionReceiptKey = {
   actorId: string;
   clientMessageId: string;
@@ -41,6 +48,18 @@ export type ChatAssertionReceipt = ChatAssertionReceiptKey & {
   affectedObjects: ChatAssertionCaptureResult["affectedObjects"];
   outcomeSummary?: string;
   errorMessage?: string;
+  sharedHigherMemory: {
+    status: HigherMemoryReceiptStatus | null;
+    targets: unknown[];
+    maintained: number;
+    errorMessage?: string;
+  };
+  actorHigherMemory: {
+    status: HigherMemoryReceiptStatus | null;
+    scopes: string[];
+    maintained: number;
+    errorMessage?: string;
+  };
   updatedAt: string;
 };
 
@@ -131,8 +150,55 @@ export async function queueChatAssertionReceipt(input: QueueReceiptInput): Promi
         affectedObjects: [],
         outcomeSummary: "已登记，等待 Assertion Agent 开始处理。",
         errorMessage: null,
+        sharedHigherMemoryStatus: null,
+        sharedHigherMemoryTargets: [],
+        sharedHigherMemoryMaintained: 0,
+        sharedHigherMemoryError: null,
+        actorHigherMemoryStatus: null,
+        actorHigherMemoryScopes: [],
+        actorHigherMemoryMaintained: 0,
+        actorHigherMemoryError: null,
       },
     });
+  });
+}
+
+export async function recordHigherMemoryReceipt(input: {
+  key: ChatAssertionReceiptKey;
+  channel: "shared" | "actor";
+  status: HigherMemoryReceiptStatus;
+  targets?: unknown[];
+  maintained?: number;
+  error?: unknown;
+}): Promise<void> {
+  const detail = input.error === undefined ? null : errorMessage(input.error);
+  const shared = input.channel === "shared";
+  await getDatabase().memoryChatAssertionReceipt.updateMany({
+    where: {
+      actorId: input.key.actorId,
+      clientMessageId: input.key.clientMessageId,
+    },
+    data: shared
+      ? {
+          sharedHigherMemoryStatus: input.status,
+          ...(input.targets
+            ? { sharedHigherMemoryTargets: jsonInput(input.targets) }
+            : {}),
+          ...(input.maintained === undefined
+            ? {}
+            : { sharedHigherMemoryMaintained: input.maintained }),
+          sharedHigherMemoryError: detail,
+        }
+      : {
+          actorHigherMemoryStatus: input.status,
+          ...(input.targets
+            ? { actorHigherMemoryScopes: input.targets.map(String) }
+            : {}),
+          ...(input.maintained === undefined
+            ? {}
+            : { actorHigherMemoryMaintained: input.maintained }),
+          actorHigherMemoryError: detail,
+        },
   });
 }
 
@@ -332,6 +398,14 @@ export async function listChatAssertionReceipts(input: {
       affectedObjects: true,
       outcomeSummary: true,
       errorMessage: true,
+      sharedHigherMemoryStatus: true,
+      sharedHigherMemoryTargets: true,
+      sharedHigherMemoryMaintained: true,
+      sharedHigherMemoryError: true,
+      actorHigherMemoryStatus: true,
+      actorHigherMemoryScopes: true,
+      actorHigherMemoryMaintained: true,
+      actorHigherMemoryError: true,
       updatedAt: true,
     },
   });
@@ -350,6 +424,24 @@ export async function listChatAssertionReceipts(input: {
     affectedObjects: affectedObjectsSchema.safeParse(row.affectedObjects).data ?? [],
     ...(row.outcomeSummary ? { outcomeSummary: row.outcomeSummary } : {}),
     ...(row.errorMessage ? { errorMessage: row.errorMessage } : {}),
+    sharedHigherMemory: {
+      status: row.sharedHigherMemoryStatus as HigherMemoryReceiptStatus | null,
+      targets: Array.isArray(row.sharedHigherMemoryTargets)
+        ? row.sharedHigherMemoryTargets
+        : [],
+      maintained: row.sharedHigherMemoryMaintained ?? 0,
+      ...(row.sharedHigherMemoryError
+        ? { errorMessage: row.sharedHigherMemoryError }
+        : {}),
+    },
+    actorHigherMemory: {
+      status: row.actorHigherMemoryStatus as HigherMemoryReceiptStatus | null,
+      scopes: row.actorHigherMemoryScopes ?? [],
+      maintained: row.actorHigherMemoryMaintained ?? 0,
+      ...(row.actorHigherMemoryError
+        ? { errorMessage: row.actorHigherMemoryError }
+        : {}),
+    },
     updatedAt: row.updatedAt.toISOString(),
   }));
 }
@@ -371,20 +463,29 @@ export function buildChatAssertionReceiptInstruction(input: {
     const text = input.messageTextById.get(receipt.clientMessageId)
       ?.replace(/\s+/g, " ").trim().slice(0, 160);
     const objects = receipt.affectedObjects.map((object) => object.canonicalName).join("、");
+    const sharedHigherMemory = receipt.sharedHigherMemory.status
+      ? `共享 Higher Memory：${receipt.sharedHigherMemory.status}` +
+        `（维护 ${receipt.sharedHigherMemory.maintained} 项）`
+      : "共享 Higher Memory：无执行回执";
+    const actorHigherMemory = receipt.actorHigherMemory.status
+      ? `Actor Higher Memory：${receipt.actorHigherMemory.status}` +
+        `（维护 ${receipt.actorHigherMemory.maintained} 项）`
+      : "Actor Higher Memory：无执行回执";
     return [
       `- 用户消息${text ? `“${text}”` : ` ${receipt.clientMessageId}`}`,
       `状态：${statusLabel[receipt.status]}`,
       `发布 Assertion：${receipt.publishedAssertions} 条`,
       objects ? `关联 Object：${objects}` : "关联 Object：无",
+      sharedHigherMemory,
+      actorHigherMemory,
       receipt.outcomeSummary ? `说明：${receipt.outcomeSummary}` : undefined,
     ].filter(Boolean).join("；");
   });
   return [
-    "【此前对话的 Chat → Assertion 处理回执】",
-    "以下是系统持久化的操作状态，只用于回答‘刚才是否进入记忆/处理到哪一步’；它不是业务事实、不是 Evidence，也不能替代搜索。",
-    "published 才表示 Assertion 已实际存在；queued/running 尚未完成；skipped 表示处理完成但未写入；failed 表示失败。",
+    "## 最近对话的持久化处理状态",
+    "仅当当前问题明确指向下列某条消息的写入结果时使用；否则忽略。它不是业务事实、人物认知或检索证据。published/completed 表示成功；queued/running 尚未完成；skipped 未写入；failed 表示失败。",
     ...lines,
-    "如需精确 Assertion ID、Object ID 或最新轮询结果，调用 readMemoryWriteStatus；不要把‘已排队’表述成‘已经写入’。",
+    "需要最新或更详细的单条状态时调用 readMemoryWriteStatus。",
   ].join("\n");
 }
 
@@ -421,8 +522,8 @@ export function createMemoryWriteStatusTool(input: {
     .join("\n");
   return tool({
     description: [
-      "读取当前对话历史中 Chat → Assertion 的真实处理回执。",
-      "用户询问‘刚才的信息有没有记住、Assertion 是否写入、后台处理到哪一步’时使用；",
+      "读取当前对话历史中 Chat → Assertion 以及共享/Actor Higher Memory 的真实处理回执。",
+      "用户询问‘刚才的信息有没有记住、Assertion 是否写入、Higher Memory 是否形成、后台处理到哪一步或为什么没有形成’时使用；",
       "它读取操作状态，不搜索组织知识，也不会创建 Evidence、Assertion、Object 或 Higher Memory。",
       "published 才代表已写入；queued/running/skipped/failed 都不能声称已发布。",
       "必须根据用户所指的原话，从下列先前用户消息中选择并显式传入 messageId；",

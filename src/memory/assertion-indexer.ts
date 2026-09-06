@@ -11,6 +11,11 @@ type PreparedAssertion = {
   renderedText: string;
 };
 
+export type MemoryAssertionCorpus = {
+  assertionCount: number;
+  revision: string;
+};
+
 function positiveIntegerEnvironment(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
@@ -31,13 +36,24 @@ function sameProfile(left: EmbeddingBatch, right: EmbeddingBatch): boolean {
     left.dimension === right.dimension;
 }
 
-/**
- * 重建 Shared Brain 的完整 Assertion 索引。
- * 资料库发布先原子替换来源记忆，再调用本函数；索引失败不会回滚已发布的可读 Assertion。
- */
-export async function rebuildMemoryAssertionIndex(input: {
-  onProgress?: (completed: number, total: number) => Promise<void> | void;
-}): Promise<{ indexedAssertionCount: number; profile?: EmbeddingBatch }> {
+export function memoryAssertionCorpusRevision(
+  assertions: ReadonlyArray<Pick<PreparedAssertion, "assertionId" | "contentHash">>,
+): string {
+  const digest = createHash("sha256");
+  for (const assertion of [...assertions].sort((left, right) =>
+    left.assertionId.localeCompare(right.assertionId)
+  )) {
+    digest.update(assertion.assertionId.length.toString());
+    digest.update(":");
+    digest.update(assertion.assertionId);
+    digest.update(":");
+    digest.update(assertion.contentHash);
+    digest.update("\n");
+  }
+  return digest.digest("hex");
+}
+
+async function loadPreparedAssertions(): Promise<PreparedAssertion[]> {
   const database = getDatabase();
   const assertions = await database.memoryAssertion.findMany({
     orderBy: { id: "asc" },
@@ -52,17 +68,7 @@ export async function rebuildMemoryAssertionIndex(input: {
       },
     },
   });
-  if (!assertions.length) {
-    await database.$transaction([
-      database.memoryAssertionEmbedding.deleteMany({
-        where: {},
-      }),
-      database.memoryAssertionEmbeddingIndex.deleteMany(),
-    ]);
-    return { indexedAssertionCount: 0 };
-  }
-
-  const prepared: PreparedAssertion[] = assertions.map((assertion) => {
+  return assertions.map((assertion) => {
     const references = assertion.objectLinks.map(({ globalObject }) => ({
       globalObjectId: globalObject.id,
       canonicalName: globalObject.canonicalName,
@@ -78,6 +84,40 @@ export async function rebuildMemoryAssertionIndex(input: {
       contentHash: createHash("sha256").update(renderedText, "utf8").digest("hex"),
     };
   });
+}
+
+export async function inspectMemoryAssertionCorpus(): Promise<MemoryAssertionCorpus> {
+  const assertions = await loadPreparedAssertions();
+  return {
+    assertionCount: assertions.length,
+    revision: memoryAssertionCorpusRevision(assertions),
+  };
+}
+
+/**
+ * 重建 Shared Brain 的完整 Assertion 索引。
+ * 资料库发布先原子替换来源记忆，再由持久化任务调用本函数；
+ * 索引失败不会回滚已发布的可读 Assertion，成功时才原子替换整份向量。
+ */
+export async function rebuildMemoryAssertionIndex(input: {
+  onProgress?: (completed: number, total: number) => Promise<void> | void;
+}): Promise<{
+  indexedAssertionCount: number;
+  revision: string;
+  profile?: EmbeddingBatch;
+}> {
+  const database = getDatabase();
+  const prepared = await loadPreparedAssertions();
+  const revision = memoryAssertionCorpusRevision(prepared);
+  if (!prepared.length) {
+    await database.$transaction([
+      database.memoryAssertionEmbedding.deleteMany({
+        where: {},
+      }),
+      database.memoryAssertionEmbeddingIndex.deleteMany(),
+    ]);
+    return { indexedAssertionCount: 0, revision };
+  }
 
   const batchSize = positiveIntegerEnvironment("MEMORY_EMBEDDING_BATCH_SIZE", 64);
   const timeoutMs = positiveIntegerEnvironment("MEMORY_EMBEDDING_TIMEOUT_MS", 120_000);
@@ -104,8 +144,34 @@ export async function rebuildMemoryAssertionIndex(input: {
   }
 
   await database.$transaction(async (transaction) => {
-    const currentCount = await transaction.memoryAssertion.count();
-    if (currentCount !== indexed.length) {
+    const currentAssertions = await transaction.memoryAssertion.findMany({
+      orderBy: { id: "asc" },
+      select: {
+        id: true,
+        globalStatementTemplateMarkdown: true,
+        objectLinks: {
+          orderBy: { globalObjectId: "asc" },
+          select: {
+            globalObject: { select: { id: true, canonicalName: true } },
+          },
+        },
+      },
+    });
+    const currentRevision = memoryAssertionCorpusRevision(currentAssertions.map((assertion) => {
+      const renderedText = renderResolvedAssertion({
+        globalStatementTemplateMarkdown: assertion.globalStatementTemplateMarkdown,
+        references: assertion.objectLinks.map(({ globalObject }) => ({
+          globalObjectId: globalObject.id,
+          canonicalName: globalObject.canonicalName,
+        })),
+        assertionKey: assertion.id,
+      });
+      return {
+        assertionId: assertion.id,
+        contentHash: createHash("sha256").update(renderedText, "utf8").digest("hex"),
+      };
+    }));
+    if (currentRevision !== revision) {
       throw new Error("生成 embedding 期间 Shared Brain Assertion 已改变");
     }
     await transaction.memoryAssertionEmbedding.deleteMany();
@@ -129,5 +195,5 @@ export async function rebuildMemoryAssertionIndex(input: {
       },
     });
   }, { maxWait: 30_000, timeout: 300_000 });
-  return { indexedAssertionCount: indexed.length, profile };
+  return { indexedAssertionCount: indexed.length, revision, profile };
 }

@@ -1,5 +1,6 @@
 import { getDatabase } from "@/db";
 import { embedMemoryQueries } from "@/memory/embedding-client";
+import { ensureMemoryAssertionIndexInBackground } from "@/memory/assertion-index-job";
 import {
   renderResolvedAssertion,
   type ResolvedAssertionReference,
@@ -490,6 +491,9 @@ function channelTrace<T extends RankedObjectHit | RankedAssertionHit>(input: {
 }
 
 export async function locateObjectAssertions(input: MemoryQuery): Promise<MemoryRetrievalResult> {
+  // Do not block this read. A missing/stale materialized index is repaired by a
+  // durable background job and remains explicit under MEMORY_VECTOR_REQUIRED.
+  ensureMemoryAssertionIndexInBackground();
   const started = Date.now();
   const database = getDatabase();
   const [embeddingIndex, globalObjectCount, objectFragmentCount, surfaceFormCount,

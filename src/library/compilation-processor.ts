@@ -2,17 +2,24 @@ import {
   extractJsonMiddleware,
   generateText,
   NoObjectGeneratedError,
+  NoOutputGeneratedError,
   Output,
   wrapLanguageModel,
 } from "ai";
 import { z } from "zod";
 
-import { getChatModel, getVisionModel } from "@/ai/provider";
+import {
+  getChatModel,
+  getVisionModel,
+  withStructuredOutputGuidance,
+} from "@/ai/provider";
 import { getDatabase } from "@/db";
+import { retryableModelOutputFailure } from "@/library/compilation-failure";
 import {
   textModelConcurrency,
   visionModelConcurrency,
 } from "@/library/compilation-concurrency";
+import { InFlightGate } from "@/library/request-limiter";
 import {
   libraryCatalogCompilationOutputSchema,
   libraryCoarseCompilationOutputSchema,
@@ -26,46 +33,13 @@ import {
 import { runDeepColdStart } from "@/library/deep-compilation-worker";
 import { extractLibraryPreview, type LibraryPreview } from "@/library/preview-extractor";
 
-export class ModelInFlightGate {
-  private active = 0;
-  private readonly queue: Array<(release: () => void) => void> = [];
-
-  constructor(readonly limit: number) {
-    if (!Number.isInteger(limit) || limit < 1) throw new Error("模型在途请求上限必须大于 0");
-  }
-
-  get activeCount(): number {
-    return this.active;
-  }
-
-  async acquire(onQueued?: (position: number) => void | Promise<void>): Promise<() => void> {
-    if (this.active < this.limit) {
-      this.active += 1;
-      return this.releaseHandle();
-    }
-    const position = this.queue.length + 1;
-    const lease = new Promise<() => void>((resolve) => this.queue.push(resolve));
-    await onQueued?.(position);
-    return lease;
-  }
-
-  private releaseHandle(): () => void {
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      const next = this.queue.shift();
-      if (next) next(this.releaseHandle());
-      else this.active -= 1;
-    };
-  }
-}
+export { InFlightGate as ModelInFlightGate } from "@/library/request-limiter";
 
 const modelRuntime = globalThis as typeof globalThis & {
   libraryModelRuntime?: {
     nextTextCallAt: number;
     nextVisionCallAt: number;
-    gates: Map<string, ModelInFlightGate>;
+    gates: Map<string, InFlightGate>;
   };
 };
 
@@ -92,11 +66,22 @@ function structuredVisionModel() {
   });
 }
 
-export function parseEmbeddedModelJson<T>(
+export type EmbeddedModelJsonResult<T> =
+  | { success: true; value: T }
+  | { success: false; error: string };
+
+function zodIssueSummary(error: z.ZodError): string {
+  return [...new Set(error.issues.map((issue) => {
+    const path = issue.path.length ? issue.path.map(String).join(".") : "<root>";
+    return `${path}: ${issue.message}`;
+  }))].slice(0, 8).join("；");
+}
+
+export function inspectEmbeddedModelJson<T>(
   text: string | undefined,
   schema: z.ZodType<T>,
-): T | undefined {
-  if (!text?.trim()) return undefined;
+): EmbeddedModelJsonResult<T> {
+  if (!text?.trim()) return { success: false, error: "模型没有返回 JSON 正文" };
   const withoutFence = text.trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/i, "")
@@ -107,15 +92,62 @@ export function parseEmbeddedModelJson<T>(
   if (objectStart >= 0 && objectEnd > objectStart) {
     candidates.push(withoutFence.slice(objectStart, objectEnd + 1));
   }
+  const schemaErrors: string[] = [];
+  const syntaxErrors: string[] = [];
   for (const candidate of [...new Set(candidates)]) {
     try {
-      const parsed = schema.safeParse(JSON.parse(candidate));
-      if (parsed.success) return parsed.data;
-    } catch {
+      const value = JSON.parse(candidate) as unknown;
+      const values = [value];
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const entries = Object.entries(value);
+        if (entries.length === 1) values.push(entries[0][1]);
+      }
+      for (const possibleOutput of values) {
+        const parsed = schema.safeParse(possibleOutput);
+        if (parsed.success) return { success: true, value: parsed.data };
+        schemaErrors.push(zodIssueSummary(parsed.error));
+      }
+    } catch (error) {
+      syntaxErrors.push(error instanceof Error ? error.message : String(error));
       // Try the next bounded candidate. Schema validation remains mandatory.
     }
   }
-  return undefined;
+  if (schemaErrors.length) {
+    return {
+      success: false,
+      error: `Schema 校验失败：${[...new Set(schemaErrors)].slice(0, 2).join("；")}`,
+    };
+  }
+  return {
+    success: false,
+    error: `JSON 语法无效：${[...new Set(syntaxErrors)].slice(0, 2).join("；")}`,
+  };
+}
+
+export function parseEmbeddedModelJson<T>(
+  text: string | undefined,
+  schema: z.ZodType<T>,
+): T | undefined {
+  const result = inspectEmbeddedModelJson(text, schema);
+  return result.success ? result.value : undefined;
+}
+
+export function shouldUseTextJsonCleanRetry(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  const messages: string[] = [];
+  while (current && !seen.has(current) && seen.size < 8) {
+    seen.add(current);
+    if (NoOutputGeneratedError.isInstance(current) || NoObjectGeneratedError.isInstance(current)) {
+      return true;
+    }
+    messages.push(current instanceof Error ? current.message : String(current));
+    current = typeof current === "object" && "cause" in current
+      ? (current as { cause?: unknown }).cause
+      : undefined;
+  }
+  return /response_format.*unavailable|unavailable.*response_format|response did not match schema|type validation failed|未通过\s*(?:json\s*)?schema|模型引用了未提供的证据编号|grounded assertion 不能使用|结果未形成有效闭环|没有返回 json 正文/iu
+    .test(messages.join("\n"));
 }
 
 function enrichedObjectError(error: unknown): Error {
@@ -134,13 +166,13 @@ function enrichedObjectError(error: unknown): Error {
 
 type ModelRequestKind = "text" | "vision";
 
-function modelGate(kind: ModelRequestKind): ModelInFlightGate {
+function modelGate(kind: ModelRequestKind): InFlightGate {
   const limit = kind === "text" ? textModelConcurrency() : visionModelConcurrency();
   const key = `${kind}:${limit}`;
   const state = runtime();
   let gate = state.gates.get(key);
   if (!gate) {
-    gate = new ModelInFlightGate(limit);
+    gate = new InFlightGate(limit);
     state.gates.set(key, gate);
   }
   return gate;
@@ -208,6 +240,12 @@ const storedPreviewSchema = z.object({
   warning: z.string().optional(),
 });
 
+const deepParallelUnitSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["source", "global_object", "object_admission"]),
+  statusMessage: z.string(),
+});
+
 const runCheckpointSchema = z.object({
   version: z.literal("library-run-checkpoint.v1"),
   extractedPreview: storedPreviewSchema.optional(),
@@ -226,15 +264,19 @@ const runCheckpointSchema = z.object({
     sourceCompilation: z.string().optional(),
     globalResolution: z.string().optional(),
     globalAssertions: z.string().optional(),
-    parallelUnits: z.array(z.object({
-      id: z.string(),
-      kind: z.enum(["source", "global_object"]),
-      statusMessage: z.string(),
-    })).max(32).optional(),
   }).optional(),
+  runtime: z.object({
+    parallelUnits: z.array(deepParallelUnitSchema).transform((units) => units.slice(-32)),
+  }).optional().catch(undefined),
 });
 
 type RunCheckpoint = z.infer<typeof runCheckpointSchema>;
+
+export function isReusableExtractedPreview(
+  preview: z.infer<typeof storedPreviewSchema> | undefined,
+): boolean {
+  return Boolean(preview?.text?.trim());
+}
 
 type ModelRetryEvent = {
   kind: ModelRequestKind;
@@ -243,9 +285,13 @@ type ModelRetryEvent = {
 
 type ModelRetryReporter = (event: ModelRetryEvent) => Promise<void>;
 
-function loadRunCheckpoint(run: ProcessingRun): RunCheckpoint {
-  const parsed = runCheckpointSchema.safeParse(run.checkpoint);
+export function normalizeLibraryRunCheckpoint(value: unknown): RunCheckpoint {
+  const parsed = runCheckpointSchema.safeParse(value);
   return parsed.success ? parsed.data : { version: "library-run-checkpoint.v1" };
+}
+
+function loadRunCheckpoint(run: ProcessingRun): RunCheckpoint {
+  return normalizeLibraryRunCheckpoint(run.checkpoint);
 }
 
 function storablePreview(preview: LibraryPreview): z.infer<typeof storedPreviewSchema> {
@@ -369,6 +415,15 @@ export function materializeLibraryAssessment(input: ({
   const canonicalizeLabels = (values: string[]) => [...new Set(values.map((label) =>
     canonicalLabels.get(normalizeCandidateLabel(label)) ?? label.trim()
   ))];
+  const evidenceStatementsByLabel = new Map<string, string[]>();
+  for (const candidate of [...input.output.referenceCandidates, ...assertions]) {
+    for (const label of candidate.objectLabels) {
+      const normalized = normalizeCandidateLabel(label);
+      const statements = evidenceStatementsByLabel.get(normalized) ?? [];
+      if (!statements.includes(candidate.statement)) statements.push(candidate.statement);
+      evidenceStatementsByLabel.set(normalized, statements.slice(0, 16));
+    }
+  }
   const existingByLabel = new Map(input.existingObjects.map((object) => [
     normalizeCandidateLabel(object.canonicalName),
     object,
@@ -392,18 +447,14 @@ export function materializeLibraryAssessment(input: ({
     })),
     objectCandidates: [...canonicalLabels].map(([normalized, label]) => {
       const existing = existingByLabel.get(normalized);
-      return existing
-        ? {
-            label,
-            action: "bind_existing",
-            existingObjectId: existing.id,
-            reason: `名称与已有 Object“${existing.canonicalName}”精确匹配`,
-          }
-        : {
-            label,
-            action: "new_candidate",
-            reason: "来源中的主要 Object 名称，等待 Global Object 归并",
-          };
+      return {
+        label,
+        action: "new_candidate",
+        reason: existing
+          ? `与已有 Object“${existing.canonicalName}”字面一致，仍需结合当前证据确认词义`
+          : "来源中的主要 Object 名称，等待 Global Object 归并",
+        evidenceStatements: evidenceStatementsByLabel.get(normalized) ?? [],
+      };
     }),
   });
 }
@@ -413,7 +464,8 @@ export function coarseCompilationInstructions(): string[] {
     "人已经选择对此文件进行粗编译；不要重新判断处理档位，也不要输出你的分析过程。",
     "请顺着文档自身的结构，将内容分成少量有意义的大主题，并为每个主题生成一条 Reference Assertion。优先沿用原文标题；不要逐句拆分，也不要把明显不同的主题强行合并。",
     "另外提取能够脱离文档上下文单独使用的重要事实作为 grounded Assertion。由文档内容决定提取多少，不必凑数。",
-    "为 Reference 和 Assertion 标注正文明确出现的主要活动、组织、地点、角色或文件主题 Object 名称，不要猜测。",
+    "每条 Reference 和 Assertion 必须至少关联一个正文明确出现、能够跨语境持续指称的 Object。从属于某个具名对象的事实，应在 statement 中明确该对象并加入 objectLabels；确实找不到明确对象时不要输出该条候选。",
+    "Object 可以是活动、组织、地点、人物、角色类别、群体、实物或具体文件/制度。宽泛主题、属性、动作、结果和修辞不是 Object；例如‘推动乒乓球运动发展’里的‘乒乓球’通常只是主题，不能仅凭这个短语提升为独立 Object。",
   ];
 }
 
@@ -447,7 +499,7 @@ function semanticPrompt(input: {
         "如果内容有可供检索的具体语义，生成 Reference 并标注它涉及的 Object 名称；否则返回空的 referenceCandidates。",
       ]),
     "每条 Reference 或 Assertion 只选择一个最直接的 sourceId；只能使用证据目录中存在的编号，不要抄写原文。grounded Assertion 不得使用 F 开头的文件语境证据。",
-    "objectLabels 只写对象名称，不要写 action、Object ID 或其他协议字段。如果与已有 Object 候选明确同指，优先逐字使用其 canonicalName。",
+    "objectLabels 只写能够稳定指称具体 referent 的对象名称，不要写宽泛主题、action、Object ID 或其他协议字段。如果与已有 Object 候选明确同指，优先逐字使用其 canonicalName；同名字面也可能是不同词义，必须以当前证据为准。",
     "summary 只概括文档内容，不要描述任务、输出格式、失败原因或纠正过程。",
     `文件名：${input.run.libraryNode.name}`,
     `导入相对路径：${input.run.libraryNode.originalRelativePath ?? "未知"}`,
@@ -590,17 +642,26 @@ async function observeImageWithVisionModel(
   run: ProcessingRun,
   preview: LibraryPreview,
   onModelRetry: ModelRetryReporter,
+  preferTextJson = false,
 ): Promise<LibraryPreview> {
   if (!preview.image) return preview;
   const modelId = process.env.AI_VISION_MODEL?.trim();
   if (!modelId) throw new Error("AI_VISION_MODEL is not configured");
   const basePrompt = visualObservationPrompt(run);
   let lastError = "";
+  let useTextJsonFallback = preferTextJson;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const prompt = attempt === 1
       ? basePrompt
       : `${basePrompt}\n\n上一次输出未通过结构校验：${lastError.slice(0, 800)}\n请重新生成一份完整结果，不要续写或解释上一次输出。`;
     try {
+      const requestPrompt = withStructuredOutputGuidance({
+        prompt,
+        schema: libraryVisualObservationOutputSchema,
+        name: "library_visual_observation",
+        kind: "vision",
+        ...(useTextJsonFallback ? { mode: "text_json" as const } : {}),
+      });
       const output = await withModelRequest({
         kind: "vision",
         onWaiting: (message) => updateRun(run.id, { statusMessage: message }),
@@ -609,26 +670,43 @@ async function observeImageWithVisionModel(
         }),
         request: async () => {
           try {
+            const messages = [{
+              role: "user" as const,
+              content: [
+                { type: "text" as const, text: requestPrompt },
+                {
+                  type: "file" as const,
+                  data: preview.image!,
+                  mediaType: preview.imageMediaType ?? run.sourceBlob.mimeType,
+                },
+              ],
+            }];
+            if (useTextJsonFallback) {
+              const result = await generateText({
+                model: structuredVisionModel(),
+                messages,
+                temperature: 0,
+                maxRetries: 0,
+              });
+              const recovered = parseEmbeddedModelJson(
+                result.text,
+                libraryVisualObservationOutputSchema,
+              );
+              if (recovered) return recovered;
+              throw new Error(
+                `视觉模型纯文本 JSON 后备输出未通过 Schema；rawResponse=${result.text.slice(0, 2_000)}`,
+              );
+            }
             const result = await generateText({
               model: structuredVisionModel(),
-              messages: [{
-                role: "user",
-                content: [
-                  { type: "text", text: prompt },
-                  {
-                    type: "file",
-                    data: preview.image!,
-                    mediaType: preview.imageMediaType ?? run.sourceBlob.mimeType,
-                  },
-                ],
-              }],
+              messages,
               output: Output.object({
                 schema: libraryVisualObservationOutputSchema,
                 name: "library_visual_observation",
                 description: "只把图片转换为带不确定性标记的 OCR 和视觉观察文字",
               }),
               temperature: 0,
-              maxOutputTokens: 4_000,
+              maxRetries: 0,
             });
             return result.output;
           } catch (error) {
@@ -651,7 +729,9 @@ async function observeImageWithVisionModel(
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
       lastError = failure.message;
-      if (attempt === 2) throw failure;
+      if (!shouldUseTextJsonCleanRetry(error)) throw failure;
+      if (attempt === 2) throw retryableModelOutputFailure(failure);
+      useTextJsonFallback = true;
       await onModelRetry({ kind: "vision", error: lastError });
     }
   }
@@ -689,6 +769,7 @@ async function analyzeWithTextModel(
   run: ProcessingRun,
   preview: LibraryPreview,
   onModelRetry: ModelRetryReporter,
+  preferTextJson = false,
 ): Promise<LibraryCompilationAssessment> {
   const searchText = [run.libraryNode.name, run.libraryNode.originalRelativePath, preview.text]
     .filter(Boolean)
@@ -702,11 +783,24 @@ async function analyzeWithTextModel(
   });
   const basePrompt = semanticPrompt({ run, preview, existingObjects, evidence });
   let lastError = "";
+  let useTextJsonFallback = preferTextJson;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const prompt = attempt === 1
       ? basePrompt
       : `${basePrompt}\n\n上一次输出未通过结构或证据编号校验：${lastError.slice(0, 1_000)}\n请只根据原始输入重新生成一份完整结果；summary 只概括文档内容，不要续写、修补或解释上一次输出。`;
     try {
+      const outputSchema = run.profile === "coarse"
+        ? libraryCoarseCompilationOutputSchema
+        : libraryCatalogCompilationOutputSchema;
+      const outputName = run.profile === "coarse"
+        ? "coarse_library_compilation"
+        : "catalog_library_compilation";
+      const requestPrompt = withStructuredOutputGuidance({
+        prompt,
+        schema: outputSchema,
+        name: outputName,
+        ...(useTextJsonFallback ? { mode: "text_json" as const } : {}),
+      });
       const output = await withModelRequest({
         kind: "text",
         onWaiting: (message) => updateRun(run.id, { statusMessage: message }),
@@ -717,30 +811,52 @@ async function analyzeWithTextModel(
           LibraryCoarseCompilationOutput | LibraryCatalogCompilationOutput
         > => {
           try {
+            if (useTextJsonFallback) {
+              const result = await generateText({
+                model: structuredTextModel(),
+                messages: [{ role: "user", content: requestPrompt }],
+                temperature: 0.1,
+                maxRetries: 0,
+              });
+              const recovered = inspectEmbeddedModelJson(result.text, outputSchema);
+              if (recovered.success) return recovered.value;
+              throw new Error(
+                [
+                  `文字模型纯文本 JSON 后备输出无效：${recovered.error}`,
+                  `finishReason=${result.finishReason}`,
+                  result.rawFinishReason ? `rawFinishReason=${result.rawFinishReason}` : undefined,
+                  `reasoningChars=${result.reasoningText?.length ?? 0}`,
+                  `responseChars=${result.text.length}`,
+                  result.usage.outputTokens === undefined
+                    ? undefined
+                    : `outputTokens=${result.usage.outputTokens}`,
+                ].filter(Boolean).join("；"),
+              );
+            }
             if (run.profile === "coarse") {
               const result = await generateText({
                 model: structuredTextModel(),
-                messages: [{ role: "user", content: prompt }],
+                messages: [{ role: "user", content: requestPrompt }],
                 output: Output.object({
                   schema: libraryCoarseCompilationOutputSchema,
                   name: "coarse_library_compilation",
                   description: "选择证据编号，生成粗粒度 Reference、可选 grounded Assertion 与 Object 名称",
                 }),
                 temperature: 0.1,
-                maxOutputTokens: 6_000,
+                maxRetries: 0,
               });
               return result.output;
             }
             const result = await generateText({
               model: structuredTextModel(),
-              messages: [{ role: "user", content: prompt }],
+              messages: [{ role: "user", content: requestPrompt }],
               output: Output.object({
                 schema: libraryCatalogCompilationOutputSchema,
                 name: "catalog_library_compilation",
                 description: "选择证据编号生成轻量 Reference 和 Object 名称，或返回空结果",
               }),
               temperature: 0.1,
-              maxOutputTokens: 3_000,
+              maxRetries: 0,
             });
             return result.output;
           } catch (error) {
@@ -776,7 +892,9 @@ async function analyzeWithTextModel(
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
       lastError = failure.message;
-      if (attempt === 2) throw failure;
+      if (!shouldUseTextJsonCleanRetry(error)) throw failure;
+      if (attempt === 2) throw retryableModelOutputFailure(failure);
+      useTextJsonFallback = true;
       await onModelRetry({ kind: "text", error: lastError });
     }
   }
@@ -828,10 +946,10 @@ async function processDeep(run: ProcessingRun): Promise<void> {
         await saveRunCheckpoint(run.id, checkpoint);
       },
       onProgress: async ({ progressCurrent, statusMessage, parallelUnits }) => {
-        if (parallelUnits && checkpoint.deep) {
+        if (parallelUnits) {
           checkpoint = {
             ...checkpoint,
-            deep: { ...checkpoint.deep, parallelUnits },
+            runtime: { parallelUnits: parallelUnits.slice(-32) },
           };
         }
         await updateRun(run.id, {
@@ -913,16 +1031,19 @@ async function processSemantic(run: ProcessingRun): Promise<void> {
       statusMessage: `${kind === "vision" ? "视觉" : "文字"}模型输出未通过校验，正在当前模型步骤内纠正重试`,
     });
   };
+  const isImage = run.sourceBlob.mimeType.startsWith("image/");
+  const reusableExtractedPreview = !isImage && isReusableExtractedPreview(
+    checkpoint.extractedPreview,
+  );
   await updateRun(run.id, {
     stage: "parsing",
     progressCurrent: 1,
-    statusMessage: checkpoint.extractedPreview || checkpoint.semanticPreview
+    statusMessage: reusableExtractedPreview || checkpoint.semanticPreview
       ? "从 checkpoint 恢复语义预览"
       : "提取低成本语义预览",
   });
-  const isImage = run.sourceBlob.mimeType.startsWith("image/");
   let preview: LibraryPreview;
-  if (!isImage && checkpoint.extractedPreview) {
+  if (reusableExtractedPreview && checkpoint.extractedPreview) {
     preview = checkpoint.extractedPreview;
   } else if (isImage && checkpoint.semanticPreview) {
     preview = checkpoint.semanticPreview;
@@ -971,7 +1092,12 @@ async function processSemantic(run: ProcessingRun): Promise<void> {
         progressCurrent: 2,
         statusMessage: "视觉模型正在执行 OCR 与画面观察",
       });
-      semanticPreview = await observeImageWithVisionModel(run, preview, reportModelRetry);
+      semanticPreview = await observeImageWithVisionModel(
+        run,
+        preview,
+        reportModelRetry,
+        shouldUseTextJsonCleanRetry(checkpoint.modelRetries?.lastError),
+      );
       checkpoint = { ...checkpoint, semanticPreview: storablePreview(semanticPreview) };
       await saveRunCheckpoint(run.id, checkpoint);
     }
@@ -992,6 +1118,7 @@ async function processSemantic(run: ProcessingRun): Promise<void> {
     run,
     semanticPreview,
     reportModelRetry,
+    shouldUseTextJsonCleanRetry(checkpoint.modelRetries?.lastError),
   );
   if (!checkpoint.assessment) {
     checkpoint = { ...checkpoint, assessment };

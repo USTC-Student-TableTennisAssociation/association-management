@@ -165,13 +165,19 @@ export function buildCapabilityInstructions(input: {
 
   if (has(toolNames, "inspectObjectIdentity")) {
     sections.push(
-      "对象名称重叠、别名纠正、合并或拆分前，使用 inspectObjectIdentity 核对真实名称来源、Assertion 引用和正式 View 依赖；相似、包含或共现不能证明同一身份。",
+      "对象名称重叠、别名纠正、合并或拆分前，使用本轮 O# 调用 inspectObjectIdentity，核对真实名称来源、Assertion 引用和该 Object 实际关联的正式 View；相似、包含或共现不能证明同一身份。",
     );
   }
 
   if (has(toolNames, "proposeObjectChange")) {
     sections.push(
       "proposeObjectChange 只生成可审计建议，用户批准前不改变数据库。没有足够来源完成身份分区时暂缓，不要猜测合并或拆分。",
+    );
+  }
+
+  if (has(toolNames, "proposeActorObjectBinding")) {
+    sections.push(
+      "只有用户亲口确认自己就是本轮某个 O# 人物并要求关联时，才调用 proposeActorObjectBinding；必须提交用户逐字确认原话。同名不等于同一人，Proposal 批准前账号身份没有改变。Actor 私有 Higher Memory 归属于登录 Actor，不依赖这项 Object 绑定。",
     );
   }
 

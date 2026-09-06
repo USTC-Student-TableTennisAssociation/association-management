@@ -136,7 +136,7 @@ export default function UserAdminPage() {
             </select>
             <button disabled={busy || !displayName.trim() || !loginName.trim() || password.length < 8} className="h-10 rounded-lg bg-emerald-800 px-4 text-sm font-medium text-white disabled:bg-zinc-300">创建</button>
             <label className="md:col-span-5 text-xs text-zinc-500">
-              可选：同名 Object 存在歧义时，填写系统提示的 Actor Object ID
+              可选：已经明确确认身份时，填写要关联的 Actor Object ID；留空会创建独立身份锚点
               <input aria-label="Actor Object ID" placeholder="UUID" value={actorObjectId} onChange={(event) => setActorObjectId(event.target.value)} className="mt-2 h-9 w-full rounded-lg border border-zinc-300 px-3 text-sm text-zinc-800" />
             </label>
           </form>

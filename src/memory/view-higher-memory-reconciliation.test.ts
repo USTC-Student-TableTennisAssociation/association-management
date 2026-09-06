@@ -91,14 +91,9 @@ beforeEach(() => {
     __transaction: transaction,
   };
   aiState.generateText.mockResolvedValue({
-    toolCalls: [{
-      toolName: "submitViewHigherMemory",
-      input: {
-        memory: {
+    output: { memory: {
           contentMarkdown: "## 当前阶段\n\n该活动运营视图目前已从筹备转入执行阶段；场地与审批仍是需要持续推进的工作方向，后续协作应继续以视图实时读取结果为准。这个摘要只保留阶段、模式和未结方向，不替代具体卡片状态。",
-        },
-      },
-    }],
+        } },
   });
 });
 
@@ -107,8 +102,9 @@ describe("View Higher Memory reconciliation after a View change", () => {
     await expect(reconcileViewHigherMemoryFromViewChange(input())).resolves.toBe(1);
 
     const call = aiState.generateText.mock.calls[0][0];
-    expect(call.tools).toHaveProperty("submitViewHigherMemory");
-    expect(call.toolChoice).toEqual({ type: "tool", toolName: "submitViewHigherMemory" });
+    expect(call.output).toBeDefined();
+    expect(call.tools).toBeUndefined();
+    expect(call.toolChoice).toBeUndefined();
     expect(call.prompt).toContain("本地业务活动");
     expect(call.prompt).toContain("场地与审批");
     expect(call.prompt).toContain("此前活动仍处于筹备阶段");
@@ -133,12 +129,7 @@ describe("View Higher Memory reconciliation after a View change", () => {
   });
 
   it("keeps the previous View memory when there is no useful replacement", async () => {
-    aiState.generateText.mockResolvedValue({
-      toolCalls: [{
-        toolName: "submitViewHigherMemory",
-        input: { memory: null },
-      }],
-    });
+    aiState.generateText.mockResolvedValue({ output: { memory: null } });
 
     await expect(reconcileViewHigherMemoryFromViewChange(input())).resolves.toBe(0);
 

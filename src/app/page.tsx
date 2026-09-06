@@ -1,6 +1,6 @@
 "use client";
 
-import { useChat } from "@ai-sdk/react";
+import { Chat, useChat } from "@ai-sdk/react";
 import {
   DefaultChatTransport,
   getToolName,
@@ -49,6 +49,11 @@ import { WorkPresentationHost } from "@/view-runtime/presentation-host/work-pres
 const initialMessages: ClubChatMessage[] = [];
 
 type ChatHistoryState = "loading" | "ready" | "error";
+type ConversationChatSession = {
+  chat: Chat<ClubChatMessage>;
+  historyState: "idle" | ChatHistoryState;
+  historyError?: string;
+};
 type CurrentUser = {
   userId: string;
   loginName: string;
@@ -93,6 +98,13 @@ function messageReasoning(message: ClubChatMessage) {
     .filter((part) => part.type === "reasoning")
     .map((part) => part.text)
     .join("");
+}
+
+function messageAnswerIsComplete(message: ClubChatMessage | undefined) {
+  return message?.role === "assistant" && message.parts.some(
+    (part) => part.type === "data-answerLifecycle" &&
+      part.data.phase === "answer_complete",
+  );
 }
 
 type ToolActivity = {
@@ -601,6 +613,9 @@ function ChatSurface({
 }) {
   const compositionActive = useRef(false);
   const isSending = status === "submitted" || status === "streaming";
+  const answerIsComplete = messageAnswerIsComplete(messages.at(-1));
+  const isGenerating = isSending && !answerIsComplete;
+  const isFinalizing = isSending && answerIsComplete;
   const canInteract = historyState === "ready";
   const canSend = input.trim().length > 0 && !isSending && canInteract;
   const isEmptyChat = !compact && messages.length === 0 && historyState === "ready";
@@ -608,6 +623,8 @@ function ChatSurface({
     ? "正在恢复对话…"
     : historyState === "error"
       ? historyError
+      : isFinalizing
+        ? "回答已完成，正在保存对话…"
       : error?.message;
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -639,7 +656,7 @@ function ChatSurface({
             const isUser = message.role === "user";
             const text = finalStepMessageText(message);
             const reasoning = messageReasoning(message);
-            const isActiveAssistant = !isUser && isSending && messageIndex === messages.length - 1;
+            const isActiveAssistant = !isUser && isGenerating && messageIndex === messages.length - 1;
             const activities = toolActivities(message, isActiveAssistant);
             const search = message.parts.filter((part) => part.type === "data-memorySearch").at(-1)?.data;
             const proposals = message.parts.filter((part) => part.type === "data-viewCommandProposal");
@@ -826,11 +843,11 @@ function ChatSurface({
               compositionActive.current = false;
             }}
             rows={1}
-            disabled={isSending || !canInteract}
+            disabled={!canInteract}
             className="min-h-8 max-h-40 min-w-0 flex-1 resize-none bg-transparent px-2.5 py-1 text-[14px] leading-6 text-zinc-950 outline-none [field-sizing:content] placeholder:text-zinc-400 disabled:opacity-60"
             placeholder={compact ? "继续提问" : "向 Sydaris 提问"}
           />
-          {isSending ? (
+          {isGenerating ? (
             <button type="button" onClick={onStop} aria-label="停止生成" className="flex size-8 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-white transition hover:bg-zinc-700">
               <span className="size-2.5 rounded-[2px] bg-white" />
             </button>
@@ -965,7 +982,7 @@ function SourceDocumentDialog({
 }
 
 export default function Home() {
-  const [input, setInput] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [surfaceMode, setSurfaceMode] = useState<SurfaceMode>("work");
   const [libraryMode, setLibraryMode] = useState<LibraryMode>("files");
   const [activeWorkViewKey, setActiveWorkViewKey] = useState<string>();
@@ -997,13 +1014,47 @@ export default function Home() {
       },
     }),
   }), []);
-  const { messages, sendMessage, status, stop, error, clearError, setMessages } = useChat<ClubChatMessage>({
+  const bootstrapChat = useMemo(() => new Chat<ClubChatMessage>({
+    id: "sydaris-bootstrap",
     messages: initialMessages,
     transport,
+  }), [transport]);
+  const chatSessionsRef = useRef(new Map<string, ConversationChatSession>());
+  const [, setChatSessionRevision] = useState(0);
+  const [bootstrapError, setBootstrapError] = useState<string>();
+  const [navigationError, setNavigationError] = useState<string>();
+  let activeSession: ConversationChatSession | undefined;
+  if (activeConversationId) {
+    activeSession = chatSessionsRef.current.get(activeConversationId);
+    if (!activeSession) {
+      activeSession = {
+        chat: new Chat<ClubChatMessage>({
+          id: activeConversationId,
+          messages: initialMessages,
+          transport,
+        }),
+        historyState: "idle",
+      };
+      chatSessionsRef.current.set(activeConversationId, activeSession);
+    }
+  }
+  const activeChat = activeSession?.chat ?? bootstrapChat;
+  const { messages, sendMessage, status, stop, error, clearError } = useChat<ClubChatMessage>({
+    chat: activeChat,
   });
-  const [historyState, setHistoryState] = useState<ChatHistoryState>("loading");
-  const [historyError, setHistoryError] = useState<string>();
+  const historyState: ChatHistoryState = bootstrapError
+    ? "error"
+    : activeSession?.historyState === "ready" || activeSession?.historyState === "error"
+      ? activeSession.historyState
+      : "loading";
+  const historyError = bootstrapError ?? activeSession?.historyError ?? navigationError;
+  const input = activeConversationId ? drafts[activeConversationId] ?? "" : "";
   const isSending = status === "submitted" || status === "streaming";
+
+  const setInput = useCallback((value: string) => {
+    if (!activeConversationId) return;
+    setDrafts((current) => ({ ...current, [activeConversationId]: value }));
+  }, [activeConversationId]);
 
   const refreshViewAfterProposal = useCallback((viewKey: string) => {
     setViewRefreshRevisions((current) => ({
@@ -1071,12 +1122,11 @@ export default function Home() {
         setActiveConversationId(items[0].id);
       } catch (bootstrapError) {
         if (controller.signal.aborted) return;
-        setHistoryError(
+        setBootstrapError(
           bootstrapError instanceof Error
             ? bootstrapError.message
             : "无法初始化 Sydaris。",
         );
-        setHistoryState("error");
       }
     }
 
@@ -1086,10 +1136,12 @@ export default function Home() {
 
   useEffect(() => {
     if (!activeConversationId) return;
-    const controller = new AbortController();
+    const session = chatSessionsRef.current.get(activeConversationId);
+    if (!session || session.historyState !== "idle") return;
+    session.historyState = "loading";
+    setChatSessionRevision((current) => current + 1);
     void fetch(`/api/chat/conversations/${activeConversationId}/messages`, {
       cache: "no-store",
-      signal: controller.signal,
     }).then(async (response) => {
       const body = await response.json() as {
         messages?: ClubChatMessage[];
@@ -1098,18 +1150,19 @@ export default function Home() {
       if (!response.ok || !Array.isArray(body.messages)) {
         throw new Error(body.error ?? "无法从服务器恢复对话。");
       }
-      setMessages([
+      session.chat.messages = [
         ...initialMessages,
         ...body.messages.filter((message) => message.id !== "welcome"),
-      ]);
-      setHistoryState("ready");
+      ];
+      session.historyState = "ready";
+      session.historyError = undefined;
+      setChatSessionRevision((current) => current + 1);
     }).catch((loadError) => {
-      if (controller.signal.aborted) return;
-      setHistoryError(loadError instanceof Error ? loadError.message : "无法恢复对话。");
-      setHistoryState("error");
+      session.historyError = loadError instanceof Error ? loadError.message : "无法恢复对话。";
+      session.historyState = "error";
+      setChatSessionRevision((current) => current + 1);
     });
-    return () => controller.abort();
-  }, [activeConversationId, setMessages]);
+  }, [activeConversationId]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -1156,17 +1209,22 @@ export default function Home() {
   function submit(content: string) {
     const text = content.trim();
     if (!text || !activeConversationId || isSending || historyState !== "ready") return;
+    const conversationId = activeConversationId;
     clearError();
     setInput("");
     void sendMessage(
       { text },
-      { body: { pageContext, conversationId: activeConversationId } },
-    ).finally(() => void refreshConversations());
+      { body: { pageContext, conversationId } },
+    ).finally(() => {
+      setChatSessionRevision((current) => current + 1);
+      void refreshConversations();
+    });
   }
 
   function invokeAI(invocation: AIInvocation) {
     const message = invocation.message.trim();
     if (!message || !activeConversationId || isSending || historyState !== "ready") return;
+    const conversationId = activeConversationId;
     clearError();
     setInput("");
     setLayoutMode("collaborate");
@@ -1180,19 +1238,19 @@ export default function Home() {
           },
         ],
       },
-      { body: { pageContext, conversationId: activeConversationId } },
-    ).finally(() => void refreshConversations());
+      { body: { pageContext, conversationId } },
+    ).finally(() => {
+      setChatSessionRevision((current) => current + 1);
+      void refreshConversations();
+    });
   }
 
   function activateConversation(conversationId: string) {
-    setHistoryState("loading");
-    setHistoryError(undefined);
-    setMessages(initialMessages);
+    setNavigationError(undefined);
     setActiveConversationId(conversationId);
   }
 
   async function createConversation() {
-    if (isSending) return;
     const response = await fetch("/api/chat/conversations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1203,9 +1261,18 @@ export default function Home() {
       error?: string;
     };
     if (!response.ok || !body.conversation) {
-      setHistoryError(body.error ?? "无法创建对话。");
+      setNavigationError(body.error ?? "无法创建对话。");
       return;
     }
+    setNavigationError(undefined);
+    chatSessionsRef.current.set(body.conversation.id, {
+      chat: new Chat<ClubChatMessage>({
+        id: body.conversation.id,
+        messages: initialMessages,
+        transport,
+      }),
+      historyState: "ready",
+    });
     setConversations((current) => [body.conversation!, ...current]);
     activateConversation(body.conversation.id);
     setLayoutMode((current) => current === "conversation" ? current : "collaborate");
@@ -1223,7 +1290,8 @@ export default function Home() {
   }
 
   async function archiveConversation(conversation: ConversationSummary) {
-    if (isSending) return;
+    const conversationStatus = chatSessionsRef.current.get(conversation.id)?.chat.status;
+    if (conversationStatus === "submitted" || conversationStatus === "streaming") return;
     const response = await fetch(`/api/chat/conversations/${conversation.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -1561,9 +1629,8 @@ export default function Home() {
 
       <button
         type="button"
-        disabled={isSending}
         onClick={() => void createConversation()}
-        className="mt-0.5 flex h-[34px] w-full shrink-0 items-center gap-2.5 rounded-lg px-2 text-left text-[12px] font-medium text-zinc-800 transition hover:bg-[#ececec] disabled:opacity-40"
+        className="mt-0.5 flex h-[34px] w-full shrink-0 items-center gap-2.5 rounded-lg px-2 text-left text-[12px] font-medium text-zinc-800 transition hover:bg-[#ececec]"
       >
         <svg viewBox="0 0 24 24" className="size-[18px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
           <path d="M12 20H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h10" strokeLinecap="round" strokeLinejoin="round" />
@@ -1584,13 +1651,19 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => {
-                  if (isSending || conversation.id === activeConversationId) return;
+                  if (conversation.id === activeConversationId) return;
                   activateConversation(conversation.id);
                 }}
                 className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-[12px] leading-5"
                 title={conversation.title}
               >
                 {conversation.title}
+                {(() => {
+                  const conversationStatus = chatSessionsRef.current.get(conversation.id)?.chat.status;
+                  return conversationStatus === "submitted" || conversationStatus === "streaming"
+                    ? <span className="ml-1 inline-block size-1.5 animate-pulse rounded-full bg-emerald-600" aria-label="正在运行" />
+                    : null;
+                })()}
               </button>
               <button type="button" aria-label="重命名对话" title="重命名" onClick={() => void renameConversation(conversation)} className="hidden px-1 py-1.5 text-[11px] text-zinc-500 hover:text-zinc-950 group-hover:block">✎</button>
               <button type="button" aria-label="归档对话" title="归档" onClick={() => void archiveConversation(conversation)} className="hidden px-1.5 py-1.5 text-sm leading-none text-zinc-500 hover:text-zinc-950 group-hover:block">×</button>

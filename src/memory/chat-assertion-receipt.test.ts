@@ -14,6 +14,7 @@ import {
   listChatAssertionReceipts,
   loadChatAssertionReceiptInput,
   queueChatAssertionReceipt,
+  recordHigherMemoryReceipt,
   recoverPendingChatAssertionReceipts,
 } from "@/memory/chat-assertion-receipt";
 
@@ -46,6 +47,14 @@ function receiptRow() {
     }],
     outcomeSummary: "成功发布 1 条 Assertion，关联 1 个 Object。",
     errorMessage: null,
+    sharedHigherMemoryStatus: "failed",
+    sharedHigherMemoryTargets: [{ scope: "object", globalObjectId: "object-1" }],
+    sharedHigherMemoryMaintained: 0,
+    sharedHigherMemoryError: "模型结构化提交失败",
+    actorHigherMemoryStatus: "skipped",
+    actorHigherMemoryScopes: [],
+    actorHigherMemoryMaintained: 0,
+    actorHigherMemoryError: null,
     updatedAt: new Date("2026-08-14T01:00:03.000Z"),
   };
 }
@@ -235,6 +244,34 @@ describe("Chat Assertion processing receipts", () => {
     });
   });
 
+  it("records Higher Memory execution independently from Assertion publication", async () => {
+    await recordHigherMemoryReceipt({
+      key: {
+        actorId: "00000000-0000-4000-8000-000000000001",
+        clientMessageId: "message-current",
+      },
+      channel: "shared",
+      status: "failed",
+      targets: [{ scope: "object", globalObjectId: "object-1" }],
+      error: new Error("Thinking mode does not support this tool_choice"),
+    });
+
+    const database = databaseState.database as {
+      memoryChatAssertionReceipt: { updateMany: ReturnType<typeof vi.fn> };
+    };
+    expect(database.memoryChatAssertionReceipt.updateMany).toHaveBeenCalledWith({
+      where: {
+        actorId: "00000000-0000-4000-8000-000000000001",
+        clientMessageId: "message-current",
+      },
+      data: expect.objectContaining({
+        sharedHigherMemoryStatus: "failed",
+        sharedHigherMemoryTargets: [{ scope: "object", globalObjectId: "object-1" }],
+        sharedHigherMemoryError: expect.stringContaining("tool_choice"),
+      }),
+    });
+  });
+
   it("requeues stale background work and returns a bounded recovery batch", async () => {
     const database = databaseState.database as {
       memoryChatAssertionReceipt: {
@@ -288,8 +325,10 @@ describe("Chat Assertion processing receipts", () => {
 
     expect(instruction).toContain("状态：已发布");
     expect(instruction).toContain("关联 Object：雷岳鑫");
-    expect(instruction).toContain("不是业务事实、不是 Evidence");
-    expect(instruction).toContain("published 才表示 Assertion 已实际存在");
+    expect(instruction).toContain("不是业务事实或检索证据");
+    expect(instruction).toContain("published/completed 表示成功");
+    expect(instruction).toContain("共享 Higher Memory：failed");
+    expect(instruction).toContain("Actor Higher Memory：skipped");
   });
 
   it("only lets the status tool inspect messages in the current conversation", async () => {

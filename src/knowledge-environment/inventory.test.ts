@@ -27,6 +27,15 @@ function fakeDependencies() {
         indexedAt: new Date("2026-08-31T00:00:00.000Z"),
       }),
     },
+    memoryAssertionIndexJob: {
+      findUnique: vi.fn().mockResolvedValue({
+        status: "ready",
+        targetAssertionCount: 6,
+        completedAssertionCount: 6,
+        attemptCount: 1,
+        errorMessage: null,
+      }),
+    },
     libraryNode: {
       groupBy: vi.fn().mockResolvedValue([
         {

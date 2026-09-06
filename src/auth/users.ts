@@ -44,24 +44,6 @@ async function resolveActorObject(input: {
     return selected;
   }
 
-  const candidates = await input.database.memoryGlobalObject.findMany({
-    where: {
-      canonicalName: { equals: input.displayName, mode: "insensitive" },
-    },
-    orderBy: { id: "asc" },
-    select: { id: true, canonicalName: true },
-  });
-  if (candidates.length > 1) {
-    throw new AuthUserValidationError(
-      [
-        `当前存在 ${candidates.length} 个同名 Object，请确认后填写对应 Actor Object ID：`,
-        ...candidates.map((candidate) => `${candidate.canonicalName}（${candidate.id}）`),
-      ].join("；"),
-      "ACTOR_OBJECT_AMBIGUOUS",
-    );
-  }
-  if (candidates[0]) return candidates[0];
-
   const id = randomUUID();
   return input.database.memoryGlobalObject.create({
     data: {

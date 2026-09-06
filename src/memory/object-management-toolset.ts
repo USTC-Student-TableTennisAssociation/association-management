@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { ChatAssertionCaptureResult } from "@/memory/chat-assertion";
 import {
+  createActorObjectBindingProposal,
   createObjectChangeProposal,
   inspectObjectIdentity,
 } from "@/memory/object-management-service";
@@ -12,6 +13,13 @@ import {
 } from "@/memory/object-management-types";
 
 export function createObjectManagementToolset(input: {
+  authUser: {
+    userId: string;
+  };
+  resolveObjectReference: (
+    reference: string,
+  ) => { id: string; canonicalName: string } | undefined;
+  conversationUserMessages: Array<{ messageId: string; text: string }>;
   onProposal?: (proposal: ObjectChangeProposalPresentation) => void;
 }) {
   const inspectedObjectIds = new Set<string>();
@@ -24,8 +32,14 @@ export function createObjectManagementToolset(input: {
       "当新名称与已有 Object 重叠、怀疑旧 surface_forms 错误、或考虑改名/合并/拆分时先调用。",
       "Surface/Reference id 只用于精确表达后续 Object Change Proposal，不能当作事实证据。",
     ].join("\n"),
-    inputSchema: z.object({ objectId: z.string().uuid() }),
-    execute: async ({ objectId }) => {
+    inputSchema: z.object({
+      objectRef: z.string().trim().regex(/^O\d+$/)
+        .describe("必须原样使用本轮 Shared Brain 或 View 读取返回的 O#"),
+    }),
+    execute: async ({ objectRef }) => {
+      const resolved = input.resolveObjectReference(objectRef);
+      if (!resolved) throw new Error(`本轮无法解析 Object 引用 ${objectRef}`);
+      const objectId = resolved.id;
       const inspection = await inspectObjectIdentity(objectId);
       inspectedObjectIds.add(objectId);
       return inspection;
@@ -58,6 +72,43 @@ export function createObjectManagementToolset(input: {
             status: proposal.status,
             invalidatesHigherMemory: proposal.invalidatesHigherMemory,
             message: "Object Change Proposal 已进入当前 Chat；只有用户批准后才会原子修改 Object 身份。",
+          };
+        },
+      }),
+      proposeActorObjectBinding: tool({
+        description: [
+          "为当前登录账号提出 Actor Object 身份关联建议；调用本身不会修改数据库。",
+          "只在用户明确表示自己就是本轮已发现的某个 O# 人物，并要求建立关联时使用。",
+          "同名、账号显示名、资料署名或模型推断都不构成确认。confirmationQuote 必须逐字复制本次对话中用户亲口作出的身份确认。",
+          "Runtime 会读取账号当前锚点、目标 Object 及两者真实 View 依赖；批准后才会绑定，必要时原子合并旧的独立账号锚点。",
+        ].join("\n"),
+        inputSchema: z.object({
+          targetObjectRef: z.string().trim().regex(/^O\d+$/)
+            .describe("用户明确确认是自己的目标人物 O#"),
+          confirmationQuote: z.string().trim().min(1).max(1_000)
+            .describe("用户关于自己就是该人物的逐字原话，不能改写"),
+          reason: z.string().trim().min(1).max(1_000),
+        }),
+        execute: async ({ targetObjectRef, confirmationQuote, reason }) => {
+          const resolved = input.resolveObjectReference(targetObjectRef);
+          if (!resolved) throw new Error(`本轮无法解析 Object 引用 ${targetObjectRef}`);
+          const confirmedByUser = input.conversationUserMessages.some(
+            (message) => message.text.includes(confirmationQuote),
+          );
+          if (!confirmedByUser) {
+            throw new Error("confirmationQuote 不是本次对话中用户的逐字原话。");
+          }
+          const proposal = await createActorObjectBindingProposal({
+            authUserId: input.authUser.userId,
+            targetObjectId: resolved.id,
+            confirmationQuote,
+            reason,
+          });
+          input.onProposal?.(proposal);
+          return {
+            proposalId: proposal.id,
+            status: proposal.status,
+            message: "身份关联 Proposal 已进入当前 Chat；只有用户批准后才会绑定或合并 Actor Object。",
           };
         },
       }),

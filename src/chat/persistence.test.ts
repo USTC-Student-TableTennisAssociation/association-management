@@ -5,6 +5,7 @@ import type { ClubChatMessage } from "@/ai/types";
 import {
   appendAssistantTextMessage,
   ChatConversationAccessError,
+  compactChatMessageForPersistence,
   hasPersistableChatContent,
   loadChatMessages,
   saveChatMessage,
@@ -47,6 +48,50 @@ beforeEach(() => {
 });
 
 describe("chat persistence", () => {
+  it("drops raw tool payloads and repeated snapshots before saving assistant history", () => {
+    const message = {
+      id: "assistant-large",
+      role: "assistant",
+      parts: [
+        { type: "step-start" },
+        {
+          type: "dynamic-tool",
+          toolName: "readSourceDocument",
+          toolCallId: "tool-1",
+          state: "output-available",
+          input: { mode: "full" },
+          output: { blocks: [{ markdown: "不应进入聊天历史的大段正文" }] },
+        },
+        {
+          type: "data-memorySearch",
+          data: { mode: "structured", seedMap: { assertions: [{ renderedStatement: "旧快照" }] } },
+        },
+        { type: "step-start" },
+        { type: "text", text: "最终回答" },
+        {
+          type: "data-memorySearch",
+          data: { mode: "structured", seedMap: { assertions: [{ renderedStatement: "最终快照" }] } },
+        },
+        {
+          type: "data-answerLifecycle",
+          data: { phase: "answer_complete" },
+        },
+      ],
+    } as unknown as ClubChatMessage;
+
+    const compacted = compactChatMessageForPersistence(message);
+    const serialized = JSON.stringify(compacted);
+
+    expect(serialized).not.toContain("不应进入聊天历史的大段正文");
+    expect(serialized).not.toContain("旧快照");
+    expect(serialized).toContain("最终回答");
+    expect(serialized).toContain("最终快照");
+    expect(compacted.parts).toContainEqual({
+      type: "data-answerLifecycle",
+      data: { phase: "answer_complete" },
+    });
+  });
+
   it("keeps reasoning-only and stream-status-only assistant diagnostics", () => {
     expect(hasPersistableChatContent({
       id: "assistant-reasoning",

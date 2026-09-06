@@ -7,6 +7,11 @@ import {
   coarseCompilationConcurrency,
   DEEP_FILE_CONCURRENCY,
 } from "@/library/compilation-concurrency";
+import {
+  classifyCompilationFailure,
+  compilationFailureStatusMessage,
+} from "@/library/compilation-failure";
+import { compilationFileGate } from "@/library/compilation-orchestration";
 import { processLibraryCompilationRun } from "@/library/compilation-processor";
 import { processLibraryGlobalResolution } from "@/library/global-object-resolver";
 
@@ -66,11 +71,11 @@ async function processRunUntilSettled(
     if (await pauseRequested(jobId)) return "paused";
     try {
       await processLibraryCompilationRun(run.id);
+      const completedRun = await database.librarySourceProcessingRun.findUnique({
+        where: { id: run.id },
+        select: { status: true },
+      });
       if (run.sourceBlobId) {
-        const completedRun = await database.librarySourceProcessingRun.findUnique({
-          where: { id: run.id },
-          select: { status: true },
-        });
         await database.libraryNode.updateMany({
           where: { blobId: run.sourceBlobId },
           data: {
@@ -81,13 +86,53 @@ async function processRunUntilSettled(
       await recalculateLibraryCompilationJob(jobId);
       return "completed";
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      if (await pauseRequested(jobId)) {
+        await database.librarySourceProcessingRun.update({
+          where: { id: run.id },
+          data: {
+            status: "queued",
+            statusMessage: "已暂停，保留 checkpoint 等待继续",
+            errorMessage: null,
+            completedAt: null,
+          },
+        });
+        if (run.sourceBlobId) {
+          await database.libraryNode.updateMany({
+            where: { blobId: run.sourceBlobId },
+            data: { processingStatus: "queued" },
+          });
+        }
+        await recalculateLibraryCompilationJob(jobId);
+        return "paused";
+      }
+      const failure = classifyCompilationFailure(error);
+      const message = failure.message;
+      if (!failure.retryable) {
+        await database.librarySourceProcessingRun.update({
+          where: { id: run.id },
+          data: {
+            status: "failed",
+            stage: "failed",
+            statusMessage: compilationFailureStatusMessage(failure),
+            errorMessage: message,
+            completedAt: new Date(),
+          },
+        });
+        if (run.sourceBlobId) {
+          await database.libraryNode.updateMany({
+            where: { blobId: run.sourceBlobId },
+            data: { processingStatus: "failed" },
+          });
+        }
+        await recalculateLibraryCompilationJob(jobId);
+        return "completed";
+      }
       const retried = await database.librarySourceProcessingRun.update({
         where: { id: run.id },
         data: {
           status: "queued",
           retryCount: { increment: 1 },
-          statusMessage: "处理失败，将从 checkpoint 自动续跑",
+          statusMessage: compilationFailureStatusMessage(failure),
           errorMessage: message,
           completedAt: null,
         },
@@ -143,6 +188,46 @@ async function runFilePhase(
   return false;
 }
 
+const PROFILE_LABELS = {
+  deep: "深度冷启动",
+  coarse: "粗编译",
+  catalog: "仅归档语义编目",
+} as const;
+
+async function stopUnlessFilesReady(
+  jobId: string,
+  profile?: QueuedRun["profile"],
+): Promise<boolean> {
+  const database = getDatabase();
+  const runs = await database.librarySourceProcessingRun.findMany({
+    where: { jobId, ...(profile ? { profile } : {}) },
+    select: { status: true },
+  });
+  const gate = compilationFileGate(runs.map((run) => run.status));
+  if (gate === "ready") return false;
+
+  const scope = profile ? PROFILE_LABELS[profile] : "所选文件";
+  const message = gate === "failed"
+    ? `${scope}仍有失败文件；请先重试，全部文件草稿成功后才会开始 Global Object 归并`
+    : `${scope}尚未全部完成；Global Object 归并不会启动`;
+  await database.libraryCompilationJob.update({
+    where: { id: jobId },
+    data: {
+      status: "failed",
+      activePhase: null,
+      activeStage: null,
+      globalStatus: "queued",
+      globalStatusMessage: message,
+      globalErrorMessage: null,
+      errorMessage: message,
+      heartbeatAt: new Date(),
+      completedAt: new Date(),
+    },
+  });
+  await recalculateLibraryCompilationJob(jobId);
+  return true;
+}
+
 async function runJob(jobId: string): Promise<void> {
   const database = getDatabase();
   const claimed = await database.libraryCompilationJob.updateMany({
@@ -163,8 +248,12 @@ async function runJob(jobId: string): Promise<void> {
   }, HEARTBEAT_INTERVAL_MS);
   try {
     if (!await runFilePhase(jobId, "deep", DEEP_FILE_CONCURRENCY)) return;
+    if (await stopUnlessFilesReady(jobId, "deep")) return;
     if (!await runFilePhase(jobId, "coarse", coarseCompilationConcurrency())) return;
+    if (await stopUnlessFilesReady(jobId, "coarse")) return;
     if (!await runFilePhase(jobId, "catalog", catalogCompilationConcurrency())) return;
+    if (await stopUnlessFilesReady(jobId, "catalog")) return;
+    if (await stopUnlessFilesReady(jobId)) return;
     await recalculateLibraryCompilationJob(jobId);
     await database.libraryCompilationJob.update({
       where: { id: jobId },
@@ -190,7 +279,29 @@ async function runJob(jobId: string): Promise<void> {
         }
         break;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        if (await pauseRequested(jobId)) {
+          await markPaused(jobId);
+          return;
+        }
+        const failure = classifyCompilationFailure(error);
+        const message = failure.message;
+        if (!failure.retryable) {
+          await database.libraryCompilationJob.update({
+            where: { id: jobId },
+            data: {
+              status: "failed",
+              activePhase: null,
+              activeStage: null,
+              globalStatus: "failed",
+              globalStatusMessage: compilationFailureStatusMessage(failure),
+              globalErrorMessage: message,
+              errorMessage: message,
+              heartbeatAt: new Date(),
+              completedAt: new Date(),
+            },
+          });
+          return;
+        }
         const retried = await database.libraryCompilationJob.update({
           where: { id: jobId },
           data: {
@@ -221,7 +332,35 @@ async function runJob(jobId: string): Promise<void> {
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const failure = classifyCompilationFailure(error);
+    const message = failure.message;
+    if (!failure.retryable) {
+      await database.$transaction([
+        database.librarySourceProcessingRun.updateMany({
+          where: { jobId, status: "running" },
+          data: {
+            status: "failed",
+            stage: "failed",
+            statusMessage: compilationFailureStatusMessage(failure),
+            errorMessage: message,
+            completedAt: new Date(),
+          },
+        }),
+        database.libraryCompilationJob.update({
+          where: { id: jobId },
+          data: {
+            status: "failed",
+            activePhase: null,
+            activeStage: null,
+            heartbeatAt: new Date(),
+            completedAt: new Date(),
+            errorMessage: message,
+          },
+        }),
+      ]).catch(() => undefined);
+      await recalculateLibraryCompilationJob(jobId).catch(() => undefined);
+      return;
+    }
     await database.$transaction([
       database.librarySourceProcessingRun.updateMany({
         where: { jobId, status: "running" },

@@ -1,11 +1,7 @@
-import { generateText } from "ai";
 import { z } from "zod";
 
 import { getChatModel } from "@/ai/provider";
-import {
-  requireStructuredSubmission,
-  structuredSubmissionTool,
-} from "@/ai/structured-submission";
+import { generateStructuredResult } from "@/ai/structured-submission";
 import { getDatabase } from "@/db";
 import {
   buildViewChangeContext,
@@ -48,7 +44,7 @@ function maintenancePrompt(input: ViewHigherMemoryReconciliationInput, previous:
     "authoritativeViewAfterChange 是本轮命令完成后的完整权威 View 快照；commandExecutions 记录实际 Command、差异与事件。previousViewHigherMemory 只用于保持连续性，发生冲突时以当前 View 为准。",
     "保留旧摘要中未被本轮变化推翻的高层理解。如果本轮信息不足以形成更有用的版本，提交 memory: null，数据库会保留旧内容。",
     "正文使用简洁自然的 Markdown，不写生成过程、模型能力、数据库 ID、Card/Object 内部引用或来源列表，也不要声称摘要已经覆盖 View 的全部实时状态。",
-    "完成判断后必须调用 submitViewHigherMemory，不要在普通文本中输出 JSON。",
+    "完成判断后输出符合给定 Schema 的结构化结果。",
     JSON.stringify({
       maintenanceInstant: new Date().toISOString(),
       maintenanceReason: maintenanceReason(input),
@@ -72,24 +68,15 @@ export async function reconcileViewHigherMemoryFromViewChange(
         maintainedAt: previousRow.maintainedAt.toISOString(),
       }
     : null;
-  const result = await generateText({
+  const submission = await generateStructuredResult({
     model: getChatModel(),
-    tools: {
-      submitViewHigherMemory: structuredSubmissionTool({
-        description: "提交该 Business View 更新后的高层动态摘要",
-        schema: viewHigherMemorySubmissionSchema,
-      }),
-    },
-    toolChoice: { type: "tool", toolName: "submitViewHigherMemory" },
+    schema: viewHigherMemorySubmissionSchema,
+    name: "view_higher_memory_reconciliation",
+    description: "提交该 Business View 更新后的高层动态摘要",
     prompt: maintenancePrompt(input, previous),
     temperature: 0.2,
     maxOutputTokens: 8_000,
     timeout: { totalMs: 1_800_000, stepMs: 1_800_000 },
-  });
-  const submission = requireStructuredSubmission({
-    toolCalls: result.toolCalls,
-    toolName: "submitViewHigherMemory",
-    schema: viewHigherMemorySubmissionSchema,
   });
   const memory = submission.memory;
   if (!memory) return 0;

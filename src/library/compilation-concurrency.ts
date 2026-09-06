@@ -26,6 +26,14 @@ export function visionModelConcurrency(): number {
   return configuredConcurrency("AI_VISION_MAX_IN_FLIGHT", 18);
 }
 
+export function mineruApiConcurrency(): number {
+  return configuredConcurrency("MINERU_API_MAX_IN_FLIGHT", 4);
+}
+
+export function mineruApiRequestsPerMinute(): number {
+  return configuredConcurrency("MINERU_API_REQUESTS_PER_MINUTE", 18);
+}
+
 export function coldStartModelConcurrency(): number {
   return configuredConcurrency("COLD_START_MODEL_MAX_IN_FLIGHT", 18);
 }

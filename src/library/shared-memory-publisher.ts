@@ -12,7 +12,7 @@ import {
   libraryReferenceCandidateSchema,
 } from "@/library/compilation-types";
 import type { GlobalObjectDraft } from "@/library/global-object-resolver";
-import { rebuildMemoryAssertionIndex } from "@/memory/assertion-indexer";
+import { queueMemoryAssertionIndexRebuild } from "@/memory/assertion-index-job";
 
 type PreparedBlock = {
   id: string;
@@ -90,7 +90,7 @@ export type SharedMemoryPublicationResult = {
   publishedRunCount: number;
   assertionCount: number;
   objectCount: number;
-  embeddingStatus: "ready" | "unavailable" | "empty";
+  embeddingStatus: "ready" | "queued" | "empty";
   embeddingWarning?: string;
 };
 
@@ -191,6 +191,8 @@ const deepSnapshotSchema = z.object({
 
 const deepResolutionSchema = z.object({
   source_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  rejected_fragment_keys: z.array(z.string()).default([]),
+  deferred_fragment_keys: z.array(z.string()).default([]),
   global_objects: z.array(z.object({
     global_object_id: z.string().uuid(),
     canonical_name: z.string().min(1),
@@ -313,6 +315,7 @@ function commonObjects(
 export function prepareSemanticPublication(
   run: PublicationRun,
   resolvedObjects: GlobalObjectDraft[],
+  disposedMemberKeys: ReadonlySet<string> = new Set(),
 ): PreparedPublication {
   if (!run.sourceBlobId || !run.sourceBlob || !run.assessment) {
     throw new Error("语义编译运行缺少 Blob 或 Assessment");
@@ -328,7 +331,9 @@ export function prepareSemanticPublication(
   const runDrafts = draftsForRun(run.id, resolvedObjects);
   const draftByNormalizedLabel = new Map<string, GlobalObjectDraft>();
   for (const [index, candidate] of objectCandidates.entries()) {
-    const draft = draftForMemberKey(`${run.id}:assessment:${index}`, resolvedObjects);
+    const memberKey = `${run.id}:assessment:${index}`;
+    if (disposedMemberKeys.has(memberKey)) continue;
+    const draft = draftForMemberKey(memberKey, resolvedObjects);
     draftByNormalizedLabel.set(normalizedLabel(candidate.label), draft);
   }
   for (const draft of runDrafts) {
@@ -504,6 +509,10 @@ export async function prepareDeepPublication(
     });
   });
   const surfaceOwnerByAtom = new Map<string, string>();
+  const disposedFragmentKeys = new Set([
+    ...resolution.rejected_fragment_keys,
+    ...resolution.deferred_fragment_keys,
+  ]);
   for (const object of resolution.global_objects) {
     for (const atomId of object.surface_atom_ids) {
       surfaceOwnerByAtom.set(atomId, object.global_object_id);
@@ -566,6 +575,8 @@ export async function prepareDeepPublication(
       createdAt: new Date(source.created_at),
     });
     for (const fragment of source.object_fragments) {
+      const fragmentKey = `fragment:${source.region_node_id}:${fragment.fragment_id}`;
+      if (disposedFragmentKeys.has(fragmentKey)) continue;
       const preparedFragment: PreparedFragment = {
         id: randomUUID(),
         sourceRegionId,
@@ -774,7 +785,7 @@ async function commitPublications(
       }),
     });
     if (publications.length) {
-      // 内容已变更后不对外声称旧向量索引仍然完整；事务提交后会尝试全量重建。
+      // 内容已变更后不对外声称旧向量索引仍然完整；事务提交后会排队持久化重建任务。
       await transaction.memoryAssertionEmbeddingIndex.deleteMany();
     }
 
@@ -793,6 +804,7 @@ async function commitPublications(
         assertionCoverage: { none: {} },
         higherMemory: { is: null },
         relatedViewCards: { none: {} },
+        authUsers: { none: {} },
       },
     });
 
@@ -817,6 +829,7 @@ async function commitPublications(
 export async function publishLibraryRunsToSharedMemory(input: {
   jobId: string;
   resolvedObjects: GlobalObjectDraft[];
+  disposedMemberKeys?: ReadonlySet<string>;
 }): Promise<SharedMemoryPublicationResult> {
   const database = getDatabase();
   const runs = await loadRuns(input.jobId);
@@ -824,7 +837,11 @@ export async function publishLibraryRunsToSharedMemory(input: {
   for (const run of runs) {
     publications.push(run.profile === "deep"
       ? await prepareDeepPublication(run, input.resolvedObjects)
-      : prepareSemanticPublication(run, input.resolvedObjects));
+      : prepareSemanticPublication(
+          run,
+          input.resolvedObjects,
+          input.disposedMemberKeys,
+        ));
   }
   await database.libraryCompilationJob.update({
     where: { id: input.jobId },
@@ -837,19 +854,11 @@ export async function publishLibraryRunsToSharedMemory(input: {
   const assertionTotal = await database.memoryAssertion.count();
   if (assertionTotal > 0) {
     try {
-      await rebuildMemoryAssertionIndex({
-        onProgress: async (completed, total) => {
-          await database.libraryCompilationJob.update({
-            where: { id: input.jobId },
-            data: {
-              globalStatusMessage: `Shared Brain 向量索引 ${completed}/${total}`,
-            },
-          });
-        },
-      });
-      embeddingStatus = "ready";
+      const indexing = await queueMemoryAssertionIndexRebuild();
+      embeddingStatus = indexing.status === "ready" ? "ready" : "queued";
     } catch (error) {
-      embeddingStatus = "unavailable";
+      // Assertion 已经成功发布。若任务表暂时不可用，保留明确告警；应用启动/读取补偿仍会再次发现缺口。
+      embeddingStatus = "queued";
       embeddingWarning = error instanceof Error ? error.message : String(error);
     }
   }
@@ -860,8 +869,8 @@ export async function publishLibraryRunsToSharedMemory(input: {
   await database.libraryCompilationJob.update({
     where: { id: input.jobId },
     data: {
-      globalStatusMessage: embeddingStatus === "unavailable"
-        ? `Shared Brain 已发布 ${assertionCount} 条 Assertion；向量索引暂不可用`
+      globalStatusMessage: embeddingStatus === "queued"
+        ? `Shared Brain 已发布 ${assertionCount} 条 Assertion；向量索引已进入后台队列`
         : `Shared Brain 已发布 ${assertionCount} 条 Assertion、${objectCount} 个 Object`,
     },
   });
