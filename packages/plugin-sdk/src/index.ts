@@ -26,6 +26,7 @@ export type SlotKey = string;
 export type ObjectId = string;
 export type CommandKey = string;
 export type ViewQueryKey = string;
+export type ViewOperationKey = string;
 export type SemVer = string;
 export type VersionRange = string;
 export type AiWritePolicy = "approval_required" | "auto_execute";
@@ -62,6 +63,14 @@ export type ViewReactionKnowledgeStatus =
   | "completed"
   | "failed";
 
+export type ViewReactionEvidenceStatus =
+  | "not_checked"
+  | "consistent"
+  | "conflict"
+  | "insufficient"
+  | "not_applicable"
+  | "failed";
+
 export type ViewReactionTarget =
   | { kind: "card"; cardId: CardId; cardTypeKey: CardTypeKey }
   | {
@@ -87,6 +96,7 @@ export interface ViewReaction {
   attention: {
     policy: ViewReactionAttentionPolicy;
     status: ViewReactionAttentionStatus;
+    evidenceStatus: ViewReactionEvidenceStatus;
     message?: string;
     reason?: string;
     completedAt?: string;
@@ -202,6 +212,8 @@ export interface ViewManifest {
   schemaVersion: string;
   description: string;
   retrievalDescription?: string;
+  aiWriteCapabilities?: readonly string[];
+  dataBoundaries?: readonly string[];
   aiSemanticInstructions?: string;
   specializedLabel?: string;
   defaultSettings: ViewSettings;
@@ -351,10 +363,52 @@ export interface ViewQueryDefinition<Input = unknown, Output = unknown> {
   ): ViewQueryOutcome<Output>;
 }
 
+export interface ViewOperationToolCall {
+  capabilityKey: ToolCapabilityKey;
+  capabilityVersion: SemVer;
+  providerId: string;
+  input: unknown;
+}
+
+export interface ViewOperationCommandCall {
+  commandKey: CommandKey;
+  commandVersion?: string;
+  input: unknown;
+  expectedStateVersion?: string;
+}
+
+/** Runtime-owned capabilities exposed to one trusted, server-side View Operation. */
+export interface ViewOperationContext {
+  viewKey: ViewKey;
+  actor: ActorContext;
+  executeTool(input: ViewOperationToolCall): Promise<unknown>;
+  dispatchCommand(input: ViewOperationCommandCall): Promise<ViewCommandResult>;
+}
+
+/**
+ * A user-triggered server workflow owned by a View Plugin.
+ *
+ * Operations may orchestrate declared Tool Capabilities and same-View system
+ * Commands without importing host Runtime implementations.
+ */
+export interface ViewOperationDefinition<Input = unknown, Output = unknown> {
+  key: ViewOperationKey;
+  version: SemVer;
+  label: string;
+  description: string;
+  requiredPermissions: readonly string[];
+  requiresCapabilities: readonly ToolCapabilityRequirement[];
+  commands: readonly CommandKey[];
+  inputSchema: ContractSchema<Input>;
+  outputSchema: ContractSchema<Output>;
+  execute(context: ViewOperationContext, input: Input): Promise<Output>;
+}
+
 export interface ViewModule {
   manifest: ViewManifest;
   schema: ViewSchema;
   queries: readonly ViewQueryDefinition[];
+  operations?: readonly ViewOperationDefinition[];
   commands: readonly CommandDefinition[];
   invariants: readonly BusinessInvariant[];
   events: readonly DomainEventDefinition[];
@@ -441,13 +495,29 @@ export type SkillViewAccess =
       viewKey: ViewKey;
       schemaVersion: string;
       mode: "read";
+      /** Card contracts relevant to this workflow's planning context. */
+      planningCardTypes?: readonly CardTypeKey[];
     }
   | {
       viewKey: ViewKey;
       schemaVersion: string;
       mode: "write";
       commands: readonly CommandKey[];
+      /** Card contracts relevant to this workflow's planning context. */
+      planningCardTypes?: readonly CardTypeKey[];
     };
+
+/**
+ * Optional, model-independent gate for a Skill's mutating capabilities.
+ *
+ * The field belongs to the Skill input contract. Read and discussion work
+ * remains available for every value; View Commands and Resource Operations
+ * are granted only when the current activation value is allowed here.
+ */
+export interface SkillActionActivation {
+  inputField: string;
+  allowedValues: readonly (string | number | boolean)[];
+}
 
 /**
  * Host resource permissions used by a Skill outside Business Views.
@@ -476,6 +546,7 @@ export interface SkillExtension<Input = unknown> {
   inputSchema: ContractSchema<Input>;
   instructions: string;
   viewAccess: readonly SkillViewAccess[];
+  actionActivation?: SkillActionActivation;
   /** Host resources this workflow may mutate through Runtime approval gates. */
   resourceAccess?: readonly SkillResourceAccess[];
   /** Activation fails unless a compatible Contract and Provider are installed. */
@@ -585,6 +656,12 @@ export interface AIInvocation {
   };
 }
 
+export type ConversationNoticeRequest = {
+  kind: "view_reaction";
+  viewKey: ViewKey;
+  reactionId: string;
+};
+
 export interface PresentationProps {
   viewKey: string;
   refreshRevision?: number;
@@ -593,6 +670,7 @@ export interface PresentationProps {
   activeConversationId?: string;
   onOpenInspector: () => void;
   onInvokeAI: (invocation: AIInvocation) => void;
+  onOpenConversationNotice: (request: ConversationNoticeRequest) => void;
 }
 
 export function definePlugin<const Plugin extends PluginManifest>(plugin: Plugin): Plugin {
@@ -601,4 +679,12 @@ export function definePlugin<const Plugin extends PluginManifest>(plugin: Plugin
 
 export function defineView<const View extends ViewModule>(view: View): View {
   return view;
+}
+
+export function defineViewOperation<
+  Input,
+  Output,
+  const Operation extends ViewOperationDefinition<Input, Output>,
+>(operation: Operation): Operation {
+  return operation;
 }

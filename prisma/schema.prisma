@@ -578,13 +578,14 @@ model MemoryActorHigherMemory {
 
 /// Actor 的私有 AI 对话。共享组织认知通过 Assertion / Business View 汇合，不通过暴露完整对话汇合。
 model ChatConversation {
-  id            String    @id @default(uuid()) @db.Uuid
-  actorId       String    @map("actor_id") @db.Uuid
-  title         String    @default("新对话") @db.Text
-  archivedAt    DateTime? @map("archived_at") @db.Timestamptz(3)
-  lastMessageAt DateTime  @default(now()) @map("last_message_at") @db.Timestamptz(3)
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                  String    @id @default(uuid()) @db.Uuid
+  actorId             String    @map("actor_id") @db.Uuid
+  title               String    @default("新对话") @db.Text
+  archivedAt          DateTime? @map("archived_at") @db.Timestamptz(3)
+  lastMessageAt       DateTime  @default(now()) @map("last_message_at") @db.Timestamptz(3)
+  nextMessagePosition Int       @default(0) @map("next_message_position")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   actor             MemoryActor                  @relation(fields: [actorId], references: [id], onDelete: Cascade)
   messages          ChatMessage[]
@@ -646,6 +647,7 @@ model ChatMessage {
   conversation ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, clientMessageId])
+  @@unique([conversationId, position])
   @@index([conversationId, position, createdAt])
   @@map("chat_messages")
 }
@@ -1025,6 +1027,8 @@ model ViewChangeReaction {
   knowledgePolicy       String                      @map("knowledge_policy") @db.Text
   knowledgeStatus       ViewReactionKnowledgeStatus @map("knowledge_status")
   guidanceJson          Json                        @default("[]") @map("guidance_json") @db.JsonB
+  evidenceStatus        String                      @default("not_checked") @map("evidence_status") @db.Text
+  evidenceJson          Json                        @default("{}") @map("evidence_json") @db.JsonB
   message               String?                     @db.Text
   reason                String?                     @db.Text
   attentionErrorMessage String?                     @map("attention_error_message") @db.Text

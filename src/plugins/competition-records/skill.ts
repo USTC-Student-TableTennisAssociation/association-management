@@ -31,7 +31,6 @@ export const competitionSeriesCuratorSkill: SkillExtension = {
       mode: "write",
       commands: ["competition.organize_series"],
     },
-    { viewKey: "society_information", schemaVersion: "5", mode: "read" },
   ],
   requiresCapabilities: [],
 };

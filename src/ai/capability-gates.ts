@@ -44,6 +44,7 @@ export type OpenedCapabilities = {
   viewStateOpened: boolean;
   lastViewKey?: string;
   openedViewKeys: Set<string>;
+  observedViewKeys: Set<string>;
   artifacts: boolean;
   libraryIndexRead: boolean;
   sharedBrain: boolean;
@@ -56,6 +57,7 @@ export function createOpenedCapabilities(): OpenedCapabilities {
     viewStateOpened: false,
     lastViewKey: undefined,
     openedViewKeys: new Set(),
+    observedViewKeys: new Set(),
     artifacts: false,
     libraryIndexRead: false,
     sharedBrain: false,
@@ -136,14 +138,17 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
         offset: z.number().int().min(0).default(0),
         limit: z.number().int().min(1).max(100).default(50),
       }),
-      execute: ({ viewKey, cardTypeKeys, query, offset = 0, limit = 50 }) =>
-        handlers.listViewCards({
+      execute: async ({ viewKey, cardTypeKeys, query, offset = 0, limit = 50 }) => {
+        const result = await handlers.listViewCards({
           viewKey,
           ...(cardTypeKeys ? { cardTypeKeys } : {}),
           ...(query ? { query } : {}),
           offset,
           limit,
-        }),
+        });
+        state.observedViewKeys.add(viewKey);
+        return result;
+      },
     }),
     readViewState: tool({
       description:
@@ -169,6 +174,7 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
         state.viewStateOpened = true;
         state.lastViewKey = viewKey;
         state.openedViewKeys.add(viewKey);
+        state.observedViewKeys.add(viewKey);
         return result;
       },
     }),
@@ -208,15 +214,25 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
     openActions: tool({
       description:
         "当用户需要修改正式 Business View、Object 身份或 Library 结构，或者本轮查询已经发现值得正式化的稳定 View 缺口时，打开对应提议能力。" +
-        "business_view 必须在读取当前 View 后打开；打开只授予下一步能力，不代表已经生成 Proposal。所有变更都先形成 Proposal，不直接生效。",
+        "business_view 必须显式给出目标 viewKey，并先观察该 View：创建或发现可用 listViewCards，修改已有实体使用 readViewState。打开只授予下一步能力，不代表已经生成 Proposal。所有变更都先形成 Proposal，不直接生效。",
       inputSchema: z.object({
         area: z.enum(["business_view", "object", "library"]),
+        viewKey: handlers.viewKeySchema.optional()
+          .describe("area=business_view 时必填；必须是本次要修改的 View key"),
         reason: z.string().trim().min(1).max(300),
       }),
-      execute: async ({ area, reason }) => {
+      execute: async ({ area, viewKey, reason }) => {
+        if (area === "business_view" && !viewKey) {
+          return {
+            opened: false,
+            area,
+            reason,
+            next: "打开 Business View Actions 时必须明确提供目标 viewKey。",
+          };
+        }
         const authorization = handlers.authorizeAction?.(
           area,
-          state.lastViewKey,
+          area === "business_view" ? viewKey : undefined,
         );
         if (authorization && !authorization.allowed) {
           return {
@@ -226,14 +242,15 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
             next: authorization.reason ?? "当前工作流不允许打开该 Action 区域。",
           };
         }
-        if (area === "business_view" && !state.viewStateOpened) {
+        if (area === "business_view" && !state.observedViewKeys.has(viewKey!)) {
           return {
             opened: false,
             area,
             reason,
-            next: "先调用 readViewState 读取具体业务目标的正式 View 当前状态，再重新调用 openActions。",
+            next: "先观察目标 View：创建或发现 Card 时调用 listViewCards，修改已有实体时调用 readViewState；然后使用同一 viewKey 重新打开 Actions。",
           };
         }
+        if (area === "business_view") state.lastViewKey = viewKey;
         state.actionAreas.add(area);
         return {
           opened: "actions",
@@ -244,8 +261,8 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
             : area === "object"
               ? "Object 身份检查与 Proposal 能力将在下一步可用；Runtime 会检查该 Object 实际关联的正式 View，不需要先任选一个 View。"
               : "对应读取与 Proposal 能力将在下一步可用；请先核对当前状态再提议。",
-          ...(area === "business_view" && state.lastViewKey
-            ? { contract: handlers.describeBusinessViewActions(state.lastViewKey) }
+          ...(area === "business_view" && viewKey
+            ? { contract: handlers.describeBusinessViewActions(viewKey) }
             : {}),
         };
       },
@@ -258,7 +275,9 @@ export const TURN_KERNEL_INSTRUCTIONS = `
 
 - 需要调用工具时直接调用，不要先输出计划、寒暄或“我来查一下”等过渡正文；工具完成后的最终回答再自然说明结果。
 - 问候、闲聊、改写、翻译、总结用户已给文字，以及不依赖 Sydaris 内部资料的任务，直接回答。
+- 结合最近尚未完成的用户目标理解追问；除非用户明确转向新任务，否则追问只改变当前问题，不替换整体目标。
 - 用户明确点名某个已安装 Skill，或当前任务与 Skill 目标高度匹配时，先调用 activateSkill。不同 Skill 可以在同一轮按需组合；Skill 激活后必须遵守其 View/Command、Resource Operation 边界和专用指令，不得用普通对话模式绕过 Skill Runtime 的写入约束。
+- Skill 返回的 viewPlanningContract 是检索前的 Schema 字段清单；完整建立或补全任务先按该清单规划证据覆盖，再搜索和提议，不要只检索用户示例或 Skill 描述里点名的字段。
 - View Catalog 是已安装 View Plugin 的权威静态定义。用户询问 View 是什么、职责、Card 类型或专业查询能力时，直接依据 Catalog 回答，禁止调用 readViewState，也不要把 View 名当成业务实体目标。
 - 用户询问整个 View 当前收录了什么、有哪些 Card，或尚不知道具体业务实体名称时，调用 listViewCards；可以使用 View Catalog 的 Card 类型筛选。数量盘点可先用 inspectKnowledgeEnvironment：若该 View 明确为 0 Card 就直接回答；大于 0 且用户要内容时再浏览。不得借 Library 文件名或 Shared Brain 猜测正式 View 中的实体。listViewCards 返回 truncated=true 时继续翻页，未读完前不能声称列出了全部内容。
 - 需要理解某个具体业务实体或一张已发现 Card 在 Sydaris 正式 View 中的详细当前状态时，调用 readViewState。targets 必须是具体实体名称、本轮真实 O# 或 listViewCards/readViewState 返回的 V# card_ref，不能填写 View key、View label 或抽象业务类别；已有 O#/V# 时优先精确定位。只有当前状态读取明确不足时才 expandEvidence。
@@ -273,7 +292,7 @@ export const TURN_KERNEL_INSTRUCTIONS = `
 - Library 的 profile、执行 status 和发布状态是三个独立维度。不得把 catalog 当成“尚未执行”的同义词，也不得把 deep 当成所有文件必须经过的下一阶段；以 Library Processing Catalog 为准。
 - 原文与 Assertion 是并列的知识入口，不是固定的最后核验层：窄事实优先 Assertion；宽综合优先高价值来源的目录和章节。
 - 问题同时涉及“正式业务现状”和“资料/历史依据”时，应同时读取 View State 并检索 Shared Brain 或 Library，不得因为先打开了其中一层就停止检查其他必要层。
-- 改变正式 Business View 时，先调用 readViewState 读取具体目标的真实当前状态，再打开 business_view actions；打开后必须真实调用 runViewCommand，文字说明不能代替 Proposal。Object 身份操作先取得本轮 O#，再打开 object actions；inspectObjectIdentity 会返回该 Object 实际关联的 View 依赖，不要为了开门而任选一个 View。需要整理 Library 时可直接打开 library actions。所有修改只创建 Proposal。
+- 改变正式 Business View 时必须先观察并显式指定目标 viewKey：新建首个 Card 或尚无具体实体时用 listViewCards，修改已有实体时用 readViewState；随后以同一 viewKey 打开 business_view actions。打开后必须真实调用 runViewCommand，文字说明不能代替 Proposal。Object 身份操作先取得本轮 O#，再打开 object actions；inspectObjectIdentity 会返回该 Object 实际关联的 View 依赖，不要为了开门而任选一个 View。需要整理 Library 时可直接打开 library actions。所有修改只创建 Proposal。
 - 登录名或显示名相同不能证明用户就是某个知识库人物。用户明确自认并要求关联时，重新检索得到该人物的本轮 O#，打开 object actions，并用用户逐字确认创建 proposeActorObjectBinding Proposal；批准前不得声称已经绑定。
 - 用户明确点名某个 Command 时，确认目标身份、当前 View 状态和该 Command 必填输入后即可打开并执行对应 action；不要为了补齐不属于该 Command 的可选资料而推迟 Proposal。
 - Proposal 是可审阅草稿。用户明确允许“先填、之后再改”时，完整提交证据支持的明确对象；可选字段不确定可以留空或披露推断，不能因此静默少做。只有身份歧义、当前状态冲突或必要字段无法确定时才询问。

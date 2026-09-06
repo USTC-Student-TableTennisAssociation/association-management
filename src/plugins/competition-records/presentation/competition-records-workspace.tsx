@@ -9,6 +9,7 @@ import type {
 } from "@sydaris/plugin-sdk";
 import {
   useViewCommand,
+  useViewOperation,
   useView,
 } from "@sydaris/plugin-sdk/react";
 
@@ -462,6 +463,7 @@ export function CompetitionRecordsWorkspace({
     refreshRevision,
   );
   const executeCommand = useViewCommand(viewKey);
+  const executeOperation = useViewOperation(viewKey);
   const model = useMemo(
     () => buildCompetitionRecordsModel(snapshot?.cards ?? []),
     [snapshot?.cards],
@@ -531,13 +533,11 @@ export function CompetitionRecordsWorkspace({
     setSyncing(true);
     setActionError(undefined);
     try {
-      const response = await fetch("/api/views/competition_records/sync", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ includeQuickMatches: false }),
-      });
-      const body = await response.json() as SyncSummary & { error?: string };
-      if (!response.ok) throw new Error(body.error ?? "同步失败");
+      const body = await executeOperation<SyncSummary>(
+        "competition.sync_from_source",
+        { includeQuickMatches: false },
+        "1.0.0",
+      );
       setSyncSummary(body);
       refresh();
     } catch (cause) {

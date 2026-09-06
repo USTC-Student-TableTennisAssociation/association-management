@@ -60,6 +60,7 @@ describe("Runtime Answer Contract", () => {
     expect(contract.incompleteScopes).toEqual(["library:inventory"]);
     expect(contract.mode).toBe("proposal_receipt");
     expect(contract.constraints.join("\n")).toContain("不能支持全称否定");
+    expect(contract.constraints.join("\n")).toContain("不得声称已经完整穷尽");
     expect(contract.constraints.join("\n")).toContain("仍待用户审批");
     expect(contract.constraints.join("\n")).toContain("没有成功写入回执");
   });

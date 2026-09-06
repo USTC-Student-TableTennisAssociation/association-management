@@ -73,7 +73,9 @@ export function buildRuntimeAnswerContract(input: {
           : "direct";
   const constraints = [
     ...(incompleteScopes.length
-      ? ["覆盖不完整的 scope 不能支持全称否定或‘不存在’结论；只能说明本次未读到或仍未知。"]
+      ? [
+          "覆盖不完整的 scope 不能支持全称否定或‘不存在’结论；只能说明本次未读到或仍未知。名单、集合与候选发现必须说明本轮覆盖的来源或范围，不得声称已经完整穷尽。",
+        ]
       : []),
     ...(conflicts.length
       ? ["同一权威 scope 存在冲突观察；陈述当前观察与边界，不得猜测同步、权限、上传时间等冲突原因。"]

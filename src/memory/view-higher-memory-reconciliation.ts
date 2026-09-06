@@ -18,7 +18,7 @@ const viewHigherMemorySubmissionSchema = z.object({
 export type ViewHigherMemoryReconciliationInput = Omit<
   ViewChangeContextInput,
   "recentConversation"
->;
+> & { signal?: AbortSignal };
 
 function maintenanceReason(input: ViewHigherMemoryReconciliationInput): string {
   const commandLabels = new Map(
@@ -75,9 +75,10 @@ export async function reconcileViewHigherMemoryFromViewChange(
     description: "提交该 Business View 更新后的高层动态摘要",
     prompt: maintenancePrompt(input, previous),
     temperature: 0.2,
-    maxOutputTokens: 8_000,
+    abortSignal: input.signal,
     timeout: { totalMs: 1_800_000, stepMs: 1_800_000 },
   });
+  input.signal?.throwIfAborted();
   const memory = submission.memory;
   if (!memory) return 0;
 

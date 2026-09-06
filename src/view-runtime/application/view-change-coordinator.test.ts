@@ -76,6 +76,8 @@ function fixture(options: {
     knowledgePolicy: "reconcile",
     knowledgeStatus: "queued",
     guidanceJson: ["星级是正式评定结果。"],
+    evidenceStatus: "not_checked",
+    evidenceJson: {},
     message: null,
     reason: null,
     attentionErrorMessage: null,
@@ -95,7 +97,16 @@ function fixture(options: {
     findMany: vi.fn().mockResolvedValue([reaction]),
     findUnique: vi.fn().mockImplementation(() => Promise.resolve(reaction)),
     count: vi.fn().mockResolvedValue(options.superseded ? 1 : 0),
-    updateMany: vi.fn().mockImplementation(({ data }: { data: Record<string, unknown> }) => {
+    updateMany: vi.fn().mockImplementation(({
+      where,
+      data,
+    }: {
+      where?: { id?: string | { not?: string } };
+      data: Record<string, unknown>;
+    }) => {
+      if (typeof where?.id === "object" && where.id.not === reaction.id) {
+        return Promise.resolve({ count: 0 });
+      }
       Object.assign(reaction, data);
       return Promise.resolve({ count: 1 });
     }),
@@ -135,23 +146,44 @@ function fixture(options: {
     }),
   };
   const evaluate = vi.fn().mockResolvedValue({
+    evidenceStatus: "conflict",
+    usedEvidenceRefs: ["E1"],
     action: "request_confirmation",
     message: "知识层只有三星级的历史记录，请确认五星级是否已正式获评。",
     reason: "当前修改与修改前认知不一致",
   });
   const reconcileObjectHigherMemory = vi.fn(options.reconcileObject ?? (async () => 1));
   const reconcileViewHigherMemory = vi.fn(options.reconcileView ?? (async () => 1));
+  const retrieveEvidence = vi.fn().mockResolvedValue({
+    version: "view-change-evidence.v1",
+    basis: "preexisting_shared_brain",
+    relatedObjects: ["中国科学技术大学学生乒乓球协会"],
+    changedFields: [{
+      cardType: "社团",
+      field: "社团星级",
+      definition: "正式评级",
+      before: "三星级社团",
+      after: "五星级社团",
+    }],
+    assertions: [{ ref: "E1", statement: "该社团为三星级社团。", sources: ["测试资料"] }],
+    coverage: "relevant_assertions_found",
+    semanticRetrieval: "used",
+    warnings: [],
+    truncated: false,
+  });
   const coordinator = new ViewChangeCoordinator({
     database: database as never,
     registry,
     readPort: readPort as never,
     evaluate,
+    retrieveEvidence,
     reconcileObjectHigherMemory,
     reconcileViewHigherMemory,
   });
   return {
     coordinator,
     evaluate,
+    retrieveEvidence,
     reconcileObjectHigherMemory,
     reconcileViewHigherMemory,
     reaction,
@@ -190,6 +222,9 @@ describe("View change reaction coordinator", () => {
     expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({
       attentionPolicy: "evaluate",
       reactionGuidance: ["星级是正式评定结果。"],
+      evidence: expect.objectContaining({
+        coverage: "relevant_assertions_found",
+      }),
       events: [{
         type: "society.profile_updated",
         version: "1",

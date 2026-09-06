@@ -6,6 +6,7 @@ import type {
 
 import { competitionRecordsCommands } from "./commands.js";
 import { competitionRecordsEvents } from "./events.js";
+import { competitionSyncOperation } from "./operations.js";
 import { competitionRecordsQueries } from "./queries.js";
 
 export const COMPETITION_RECORDS_VIEW_KEY = "competition_records";
@@ -155,7 +156,13 @@ export const competitionRecordsViewModule: ViewModule = {
     description:
       "记录具体比赛届次，并从多届数据与组织资料中整理长期赛事系列。",
     retrievalDescription:
-      "用于比赛届次、参与人数、来源记录、届次序号和长期赛事系列。",
+      "当用户要查询或整理已经发生的比赛届次、参与人数、来源记录、届次序号、长期赛事系列或参与趋势时使用。",
+    aiWriteCapabilities: [
+      "整理长期赛事系列，并将已同步的比赛届次归入有证据支持的系列",
+    ],
+    dataBoundaries: [
+      "比赛届次由权威数据源同步，AI 不能直接创建或修改届次",
+    ],
     aiSemanticInstructions: [
       "CompetitionEditionCard 表示一次具体发生的比赛；CompetitionSeriesCard 表示可重复举办的长期赛事品牌或制度。",
       "例如‘第十五次积分赛’是 Edition，‘积分赛’是 Series；两者不是同一 Object。",
@@ -174,6 +181,7 @@ export const competitionRecordsViewModule: ViewModule = {
     cardTypes: competitionRecordsCardTypes,
   },
   queries: competitionRecordsQueries,
+  operations: [competitionSyncOperation],
   commands: competitionRecordsCommands,
   invariants: [],
   events: competitionRecordsEvents,

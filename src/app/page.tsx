@@ -19,10 +19,14 @@ import {
 } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { AIInvocation } from "@sydaris/plugin-sdk";
+import type {
+  AIInvocation,
+  ConversationNoticeRequest,
+} from "@sydaris/plugin-sdk";
 
 import type { ChatPageContext, ClubChatMessage } from "@/ai/types";
 import { shouldSubmitChatInput } from "@/app/chat-input-keyboard";
+import { chatTurnInteractionState } from "@/app/chat-turn-state";
 import type { ArtifactReference } from "@/library/artifact-references";
 import type { ViewInformationReference } from "@/agent-runtime/view-types";
 import {
@@ -49,10 +53,16 @@ import { WorkPresentationHost } from "@/view-runtime/presentation-host/work-pres
 const initialMessages: ClubChatMessage[] = [];
 
 type ChatHistoryState = "loading" | "ready" | "error";
+type ChatSendMessage = Chat<ClubChatMessage>["sendMessage"];
+type ChatSubmission = {
+  message: NonNullable<Parameters<ChatSendMessage>[0]>;
+  options: Parameters<ChatSendMessage>[1];
+};
 type ConversationChatSession = {
   chat: Chat<ClubChatMessage>;
   historyState: "idle" | ChatHistoryState;
   historyError?: string;
+  activeRequestChat?: Chat<ClubChatMessage>;
 };
 type CurrentUser = {
   userId: string;
@@ -72,6 +82,42 @@ type ConversationSummary = {
   lastMessageAt: string;
   createdAt: string;
 };
+
+async function fetchConversationMessages(
+  conversationId: string,
+  signal?: AbortSignal,
+): Promise<ClubChatMessage[]> {
+  const response = await fetch(
+    `/api/chat/conversations/${encodeURIComponent(conversationId)}/messages`,
+    { cache: "no-store", signal },
+  );
+  const body = await response.json() as {
+    messages?: ClubChatMessage[];
+    error?: string;
+  };
+  if (!response.ok || !Array.isArray(body.messages)) {
+    throw new Error(body.error ?? "无法从服务器恢复对话。");
+  }
+  return body.messages;
+}
+
+function authoritativeConversationMessages(
+  messages: ClubChatMessage[],
+): ClubChatMessage[] {
+  const positions = new Map<string, number>();
+  const unique: ClubChatMessage[] = [];
+  for (const message of messages) {
+    if (message.id === "welcome") continue;
+    const position = positions.get(message.id);
+    if (position === undefined) {
+      positions.set(message.id, unique.length);
+      unique.push(message);
+    } else {
+      unique[position] = message;
+    }
+  }
+  return [...initialMessages, ...unique];
+}
 
 type InstalledViewSummary = {
   viewKey: string;
@@ -612,12 +658,16 @@ function ChatSurface({
   onViewProposalApplied: (viewKey: string) => void;
 }) {
   const compositionActive = useRef(false);
-  const isSending = status === "submitted" || status === "streaming";
   const answerIsComplete = messageAnswerIsComplete(messages.at(-1));
-  const isGenerating = isSending && !answerIsComplete;
-  const isFinalizing = isSending && answerIsComplete;
   const canInteract = historyState === "ready";
-  const canSend = input.trim().length > 0 && !isSending && canInteract;
+  const interaction = chatTurnInteractionState({
+    status,
+    answerComplete: answerIsComplete,
+    historyReady: canInteract,
+    hasInput: input.trim().length > 0,
+  });
+  const { isGenerating, isFinalizing } = interaction;
+  const canSend = interaction.canSubmit;
   const isEmptyChat = !compact && messages.length === 0 && historyState === "ready";
   const statusMessage = historyState === "loading"
     ? "正在恢复对话…"
@@ -810,7 +860,7 @@ function ChatSurface({
               </article>
             );
           })}
-          {status === "submitted" ? (
+          {status === "submitted" && isGenerating ? (
             <article className="flex items-center gap-2.5 text-[13px] text-zinc-500">
               <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-zinc-950 text-[9px] font-semibold text-white">S</div>
               <span>正在思考</span>
@@ -1020,6 +1070,11 @@ export default function Home() {
     transport,
   }), [transport]);
   const chatSessionsRef = useRef(new Map<string, ConversationChatSession>());
+  const finalizationWatchersRef = useRef(new Map<string, {
+    assistantMessageId: string;
+    chat: Chat<ClubChatMessage>;
+    controller: AbortController;
+  }>());
   const [, setChatSessionRevision] = useState(0);
   const [bootstrapError, setBootstrapError] = useState<string>();
   const [navigationError, setNavigationError] = useState<string>();
@@ -1039,7 +1094,7 @@ export default function Home() {
     }
   }
   const activeChat = activeSession?.chat ?? bootstrapChat;
-  const { messages, sendMessage, status, stop, error, clearError } = useChat<ClubChatMessage>({
+  const { messages, status, stop, error, clearError } = useChat<ClubChatMessage>({
     chat: activeChat,
   });
   const historyState: ChatHistoryState = bootstrapError
@@ -1049,7 +1104,8 @@ export default function Home() {
       : "loading";
   const historyError = bootstrapError ?? activeSession?.historyError ?? navigationError;
   const input = activeConversationId ? drafts[activeConversationId] ?? "" : "";
-  const isSending = status === "submitted" || status === "streaming";
+  const transportIsSending = status === "submitted" || status === "streaming";
+  const isSending = transportIsSending;
 
   const setInput = useCallback((value: string) => {
     if (!activeConversationId) return;
@@ -1078,6 +1134,107 @@ export default function Home() {
     }
     setConversations(body.conversations);
     return body.conversations;
+  }, []);
+
+  const reconcileConversationHistory = useCallback(async (
+    conversationId: string,
+  ) => {
+    const session = chatSessionsRef.current.get(conversationId);
+    const expectedLastMessageId = session?.chat.messages.at(-1)?.id;
+    if (
+      !session ||
+      session.chat.status !== "ready" ||
+      !expectedLastMessageId ||
+      !messageAnswerIsComplete(session.chat.messages.at(-1))
+    ) return;
+
+    try {
+      const authoritativeMessages = await fetchConversationMessages(conversationId);
+      const currentSession = chatSessionsRef.current.get(conversationId);
+      if (
+        currentSession !== session ||
+        currentSession.chat.status !== "ready" ||
+        currentSession.chat.messages.at(-1)?.id !== expectedLastMessageId
+      ) return;
+      if (!authoritativeMessages.some((message) => message.id === expectedLastMessageId)) {
+        console.warn("[chat.history.reconcile] terminal assistant message is not durable yet");
+        return;
+      }
+      currentSession.chat.messages = authoritativeConversationMessages(
+        authoritativeMessages,
+      );
+      setChatSessionRevision((current) => current + 1);
+    } catch (cause) {
+      console.warn("[chat.history.reconcile]", cause);
+    }
+  }, []);
+
+  const releaseFinalizedTransportWhenDurable = useCallback((
+    conversationId: string,
+    assistantMessageId: string,
+    chat: Chat<ClubChatMessage>,
+  ) => {
+    const watcherKey = `${conversationId}:${assistantMessageId}`;
+    const existing = finalizationWatchersRef.current.get(watcherKey);
+    if (
+      existing?.assistantMessageId === assistantMessageId &&
+      existing.chat === chat
+    ) return;
+    existing?.controller.abort();
+
+    const controller = new AbortController();
+    const watcher = { assistantMessageId, chat, controller };
+    finalizationWatchersRef.current.set(watcherKey, watcher);
+
+    const waitForNextCheck = () => new Promise<void>((resolve) => {
+      const finish = () => {
+        window.clearTimeout(timer);
+        controller.signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      const timer = window.setTimeout(finish, 750);
+      controller.signal.addEventListener("abort", finish, { once: true });
+    });
+
+    void (async () => {
+      while (!controller.signal.aborted) {
+        const transportBusy = chat.status === "submitted" ||
+          chat.status === "streaming";
+        if (
+          !transportBusy ||
+          chat.messages.at(-1)?.id !== assistantMessageId
+        ) return;
+
+        try {
+          const authoritativeMessages = await fetchConversationMessages(
+            conversationId,
+            controller.signal,
+          );
+          if (authoritativeMessages.some((message) => message.id === assistantMessageId)) {
+            // The terminal answer is authoritative on the server. Abort only
+            // this stale transport; a newer turn may already be in progress.
+            await chat.stop();
+            setChatSessionRevision((current) => current + 1);
+            return;
+          }
+        } catch (cause) {
+          if (controller.signal.aborted) return;
+          console.warn("[chat.finalization.release]", cause);
+        }
+        await waitForNextCheck();
+      }
+    })().finally(() => {
+      if (finalizationWatchersRef.current.get(watcherKey) === watcher) {
+        finalizationWatchersRef.current.delete(watcherKey);
+      }
+    });
+  }, []);
+
+  useEffect(() => () => {
+    for (const watcher of finalizationWatchersRef.current.values()) {
+      watcher.controller.abort();
+    }
+    finalizationWatchersRef.current.clear();
   }, []);
 
   useEffect(() => {
@@ -1140,20 +1297,8 @@ export default function Home() {
     if (!session || session.historyState !== "idle") return;
     session.historyState = "loading";
     setChatSessionRevision((current) => current + 1);
-    void fetch(`/api/chat/conversations/${activeConversationId}/messages`, {
-      cache: "no-store",
-    }).then(async (response) => {
-      const body = await response.json() as {
-        messages?: ClubChatMessage[];
-        error?: string;
-      };
-      if (!response.ok || !Array.isArray(body.messages)) {
-        throw new Error(body.error ?? "无法从服务器恢复对话。");
-      }
-      session.chat.messages = [
-        ...initialMessages,
-        ...body.messages.filter((message) => message.id !== "welcome"),
-      ];
+    void fetchConversationMessages(activeConversationId).then((messages) => {
+      session.chat.messages = authoritativeConversationMessages(messages);
       session.historyState = "ready";
       session.historyError = undefined;
       setChatSessionRevision((current) => current + 1);
@@ -1163,6 +1308,29 @@ export default function Home() {
       setChatSessionRevision((current) => current + 1);
     });
   }, [activeConversationId]);
+
+  const activeAssistantMessageId = messages.at(-1)?.id;
+  const activeAnswerIsComplete = messageAnswerIsComplete(messages.at(-1));
+  useEffect(() => {
+    if (
+      !activeConversationId ||
+      !activeAssistantMessageId ||
+      !activeAnswerIsComplete ||
+      (status !== "submitted" && status !== "streaming")
+    ) return;
+    releaseFinalizedTransportWhenDurable(
+      activeConversationId,
+      activeAssistantMessageId,
+      activeChat,
+    );
+  }, [
+    activeChat,
+    activeAnswerIsComplete,
+    activeAssistantMessageId,
+    activeConversationId,
+    releaseFinalizedTransportWhenDurable,
+    status,
+  ]);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -1206,30 +1374,89 @@ export default function Home() {
             }
           : { activePresentation: "full_chat" };
 
+  function startChatSubmission(
+    conversationId: string,
+    submission: ChatSubmission,
+  ) {
+    const session = chatSessionsRef.current.get(conversationId);
+    if (!session) return;
+    const requestChat = session.chat;
+    session.activeRequestChat = requestChat;
+    setChatSessionRevision((current) => current + 1);
+
+    void requestChat.sendMessage(submission.message, submission.options)
+      .then(() => {
+        if (chatSessionsRef.current.get(conversationId)?.chat === requestChat) {
+          return reconcileConversationHistory(conversationId);
+        }
+      })
+      .finally(() => {
+        const currentSession = chatSessionsRef.current.get(conversationId);
+        if (currentSession?.activeRequestChat === requestChat) {
+          currentSession.activeRequestChat = undefined;
+        }
+        setChatSessionRevision((current) => current + 1);
+        void refreshConversations();
+      });
+  }
+
+  function submitChatSubmission(
+    conversationId: string,
+    submission: ChatSubmission,
+  ) {
+    const session = chatSessionsRef.current.get(conversationId);
+    if (!session) return false;
+    const interaction = chatTurnInteractionState({
+      status: session.chat.status,
+      answerComplete: messageAnswerIsComplete(session.chat.messages.at(-1)),
+      historyReady: session.historyState === "ready",
+      hasInput: true,
+    });
+    if (interaction.submitMode === "blocked") return false;
+    if (
+      interaction.submitMode === "send" &&
+      session.activeRequestChat === session.chat
+    ) return false;
+    if (interaction.submitMode === "rollover") {
+      const previousChat = session.chat;
+      session.chat = new Chat<ClubChatMessage>({
+        id: conversationId,
+        messages: previousChat.messages,
+        transport,
+      });
+      setChatSessionRevision((current) => current + 1);
+      const assistantMessageId = previousChat.messages.at(-1)?.id;
+      if (assistantMessageId) {
+        releaseFinalizedTransportWhenDurable(
+          conversationId,
+          assistantMessageId,
+          previousChat,
+        );
+      }
+    }
+    startChatSubmission(conversationId, submission);
+    return true;
+  }
+
   function submit(content: string) {
     const text = content.trim();
-    if (!text || !activeConversationId || isSending || historyState !== "ready") return;
+    if (!text || !activeConversationId || historyState !== "ready") return;
     const conversationId = activeConversationId;
+    const accepted = submitChatSubmission(conversationId, {
+      message: { text },
+      options: { body: { pageContext, conversationId } },
+    });
+    if (!accepted) return;
     clearError();
     setInput("");
-    void sendMessage(
-      { text },
-      { body: { pageContext, conversationId } },
-    ).finally(() => {
-      setChatSessionRevision((current) => current + 1);
-      void refreshConversations();
-    });
   }
 
   function invokeAI(invocation: AIInvocation) {
     const message = invocation.message.trim();
-    if (!message || !activeConversationId || isSending || historyState !== "ready") return;
+    if (!message || !activeConversationId || historyState !== "ready") return;
     const conversationId = activeConversationId;
-    clearError();
-    setInput("");
-    setLayoutMode("collaborate");
-    void sendMessage(
-      {
+    const accepted = submitChatSubmission(conversationId, {
+      message: {
         parts: [
           { type: "text", text: message },
           {
@@ -1238,11 +1465,46 @@ export default function Home() {
           },
         ],
       },
-      { body: { pageContext, conversationId } },
-    ).finally(() => {
-      setChatSessionRevision((current) => current + 1);
-      void refreshConversations();
+      options: { body: { pageContext, conversationId } },
     });
+    if (!accepted) return;
+    clearError();
+    setInput("");
+    setLayoutMode("collaborate");
+  }
+
+  async function openConversationNotice(notice: ConversationNoticeRequest) {
+    if (!activeConversationId || historyState !== "ready") return;
+    if (isSending) {
+      setNavigationError("请先等待当前回答结束，再打开这条核对问题。");
+      return;
+    }
+    const conversationId = activeConversationId;
+    const response = await fetch(
+      `/api/chat/conversations/${encodeURIComponent(conversationId)}/notices`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(notice),
+      },
+    );
+    const body = await response.json() as {
+      message?: ClubChatMessage;
+      error?: string;
+    };
+    if (!response.ok || !body.message) {
+      setNavigationError(body.error ?? "无法打开这条核对问题。");
+      return;
+    }
+    const session = chatSessionsRef.current.get(conversationId);
+    if (session && !session.chat.messages.some((message) => message.id === body.message!.id)) {
+      session.chat.messages = [...session.chat.messages, body.message];
+      setChatSessionRevision((current) => current + 1);
+    }
+    setNavigationError(undefined);
+    setLayoutMode("collaborate");
+    void refreshConversations();
+    window.setTimeout(() => document.getElementById("ai-pane-input")?.focus(), 0);
   }
 
   function activateConversation(conversationId: string) {
@@ -1568,6 +1830,7 @@ export default function Home() {
                 activeConversationId={activeConversationId}
                 onOpenInspector={() => setWorkInspectorOpen(true)}
                 onInvokeAI={invokeAI}
+                onOpenConversationNotice={openConversationNotice}
               />
             )
           ) : (

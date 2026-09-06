@@ -24,12 +24,17 @@ const skillPlugin: PluginManifest = {
       version: "1.0.0",
       label: "活动整理",
       description: "整理已有活动资料。",
-      inputSchema: zodContractSchema(z.object({ focus: z.string().min(1) })),
+      inputSchema: zodContractSchema(z.object({
+        focus: z.string().min(1),
+        phase: z.enum(["discuss", "propose"]).default("discuss"),
+      })),
+      actionActivation: { inputField: "phase", allowedValues: ["propose"] },
       instructions: "核对资料后，只调用 activity.update_activity。",
       viewAccess: [{
         viewKey: "activity_operations",
         schemaVersion: activityOperationsPlugin.contributes.views?.[0]?.manifest.schemaVersion ?? "1",
         mode: "write",
+        planningCardTypes: ["ActivityCard"],
         commands: ["activity.update_activity"],
       }],
       requiresCapabilities: [],
@@ -39,6 +44,7 @@ const skillPlugin: PluginManifest = {
       label: "资料分诊",
       description: "为资料库文件建议处理档位。",
       inputSchema: zodContractSchema(z.object({ phase: z.enum(["recommend", "propose"]) })),
+      actionActivation: { inputField: "phase", allowedValues: ["propose"] },
       instructions: "先完整盘点，再提出有理由的处理档位建议。",
       viewAccess: [],
       resourceAccess: [{ resource: "library", operations: ["propose_plan"] }],
@@ -85,16 +91,20 @@ describe("Agent Skill Runtime", () => {
 
     const result = await execute({
       skillId,
-      input: { focus: "秋季活动" },
+      input: { focus: "秋季活动", phase: "discuss" },
     });
     expect(result).toMatchObject({
       activated: true,
-      input: { focus: "秋季活动" },
+      input: { focus: "秋季活动", phase: "discuss" },
       skill: { id: skillId },
+      viewPlanningContract: [{
+        viewKey: "activity_operations",
+        cardTypes: [{ key: "ActivityCard" }],
+      }],
     });
     expect(result).not.toHaveProperty("knowledge");
 
-    expect(session.active()?.input).toEqual({ focus: "秋季活动" });
+    expect(session.active()?.input).toEqual({ focus: "秋季活动", phase: "discuss" });
     expect(session.instructions()).toContain("activity.update_activity");
     expect(session.instructions()).toContain("只调用 activity.update_activity");
     expect(session.instructions()).not.toContain("知识层：");
@@ -111,7 +121,7 @@ describe("Agent Skill Runtime", () => {
 
   it("enforces the declared View and Command boundary", () => {
     const { session } = fixture();
-    session.activate(skillId, { focus: "秋季活动" });
+    session.activate(skillId, { focus: "秋季活动", phase: "propose" });
 
     expect(session.canReadView("activity_operations")).toBe(true);
     expect(session.canReadView("society_information")).toBe(false);
@@ -127,6 +137,7 @@ describe("Agent Skill Runtime", () => {
     expect(session.canOpenAction("business_view", "society_information")).toBe(false);
     expect(session.canOpenAction("object")).toBe(false);
     expect(session.canOpenAction("library")).toBe(false);
+    expect(session.hasActionIntent()).toBe(true);
   });
 
   it("grants declared non-View Resource operations", () => {
@@ -143,8 +154,8 @@ describe("Agent Skill Runtime", () => {
 
   it("composes different Skills but rejects changing one Skill's input", () => {
     const { session } = fixture();
-    const first = session.activate(skillId, { focus: "秋季活动" });
-    expect(session.activate(skillId, { focus: "秋季活动" })).toBe(first);
+    const first = session.activate(skillId, { focus: "秋季活动", phase: "propose" });
+    expect(session.activate(skillId, { focus: "秋季活动", phase: "propose" })).toBe(first);
 
     session.activate(librarySkillId, { phase: "propose" });
     expect(session.activeSkillIds()).toEqual([skillId, librarySkillId]);
@@ -155,7 +166,7 @@ describe("Agent Skill Runtime", () => {
     expect(session.canOpenAction("library")).toBe(true);
     expect(session.instructions()).toContain("本轮已激活的可组合 Skills");
 
-    expect(() => session.activate(skillId, { focus: "春季活动" }))
+    expect(() => session.activate(skillId, { focus: "春季活动", phase: "propose" }))
       .toThrow(SkillRuntimeError);
   });
 
@@ -176,7 +187,17 @@ describe("Agent Skill Runtime", () => {
     });
     const session = new AgentSkillSession(registry, new ToolRuntime());
 
-    expect(() => session.activate(requiredSkillId, { focus: "秋季活动" }))
+    expect(() => session.activate(requiredSkillId, { focus: "秋季活动", phase: "discuss" }))
       .toThrow(/Capability 不可用/);
+  });
+
+  it("enforces discussion-only activation before tools are exposed", () => {
+    const { session } = fixture();
+    session.activate(skillId, { focus: "秋季活动", phase: "discuss" });
+
+    expect(session.canOpenAction("business_view", "activity_operations")).toBe(false);
+    expect(session.canRunCommand("activity_operations", "activity.update_activity")).toBe(false);
+    expect(session.hasActionIntent()).toBe(false);
+    expect(session.instructions()).toContain("Runtime 禁止副作用");
   });
 });

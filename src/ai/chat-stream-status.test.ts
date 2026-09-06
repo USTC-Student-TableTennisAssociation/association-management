@@ -4,6 +4,7 @@ import {
   classifyChatStreamFailureCode,
   classifyChatStreamStatus,
   summarizeChatStreamError,
+  userFacingChatStreamError,
 } from "@/ai/chat-stream-status";
 
 describe("chat stream errors", () => {
@@ -21,6 +22,21 @@ describe("chat stream errors", () => {
     });
     expect(classifyChatStreamFailureCode(error)).toBe("timeout");
     expect(classifyChatStreamFailureCode(summary)).toBe("timeout");
+  });
+
+  it("shows transport failures as network problems", () => {
+    expect(userFacingChatStreamError(
+      new Error("Cannot connect to API: getaddrinfo ENOTFOUND api.deepseek.com"),
+    )).toBe("网络连接失败：无法连接外部 AI 或文档解析服务，请检查网络或 VPN 后重试。");
+    expect(userFacingChatStreamError(
+      new TypeError("terminated"),
+    )).toBe("网络连接失败：无法连接外部 AI 或文档解析服务，请检查网络或 VPN 后重试。");
+  });
+
+  it("keeps non-network failures generic", () => {
+    expect(userFacingChatStreamError(
+      new Error("Invalid tool schema"),
+    )).toBe("AI 服务响应失败，请稍后重试。");
   });
 });
 

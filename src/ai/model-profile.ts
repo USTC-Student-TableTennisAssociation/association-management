@@ -1,7 +1,7 @@
 export type ModelProfile = {
   contextWindowTokens: number;
   preferredInputTokens: number;
-  maxOutputTokens: number;
+  outputReserveTokens: number;
   safetyTokens: number;
   historyMaxTokens: number;
   memoryMaxTokens: number;
@@ -43,9 +43,9 @@ export function createModelProfile(
     16_384,
     2_000_000,
   );
-  const maxOutputTokens = environmentInteger(
+  const outputReserveTokens = environmentInteger(
     environment,
-    "AI_MAX_OUTPUT_TOKENS",
+    "AI_CONTEXT_OUTPUT_RESERVE_TOKENS",
     16_384,
     1_024,
     131_072,
@@ -58,7 +58,7 @@ export function createModelProfile(
     131_072,
   );
   const hardInputTokens =
-    contextWindowTokens - maxOutputTokens - safetyTokens;
+    contextWindowTokens - outputReserveTokens - safetyTokens;
   if (hardInputTokens <= 0) {
     throw new Error(
       "AI_CONTEXT_WINDOW_TOKENS 必须大于输出预留与上下文安全余量之和",
@@ -76,7 +76,7 @@ export function createModelProfile(
   return {
     contextWindowTokens,
     preferredInputTokens,
-    maxOutputTokens,
+    outputReserveTokens,
     safetyTokens,
     historyMaxTokens: environmentInteger(
       environment,

@@ -108,6 +108,11 @@ function validateViewModule(view: ViewModule): void {
   }
   assertUnique(view.schema.cardTypes.map((card) => card.key), "Card Type key", view.manifest.key);
   assertUnique(view.queries.map((query) => query.key), "Query key", view.manifest.key);
+  assertUnique(
+    (view.operations ?? []).map((operation) => operation.key),
+    "Operation key",
+    view.manifest.key,
+  );
   assertUnique(view.commands.map((command) => command.key), "Command key", view.manifest.key);
   assertUnique(view.invariants.map((invariant) => invariant.key), "Invariant key", view.manifest.key);
   assertUnique(view.events.map((event) => `${event.key}@${event.version}`), "Event key/version", view.manifest.key);
@@ -130,6 +135,64 @@ function validateViewModule(view: ViewModule): void {
       `View ${view.manifest.key} Query ${query.key}`,
       query.inputSchema.jsonSchema,
     );
+  }
+  const commandKeys = new Set(view.commands.map((command) => command.key));
+  for (const operation of view.operations ?? []) {
+    requireIdentifier(`View ${view.manifest.key} Operation key`, operation.key);
+    requireSemver(
+      `View ${view.manifest.key} Operation ${operation.key} version`,
+      operation.version,
+    );
+    if (!operation.label.trim()) {
+      throw new ExtensionRegistrationError(
+        `View ${view.manifest.key} Operation ${operation.key} label 不能为空`,
+      );
+    }
+    if (!operation.description.trim()) {
+      throw new ExtensionRegistrationError(
+        `View ${view.manifest.key} Operation ${operation.key} description 不能为空`,
+      );
+    }
+    assertUnique(
+      operation.requiredPermissions,
+      "required permission",
+      `${view.manifest.key}/${operation.key}`,
+    );
+    assertUnique(
+      operation.requiresCapabilities.map((requirement) => requirement.key),
+      "Capability requirement",
+      `${view.manifest.key}/${operation.key}`,
+    );
+    for (const requirement of operation.requiresCapabilities) {
+      requireIdentifier(
+        `View ${view.manifest.key} Operation ${operation.key} Capability key`,
+        requirement.key,
+      );
+      if (!requirement.versions.trim()) {
+        throw new ExtensionRegistrationError(
+          `View ${view.manifest.key} Operation ${operation.key} Capability ` +
+            `${requirement.key} 的 versions 不能为空`,
+        );
+      }
+    }
+    assertUnique(operation.commands, "Command access", `${view.manifest.key}/${operation.key}`);
+    const unknownCommands = operation.commands.filter((command) => !commandKeys.has(command));
+    if (unknownCommands.length) {
+      throw new ExtensionRegistrationError(
+        `View ${view.manifest.key} Operation ${operation.key} 引用了未声明的 Commands：` +
+          unknownCommands.join(", "),
+      );
+    }
+    const nonSystemCommands = operation.commands.filter((commandKey) =>
+      !view.commands.find((command) => command.key === commandKey)
+        ?.allowedInitiators.includes("system")
+    );
+    if (nonSystemCommands.length) {
+      throw new ExtensionRegistrationError(
+        `View ${view.manifest.key} Operation ${operation.key} 引用了不允许 system 调用的 Commands：` +
+          nonSystemCommands.join(", "),
+      );
+    }
   }
   for (const command of view.commands) {
     if (command.allowedInitiators.length === 0) {
@@ -213,6 +276,16 @@ function validateSkill(
   if (skill.instructions.length > 20_000) {
     throw new ExtensionRegistrationError(`Skill ${skill.id} instructions 过长`);
   }
+  if (skill.actionActivation) {
+    if (!skill.actionActivation.inputField.trim()) {
+      throw new ExtensionRegistrationError(`Skill ${skill.id} actionActivation.inputField 不能为空`);
+    }
+    if (skill.actionActivation.allowedValues.length === 0) {
+      throw new ExtensionRegistrationError(`Skill ${skill.id} actionActivation.allowedValues 不能为空`);
+    }
+    const serializedValues = skill.actionActivation.allowedValues.map((value) => JSON.stringify(value));
+    assertUnique(serializedValues, "Action activation value", skill.id);
+  }
   const accessKeys = skill.viewAccess.map((access) => access.viewKey);
   assertUnique(accessKeys, "View access", skill.id);
   for (const access of skill.viewAccess) {
@@ -226,6 +299,18 @@ function validateSkill(
       throw new ExtensionRegistrationError(
         `Skill ${skill.id} 需要 ${access.viewKey} schemaVersion ${access.schemaVersion}，` +
           `当前为 ${view.manifest.schemaVersion}`,
+      );
+    }
+    const cardTypeKeys = new Set(view.schema.cardTypes.map((cardType) => cardType.key));
+    const planningCardTypes = access.planningCardTypes ?? [];
+    assertUnique(planningCardTypes, "Planning Card Type", `${skill.id}/${access.viewKey}`);
+    const unknownPlanningCardTypes = planningCardTypes.filter((cardTypeKey) =>
+      !cardTypeKeys.has(cardTypeKey)
+    );
+    if (unknownPlanningCardTypes.length) {
+      throw new ExtensionRegistrationError(
+        `Skill ${skill.id} 引用了 ${access.viewKey} 未声明的 planningCardTypes：` +
+          unknownPlanningCardTypes.join(", "),
       );
     }
     if (access.mode === "write") {

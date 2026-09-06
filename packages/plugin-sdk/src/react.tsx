@@ -73,6 +73,24 @@ export function useViewCommand(viewKey: string) {
   }, [viewKey]);
 }
 
+export function useViewOperation(viewKey: string) {
+  return useCallback(async <Result = unknown>(
+    operationKey: string,
+    input: unknown,
+    operationVersion?: string,
+  ): Promise<Result> => {
+    const response = await fetch(
+      `/api/views/${encodeURIComponent(viewKey)}/operations/${encodeURIComponent(operationKey)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input, operationVersion }),
+      },
+    );
+    return responseJson<Result>(response);
+  }, [viewKey]);
+}
+
 export function useViewReactions(
   viewKey: string,
   options: { limit?: number; pollIntervalMs?: number; enabled?: boolean } = {},
@@ -99,9 +117,7 @@ export function useViewReactions(
         setLoading(false);
         const active = body.reactions.some((reaction) =>
           reaction.attention.status === "queued" ||
-          reaction.attention.status === "running" ||
-          reaction.knowledge.status === "queued" ||
-          reaction.knowledge.status === "running"
+          reaction.attention.status === "running"
         );
         timer = setTimeout(load, active ? pollIntervalMs : Math.max(pollIntervalMs, 10_000));
       } catch (cause) {
@@ -131,5 +147,24 @@ export function useViewReactions(
     return body.reaction;
   }, [viewKey]);
 
-  return { reactions, error, loading: enabled && loading, refresh, markSeen };
+  const retryAttention = useCallback(async (reactionId: string) => {
+    const response = await fetch(
+      `/api/views/${encodeURIComponent(viewKey)}/reactions/${encodeURIComponent(reactionId)}/retry`,
+      { method: "POST" },
+    );
+    const body = await responseJson<{ reaction: ViewReaction }>(response);
+    setReactions((current) => current.map((reaction) =>
+      reaction.id === body.reaction.id ? body.reaction : reaction
+    ));
+    return body.reaction;
+  }, [viewKey]);
+
+  return {
+    reactions,
+    error,
+    loading: enabled && loading,
+    refresh,
+    markSeen,
+    retryAttention,
+  };
 }

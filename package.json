@@ -48,7 +48,6 @@
     "@ai-sdk/react": "^4.0.58",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
-    "@sydaris/competition-records-plugin": "workspace:*",
     "ai": "^7.0.55",
     "cytoscape": "^3.34.0",
     "dotenv": "^17.4.2",

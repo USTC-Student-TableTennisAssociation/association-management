@@ -64,6 +64,7 @@ export type ObjectHigherMemoryMaintenanceInput = {
   retrieval: MemoryRetrievalResult;
   queueDecision: ObjectHigherMemoryQueueDecision;
   existingOnly?: boolean;
+  signal?: AbortSignal;
 };
 
 /**
@@ -235,7 +236,9 @@ export async function maintainObjectHigherMemories(
     }
   }
   const searchEvidence = new MemoryEvidenceAccumulator(input.retrieval);
-  const maintenanceSignal = AbortSignal.timeout(1_800_000);
+  const maintenanceSignal = input.signal
+    ? AbortSignal.any([input.signal, AbortSignal.timeout(1_800_000)])
+    : AbortSignal.timeout(1_800_000);
   const objectEvidence = await Promise.all(targetIds.map((globalObjectId) =>
     followObject(
       globalObjectId,
@@ -302,7 +305,6 @@ export async function maintainObjectHigherMemories(
       description: "提交目标 GlobalObject 的高层认知增量 Patch",
       prompt,
       temperature: 0.15,
-      maxOutputTokens: 12_000,
       abortSignal: maintenanceSignal,
       timeout: { totalMs: 1_800_000, stepMs: 1_800_000, toolMs: 30_000 },
       onLanguageModelCallStart: async (event) => {
@@ -338,6 +340,7 @@ export async function maintainObjectHigherMemories(
         );
       },
     });
+    maintenanceSignal.throwIfAborted();
     await trace?.appendSection(
       "后台 Higher Memory Agent · Schema 校验后的输出",
       debugCodeBlock(debugJson(output), "json"),

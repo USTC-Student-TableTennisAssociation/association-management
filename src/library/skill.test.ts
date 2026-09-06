@@ -14,10 +14,14 @@ describe("Library Triage Skill", () => {
     const activation = session.activate("sydaris.library.triage", {});
 
     expect(activation.input).toEqual({ phase: "recommend" });
-    expect(session.canOpenAction("library")).toBe(true);
+    expect(session.canOpenAction("library")).toBe(false);
     expect(session.canOpenAction("object")).toBe(false);
     expect(session.canReadView("activity_operations")).toBe(false);
     expect(session.instructions()).toContain("不得说成‘从内容看’");
     expect(session.instructions()).toContain("phase=recommend");
+
+    const proposalSession = new AgentSkillSession(registry, new ToolRuntime());
+    proposalSession.activate("sydaris.library.triage", { phase: "propose" });
+    expect(proposalSession.canOpenAction("library")).toBe(true);
   });
 });

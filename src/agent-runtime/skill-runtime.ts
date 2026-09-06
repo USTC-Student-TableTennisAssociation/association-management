@@ -31,6 +31,52 @@ function stableJson(value: unknown): string {
   return JSON.stringify(canonicalValue(value));
 }
 
+function viewPlanningContract(
+  registry: ExtensionRegistry,
+  skill: SkillExtension,
+) {
+  return skill.viewAccess.map((access) => {
+    const view = registry.getView(access.viewKey);
+    if (!view) throw new SkillRuntimeError(`Skill 引用的 View 未安装：${access.viewKey}`);
+    const planningCardTypes = access.planningCardTypes
+      ? new Set(access.planningCardTypes)
+      : undefined;
+    return {
+      viewKey: access.viewKey,
+      schemaVersion: view.manifest.schemaVersion,
+      cardTypes: view.schema.cardTypes
+        .filter((cardType) => !planningCardTypes || planningCardTypes.has(cardType.key))
+        .map((cardType) => ({
+          key: cardType.key,
+          label: cardType.label,
+          description: cardType.description,
+          dimensions: cardType.dimensions.map((dimension) => ({
+            key: dimension.key,
+            label: dimension.label,
+            description: dimension.description ?? null,
+            type: dimension.type,
+            required: dimension.required === true,
+          })),
+          slots: cardType.slots.map((slot) => ({
+            key: slot.key,
+            label: slot.label,
+            description: slot.description ?? null,
+            cardinality: slot.cardinality,
+            required: slot.required === true,
+            targetCardTypes: [...slot.allowedTargetCardTypes],
+          })),
+          relatedObjects: cardType.relatedObjects
+            ? {
+                description: cardType.relatedObjects.description ?? null,
+                min: cardType.relatedObjects.min ?? 0,
+                max: cardType.relatedObjects.max ?? null,
+              }
+            : null,
+        })),
+    };
+  });
+}
+
 export class AgentSkillSession {
   private readonly activated = new Map<string, ActivatedSkill>();
 
@@ -53,6 +99,24 @@ export class AgentSkillSession {
 
   activeSkillIds(): string[] {
     return this.activations().map(({ extension }) => extension.id);
+  }
+
+  planningContract(skill: SkillExtension) {
+    return viewPlanningContract(this.registry, skill);
+  }
+
+  actionEnabled(activation: ActivatedSkill): boolean {
+    const policy = activation.extension.actionActivation;
+    if (!policy) return true;
+    if (!activation.input || typeof activation.input !== "object" || Array.isArray(activation.input)) {
+      return false;
+    }
+    const value = (activation.input as Record<string, unknown>)[policy.inputField];
+    return policy.allowedValues.some((allowed) => allowed === value);
+  }
+
+  hasActionIntent(): boolean {
+    return this.activations().some((activation) => this.actionEnabled(activation));
   }
 
   activate(skillId: string, rawInput: unknown): ActivatedSkill {
@@ -88,8 +152,9 @@ export class AgentSkillSession {
     viewKey: string,
     commandKey: string,
   ): ActivatedSkill | undefined {
-    return this.activations().find(({ extension }) =>
-      extension.viewAccess.some((access) =>
+    return this.activations().find((activation) =>
+      this.actionEnabled(activation) &&
+      activation.extension.viewAccess.some((access) =>
         access.mode === "write" &&
         access.viewKey === viewKey &&
         access.commands.includes(commandKey)
@@ -106,8 +171,9 @@ export class AgentSkillSession {
     resource: string,
     operation: string,
   ): ActivatedSkill | undefined {
-    return this.activations().find(({ extension }) =>
-      (extension.resourceAccess ?? []).some((access) =>
+    return this.activations().find((activation) =>
+      this.actionEnabled(activation) &&
+      (activation.extension.resourceAccess ?? []).some((access) =>
         access.resource === resource && access.operations.includes(operation)
       )
     );
@@ -125,8 +191,9 @@ export class AgentSkillSession {
       return this.canUseResourceOperation("object", "propose_change");
     }
     if (!businessViewKey) return false;
-    return this.activations().some(({ extension }) =>
-      extension.viewAccess.some((access) =>
+    return this.activations().some((activation) =>
+      this.actionEnabled(activation) &&
+      activation.extension.viewAccess.some((access) =>
         access.mode === "write" && access.viewKey === businessViewKey
       )
     );
@@ -134,7 +201,8 @@ export class AgentSkillSession {
 
   instructions(): string {
     if (this.activated.size === 0) return "";
-    const blocks = this.activations().map(({ extension, input }) => {
+    const blocks = this.activations().map((activation) => {
+      const { extension, input } = activation;
       const viewScope = extension.viewAccess.map((access) =>
         access.mode === "write"
           ? `${access.viewKey}@${access.schemaVersion} (write: ${access.commands.join(", ")})`
@@ -149,7 +217,9 @@ export class AgentSkillSession {
         `本轮 Skill 输入：${JSON.stringify(input)}`,
         `View 权限：\n${viewScope || "（无）"}`,
         `Resource 权限：\n${resourceScope || "（无）"}`,
-        "Skill 权限由 Runtime 强制执行；不得调用未声明的 View Command 或 Resource Operation。",
+        `本次激活写入状态：${this.actionEnabled(activation) ? "允许按声明提议" : "只读/讨论；Runtime 禁止副作用"}`,
+        "Skill 权限与本次激活模式由 Runtime 强制执行；不得调用未声明的 View Command 或 Resource Operation。",
+        "完整建立或补全任务按激活回执中的 viewPlanningContract 核对字段；有证据则填写，无证据则留空。",
         extension.instructions,
       ].join("\n\n");
     });
@@ -236,6 +306,8 @@ export function createAgentSkillToolset(input: {
           input: activation.input,
           viewAccess: activation.extension.viewAccess,
           resourceAccess: activation.extension.resourceAccess ?? [],
+          viewPlanningContract: input.session.planningContract(activation.extension),
+          actionEnabled: input.session.actionEnabled(activation),
           activeSkills: input.session.activeSkillIds(),
           next:
             "按所有已激活 Skill 指令打开必要 Context，核对证据后使用已声明的 View Command 或 Resource Operation。",

@@ -76,6 +76,35 @@ async function runCreateActivity(
 }
 
 describe("Agent View Toolset foreground Object binding", () => {
+  it("refreshes an explicitly requested View snapshot", async () => {
+    const { readPort, toolset } = fixture();
+    readPort.query
+      .mockResolvedValueOnce({
+        viewKey: "activity_operations",
+        pluginVersion: "1.0.0",
+        schemaVersion: "1",
+        stateVersion: "3",
+        observedAt: "2026-08-21T00:00:00.000Z",
+        cards: [],
+      })
+      .mockResolvedValueOnce({
+        viewKey: "activity_operations",
+        pluginVersion: "1.0.0",
+        schemaVersion: "1",
+        stateVersion: "4",
+        observedAt: "2026-08-21T00:01:00.000Z",
+        cards: [],
+      });
+
+    await expect(toolset.readSnapshot("activity_operations")).resolves.toMatchObject({
+      stateVersion: "3",
+    });
+    await expect(toolset.refreshSnapshot("activity_operations")).resolves.toMatchObject({
+      stateVersion: "4",
+    });
+    expect(readPort.query).toHaveBeenCalledTimes(2);
+  });
+
   it("publishes runViewCommand as one provider-compatible object envelope", () => {
     const { toolset } = fixture();
     const inputSchema = toolset.tools.runViewCommand.inputSchema as unknown as {

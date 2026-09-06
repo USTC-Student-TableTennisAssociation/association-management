@@ -46,7 +46,6 @@ export async function generateMemoryFacets(input: {
       ].join("\n"),
       prompt: input.query,
       temperature: 0.1,
-      maxOutputTokens: 512,
       abortSignal: input.signal,
       timeout: 30_000,
     });

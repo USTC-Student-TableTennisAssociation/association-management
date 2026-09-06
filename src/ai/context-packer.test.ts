@@ -14,7 +14,7 @@ import type { MemoryAssertionSeed, MemoryRetrievalResult } from "@/memory/types"
 const roomyProfile: ModelProfile = {
   contextWindowTokens: 200_000,
   preferredInputTokens: 128_000,
-  maxOutputTokens: 16_384,
+  outputReserveTokens: 16_384,
   safetyTokens: 12_000,
   historyMaxTokens: 40_000,
   memoryMaxTokens: 64_000,
@@ -144,7 +144,7 @@ describe("packContext", () => {
         profile: {
           ...roomyProfile,
           contextWindowTokens: 1_000,
-          maxOutputTokens: 200,
+          outputReserveTokens: 200,
           safetyTokens: 200,
           preferredInputTokens: 500,
         },

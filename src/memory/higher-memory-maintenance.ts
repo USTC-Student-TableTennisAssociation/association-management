@@ -17,6 +17,7 @@ export type HigherMemoryMaintenanceInput = {
   retrieval: MemoryRetrievalResult;
   queueDecision: HigherMemoryQueueDecision;
   existingObjectMemoriesOnly?: boolean;
+  signal?: AbortSignal;
 };
 
 export type HigherMemoryMaintenanceResult = {

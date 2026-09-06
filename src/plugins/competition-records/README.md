@@ -9,9 +9,10 @@ Competition View 还提供三项只读 Query：筛选正式届次、汇总参与
 覆盖范围和来源 Card 引用。
 
 正式比赛状态只能通过 `competition.sync_editions` 和
-`competition.organize_series` Commands 修改。Sydaris host 的同步入口负责依次
-执行本 Plugin 提供的来源与映射 Tools，再把映射结果交给 System Command；Plugin
-不会直接依赖宿主的 ToolRuntime、CommandBus 或数据库实现。
+`competition.organize_series` Commands 修改。用户触发的 `competition.sync_from_source`
+View Operation 负责依次执行本 Plugin 提供的来源与映射 Tools，再把映射结果交给
+System Command。Presentation 通过 SDK 的 `useViewOperation` 调用通用 Runtime 入口；
+Plugin 不依赖宿主专用 API、ToolRuntime、CommandBus 或数据库实现。
 
 USTCTTA 来源 Provider 需要服务端环境变量 `USTCTTA_DATABASE_URL`，也可以使用
 `USTCTTA_DATABASE_URL_UNPOOLED`。

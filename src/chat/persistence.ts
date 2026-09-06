@@ -8,6 +8,7 @@ import {
 } from "@/generated/prisma/client";
 import { getDatabase } from "@/db";
 import type { ClubChatMessage } from "@/ai/types";
+import type { ChatStreamStatus } from "@/ai/chat-stream-status";
 import { finalStepMessageText } from "@/ai/ui-message-text";
 
 export type ChatHistoryActor = {
@@ -21,6 +22,11 @@ export type ChatConversationSummary = {
   archivedAt: string | null;
   lastMessageAt: string;
   createdAt: string;
+};
+
+export type ReservedChatTurn = {
+  userPosition: number;
+  assistantPosition: number;
 };
 
 export class ChatConversationAccessError extends Error {
@@ -90,6 +96,26 @@ export function compactChatMessageForPersistence(
       ...(text ? [{ type: "text" as const, text }] : []),
       ...(reasoning ? [{ type: "reasoning" as const, text: reasoning }] : []),
       ...dataParts,
+    ],
+  };
+}
+
+export function withTerminalChatState(
+  message: ClubChatMessage,
+  status: ChatStreamStatus,
+): ClubChatMessage {
+  if (message.role !== "assistant") return message;
+  const hasAnswerLifecycle = message.parts.some(
+    (part) => part.type === "data-answerLifecycle" && part.data.phase === "answer_complete",
+  );
+  return {
+    ...message,
+    parts: [
+      ...message.parts.filter((part) => part.type !== "data-streamStatus"),
+      { type: "data-streamStatus", data: status },
+      ...(hasAnswerLifecycle
+        ? []
+        : [{ type: "data-answerLifecycle" as const, data: { phase: "answer_complete" as const } }]),
     ],
   };
 }
@@ -244,7 +270,6 @@ export async function saveChatMessage(input: {
       update: {
         role: databaseRole(message.role),
         parts: jsonParts(message.parts),
-        position: input.position,
       },
       create: {
         conversationId: conversation.id,
@@ -267,15 +292,94 @@ export async function saveChatMessage(input: {
   });
 }
 
+/**
+ * Atomically reserves a user/assistant pair in the durable conversation
+ * timeline. Client array indexes are deliberately ignored: deletions,
+ * compaction, reloads, and another browser must never be able to reuse an old
+ * position.
+ */
+export async function reserveChatTurn(input: {
+  actor: ChatHistoryActor;
+  conversationId: string;
+  userMessage: ClubChatMessage;
+}, database: PrismaClient = getDatabase()): Promise<ReservedChatTurn> {
+  if (input.userMessage.role !== "user") {
+    throw new Error("只有用户消息可以开始新的对话轮次。");
+  }
+  const message = input.userMessage;
+  return database.$transaction(async (transaction) => {
+    const conversation = await requireOwnedConversation(
+      transaction,
+      input.actor.id,
+      input.conversationId,
+    );
+    const existing = await transaction.chatMessage.findUnique({
+      where: {
+        conversationId_clientMessageId: {
+          conversationId: conversation.id,
+          clientMessageId: message.id,
+        },
+      },
+      select: { position: true },
+    });
+    if (existing) {
+      await transaction.chatMessage.update({
+        where: {
+          conversationId_clientMessageId: {
+            conversationId: conversation.id,
+            clientMessageId: message.id,
+          },
+        },
+        data: {
+          role: databaseRole(message.role),
+          parts: jsonParts(message.parts),
+        },
+      });
+      return {
+        userPosition: existing.position,
+        assistantPosition: existing.position + 1,
+      };
+    }
+
+    const reserved = await transaction.chatConversation.update({
+      where: { id: conversation.id },
+      data: { nextMessagePosition: { increment: 2 } },
+      select: { nextMessagePosition: true },
+    });
+    const userPosition = reserved.nextMessagePosition - 2;
+    await transaction.chatMessage.create({
+      data: {
+        conversationId: conversation.id,
+        clientMessageId: message.id,
+        role: databaseRole(message.role),
+        parts: jsonParts(message.parts),
+        position: userPosition,
+      },
+    });
+    const suggestedTitle = conversation.title === "新对话"
+      ? firstMessageTitle(message)
+      : undefined;
+    await transaction.chatConversation.update({
+      where: { id: conversation.id },
+      data: {
+        lastMessageAt: new Date(),
+        ...(suggestedTitle ? { title: suggestedTitle } : {}),
+      },
+    });
+    return { userPosition, assistantPosition: userPosition + 1 };
+  });
+}
+
 export async function appendAssistantTextMessage(input: {
   actor: ChatHistoryActor;
   conversationId: string;
   text: string;
+  messageId?: string;
 }, database: PrismaClient = getDatabase()): Promise<ClubChatMessage> {
   const cleanText = input.text.trim();
   if (!cleanText) throw new Error("主动消息不能为空。");
   const message: ClubChatMessage = {
-    id: `view-attention-${randomUUID()}`,
+    id: input.messageId ?? `view-attention-${randomUUID()}`,
     role: "assistant",
     parts: [{ type: "text", text: cleanText }],
   };
@@ -285,9 +389,22 @@ export async function appendAssistantTextMessage(input: {
       input.actor.id,
       input.conversationId,
     );
-    const latest = await transaction.chatMessage.aggregate({
-      where: { conversationId: conversation.id },
-      _max: { position: true },
+    if (input.messageId) {
+      const existing = await transaction.chatMessage.findUnique({
+        where: {
+          conversationId_clientMessageId: {
+            conversationId: conversation.id,
+            clientMessageId: input.messageId,
+          },
+        },
+        select: { id: true },
+      });
+      if (existing) return;
+    }
+    const reserved = await transaction.chatConversation.update({
+      where: { id: conversation.id },
+      data: { nextMessagePosition: { increment: 1 } },
+      select: { nextMessagePosition: true },
     });
     await transaction.chatMessage.create({
       data: {
@@ -295,7 +412,7 @@ export async function appendAssistantTextMessage(input: {
         clientMessageId: message.id,
         role: ChatMessageRole.ASSISTANT,
         parts: jsonParts(message.parts),
-        position: (latest._max.position ?? -1) + 1,
+        position: reserved.nextMessagePosition - 1,
       },
     });
     await transaction.chatConversation.update({

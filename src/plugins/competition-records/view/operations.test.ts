@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { syncCompetitionEditions } from "@/integrations/competition-records/sync-service";
-import type { ToolRuntime } from "@/runtime/tool-runtime/tool-runtime";
-import type { ViewCommandBus } from "@/view-runtime/application/command-bus";
+import type { ViewOperationContext } from "@sydaris/plugin-sdk";
 
-describe("competition records sync service", () => {
-  it("preserves a complete source snapshot through mapping and the v2 system command", async () => {
+import { competitionSyncOperation } from "./operations";
+
+describe("Competition Records View Operations", () => {
+  it("preserves a complete source snapshot through mapping and the system command", async () => {
     const sourceBatch = {
       sourceSystem: "USTCTTA-site" as const,
       sourceSchemaVersion: "1" as const,
@@ -21,38 +21,41 @@ describe("competition records sync service", () => {
       sourceSnapshotAt: sourceBatch.sourceSnapshotAt,
       editions: [],
     };
-    const execute = vi.fn()
+    const executeTool = vi.fn()
       .mockResolvedValueOnce(sourceBatch)
       .mockResolvedValueOnce(projection);
-    const dispatch = vi.fn().mockResolvedValue({
+    const dispatchCommand = vi.fn().mockResolvedValue({
       kind: "executed",
+      executionId: "execution-1",
+      viewKey: "competition_records",
+      stateVersion: "2",
       summary: { total: 0, created: 0, updated: 0, unchanged: 0 },
     });
-
-    const result = await syncCompetitionEditions({
-      source: { includeQuickMatches: false },
-      caller: { kind: "automation", jobKey: "competition-schedule" },
+    const context: ViewOperationContext = {
+      viewKey: "competition_records",
       actor: { permissions: ["view.write"] },
-      toolRuntime: { execute } as unknown as ToolRuntime,
-      commandBus: { dispatch } as unknown as ViewCommandBus,
-    });
+      executeTool,
+      dispatchCommand,
+    };
 
-    expect(execute).toHaveBeenNthCalledWith(1, expect.objectContaining({
+    const result = await competitionSyncOperation.execute(
+      context,
+      competitionSyncOperation.inputSchema.parse({ includeQuickMatches: false }),
+    );
+
+    expect(executeTool).toHaveBeenNthCalledWith(1, expect.objectContaining({
       capabilityKey: "competition.source.read",
       capabilityVersion: "2.0.0",
-      context: expect.objectContaining({
-        caller: { kind: "automation", jobKey: "competition-schedule" },
-      }),
+      providerId: "ustctta.competition-source",
     }));
-    expect(execute).toHaveBeenNthCalledWith(2, expect.objectContaining({
+    expect(executeTool).toHaveBeenNthCalledWith(2, expect.objectContaining({
       capabilityKey: "competition.edition.project",
-      value: { batch: sourceBatch },
+      input: { batch: sourceBatch },
     }));
-    expect(dispatch).toHaveBeenCalledWith(expect.objectContaining({
+    expect(dispatchCommand).toHaveBeenCalledWith(expect.objectContaining({
       commandKey: "competition.sync_editions",
       commandVersion: "2",
       input: projection,
-      initiator: "system",
     }));
     expect(result.source).toEqual({
       sourceSystem: "USTCTTA-site",

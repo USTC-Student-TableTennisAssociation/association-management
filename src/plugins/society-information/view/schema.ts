@@ -273,6 +273,12 @@ export const societyInformationViewModule: ViewModule = {
     description: "组织社团身份、基本信息、当前指导关系、干事队伍、长期活动和平台入口。",
     retrievalDescription:
       "用于社团身份、基本信息、宗旨、星级、成立时间、当前指导老师、当前干事队伍、长期活动、平台与公开入口。",
+    aiWriteCapabilities: [
+      "建立和维护社团档案、当前指导关系、当前干事队伍、长期活动和平台入口",
+    ],
+    dataBoundaries: [
+      "当前关系与历史资料分开，历史提及不会自动写成当前在任状态",
+    ],
     aiSemanticInstructions:
       "Card 使用 View-local identity，并通过 Related Objects 连接稳定认知 Object；业务关系只由本 View Slot 表达。" +
       "SocietyCard.advisor 只表示当前正式指导老师；致谢、曾经提供指导、历史交流或笼统的‘指导老师’提法，不能单独证明当前任职。" +

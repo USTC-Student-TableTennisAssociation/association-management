@@ -8,6 +8,8 @@ import { InstalledViewService } from "@/view-runtime/application/installed-views
 import { ViewCommandBus } from "@/view-runtime/application/command-bus";
 import { PrismaViewReadPort } from "@/view-runtime/application/view-read-port";
 import { ViewChangeCoordinator } from "@/view-runtime/application/view-change-coordinator";
+import { ViewOperationRunner } from "@/view-runtime/application/view-operation-runner";
+import { retrieveViewChangeEvidence } from "@/view-runtime/application/view-change-evidence";
 import { observeViewChanges } from "@/ai/view-change-observer";
 import { reconcileObjectHigherMemoryFromViewChange } from "@/memory/object-higher-memory-reconciliation";
 import { reconcileViewHigherMemoryFromViewChange } from "@/memory/view-higher-memory-reconciliation";
@@ -32,6 +34,7 @@ export const viewChangeCoordinator = new ViewChangeCoordinator({
   registry: extensionRegistry,
   readPort: viewReadPort,
   evaluate: observeViewChanges,
+  retrieveEvidence: (input) => retrieveViewChangeEvidence({ database, ...input }),
   reconcileObjectHigherMemory: reconcileObjectHigherMemoryFromViewChange,
   reconcileViewHigherMemory: reconcileViewHigherMemoryFromViewChange,
 });
@@ -53,3 +56,10 @@ export function createToolRuntime(): ToolRuntime {
 }
 
 export const toolRuntime = createToolRuntime();
+export const viewOperationRunner = new ViewOperationRunner(
+  database,
+  extensionRegistry,
+  installedViewService,
+  toolRuntime,
+  viewCommandBus,
+);

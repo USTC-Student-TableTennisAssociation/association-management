@@ -76,11 +76,14 @@ describe("Sydaris plugin architecture boundaries", () => {
       "src/contracts/view.ts",
       "src/runtime/extension-host/extension-registry.ts",
       "src/view-runtime/application/command-bus.ts",
+      "src/view-runtime/application/view-operation-runner.ts",
       "src/view-runtime/application/view-read-port.ts",
       "src/view-runtime/persistence/prisma-card-graph.ts",
     ];
     for (const file of files) {
-      expect(source(file), file).not.toMatch(/society_information|activity_operations/);
+      expect(source(file), file).not.toMatch(
+        /society_information|activity_operations|competition_records/,
+      );
       expect(source(file), file).not.toContain("@/plugins/");
       expect(source(file), file).not.toContain("@/shell/");
     }
@@ -105,6 +108,21 @@ describe("Sydaris plugin architecture boundaries", () => {
     expect(commandRoute).not.toContain("viewChangeCoordinator");
     expect(commandRoute).not.toContain("reaction.enqueue");
     expect(commandBus).toContain("this.postCommit.enqueue");
+  });
+
+  it("keeps business-specific server workflows inside Plugin packages", () => {
+    expect(existsSync(resolve(
+      process.cwd(),
+      "src/app/api/views/competition_records/sync/route.ts",
+    ))).toBe(false);
+    expect(existsSync(resolve(
+      process.cwd(),
+      "src/integrations/competition-records/sync-service.ts",
+    ))).toBe(false);
+    const operationRoute = source(
+      "src/app/api/views/[viewKey]/operations/[operationKey]/route.ts",
+    );
+    expect(operationRoute).not.toMatch(/competition_records|@sydaris\/competition-records-plugin/);
   });
 
   it("keeps every installed Plugin behind the public SDK boundary", () => {
@@ -139,7 +157,9 @@ describe("Sydaris plugin architecture boundaries", () => {
         /\.viewCard\.(?:create|update|delete)|\.viewDimensionValue\.|\.viewSlotBinding\./,
       );
       if (/method:\s*["'](?:POST|PUT|PATCH|DELETE)/.test(contents)) {
-        expect(contents, displayPath(file)).toMatch(/useViewCommand|\/commands\//);
+        expect(contents, displayPath(file)).toMatch(
+          /useViewCommand|useViewOperation|\/commands\/|\/operations\//,
+        );
       }
     }
   });

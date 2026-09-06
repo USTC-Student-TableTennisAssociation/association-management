@@ -85,6 +85,13 @@ export function governFinalAnswerStream<T extends UIMessageChunk>(
           emitAnswerComplete(controller);
           controller.enqueue(chunk);
           return;
+        case "abort":
+          // Some UI stream consumers stop reading as soon as they observe an
+          // abort chunk. Publish the terminal lifecycle before it so the
+          // composer can leave its generating state deterministically.
+          emitAnswerComplete(controller);
+          controller.enqueue(chunk);
+          return;
         default:
           controller.enqueue(chunk);
       }
