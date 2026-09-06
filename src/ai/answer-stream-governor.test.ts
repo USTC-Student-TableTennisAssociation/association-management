@@ -46,6 +46,10 @@ describe("Answer Stream Governor", () => {
       id: "answer",
       delta: "原始回答",
     });
+    expect(chunks).toContainEqual({
+      type: "data-answerLifecycle",
+      data: { phase: "answer_complete" },
+    });
     expect(onDirectStream).toHaveBeenCalled();
   });
 
@@ -62,6 +66,10 @@ describe("Answer Stream Governor", () => {
       type: "text-delta",
       id: "grounded-final-answer",
       delta: "校验后回答",
+    });
+    expect(chunks).toContainEqual({
+      type: "data-answerLifecycle",
+      data: { phase: "answer_complete" },
     });
   });
 });

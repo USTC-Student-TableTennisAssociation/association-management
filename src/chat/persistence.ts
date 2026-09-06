@@ -8,6 +8,7 @@ import {
 } from "@/generated/prisma/client";
 import { getDatabase } from "@/db";
 import type { ClubChatMessage } from "@/ai/types";
+import { finalStepMessageText } from "@/ai/ui-message-text";
 
 export type ChatHistoryActor = {
   id: string;
@@ -47,6 +48,50 @@ function uiRole(role: ChatMessageRole): ClubChatMessage["role"] {
 
 function jsonParts(parts: ClubChatMessage["parts"]): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(parts)) as Prisma.InputJsonValue;
+}
+
+const repeatingPersistentDataParts = new Set([
+  "data-viewCommandProposal",
+  "data-objectChangeProposal",
+  "data-libraryProposal",
+]);
+
+/**
+ * Chat history keeps the user-visible answer and lightweight UI state. Raw
+ * tool inputs/outputs and repeated retrieval snapshots belong in the debug
+ * trace; persisting them here makes stream finalization unnecessarily large.
+ */
+export function compactChatMessageForPersistence(
+  message: ClubChatMessage,
+): ClubChatMessage {
+  if (message.role !== "assistant") return message;
+
+  const text = finalStepMessageText(message);
+  const reasoning = message.parts
+    .filter((part) => part.type === "reasoning")
+    .map((part) => part.text)
+    .join("");
+  const lastSingletonIndex = new Map<string, number>();
+  message.parts.forEach((part, index) => {
+    if (part.type.startsWith("data-") && !repeatingPersistentDataParts.has(part.type)) {
+      lastSingletonIndex.set(part.type, index);
+    }
+  });
+  const dataParts = message.parts.filter((part, index) =>
+    part.type.startsWith("data-") && (
+      repeatingPersistentDataParts.has(part.type) ||
+      lastSingletonIndex.get(part.type) === index
+    )
+  );
+
+  return {
+    ...message,
+    parts: [
+      ...(text ? [{ type: "text" as const, text }] : []),
+      ...(reasoning ? [{ type: "reasoning" as const, text: reasoning }] : []),
+      ...dataParts,
+    ],
+  };
 }
 
 function summary(row: {
@@ -181,7 +226,8 @@ export async function saveChatMessage(input: {
   message: ClubChatMessage;
   position: number;
 }, database: PrismaClient = getDatabase()): Promise<void> {
-  if (!hasPersistableChatContent(input.message)) return;
+  const message = compactChatMessageForPersistence(input.message);
+  if (!hasPersistableChatContent(message)) return;
   await database.$transaction(async (transaction) => {
     const conversation = await requireOwnedConversation(
       transaction,
@@ -192,24 +238,24 @@ export async function saveChatMessage(input: {
       where: {
         conversationId_clientMessageId: {
           conversationId: conversation.id,
-          clientMessageId: input.message.id,
+          clientMessageId: message.id,
         },
       },
       update: {
-        role: databaseRole(input.message.role),
-        parts: jsonParts(input.message.parts),
+        role: databaseRole(message.role),
+        parts: jsonParts(message.parts),
         position: input.position,
       },
       create: {
         conversationId: conversation.id,
-        clientMessageId: input.message.id,
-        role: databaseRole(input.message.role),
-        parts: jsonParts(input.message.parts),
+        clientMessageId: message.id,
+        role: databaseRole(message.role),
+        parts: jsonParts(message.parts),
         position: input.position,
       },
     });
     const suggestedTitle = conversation.title === "新对话"
-      ? firstMessageTitle(input.message)
+      ? firstMessageTitle(message)
       : undefined;
     await transaction.chatConversation.update({
       where: { id: conversation.id },
