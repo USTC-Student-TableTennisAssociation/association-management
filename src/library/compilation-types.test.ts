@@ -12,19 +12,26 @@ import {
 import {
   buildLibraryEvidenceCatalog,
   coarseCompilationInstructions,
+  isReusableExtractedPreview,
+  inspectEmbeddedModelJson,
   materializeLibraryAssessment,
   ModelInFlightGate,
+  normalizeLibraryRunCheckpoint,
   parseEmbeddedModelJson,
   renderVisualObservation,
+  shouldUseTextJsonCleanRetry,
   sourceExcerptMatchesPreview,
 } from "@/library/compilation-processor";
 import {
   coldStartModelConcurrency,
   catalogCompilationConcurrency,
   coarseCompilationConcurrency,
+  mineruApiConcurrency,
+  mineruApiRequestsPerMinute,
   textModelConcurrency,
   visionModelConcurrency,
 } from "@/library/compilation-concurrency";
+import { compilationFileGate } from "@/library/compilation-orchestration";
 import {
   artifactDirectoryFromProgress,
   checkpointOwnedByRun,
@@ -34,6 +41,95 @@ import {
 import { parserKeyForMimeType } from "@/library/compilation-service";
 
 describe("library compilation profiles", () => {
+  it("blocks later phases until every file in scope is ready", () => {
+    expect(compilationFileGate([])).toBe("ready");
+    expect(compilationFileGate(["ready", "ready"])).toBe("ready");
+    expect(compilationFileGate(["ready", "queued"])).toBe("pending");
+    expect(compilationFileGate(["ready", "running"])).toBe("pending");
+    expect(compilationFileGate(["ready", "queued", "failed"])).toBe("failed");
+  });
+
+  it("reports exact schema paths for text-json correction retries", () => {
+    const result = inspectEmbeddedModelJson(JSON.stringify({
+      summary: "赛事策划案",
+      referenceCandidates: [{
+        statement: "比赛预算为 2500 元",
+        sourceId: "S0001",
+        objectLabels: [],
+      }],
+      assertionCandidates: [],
+    }), libraryCoarseCompilationOutputSchema);
+
+    expect(result).toMatchObject({ success: false });
+    if (!result.success) {
+      expect(result.error).toContain("referenceCandidates.0.objectLabels");
+      expect(result.error).toContain("Schema 校验失败");
+    }
+  });
+
+  it("makes every coarse candidate object-centered", () => {
+    expect(coarseCompilationInstructions().join("\n")).toContain(
+      "每条 Reference 和 Assertion 必须至少关联一个",
+    );
+    expect(coarseCompilationInstructions().join("\n")).toContain(
+      "确实找不到明确对象时不要输出",
+    );
+  });
+
+  it("uses a text-json clean retry only for structured output failures", () => {
+    expect(shouldUseTextJsonCleanRetry(
+      new Error("No object generated: response did not match schema"),
+    )).toBe(true);
+    expect(shouldUseTextJsonCleanRetry(
+      new Error("模型引用了未提供的证据编号 S9999"),
+    )).toBe(true);
+    expect(shouldUseTextJsonCleanRetry(
+      new Error("AI_APICallError: Headers Timeout Error"),
+    )).toBe(false);
+    expect(shouldUseTextJsonCleanRetry(
+      Object.assign(new Error("rate limited"), { statusCode: 429 }),
+    )).toBe(false);
+  });
+
+  it("keeps durable deep paths independent from unbounded runtime telemetry", () => {
+    const legacyUnits = Array.from({ length: 100 }, (_, index) => ({
+      id: `region-${index}`,
+      kind: "source" as const,
+      statusMessage: "running",
+    }));
+    const checkpoint = normalizeLibraryRunCheckpoint({
+      version: "library-run-checkpoint.v1",
+      deep: {
+        ownerRunId: "9cf76cbd-31cf-4b18-bd9a-b64f8ee1354c",
+        explorationRun: "/runs/exploration",
+        sourceCompilation: "/runs/exploration/source-compilation",
+        parallelUnits: legacyUnits,
+      },
+      runtime: { parallelUnits: legacyUnits },
+    });
+
+    expect(checkpoint.deep).toMatchObject({
+      explorationRun: "/runs/exploration",
+      sourceCompilation: "/runs/exploration/source-compilation",
+    });
+    expect(checkpoint.runtime?.parallelUnits).toHaveLength(32);
+    expect(checkpoint.runtime?.parallelUnits[0]?.id).toBe("region-68");
+    expect(checkpoint.deep).not.toHaveProperty("parallelUnits");
+  });
+
+  it("does not reuse a failed parser warning as a content checkpoint", () => {
+    expect(isReusableExtractedPreview({
+      parser: "mineru-unavailable",
+      sourceKind: "text_excerpt",
+      warning: "MinerU API 返回 HTTP 429",
+    })).toBe(false);
+    expect(isReusableExtractedPreview({
+      parser: "mineru-api",
+      sourceKind: "text_excerpt",
+      text: "已解析正文",
+    })).toBe(true);
+  });
+
   it("uses eighteen coarse file workers by default", () => {
     const previous = process.env.LIBRARY_COARSE_CONCURRENCY;
     delete process.env.LIBRARY_COARSE_CONCURRENCY;
@@ -81,6 +177,26 @@ describe("library compilation profiles", () => {
     }
   });
 
+  it("gives the MinerU API its own conservative request limits", () => {
+    const previousConcurrency = process.env.MINERU_API_MAX_IN_FLIGHT;
+    const previousRpm = process.env.MINERU_API_REQUESTS_PER_MINUTE;
+    delete process.env.MINERU_API_MAX_IN_FLIGHT;
+    delete process.env.MINERU_API_REQUESTS_PER_MINUTE;
+    try {
+      expect(mineruApiConcurrency()).toBe(4);
+      expect(mineruApiRequestsPerMinute()).toBe(18);
+      process.env.MINERU_API_MAX_IN_FLIGHT = "2";
+      process.env.MINERU_API_REQUESTS_PER_MINUTE = "12";
+      expect(mineruApiConcurrency()).toBe(2);
+      expect(mineruApiRequestsPerMinute()).toBe(12);
+    } finally {
+      if (previousConcurrency === undefined) delete process.env.MINERU_API_MAX_IN_FLIGHT;
+      else process.env.MINERU_API_MAX_IN_FLIGHT = previousConcurrency;
+      if (previousRpm === undefined) delete process.env.MINERU_API_REQUESTS_PER_MINUTE;
+      else process.env.MINERU_API_REQUESTS_PER_MINUTE = previousRpm;
+    }
+  });
+
   it("allows eighteen in-flight model requests and queues the nineteenth", async () => {
     const gate = new ModelInFlightGate(18);
     const releases = await Promise.all(Array.from({ length: 18 }, () => gate.acquire()));
@@ -117,6 +233,9 @@ describe("library compilation profiles", () => {
     expect(deepParallelUnitEventFromProgress(
       "[+  18.0s] [全局对象·region-0001] 开始 1/8：3 个 Fragment",
     )?.unit.kind).toBe("global_object");
+    expect(deepParallelUnitEventFromProgress(
+      "[+  24.0s] [对象准入·global-object-0042] 复审：热情",
+    )?.unit.kind).toBe("object_admission");
     expect(deepParallelUnitEventFromProgress(
       "[+  30.0s] [来源语义·region-0003] 完成：命题 4，Object Fragment 2",
     )?.completed).toBe(true);
@@ -209,8 +328,16 @@ describe("library compilation profiles", () => {
     });
     expect(assessment.assertionCandidates[0].sourceExcerpt).toBe("时间：10月25日");
     expect(assessment.objectCandidates).toEqual(expect.arrayContaining([
-      expect.objectContaining({ label: "西区乒乓球馆", action: "bind_existing" }),
-      expect.objectContaining({ label: "比赛", action: "new_candidate" }),
+      expect.objectContaining({
+        label: "西区乒乓球馆",
+        action: "new_candidate",
+        evidenceStatements: ["文件说明比赛地点"],
+      }),
+      expect.objectContaining({
+        label: "比赛",
+        action: "new_candidate",
+        evidenceStatements: ["比赛时间为10月25日"],
+      }),
     ]));
   });
 
@@ -433,5 +560,16 @@ describe("library compilation profiles", () => {
     })}\n\`\`\``;
     expect(parseEmbeddedModelJson(raw, libraryCatalogCompilationOutputSchema))
       .toMatchObject({ summary: "未形成知识结果" });
+  });
+
+  it("safely unwraps one protocol-name layer after validating the inner object", () => {
+    const raw = JSON.stringify({
+      catalog_library_compilation: {
+        summary: "协议字段被模型误作外层包装",
+        referenceCandidates: [],
+      },
+    });
+    expect(parseEmbeddedModelJson(raw, libraryCatalogCompilationOutputSchema))
+      .toMatchObject({ summary: "协议字段被模型误作外层包装" });
   });
 });

@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+
+import httpx
 
 from cold_start.compilation.source_semantics import (
     FullSourceSemanticRunner,
@@ -27,8 +31,12 @@ from cold_start.embedding_server import (
 from cold_start.environment import load_environment_file
 from cold_start.global_exploration import (
     GlobalExplorationRunner,
+    GlobalExplorationSnapshot,
     create_exploration_run_directory,
     load_exploration_inputs,
+    load_exploration_snapshot,
+    load_exploration_working_checkpoint,
+    load_parsing_artifacts,
     write_exploration_artifacts,
     write_parsing_artifacts,
 )
@@ -44,8 +52,66 @@ from cold_start.global_resolution import (
     write_working_registry,
 )
 from cold_start.llm import OpenAICompatibleChatModel
+from cold_start.llm.structured_output import ModelOutputError
 from cold_start.progress import ConsoleProgressReporter
 from cold_start.region_tree.runtime import BgeM3Embedder
+
+
+class ExplorationIncompleteError(RuntimeError):
+    """An exploration artifact exists, but technical nodes are not final."""
+
+    def __init__(self, snapshot: GlobalExplorationSnapshot) -> None:
+        tree = snapshot.region_tree
+        failed = [node.node_id for node in tree.nodes if node.status == "failed"]
+        review = [
+            node.node_id for node in tree.nodes if node.status == "needs_review"
+        ]
+        details = "；".join(tree.issues[-8:]) or "区域树仍有未完成节点"
+        failed_label = f"（{', '.join(failed)}）" if failed else ""
+        review_label = f"（{', '.join(review)}）" if review else ""
+        super().__init__(
+            f"区域树未冻结：失败 {len(failed)} 个{failed_label}，"
+            f"待复核 {len(review)} 个{review_label}；{details}"
+        )
+        self.retryable = bool(failed)
+        self.category = (
+            "transport"
+            if "ConnectError" in details or "流式传输连续失败" in details
+            else "model_output"
+            if failed
+            else "internal"
+        )
+
+
+async def _run_progressive_tasks(
+    compile_sources: Callable[[], Awaitable[None]],
+    resolve_available: Callable[[], Awaitable[None]],
+) -> None:
+    """Supervise producer and consumer without losing completed source checkpoints.
+
+    A transient resolver failure must not cancel source regions that can still finish and
+    persist their stage artifacts. If source compilation itself fails, it has already waited
+    for all region tasks, so the resolver can no longer receive a final snapshot and is
+    cancelled explicitly.
+    """
+
+    compiler = asyncio.create_task(compile_sources(), name="compile-sources")
+    resolver = asyncio.create_task(resolve_available(), name="resolve-available")
+    try:
+        try:
+            await compiler
+        except Exception:
+            if not resolver.done():
+                resolver.cancel()
+            await asyncio.gather(resolver, return_exceptions=True)
+            raise
+        await resolver
+    finally:
+        unfinished = [task for task in (compiler, resolver) if not task.done()]
+        for task in unfinished:
+            task.cancel()
+        if unfinished:
+            await asyncio.gather(*unfinished, return_exceptions=True)
 
 
 def _add_model_arguments(command: argparse.ArgumentParser) -> None:
@@ -101,6 +167,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     explore = subparsers.add_parser("explore", help="运行单文档全局勘探")
     _add_document_arguments(explore)
+    explore.add_argument(
+        "--resume",
+        type=Path,
+        help="继续已有勘探运行目录，复用解析产物和已成功的模型请求",
+    )
     _add_model_arguments(explore)
 
     parse_document = subparsers.add_parser(
@@ -279,7 +350,7 @@ def _report_environment(
 async def _execute_explore(
     args: argparse.Namespace,
     progress: ConsoleProgressReporter,
-) -> tuple[Path, bool]:
+) -> tuple[Path, GlobalExplorationSnapshot]:
     model_settings = ModelSettings.from_environment(
         model=args.model,
         api_base_url=args.api_base_url,
@@ -302,44 +373,86 @@ async def _execute_explore(
         ),
     )
 
-    run_directory = create_exploration_run_directory(
-        output_root=args.output,
-        source_path=args.source,
+    resume_directory = getattr(args, "resume", None)
+    run_directory = (
+        resume_directory.expanduser().resolve()
+        if resume_directory
+        else create_exploration_run_directory(
+            output_root=args.output,
+            source_path=args.source,
+        )
     )
+    if resume_directory and not run_directory.is_dir():
+        raise ValueError(f"勘探恢复目录不存在：{run_directory}")
     model_stream_directory = run_directory / "model-streams"
-    progress.report("产物", f"已创建运行目录 {run_directory}")
-
-    document_loader = MinerUDocumentLoader(
-        progress=lambda message: progress.report("文档", message)
-    )
-    progress.report(
-        "文档",
-        (
-            f"开始解析 {args.source}；{document_loader.parser_name}，"
-            f"计算设备 {document_loader.accelerator_description()}"
-        ),
-    )
-    document = await asyncio.to_thread(
-        document_loader.load,
-        args.source,
-        raw_output_directory=run_directory / "mineru-raw",
-    )
-    nonempty_pages = sum(bool(page.markdown.strip()) for page in document.pages)
-    progress.report(
-        "文档",
-        (
-            f"解析完成：{nonempty_pages}/{document.page_count} 页非空，"
-            f"全文 {len(document.markdown)} 字符，{len(document.blocks)} 个稳定块；"
-            f"{document.parser_name}"
-        ),
-    )
-    parsing_paths = write_parsing_artifacts(
-        run_directory=run_directory,
-        document=document,
-    )
     progress.report(
         "产物",
-        f"PDF 解析产物已提前写入 {parsing_paths.parsed_document_markdown}",
+        (
+            f"继续运行目录 {run_directory}"
+            if resume_directory
+            else f"已创建运行目录 {run_directory}"
+        ),
+    )
+
+    if resume_directory:
+        document = load_parsing_artifacts(
+            run_directory=run_directory,
+            source_path=args.source,
+        )
+        progress.report(
+            "文档",
+            f"已恢复解析 checkpoint：{document.page_count} 页，{len(document.blocks)} 个稳定块",
+        )
+    else:
+        document_loader = MinerUDocumentLoader(
+            progress=lambda message: progress.report("文档", message)
+        )
+        progress.report(
+            "文档",
+            (
+                f"开始解析 {args.source}；{document_loader.parser_name}，"
+                f"计算设备 {document_loader.accelerator_description()}"
+            ),
+        )
+        document = await asyncio.to_thread(
+            document_loader.load,
+            args.source,
+            raw_output_directory=run_directory / "mineru-raw",
+        )
+        nonempty_pages = sum(bool(page.markdown.strip()) for page in document.pages)
+        progress.report(
+            "文档",
+            (
+                f"解析完成：{nonempty_pages}/{document.page_count} 页非空，"
+                f"全文 {len(document.markdown)} 字符，{len(document.blocks)} 个稳定块；"
+                f"{document.parser_name}"
+            ),
+        )
+        parsing_paths = write_parsing_artifacts(
+            run_directory=run_directory,
+            document=document,
+        )
+        progress.report(
+            "产物",
+            f"PDF 解析产物已提前写入 {parsing_paths.parsed_document_markdown}",
+        )
+
+    existing_snapshot = (
+        load_exploration_snapshot(run_directory) if resume_directory else None
+    )
+    if existing_snapshot and existing_snapshot.source.sha256 != document.file_sha256:
+        raise ValueError("勘探最终产物与当前来源 SHA-256 不一致")
+    if existing_snapshot and existing_snapshot.region_tree.status == "frozen":
+        progress.report("完成", "区域树已从 frozen checkpoint 恢复，无需重新调用模型")
+        return run_directory, existing_snapshot
+    working_checkpoint = (
+        load_exploration_working_checkpoint(
+            run_directory=run_directory,
+            source_sha256=document.file_sha256,
+            fallback_snapshot=existing_snapshot,
+        )
+        if resume_directory
+        else None
     )
     progress.report("模型", f"模型输入、正文和思考将实时保存到 {model_stream_directory}")
     progress.report(
@@ -357,12 +470,21 @@ async def _execute_explore(
         show_model_stream=args.show_model_stream,
     )
     try:
-        snapshot = await GlobalExplorationRunner(
+        runner = GlobalExplorationRunner(
             model=model,
             settings=exploration_settings,
             progress=progress,
             run_directory=run_directory,
-        ).run(document)
+        )
+        if working_checkpoint:
+            snapshot = await runner.resume(document, working_checkpoint)
+        else:
+            if resume_directory:
+                progress.report(
+                    "区域树",
+                    "没有可用的区域树 working checkpoint，将从已缓存解析结果重新勘探",
+                )
+            snapshot = await runner.run(document)
     finally:
         await model.aclose()
 
@@ -372,14 +494,28 @@ async def _execute_explore(
         document=document,
         snapshot=snapshot,
     )
-    progress.report("完成", f"全局勘探产物：{paths.run_directory}")
-    return paths.run_directory, snapshot.region_tree.status == "frozen"
+    if snapshot.region_tree.status == "frozen":
+        progress.report("完成", f"全局勘探产物：{paths.run_directory}")
+    else:
+        failed_count = sum(
+            node.status == "failed" for node in snapshot.region_tree.nodes
+        )
+        progress.report(
+            "区域树",
+            (
+                f"尚未冻结；{failed_count} 个技术失败节点已保存到 checkpoint，"
+                "本次命令将返回失败并等待恢复"
+            ),
+        )
+    return paths.run_directory, snapshot
 
 
 async def _run_explore(args: argparse.Namespace) -> int:
     progress = ConsoleProgressReporter()
     _report_environment(args, progress)
-    await _execute_explore(args, progress)
+    _, snapshot = await _execute_explore(args, progress)
+    if snapshot.region_tree.status != "frozen":
+        raise ExplorationIncompleteError(snapshot)
     return 0
 
 
@@ -422,8 +558,8 @@ async def _run_compile_source(args: argparse.Namespace) -> int:
         (
             f"使用模型 {model_settings.model}，接口 {model_settings.api_base_url}；"
             f"全局 RPM {model_settings.requests_per_minute}；"
-            "内聚 Assertion/Reference、遗漏扫描和 Object Fragment Construction 分别调用模型；"
-            "source naming hints 在 Fragment Construction 中作为硬分组提示"
+            "依次执行 Assertion Discovery、覆盖差分和 Object Fragment Construction；"
+            "名称与局部共指只在 Fragment Construction 中判断"
         ),
     )
     progress.report(
@@ -493,8 +629,8 @@ async def _run_compile_sources(args: argparse.Namespace) -> int:
             f"全局 RPM {model_settings.requests_per_minute}；"
             f"来源并发 {compilation_settings.max_parallel_sources}；"
             "整份 Source 先进行一次保守 Source Time 提取；每个来源依次执行内聚 "
-            "Assertion/Reference、遗漏扫描和 Object Fragment Construction；source naming hints "
-            "在 Fragment Construction 中作为硬分组提示"
+            "Assertion Discovery、覆盖差分和 Object Fragment Construction；名称与局部共指"
+            "只在 Fragment Construction 中判断"
         ),
     )
     progress.report(
@@ -608,9 +744,7 @@ async def _run_compile_sources(args: argparse.Namespace) -> int:
                     if complete:
                         return
 
-            async with asyncio.TaskGroup() as tasks:
-                tasks.create_task(compile_sources())
-                tasks.create_task(resolve_available())
+            await _run_progressive_tasks(compile_sources, resolve_available)
     finally:
         await model.aclose()
     progress.report("完成", f"全部来源语义编译产物：{paths.directory}")
@@ -749,7 +883,126 @@ def main() -> None:
         raise SystemExit(130) from None
     except Exception as error:
         print(f"冷启动任务失败：{error}", file=sys.stderr)
+        print(
+            "SYDARIS_FAILURE "
+            + json.dumps(_failure_metadata(error), ensure_ascii=False),
+            file=sys.stderr,
+        )
         raise SystemExit(1) from error
+
+
+def _exception_graph(error: BaseException) -> list[BaseException]:
+    pending = [error]
+    found: list[BaseException] = []
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        found.append(current)
+        if isinstance(current, BaseExceptionGroup):
+            pending.extend(reversed(current.exceptions))
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        elif current.__context__ is not None:
+            pending.append(current.__context__)
+    return found
+
+
+def _exception_path(
+    root: BaseException,
+    target: BaseException,
+    seen: set[int] | None = None,
+) -> list[BaseException] | None:
+    visited = seen or set()
+    if id(root) in visited:
+        return None
+    visited.add(id(root))
+    if root is target:
+        return [root]
+    children: list[BaseException] = []
+    if isinstance(root, BaseExceptionGroup):
+        children.extend(root.exceptions)
+    if root.__cause__ is not None:
+        children.append(root.__cause__)
+    elif root.__context__ is not None:
+        children.append(root.__context__)
+    for child in children:
+        path = _exception_path(child, target, visited)
+        if path is not None:
+            return [root, *path]
+    return None
+
+
+def _failure_message(error: Exception, cause: BaseException) -> str:
+    if not isinstance(error, BaseExceptionGroup):
+        return str(error)
+    path = _exception_path(error, cause) or [error, cause]
+    details = [str(error)]
+    for item in path[1:]:
+        detail = " ".join(str(item).split())
+        details.append(f"{type(item).__name__}: {detail}")
+    return "；".join(details)
+
+
+def _failure_metadata(error: Exception) -> dict[str, object]:
+    failures = _exception_graph(error)
+    status_failures = [
+        item for item in failures if isinstance(item, httpx.HTTPStatusError)
+    ]
+    # A terminal provider response takes precedence over transient siblings: retrying cannot
+    # repair credentials, billing or endpoint configuration.
+    status_failures.sort(
+        key=lambda item: item.response.status_code in {408, 409, 425, 429}
+        or item.response.status_code >= 500
+    )
+    for current in status_failures:
+        status = current.response.status_code
+        retryable = status in {408, 409, 425, 429} or status >= 500
+        category = (
+            "rate_limit"
+            if status == 429
+            else "remote_service"
+            if retryable
+            else "authentication"
+            if status in {401, 403}
+            else "billing"
+            if status == 402
+            else "configuration"
+        )
+        return {
+            "retryable": retryable,
+            "category": category,
+            "message": _failure_message(error, current),
+            "statusCode": status,
+        }
+    for current in failures:
+        if isinstance(current, ExplorationIncompleteError):
+            return {
+                "retryable": current.retryable,
+                "category": current.category,
+                "message": str(current),
+            }
+    for current in failures:
+        if isinstance(current, ModelOutputError):
+            return {
+                "retryable": True,
+                "category": "model_output",
+                "message": _failure_message(error, current),
+            }
+    for current in failures:
+        if isinstance(current, httpx.TransportError):
+            return {
+                "retryable": True,
+                "category": "transport",
+                "message": _failure_message(error, current),
+            }
+    return {
+        "retryable": False,
+        "category": "internal",
+        "message": str(error),
+    }
 
 
 if __name__ == "__main__":

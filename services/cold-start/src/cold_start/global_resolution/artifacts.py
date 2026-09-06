@@ -8,13 +8,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cold_start.compilation.source_semantics import FullSourceSemanticSnapshot
+from cold_start.compilation.source_semantics import (
+    SOURCE_SEMANTIC_POLICY_VERSION,
+    FullSourceSemanticSnapshot,
+)
 from cold_start.document.models import ParsedBlock
 from cold_start.global_resolution.models import (
+    GLOBAL_RESOLUTION_POLICY_VERSION,
     ActiveGlobalObject,
     AssertionEvidence,
     GlobalResolutionArtifact,
     GlobalResolutionWorking,
+    ObjectAdmissionRecord,
     ReferenceAtom,
     RegistryState,
     SourceBlockEvidence,
@@ -24,6 +29,7 @@ from cold_start.global_resolution.models import (
     SurfaceAtom,
     assertion_key,
     reference_atom_id,
+    source_fragment_key,
     surface_atom_id,
 )
 
@@ -66,9 +72,13 @@ def load_source_compilation(
     directory = snapshot_path.parent
     if not snapshot_path.is_file():
         raise ValueError("--compilation 必须指向完整来源语义目录或 source-semantics-full.json")
-    snapshot = FullSourceSemanticSnapshot.model_validate_json(
-        snapshot_path.read_text(encoding="utf-8")
-    )
+    raw_snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(raw_snapshot, dict)
+        or raw_snapshot.get("policy_version") != SOURCE_SEMANTIC_POLICY_VERSION
+    ):
+        raise ValueError("Source Semantic 使用了不同或缺失的编译策略版本")
+    snapshot = FullSourceSemanticSnapshot.model_validate(raw_snapshot)
     compiled_ids = [item.region_node_id for item in snapshot.sources]
     expected_ids = (
         snapshot.source_node_ids[: len(compiled_ids)] if allow_partial else snapshot.source_node_ids
@@ -99,6 +109,7 @@ def load_source_compilation(
             source_blocks.append(block)
         evidence_by_claim: dict[str, AssertionEvidence] = {}
         references_by_fragment: dict[str, list[ReferenceAtom]] = {}
+        semantic_assertions_by_fragment: dict[str, list[str]] = {}
         for assertion in source.assertions:
             key = assertion_key(source.region_node_id, assertion.claim_id)
             supporting_blocks = []
@@ -124,6 +135,8 @@ def load_source_compilation(
             )
             assertions[key] = evidence
             evidence_by_claim[assertion.claim_id] = evidence
+            for source_fragment_id in assertion.semantic_fragment_ids:
+                semantic_assertions_by_fragment.setdefault(source_fragment_id, []).append(key)
             for ordinal, match in enumerate(
                 _FRAGMENT_REFERENCE_PATTERN.finditer(assertion.statement_template_markdown)
             ):
@@ -179,14 +192,18 @@ def load_source_compilation(
             fragment_references = references_by_fragment.get(fragment.fragment_id, [])
             fragment_assertion_ids = list(
                 dict.fromkeys(
-                    assertion_key(item.source_node_id, item.source_claim_id)
-                    for item in fragment_references
+                    [
+                        assertion_key(item.source_node_id, item.source_claim_id)
+                        for item in fragment_references
+                    ]
+                    + semantic_assertions_by_fragment.get(fragment.fragment_id, [])
                 )
             )
             fragments.append(
                 SourceFragmentDossier(
                     source_node_id=source.region_node_id,
                     source_fragment_id=fragment.fragment_id,
+                    identity_mode_hint=fragment.identity_mode_hint,
                     surface_atoms=fragment_surfaces,
                     reference_atoms=fragment_references,
                     assertions=[assertions[item] for item in fragment_assertion_ids],
@@ -247,8 +264,11 @@ def load_working_registry(
     working = GlobalResolutionWorking.model_validate_json(
         paths.working_json.read_text(encoding="utf-8")
     )
+    if working.resolution_policy_version != GLOBAL_RESOLUTION_POLICY_VERSION:
+        raise ValueError("Global Resolution 使用了不同的身份裁决策略版本")
     _validate_source_identity(
         schema_version=working.source_semantics_schema_version,
+        policy_version=working.source_semantics_policy_version,
         source_sha256=working.source_sha256,
         source_node_ids=working.source_node_ids,
         dataset=dataset,
@@ -257,6 +277,9 @@ def load_working_registry(
         working.global_objects,
         dataset,
         next_source_region_ordinal=working.next_source_region_ordinal,
+        rejected_fragment_keys=working.rejected_fragment_keys,
+        deferred_fragment_keys=working.deferred_fragment_keys,
+        admission_records=working.admission_records,
     )
 
 
@@ -273,11 +296,16 @@ def write_working_registry(
     state: RegistryState,
 ) -> None:
     working = GlobalResolutionWorking(
+        resolution_policy_version=GLOBAL_RESOLUTION_POLICY_VERSION,
         source_semantics_schema_version=dataset.snapshot.schema_version,
+        source_semantics_policy_version=dataset.snapshot.policy_version,
         source_sha256=dataset.source_sha256,
         source_node_ids=list(dataset.source_node_ids),
         next_source_region_ordinal=state.next_source_region_ordinal,
         global_objects=store_registry(state),
+        rejected_fragment_keys=state.rejected_fragment_keys,
+        deferred_fragment_keys=state.deferred_fragment_keys,
+        admission_records=state.admission_records,
     )
     _atomic_write(paths.working_json, working.model_dump_json(indent=2))
 
@@ -292,11 +320,16 @@ def write_final_artifact(
     _validate_registry_cursor(state, dataset)
     artifact = GlobalResolutionArtifact(
         created_at=datetime.now(UTC),
+        resolution_policy_version=GLOBAL_RESOLUTION_POLICY_VERSION,
         source_semantics_schema_version=dataset.snapshot.schema_version,
+        source_semantics_policy_version=dataset.snapshot.policy_version,
         source_sha256=dataset.source_sha256,
         source_node_ids=list(dataset.source_node_ids),
         source_region_count=len(dataset.regions),
         global_objects=store_registry(state),
+        rejected_fragment_keys=state.rejected_fragment_keys,
+        deferred_fragment_keys=state.deferred_fragment_keys,
+        admission_records=state.admission_records,
         total_surface_atoms=len(dataset.surface_atoms),
         total_reference_atoms=len(dataset.reference_atoms),
     )
@@ -322,8 +355,16 @@ def rebuild_registry(
     dataset: SourceCompilationDataset,
     *,
     next_source_region_ordinal: int,
+    rejected_fragment_keys: list[str] | None = None,
+    deferred_fragment_keys: list[str] | None = None,
+    admission_records: list[ObjectAdmissionRecord] | None = None,
 ) -> RegistryState:
     objects = []
+    fragment_by_key = {
+        fragment.fragment_key: fragment
+        for region in dataset.regions
+        for fragment in region.fragments
+    }
     for item in stored:
         try:
             surfaces = [dataset.surface_atoms[atom_id] for atom_id in item.surface_atom_ids]
@@ -338,7 +379,20 @@ def rebuild_registry(
             raise ValueError("Global Object canonical_name 必须来自当前 surface atom")
         assertion_ids = list(
             dict.fromkeys(
-                assertion_key(atom.source_node_id, atom.source_claim_id) for atom in references
+                [
+                    assertion_key(atom.source_node_id, atom.source_claim_id)
+                    for atom in references
+                ]
+                + [
+                    assertion.assertion_id
+                    for atom in surfaces
+                    for assertion in fragment_by_key[
+                        source_fragment_key(
+                            atom.source_node_id,
+                            atom.source_fragment_id,
+                        )
+                    ].assertions
+                ]
             )
         )
         objects.append(
@@ -356,6 +410,9 @@ def rebuild_registry(
         source_node_ids=list(dataset.source_node_ids),
         next_source_region_ordinal=next_source_region_ordinal,
         objects=objects,
+        rejected_fragment_keys=rejected_fragment_keys or [],
+        deferred_fragment_keys=deferred_fragment_keys or [],
+        admission_records=admission_records or [],
     )
     _validate_registry_cursor(state, dataset)
     return state
@@ -370,19 +427,45 @@ def _validate_registry_cursor(
     expected_references = {atom.atom_id for region in processed for atom in region.reference_atoms}
     actual_surfaces = {atom.atom_id for item in state.objects for atom in item.surface_atoms}
     actual_references = {atom.atom_id for item in state.objects for atom in item.reference_atoms}
-    if actual_surfaces != expected_surfaces or actual_references != expected_references:
+    dispositions = set(state.rejected_fragment_keys) | set(state.deferred_fragment_keys)
+    processed_fragment_by_key = {
+        fragment.fragment_key: fragment
+        for region in processed
+        for fragment in region.fragments
+    }
+    if dispositions - set(processed_fragment_by_key):
+        raise ValueError("Global Registry disposition 超出当前 SourceRegion cursor")
+    disposed_surfaces = {
+        atom.atom_id
+        for key in dispositions
+        for atom in processed_fragment_by_key[key].surface_atoms
+    }
+    disposed_references = {
+        atom.atom_id
+        for key in dispositions
+        for atom in processed_fragment_by_key[key].reference_atoms
+    }
+    if (
+        actual_surfaces | disposed_surfaces != expected_surfaces
+        or actual_references | disposed_references != expected_references
+        or actual_surfaces & disposed_surfaces
+        or actual_references & disposed_references
+    ):
         raise ValueError("Global Registry 当前 atom 归属与 SourceRegion cursor 不一致")
 
 
 def _validate_source_identity(
     *,
     schema_version: str,
+    policy_version: str,
     source_sha256: str,
     source_node_ids: list[str],
     dataset: SourceCompilationDataset,
 ) -> None:
     if schema_version != dataset.snapshot.schema_version:
         raise ValueError("working.json 与 Source Semantic schema 不一致")
+    if policy_version != dataset.snapshot.policy_version:
+        raise ValueError("working.json 与 Source Semantic policy 不一致")
     if source_sha256 != dataset.source_sha256:
         raise ValueError("working.json 与 Source Semantic SHA256 不一致")
     if source_node_ids != list(dataset.source_node_ids):

@@ -93,34 +93,30 @@ describe("View Change Observer", () => {
 
   it("requires a structured intervention decision", async () => {
     aiState.generateText.mockResolvedValue({
-      toolCalls: [{
-        toolName: "submitViewAttentionDecision",
-        input: {
-          action: "request_confirmation",
-          message: "四星级对应的评审结果是否还需要同步到公开平台简介？",
-          reason: "正式等级变化可能影响对外展示口径",
-        },
-      }],
+      output: {
+        action: "request_confirmation",
+        message: "四星级对应的评审结果是否还需要同步到公开平台简介？",
+        reason: "正式等级变化可能影响对外展示口径",
+      },
     });
 
     await expect(observeViewChanges(input())).resolves.toEqual(expect.objectContaining({
       action: "request_confirmation",
     }));
     expect(aiState.generateText).toHaveBeenCalledWith(expect.objectContaining({
-      toolChoice: { type: "tool", toolName: "submitViewAttentionDecision" },
+      output: expect.any(Object),
     }));
+    expect(aiState.generateText.mock.calls[0][0]).not.toHaveProperty("toolChoice");
+    expect(aiState.generateText.mock.calls[0][0]).not.toHaveProperty("tools");
   });
 
   it("represents silence explicitly without a user-visible message", async () => {
     aiState.generateText.mockResolvedValue({
-      toolCalls: [{
-        toolName: "submitViewAttentionDecision",
-        input: {
-          action: "silent",
-          message: "",
-          reason: "本次变化只是展示层微调",
-        },
-      }],
+      output: {
+        action: "silent",
+        message: "",
+        reason: "本次变化只是展示层微调",
+      },
     });
 
     await expect(observeViewChanges(input())).resolves.toEqual({
@@ -132,14 +128,11 @@ describe("View Change Observer", () => {
 
   it("makes silence invalid in the tool schema for an always-visible review", async () => {
     aiState.generateText.mockResolvedValue({
-      toolCalls: [{
-        toolName: "submitViewAttentionDecision",
-        input: {
-          action: "silent",
-          message: "",
-          reason: "没有发现冲突",
-        },
-      }],
+      output: {
+        action: "silent",
+        message: "",
+        reason: "没有发现冲突",
+      },
     });
     const value = input();
     value.attentionPolicy = "always";

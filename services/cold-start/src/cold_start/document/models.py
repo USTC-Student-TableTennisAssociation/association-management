@@ -27,6 +27,16 @@ class ParsedPage(BaseModel):
     markdown: str
 
 
+class AttachedEvidence(BaseModel):
+    """A parser-grounded auxiliary block used to interpret another source block."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["footnote"]
+    marker: str = Field(min_length=1, max_length=32)
+    block_id: str = Field(pattern=r"^p\d{4}-b\d{4}$")
+
+
 class ParsedBlock(BaseModel):
     """不可跨越内部切分的最小来源块。"""
 
@@ -42,6 +52,7 @@ class ParsedBlock(BaseModel):
     source_sub_type: str | None = None
     bbox: tuple[float, float, float, float] | None = None
     asset_path: str | None = None
+    attached_evidence: tuple[AttachedEvidence, ...] = ()
     markdown: str = Field(min_length=1)
 
 

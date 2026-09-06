@@ -166,7 +166,7 @@ export async function createLibraryCompilationJob(
           profileOrder: ["deep", "coarse", "catalog"],
           deduplicateBy: "sha256",
           publication: "draft_only",
-          version: "library-foundation.v2",
+          version: "library-foundation.v3",
           retryStrategy: "automatic_checkpoint_resume",
           globalObjectResolution: "draft_per_source_checkpoint",
           model: process.env.AI_MODEL?.trim() || null,
@@ -185,7 +185,7 @@ export async function createLibraryCompilationJob(
         libraryNodeId: content.representativeNodeId,
         sourceBlobId: content.sourceBlobId,
         profile: content.profile,
-        profileVersion: "library-foundation.v3",
+        profileVersion: "library-foundation.v4",
         status: "queued",
         stage: "queued",
         phaseOrder: PROFILE_ORDER[content.profile],
@@ -237,21 +237,27 @@ function jsonNumber(value: Prisma.JsonValue, key: string): number {
 
 function parallelUnits(value: Prisma.JsonValue): LibraryCompilationRunView["parallelUnits"] {
   if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  const runtime = value.runtime;
   const deep = value.deep;
-  if (!deep || typeof deep !== "object" || Array.isArray(deep)) return [];
-  const units = deep.parallelUnits;
+  const runtimeUnits = runtime && typeof runtime === "object" && !Array.isArray(runtime)
+    ? runtime.parallelUnits
+    : undefined;
+  const legacyUnits = deep && typeof deep === "object" && !Array.isArray(deep)
+    ? deep.parallelUnits
+    : undefined;
+  const units = Array.isArray(runtimeUnits) ? runtimeUnits : legacyUnits;
   if (!Array.isArray(units)) return [];
   return units.flatMap((unit) => {
     if (!unit || typeof unit !== "object" || Array.isArray(unit)) return [];
     const { id, kind, statusMessage } = unit;
     if (
       typeof id !== "string" ||
-      (kind !== "source" && kind !== "global_object") ||
+      (kind !== "source" && kind !== "global_object" && kind !== "object_admission") ||
       typeof statusMessage !== "string"
     ) return [];
     return [{
       id,
-      kind: kind as "source" | "global_object",
+      kind: kind as "source" | "global_object" | "object_admission",
       statusMessage,
     }];
   }).slice(0, 32);
@@ -579,12 +585,23 @@ export async function prepareLibraryCompilationRecovery(jobId: string): Promise<
 
 export async function prepareLibraryCompilationRetry(jobId: string): Promise<void> {
   const database = getDatabase();
+  const job = await database.libraryCompilationJob.findUnique({
+    where: { id: jobId },
+    select: { status: true },
+  });
+  if (!job) throw new LibraryValidationError("基础编译任务不存在");
+  if (job.status !== "paused" && job.status !== "failed") {
+    throw new LibraryValidationError("请先暂停当前任务，再重试失败文件");
+  }
   const failedRuns = await database.librarySourceProcessingRun.findMany({
     where: { jobId, status: "failed" },
-    select: { id: true },
+    select: { id: true, sourceBlobId: true },
   });
   if (!failedRuns.length) throw new LibraryValidationError("没有可重试的失败文件");
   const ids = failedRuns.map((run) => run.id);
+  const sourceBlobIds = failedRuns
+    .map((run) => run.sourceBlobId)
+    .filter((id): id is string => Boolean(id));
   await database.$transaction([
     database.librarySourceProcessingRun.updateMany({
       where: { id: { in: ids } },
@@ -592,21 +609,73 @@ export async function prepareLibraryCompilationRetry(jobId: string): Promise<voi
         status: "queued",
         stage: "queued",
         progressCurrent: 0,
+        retryCount: { increment: 1 },
         statusMessage: "等待重试",
         resultSummary: null,
         errorMessage: null,
         completedAt: null,
       },
     }),
+    database.libraryNode.updateMany({
+      where: { kind: "file", blobId: { in: sourceBlobIds } },
+      data: { processingStatus: "queued" },
+    }),
     database.libraryCompilationJob.update({
       where: { id: jobId },
       data: {
         status: "queued",
+        activePhase: null,
+        activeStage: null,
         pauseRequested: false,
+        startedAt: null,
+        heartbeatAt: new Date(),
         completedAt: null,
         errorMessage: null,
+        globalStatus: "queued",
+        globalProgress: 0,
+        globalTotal: 0,
+        globalStatusMessage: "等待全部文件草稿成功后执行 Global Object 归并",
+        globalErrorMessage: null,
+        globalCheckpoint: {},
+        globalResult: {},
       },
     }),
   ]);
+  await recalculateLibraryCompilationJob(jobId);
+}
+
+export async function prepareLibraryCompilationGlobalRetry(jobId: string): Promise<void> {
+  const database = getDatabase();
+  const job = await database.libraryCompilationJob.findUnique({
+    where: { id: jobId },
+    select: { status: true, globalStatus: true },
+  });
+  if (!job) throw new LibraryValidationError("基础编译任务不存在");
+  if (job.status !== "failed" || job.globalStatus !== "failed") {
+    throw new LibraryValidationError("当前任务没有可重试的归并或发布失败");
+  }
+  const unfinishedRuns = await database.librarySourceProcessingRun.count({
+    where: { jobId, status: { not: "ready" } },
+  });
+  if (unfinishedRuns) {
+    throw new LibraryValidationError("仍有文件未成功生成草稿，请先重试失败文件");
+  }
+  await database.libraryCompilationJob.update({
+    where: { id: jobId },
+    data: {
+      status: "queued",
+      activePhase: null,
+      activeStage: null,
+      pauseRequested: false,
+      startedAt: null,
+      heartbeatAt: new Date(),
+      completedAt: null,
+      errorMessage: null,
+      globalStatus: "queued",
+      globalRetryCount: { increment: 1 },
+      globalStatusMessage: "等待重试 Global Object 归并与 Shared Brain 发布",
+      globalErrorMessage: null,
+    },
+  });
   await recalculateLibraryCompilationJob(jobId);
 }

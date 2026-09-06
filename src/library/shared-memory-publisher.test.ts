@@ -30,6 +30,7 @@ function resolvedObject(key: string, label = "继往开来杯"): GlobalObjectDra
       sourceName: "比赛通知.docx",
       label,
       reason: "活动实体",
+      evidenceStatements: [],
     }],
   };
 }
@@ -58,6 +59,7 @@ describe("library Shared Brain publication preparation", () => {
           sourceName: "首份通知.docx",
           label: "继往开来杯",
           reason: "活动实体",
+          evidenceStatements: [],
         },
         {
           key: `${LATER_RUN_ID}:assessment:0`,
@@ -65,6 +67,7 @@ describe("library Shared Brain publication preparation", () => {
           sourceName: "补充通知.docx",
           label: "继往开来杯",
           reason: "同一活动的新材料",
+          evidenceStatements: [],
         },
       ],
     };
@@ -181,6 +184,38 @@ describe("library Shared Brain publication preparation", () => {
     });
   });
 
+  it("keeps Assertions while omitting links for a rejected Object candidate", () => {
+    const publication = prepareSemanticPublication({
+      id: RUN_ID,
+      sourceBlobId: BLOB_ID,
+      profile: "coarse",
+      parserKey: "mineru-raw",
+      artifactLocation: null,
+      completedAt: new Date("2026-08-16T00:00:00Z"),
+      sourceBlob: { sha256: SHA },
+      libraryNode: { name: "协会简介.docx" },
+      assessment: {
+        referenceCandidates: [],
+        assertionCandidates: [{
+          statement: "协会致力于推动乒乓球运动发展。",
+          sourceExcerpt: "推动乒乓球运动发展",
+          objectLabels: ["乒乓球"],
+          contextDependent: false,
+        }],
+        objectCandidates: [{
+          label: "乒乓球",
+          action: "new_candidate",
+          reason: "可能只是宽泛主题",
+        }],
+      },
+    }, [], new Set([`${RUN_ID}:assessment:0`]));
+
+    expect(publication.assertions).toHaveLength(1);
+    expect(publication.objects).toEqual([]);
+    expect(publication.objectLinks).toEqual([]);
+    expect(publication.objectCoverage).toEqual([]);
+  });
+
   it("merges a deep package into plain Shared Brain assertions and shared objects", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "sydaris-shared-publisher-"));
     temporaryRoots.push(root);
@@ -210,7 +245,7 @@ describe("library Shared Brain publication preparation", () => {
         source_block_ids: ["block-1"],
         covered_block_ids: ["block-1"],
         unclaimed_block_ids: [],
-        initial_claim_count: 1,
+        initial_claim_count: 2,
         review_addition_count: 0,
         assertions: [{
           claim_id: "claim-1",
@@ -218,10 +253,19 @@ describe("library Shared Brain publication preparation", () => {
           statement_template_markdown: "{{fragment:fragment-1}}在10月25日举行。",
           supporting_block_ids: ["block-1"],
           context_dependent: false,
+        }, {
+          claim_id: "claim-2",
+          kind: "grounded",
+          statement_template_markdown: "{{fragment:fragment-2}}是材料中的宽泛主题。",
+          supporting_block_ids: ["block-1"],
+          context_dependent: false,
         }],
         object_fragments: [{
           fragment_id: "fragment-1",
           surface_forms: ["继往开来杯"],
+        }, {
+          fragment_id: "fragment-2",
+          surface_forms: ["乒乓球"],
         }],
         model_calls: 1,
       }],
@@ -241,6 +285,8 @@ describe("library Shared Brain publication preparation", () => {
     }]), "utf8");
     await writeFile(path.join(resolutionDirectory, "global-resolution.json"), JSON.stringify({
       source_sha256: SHA,
+      rejected_fragment_keys: ["fragment:region-1:fragment-2"],
+      deferred_fragment_keys: [],
       global_objects: [{
         global_object_id: OLD_OBJECT_ID,
         canonical_name: "继往开来杯",
@@ -254,6 +300,12 @@ describe("library Shared Brain publication preparation", () => {
         kind: "grounded",
         global_statement_template_markdown: `{{object:${OLD_OBJECT_ID}}}在10月25日举行。`,
         reference_atoms: [{ global_object_id: OLD_OBJECT_ID }],
+        linked_global_object_ids: [],
+      }, {
+        assertion_id: "assertion:region-1:claim-2",
+        kind: "grounded",
+        global_statement_template_markdown: "乒乓球是材料中的宽泛主题。",
+        reference_atoms: [],
         linked_global_object_ids: [],
       }],
     }), "utf8");
@@ -273,8 +325,11 @@ describe("library Shared Brain publication preparation", () => {
     expect(publication.regions).toHaveLength(1);
     expect(publication.blocks).toHaveLength(1);
     expect(publication.fragments).toHaveLength(1);
+    expect(publication.assertions).toHaveLength(2);
     expect(publication.assertions[0].globalStatementTemplateMarkdown)
       .toBe("继往开来杯在10月25日举行。");
+    expect(publication.assertions[1].globalStatementTemplateMarkdown)
+      .toBe("乒乓球是材料中的宽泛主题。");
     expect(publication.objectLinks).toEqual([{
       assertionId: publication.assertions[0].id,
       globalObjectId: DRAFT_ID,

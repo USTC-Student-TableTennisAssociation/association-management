@@ -147,6 +147,27 @@ export class MemoryExploreContextBudgetError extends Error {
   }
 }
 
+export const memorySearchToolInputSchema = z.object({
+  query: z.string().trim().min(1).max(memoryExploreLimits.queryChars)
+    .describe("围绕目标 Object 想了解的信息需求；不要重复堆叠目标名称"),
+  targetHints: z.array(z.string().trim().min(1).max(200)).min(1).max(8)
+    .optional()
+    .describe("同一个主体 Object 的名称、别名或忠实原话，主名称放第一个；不要放入其成员、子项、活动或平台"),
+  targetObjectRefs: z.array(z.string().trim().regex(/^O\d+$/)).max(3)
+    .optional()
+    .describe("可选：本轮先前工具结果已确认的目标 O#；数据库 ID 由 Runtime 自动解析"),
+  taskShape: z.enum(["fact", "synthesis"])
+    .describe("fact=单一事实；synthesis=完整理解、名单/表格、资料梳理或多字段 View 填充"),
+});
+
+export const memoryFollowObjectToolInputSchema = z.object({
+  objectRef: z.string().trim().regex(/^O\d+$/)
+    .describe("已在本轮证据中出现的 O# Object 引用"),
+  focus: z.string().trim().min(1).max(memoryExploreLimits.focusChars)
+    .optional()
+    .describe("可选的关系或子问题焦点"),
+});
+
 export function createMemoryExploreToolset(input: {
   evidence: MemoryEvidenceAccumulator;
   resultTokenBudget: number;
@@ -205,6 +226,45 @@ export function createMemoryExploreToolset(input: {
       : presentExploreResult(described, input.evidence);
   }
 
+  const runSearch = async (
+    request: z.input<typeof memorySearchToolInputSchema>,
+  ) => {
+    const { query, targetHints, targetObjectRefs, taskShape } =
+      memorySearchToolInputSchema.parse(request);
+    const targetObjectIds = targetObjectRefs?.map((objectRef) => {
+      const objectId = input.evidence.objectIdForRef(objectRef);
+      if (!objectId) throw new UnknownExploreObjectError(objectRef);
+      return objectId;
+    });
+    observeCall();
+    return merge(await searchMemoryIndex({
+      query,
+      targetHints: targetHints ?? [],
+      targetObjectIds,
+      taskShape,
+    }, {
+      signal: input.signal,
+      preferHigherMemory: input.preferHigherMemory,
+      onLocate: (retrieval) => {
+        if (retrieval.trace) input.onLocateTrace?.(retrieval.trace);
+      },
+    }));
+  };
+
+  const runFollow = async (
+    request: z.input<typeof memoryFollowObjectToolInputSchema>,
+  ) => {
+    const { objectRef, focus } = memoryFollowObjectToolInputSchema.parse(request);
+    const globalObjectId = input.evidence.objectIdForRef(objectRef);
+    if (!globalObjectId) throw new UnknownExploreObjectError(objectRef);
+    observeCall();
+    return merge(
+      await followMemoryObject(globalObjectId, focus, {
+        signal: input.signal,
+      }),
+    );
+  };
+
   return {
     searchMemory: tool({
       description:
@@ -218,38 +278,8 @@ export function createMemoryExploreToolset(input: {
         "问候、闲聊、改写、翻译和不依赖组织资料的任务不应调用。" +
         "获得证据后，如问题仍包含未覆盖的子问题，可以换一种聚焦表述再次检索。" +
         "结果把 facts 与 references 分开：facts 是可用事实证据；references 只是原文导航，需要时应使用 readSourceDocument 回读。",
-      inputSchema: z.object({
-        query: z.string().trim().min(1).max(memoryExploreLimits.queryChars)
-          .describe("围绕目标 Object 想了解的信息需求；不要重复堆叠目标名称"),
-        targetHints: z.array(z.string().trim().min(1).max(200)).min(1).max(8)
-          .optional()
-          .describe("同一个主体 Object 的名称、别名或忠实原话，主名称放第一个；不要放入其成员、子项、活动或平台"),
-        targetObjectRefs: z.array(z.string().trim().regex(/^O\d+$/)).max(3)
-          .optional()
-          .describe("可选：本轮先前工具结果已确认的目标 O#；数据库 ID 由 Runtime 自动解析"),
-        taskShape: z.enum(["fact", "synthesis"])
-          .describe("fact=单一事实；synthesis=完整理解、名单/表格、资料梳理或多字段 View 填充"),
-      }),
-      execute: async ({ query, targetHints, targetObjectRefs, taskShape }) => {
-        const targetObjectIds = targetObjectRefs?.map((objectRef) => {
-          const objectId = input.evidence.objectIdForRef(objectRef);
-          if (!objectId) throw new UnknownExploreObjectError(objectRef);
-          return objectId;
-        });
-        observeCall();
-        return merge(await searchMemoryIndex({
-          query,
-          targetHints: targetHints ?? [],
-          targetObjectIds,
-          taskShape,
-        }, {
-          signal: input.signal,
-          preferHigherMemory: input.preferHigherMemory,
-          onLocate: (retrieval) => {
-            if (retrieval.trace) input.onLocateTrace?.(retrieval.trace);
-          },
-        }));
-      },
+      inputSchema: memorySearchToolInputSchema,
+      execute: runSearch,
     }),
 
     followObject: tool({
@@ -258,23 +288,10 @@ export function createMemoryExploreToolset(input: {
         "并返回这些 Assertion 所连接的 GlobalObject。" +
         "objectRef 必须使用本轮初始 Context 或之前工具结果中的 O#；数据库 ID 由 Runtime 自动解析。" +
         "focus 只用于排序，不会创造或扩张事实。",
-      inputSchema: z.object({
-        objectRef: z.string().trim().regex(/^O\d+$/)
-          .describe("已在本轮证据中出现的 O# Object 引用"),
-        focus: z.string().trim().min(1).max(memoryExploreLimits.focusChars)
-          .optional()
-          .describe("可选的关系或子问题焦点"),
-      }),
-      execute: async ({ objectRef, focus }) => {
-        const globalObjectId = input.evidence.objectIdForRef(objectRef);
-        if (!globalObjectId) throw new UnknownExploreObjectError(objectRef);
-        observeCall();
-        return merge(
-          await followMemoryObject(globalObjectId, focus, {
-            signal: input.signal,
-          }),
-        );
-      },
+      inputSchema: memoryFollowObjectToolInputSchema,
+      execute: runFollow,
     }),
+    runSearch,
+    runFollow,
   };
 }

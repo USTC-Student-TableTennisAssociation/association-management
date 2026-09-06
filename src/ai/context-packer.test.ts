@@ -182,6 +182,47 @@ describe("packContext", () => {
     expect(result.report.dropped.memoryItems).toBe(0);
   });
 
+  it("keeps an identity-bound Object alongside its Higher Memory without Assertions", () => {
+    const result = packContext({
+      messages: [message("user", "你对我有什么了解？")],
+      retrieval: {
+        query: "你对我有什么了解？",
+        mode: "object-assertion",
+        seedMap: {
+          facets: [],
+          objects: [{
+            ref: "O1",
+            id: "00000000-0000-4000-8000-000000000020",
+            globalObjectKey: "bound-person",
+            canonicalName: "已绑定人物",
+            surfaceForms: [],
+            matchedBy: [],
+            matchedFacets: [],
+            supportingAssertions: [],
+            lexicalMatch: false,
+            semanticMatch: false,
+          }],
+          higherMemories: [{
+            ref: "H1",
+            id: "00000000-0000-4000-8000-000000000021",
+            globalObjectId: "00000000-0000-4000-8000-000000000020",
+            contentMarkdown: "## 身份与边界\n\n这是已绑定人物的共享高层认知。",
+            operationalIndex: { aspects: [] },
+            maintainedAt: "2026-09-06T00:00:00.000Z",
+          }],
+          assertions: [],
+          connections: [],
+        },
+      },
+      profile: roomyProfile,
+      memoryState: "not-searched",
+    });
+
+    expect(result.system).toContain("Global Object：已绑定人物");
+    expect(result.system).toContain("这是已绑定人物的共享高层认知");
+    expect(result.retrieval.seedMap.objects).toHaveLength(1);
+  });
+
   it("does not describe an unsearched empty seed map as a failed Locate", () => {
     const result = packContext({
       messages: [message("user", "你好")],
@@ -193,9 +234,10 @@ describe("packContext", () => {
     expect(result.system).not.toContain("Locate");
     expect(result.system).not.toContain("资料不足");
     expect(result.report.estimatedTokens.memory).toBe(0);
-    expect(result.system).toContain("本轮没有加载到 identity、narrative 或 working_set");
-    expect(result.system).toContain("没有一个关于 Sydaris 自身的 Object Higher Memory");
-    expect(result.system).toContain("不等于“Sydaris 没有 Higher Memory”");
+    expect(result.system).toContain("本轮未加载任何共享环境高层记忆");
+    expect(result.system).toContain("当前对话观察尚未持久化");
+    expect(result.system).toContain("任一层为空都不代表其他层为空");
+    expect(result.system).toContain("写入回执只回答对应消息的持久化状态");
   });
 
   it("always includes environment identity and working set before any search", () => {

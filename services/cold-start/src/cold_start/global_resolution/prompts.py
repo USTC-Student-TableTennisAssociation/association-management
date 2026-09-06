@@ -7,68 +7,120 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 GLOBAL_IDENTITY_SYSTEM_PROMPT = """
-你是 Global Object Resolver。输入中的 ObjectFragments 是一个 SourceRegion 内形成的 source-local
-身份假设，不是不可拆分的最终 Object。你必须把当前 Region 的全部 Fragments、Assertions、原文
-依据和局部语境作为一个整体，与本轮开始前的 Global Registry 候选做一次身份对齐。
+你负责把当前 SourceRegion 的局部 Fragment 对齐到稳定的 Global Object。只裁决 Objecthood、
+词义和 identity；Assertion 内容已经冻结。
 
-每个 Fragment 有自己的 candidate IDs；候选详情在 candidate_global_objects 中全 Region 去重。
-候选只表示值得查看，词面或 embedding 相似不能证明 identity。不得引用输入之外的已有 Object。
+先独立判断每个 Fragment 是否需要跨命题维持长期身份，再处理分类和 identity。Fragment 的存在、
+出现次数和 identity_mode_hint 都不证明 Objecthood；reject/defer 只取消 Object 提升，原 Assertion
+事实会完整保留。候选只用于检索，不证明 identity。
 
-一次输出一个声明式 integration plan。operations 没有执行顺序，必须全部基于同一个旧 Registry
-快照同时成立。一个 operation 可以包含多个 incoming Fragment 的 atom；如果 F1/F2 实际属于同一
-新身份，应把它们放入同一个 new target，不要因为候选按 Fragment 召回而机械分开。
+Objecthood 成立后再把 identity_mode_hint 作为可纠正的证据模式：named_person 需要直接身份依据；
+role_type 比较角色语义与组织作用域；entity_type 比较类别的实际用法；named_entity 比较名称与来源
+关系；undetermined 根据当前证据选择合适模式。仅作为其他对象的属性、状态、情绪、评价或程度出现
+的内容不需要长期身份。
 
-停止原则：当前 Region 只触发本轮必要修改。不要重新整理未被召回的 Global Object，不要追求
-整库理论最优分类，也不要把语义相关、上下游关系或同属一个业务误判为同一身份。
+只处理当前 Region 引入的必要变化。语义相关、共同出现或名称相似都不等于同一 Object。
+Objecthood 成立且证据足够时 attach；Objecthood 成立但没有匹配身份时 create；不需要长期身份时
+reject；Objecthood 或词义仍不清楚时 defer；只有多个 Fragment 或已有 Object 必须共同调整时使用
+联合计划。
 
-身份判断必须同时阅读 surface forms、相关 Assertion、Assertion 原文依据和 Region 语境。特别
-区分系统/服务、审批/流程、项目实例、项目类别、角色、人物、制度和文档。例如“工单平台”与
-“工单审批”高度相关但通常不是同一身份。
+联合计划中的 create/attach 只分配 incoming atoms；merge/split 才重分配
+source_global_object_ids 所列已有 Object 的全部 atoms。所有 operation 基于同一旧 Registry
+快照。当前 Region 的 incoming atoms，以及被 merge/split 的已有 atoms，都必须各出现一次。
+reference atom 按 Assertion 中的实际指称分配；结构细节服从输出 JSON Schema。
 
-对人物身份采取保守的证据门槛：姓名相同、去掉“老师/主管/负责人”等称谓后相同、同属一个
-组织，或时间与履历在叙事上相容，都只能用于召回候选，不能单独证明是同一人。只有原文明示的
-别名或脚注映射、人员编号、账号 ID 等唯一稳定标识，或其他能够排除同名歧义的
-直接证据，才足以 attach。如果结论
-仍依赖“可能”“很可能”“符合背景”等合理性推测，必须 create。称谓不同本身不禁止 attach：例如
-“林主管¹”的脚注明确写明“林岚，2025—2026 年度项目主管”时，可以与“林岚” attach；但仅有
-“陈晨”和“陈晨老师”且没有这类直接映射时，必须保留为不同人物。
+候选不足以证明同一身份，不能反向证明 incoming 是 Object。只有当前证据先独立证明其长期身份时
+才 create；Objecthood 不成立时 reject，证据不足时 defer。
 
-每个 operation 只允许四种 action：
-source_global_object_ids 只表示“本 operation 需要重新分配已有 atoms 的 Global
-Objects”，不是“这个 operation 涉及的所有已有对象”。四种 action 的结构边界是：
-- create：source_global_object_ids 必须是 []；一个 new target，只分配 incoming atoms。
-- attach：source_global_object_ids 必须是 []；一个 existing target，只分配当前 Region
-  新进入的 incoming atoms。已有 target 只出现在 group.target，不要重新输出它已拥有的旧 atoms。
-- merge：source_global_object_ids 填写至少两个需要合并重构的已有 Objects；一个
-  existing target，保留 global_object_key 最早者，并完整重新分配这些 source atoms。
-- split：只拆 incoming 时 source_global_object_ids 是 []；拆已有 Object 时填写唯一需要
-  拆分重构的 Object。至少两个 target，并完整重新分配该 source atoms；保留其 UUID
-  代表其中一个身份，保留组必须包含原 canonical name。只创建必要的新 Object，
-  也可以把一组放入其他候选 existing Object。
+同一 surface form 可以对应多个长期 Object；reference atom 必须按 Assertion 中的实际指称分配。
 
-groups 不是同类 action 的批量容器。只有 split operation 可以包含多个 groups；create、
-attach、merge 每个 operation 都必须恰好只有一个 group。当前 Region 有多个独立新身份时，
-必须重复输出多个 create operations；需要加入多个已有 targets 时，必须重复输出多个
-attach operations。例如两个独立新身份的结构是：
-  错误：[{"action":"create","groups":[G1,G2]}]
-  正确：[{"action":"create","groups":[G1]},{"action":"create","groups":[G2]}]
+当前证据足够时直接提交。只有结论取决于同一名称在本来源其他 Region 的用法时，才调用
+inspect_source_fragment_usage；频次只提供语境，不直接决定保留、合并或拒绝。
 
-atom 有两类：
-- surface atom：Fragment 中一个名称；
-- reference atom：Assertion template 中一次 Fragment 引用。
-
-当前 Region 的每个 incoming atom 必须在整份 plan 中恰好出现一次。每个 source Object 的全部
-当前 atom 必须在所属 operation 中恰好出现一次。不得遗漏、重复或编造 atom ID。同一已有 Object
-不能被多个 operation 同时修改或作为多个 target。split 后 reference atom 必须按 Assertion 的
-实际指称分配，不能机械复制给多个 Object。
-
-已有 target 使用 target.kind=existing 并只填写 global_object_id；不要重写名称。新 target
-使用 target.kind=new 并只填写 canonical_name。canonical_name 必须逐字
-选自该 group 的 surface atom。所有 source/target/Assertion/atom ID 都只能来自输入。
+已有 target 使用输入中的 global_object_id；新 target 的 canonical_name 选自所属 surface atom。
 
 输出严格合法的 JSON 正文，不要 Markdown fence，不要输出 JSON 之外的解释。JSON 字符串内
 不得出现未转义的 ASCII 双引号 "；描述名称时优先使用中文引号“”，否则必须写成 \\"。
 """.strip()
+
+
+_FRAGMENT_IDENTITY_CORE_PROMPT = """
+你只裁决一个 source-local Fragment。先独立判断它是否需要跨命题维持长期 Object 身份，再判断
+词义和全局 identity。Fragment 的存在、出现次数、候选数量和 identity_mode_hint 都不证明
+Objecthood；reject/defer 只取消 Object 提升，原 Assertion 事实仍完整保留。
+
+Objecthood 成立且同一性证据充分时 attach；Objecthood 成立但没有匹配身份时 create；不需要长期
+身份时 reject；证据不足时 defer；必须联合其他 Fragment 或重构已有 Object 时 joint。候选相似度
+只用于召回。只有结论确实依赖其他 Region 的用法时才调用 inspect_source_fragment_usage。完成后
+立即提交符合 Schema 的 JSON。
+""".strip()
+
+_IDENTITY_MODE_PROMPTS = {
+    "named_person": (
+        "若 Objecthood 成立，上游建议按具体人物检查。姓名、称谓、组织或时间相容只用于召回；"
+        "attach 需要明确名称映射、"
+        "稳定标识或其他能够排除同名歧义的直接证据。"
+    ),
+    "role_type": (
+        "若 Objecthood 成立，上游建议按角色类型检查。按角色语义与组织作用域判断 identity；"
+        "不要求人物身份凭据。"
+    ),
+    "entity_type": (
+        "若 Objecthood 成立，上游建议按可复用类别检查。按当前命题中的实际用法判断词义；"
+        "该提示本身不证明它是类别。"
+    ),
+    "named_entity": (
+        "若 Objecthood 成立，上游建议按具名实例或稳定对象检查。按名称证据、语义位置与来源关系"
+        "判断 identity。"
+    ),
+    "undetermined": (
+        "上游无法确定身份模式。依据当前 Assertion、原文及必要的跨 Region 用法，"
+        "独立判断 Objecthood；"
+        "成立后再选择合适的身份标准。"
+    ),
+}
+
+
+OBJECT_ADMISSION_SYSTEM_PROMPT = """
+你是 provisional Global Object 发布前的 Objecthood 准入闸门。只复审 Runtime 标记的低证据
+Object，不重写 Assertion，也不按出现次数自动裁决。demote/defer 只取消节点提升，事实原文仍保留。
+
+当跨命题维持“同一个对象或同一种业务类型”的身份，能够承载稳定属性、关系、规则或生命周期时
+admit。若内容在现有证据中仅作为其他对象的属性、状态、情绪、评价、程度或临时描述出现，则
+demote。证据不足以可靠判断时 defer。完成后立即提交符合 Schema 的 JSON。
+""".strip()
+
+
+def fragment_identity_system_prompt(identity_mode_hint: str) -> str:
+    mode_prompt = _IDENTITY_MODE_PROMPTS.get(identity_mode_hint)
+    if mode_prompt is None:
+        raise ValueError(f"未知 identity_mode_hint：{identity_mode_hint}")
+    return f"{_FRAGMENT_IDENTITY_CORE_PROMPT}\n\n{mode_prompt}"
+
+
+def fragment_identity_alignment_prompt(
+    *,
+    fragment: Mapping[str, Any],
+    peer_fragments: Sequence[Mapping[str, Any]],
+    candidates: Sequence[Mapping[str, Any]],
+    decision_schema: Mapping[str, Any],
+) -> str:
+    """序列化一个 Fragment 的紧凑、可独立裁决上下文。"""
+
+    payload = {
+        "fragment": fragment,
+        "peer_fragments": list(peer_fragments),
+        "candidate_global_objects": list(candidates),
+    }
+    return (
+        "请先给出 objecthood，再裁决当前 Fragment。普通结果直接 create/attach/reject/defer；"
+        "只有共指、词义拆分或"
+        "已有 Object merge/split 无法独立处理时才选择 joint。\n\n"
+        "输入：\n"
+        f"{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "输出必须满足以下 JSON Schema：\n"
+        f"{json.dumps(decision_schema, ensure_ascii=False, separators=(',', ':'))}"
+    )
 
 
 def region_identity_alignment_prompt(
@@ -77,6 +129,7 @@ def region_identity_alignment_prompt(
     candidate_ids_by_fragment: Mapping[str, Sequence[str]],
     candidates: Sequence[Mapping[str, Any]],
     decision_schema: Mapping[str, Any],
+    source_usage_by_fragment: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
     """序列化一个 SourceRegion 的完整、有限身份对齐上下文。"""
 
@@ -87,9 +140,13 @@ def region_identity_alignment_prompt(
         },
         "candidate_global_objects": list(candidates),
     }
+    if source_usage_by_fragment:
+        payload["inspected_source_usage_by_fragment"] = dict(source_usage_by_fragment)
     return (
-        "请对下面整个 SourceRegion 做一次全局身份对齐。没有候选的 Fragment 通常 create；候选不足"
-        "以证明同一身份时保守 create。operations 是同一旧 Registry 上的声明式联合计划。\n\n"
+        "请对下面整个 SourceRegion 做一次全局身份对齐。先独立判断 Objecthood；没有候选不能作为"
+        "create 的理由。Objecthood 成立且没有匹配身份时 create；不需要长期身份时 reject，证据"
+        "不足时 defer。operations 是同一"
+        "旧 Registry 上的声明式联合计划。\n\n"
         "输入：\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}\n\n"
         "输出必须满足以下 JSON Schema：\n"
@@ -97,4 +154,25 @@ def region_identity_alignment_prompt(
     )
 
 
-__all__ = ["GLOBAL_IDENTITY_SYSTEM_PROMPT", "region_identity_alignment_prompt"]
+def object_admission_prompt(
+    *,
+    provisional_object: Mapping[str, Any],
+    decision_schema: Mapping[str, Any],
+) -> str:
+    return (
+        "请独立复审下面的 provisional Object。统计量只说明为何触发复审，不是删除或保留阈值。\n\n"
+        "输入：\n"
+        f"{json.dumps(provisional_object, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "输出必须满足以下 JSON Schema：\n"
+        f"{json.dumps(decision_schema, ensure_ascii=False, separators=(',', ':'))}"
+    )
+
+
+__all__ = [
+    "GLOBAL_IDENTITY_SYSTEM_PROMPT",
+    "OBJECT_ADMISSION_SYSTEM_PROMPT",
+    "fragment_identity_alignment_prompt",
+    "fragment_identity_system_prompt",
+    "object_admission_prompt",
+    "region_identity_alignment_prompt",
+]

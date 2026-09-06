@@ -26,6 +26,7 @@ def test_finds_parent_env_and_preserves_system_environment(
             "AI_READ_TIMEOUT_SECONDS=720\n"
             "AI_MAX_RETRIES=1\n"
             "AI_REQUESTS_PER_MINUTE=17\n"
+            "AI_THINKING_MODE=enabled\n"
             "COLD_START_MODEL_MAX_IN_FLIGHT=18\n"
             "AI_STREAM_PROGRESS_INTERVAL_SECONDS=7\n"
         ),
@@ -37,6 +38,7 @@ def test_finds_parent_env_and_preserves_system_environment(
         "AI_READ_TIMEOUT_SECONDS",
         "AI_MAX_RETRIES",
         "AI_REQUESTS_PER_MINUTE",
+        "AI_THINKING_MODE",
         "COLD_START_MODEL_MAX_IN_FLIGHT",
         "AI_STREAM_PROGRESS_INTERVAL_SECONDS",
     ):
@@ -52,6 +54,7 @@ def test_finds_parent_env_and_preserves_system_environment(
     assert model_settings.read_timeout_seconds == 720
     assert model_settings.max_retries == 1
     assert model_settings.requests_per_minute == 17
+    assert model_settings.thinking_mode == "enabled"
     assert model_settings.max_in_flight == 18
     assert model_settings.stream_progress_interval_seconds == 7
 

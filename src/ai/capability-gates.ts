@@ -30,7 +30,11 @@ export const artifactToolNames = [
 
 const actionToolNames = {
   business_view: ["runViewCommand"],
-  object: ["inspectObjectIdentity", "proposeObjectChange"],
+  object: [
+    "inspectObjectIdentity",
+    "proposeObjectChange",
+    "proposeActorObjectBinding",
+  ],
   library: ["proposeLibraryPlan"],
 } as const;
 
@@ -222,7 +226,7 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
             next: authorization.reason ?? "当前工作流不允许打开该 Action 区域。",
           };
         }
-        if (area !== "library" && !state.viewStateOpened) {
+        if (area === "business_view" && !state.viewStateOpened) {
           return {
             opened: false,
             area,
@@ -237,7 +241,9 @@ export function createCapabilityGatewayTools(state: OpenedCapabilities, handlers
           reason,
           message: area === "business_view"
             ? "Business View 写入能力将在下一步可用；必须真实调用 View Command，文字说明不能代替 Proposal。"
-            : "对应读取与 Proposal 能力将在下一步可用；请先核对当前状态再提议。",
+            : area === "object"
+              ? "Object 身份检查与 Proposal 能力将在下一步可用；Runtime 会检查该 Object 实际关联的正式 View，不需要先任选一个 View。"
+              : "对应读取与 Proposal 能力将在下一步可用；请先核对当前状态再提议。",
           ...(area === "business_view" && state.lastViewKey
             ? { contract: handlers.describeBusinessViewActions(state.lastViewKey) }
             : {}),
@@ -267,7 +273,8 @@ export const TURN_KERNEL_INSTRUCTIONS = `
 - Library 的 profile、执行 status 和发布状态是三个独立维度。不得把 catalog 当成“尚未执行”的同义词，也不得把 deep 当成所有文件必须经过的下一阶段；以 Library Processing Catalog 为准。
 - 原文与 Assertion 是并列的知识入口，不是固定的最后核验层：窄事实优先 Assertion；宽综合优先高价值来源的目录和章节。
 - 问题同时涉及“正式业务现状”和“资料/历史依据”时，应同时读取 View State 并检索 Shared Brain 或 Library，不得因为先打开了其中一层就停止检查其他必要层。
-- 需要改变正式 View 或 Object 身份时，先调用 readViewState 读取具体目标的真实当前状态，再调用 openActions；打开 business_view actions 后必须真实调用 runViewCommand，文字说明不能代替 Proposal。需要整理 Library 时可直接调用 openActions。即使用户只是在查询，只要本轮已经从用户确认或可靠证据发现一个稳定、可复用且明确属于 View 职责的正式状态缺口，也应主动生成待审批 Proposal。所有修改只创建 Proposal。
+- 改变正式 Business View 时，先调用 readViewState 读取具体目标的真实当前状态，再打开 business_view actions；打开后必须真实调用 runViewCommand，文字说明不能代替 Proposal。Object 身份操作先取得本轮 O#，再打开 object actions；inspectObjectIdentity 会返回该 Object 实际关联的 View 依赖，不要为了开门而任选一个 View。需要整理 Library 时可直接打开 library actions。所有修改只创建 Proposal。
+- 登录名或显示名相同不能证明用户就是某个知识库人物。用户明确自认并要求关联时，重新检索得到该人物的本轮 O#，打开 object actions，并用用户逐字确认创建 proposeActorObjectBinding Proposal；批准前不得声称已经绑定。
 - 用户明确点名某个 Command 时，确认目标身份、当前 View 状态和该 Command 必填输入后即可打开并执行对应 action；不要为了补齐不属于该 Command 的可选资料而推迟 Proposal。
 - Proposal 是可审阅草稿。用户明确允许“先填、之后再改”时，完整提交证据支持的明确对象；可选字段不确定可以留空或披露推断，不能因此静默少做。只有身份歧义、当前状态冲突或必要字段无法确定时才询问。
 - publishUserFactForView 只处理同轮 View Proposal 必需、由当前用户原话刚提供且现有知识缺失的新实体事实；不能把资料原文重新包装成聊天 Evidence。资料中的实体先使用检索返回的 O#、别名或唯一 canonical name。普通回答后的事实审查由 Post-turn Runtime 自动执行，不需要主模型判断或排队。
@@ -275,7 +282,8 @@ export const TURN_KERNEL_INSTRUCTIONS = `
 - 若某个工具返回 semantics，它只描述已经完成的读取，不是检索计划；你仍根据用户目的自主决定是否继续使用其他知识层。View 状态的详细 evidence semantics 由服务端保存，不会作为回答正文提供。
 - View Catalog 用于静态定义与能力说明；View Higher Memory 是高层摘要。两者都不是精确当前状态的证据，涉及具体业务实体的现状时仍应调用 readViewState。
 - 回答后的 Assertion、共享 Higher Memory 与 Actor 后台综合由独立 Post-turn Runtime 负责；不要在主回答中规划或调用这些后台治理能力，也不需要提交模型自述式 Handoff。
-- 用户追问此前信息是否已经进入记忆时，先调用 openMemory 并选择 check_write_status；能力开放后调用 readMemoryWriteStatus，并根据对应原话显式传入目标 messageId。不得省略、猜测最近消息或把回执套用于其他消息。
+- 用户的自我指称已绑定 Object 时，组织身份、经历、关系、贡献和观点先使用该 Object 的共享 Higher Memory 与 Assertion；私人称呼、偏好和协作约定使用 Actor Higher Memory。仅当用户询问记忆分层时才逐层解释。
+- 只有用户明确询问某一条先前消息是否写入或为何未写入时，才用 openMemory(check_write_status) 和 readMemoryWriteStatus 核对该 messageId；不要用写入回执回答“你了解我什么”。
 - 用户明确要求跨会话记住、修改或忘记私人称呼、互动约定和稳定工作方式时，先调用 openMemory 并选择 update_actor_memory；只有后续工具返回 committed=true 才能声称已经保存。
 - 不要凭模型内部知识补写 Sydaris 的组织事实。不要声称未实际完成的写入、更新或归档。
 `.trim();

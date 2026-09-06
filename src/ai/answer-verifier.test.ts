@@ -114,5 +114,21 @@ describe("verifyGroundedAnswer", () => {
     expect(prompt).toContain("V1");
     expect(prompt).toContain("V9");
     expect(verificationFailureAnswer(verification)).toContain("本轮未完成");
+    expect(prompt).toContain("[S1][S2]");
+  });
+
+  it("accepts natural parenthesized source citations for a readable target", () => {
+    const result = verifyGroundedAnswer({
+      text: "第一项判断来自原文（S1、S2），第二项来自另一章节 (S3/S4)。",
+      contract: contract({
+        targetKind: "artifact",
+        requiresReadableTarget: true,
+        targetLocated: true,
+        targetReadable: true,
+      }),
+      validRefs: ["S1", "S2", "S3", "S4"],
+    });
+
+    expect(result).toEqual({ accepted: true, violations: [], warnings: [] });
   });
 });

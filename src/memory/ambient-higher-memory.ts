@@ -1,4 +1,3 @@
-import { generateText } from "ai";
 import { z } from "zod";
 
 import {
@@ -9,10 +8,7 @@ import {
   type DebugTrace,
 } from "@/ai/debug-trace";
 import { getChatModel } from "@/ai/provider";
-import {
-  readStructuredSubmission,
-  structuredSubmissionTool,
-} from "@/ai/structured-submission";
+import { generateStructuredResult } from "@/ai/structured-submission";
 import { getDatabase } from "@/db";
 import {
   ambientHigherMemoryScopes,
@@ -103,16 +99,15 @@ export function buildAmbientHigherMemoryContext(
       memory.contentMarkdown,
     ].join("\n");
   });
+  if (!memories.length) {
+    return "## Ambient Higher Memory\n状态：本轮未加载任何共享环境高层记忆。";
+  }
   return [
-    "## Sydaris 自动加载的 Ambient Higher Memory",
-    memories.length
-      ? `运行状态：本轮已加载 ${memories.length} 个 Ambient scope（${memories.map((memory) => memory.scope).join("、")}）。`
-      : "运行状态：本轮没有加载到 identity、narrative 或 working_set 内容。这只表示当前没有可用于本轮的 Ambient Higher Memory，不代表 Higher Memory 架构不存在，也不代表 Sydaris 只拥有 Object Higher Memory。",
-    "以下内容是 Sydaris 在过去真实互动和正式证据中形成的高层环境理解，本轮无需先搜索即可用于进入状态。已存在的 Environment Identity 是有来源的环境默认值，不应在每轮重新退回‘环境类型未知’；只有权威新证据冲突时才修正。",
-    "它不是精确业务状态的权威来源，也不代表下列内容截至今天仍全部有效。用户询问精确当前状态、要求来源或准备执行动作时，应读取正式 Business View 或按需检索。",
-    "Ambient scope 描述跨单一 Object 的共享环境认知。具体 Object 的事实及关系留在 Object–Assertion 图和 Object Higher Memory 中，不得仅因被讨论就提升为 Ambient。",
-    "Ambient Higher Memory 没有 H# 引用标记，不得伪造引用。",
-    ...(sections.length ? ["", sections.join("\n\n")] : []),
+    "## Ambient Higher Memory",
+    `状态：已加载 ${memories.length} 个 scope（${memories.map((memory) => memory.scope).join("、")}）。`,
+    "这些内容可直接用于进入共享工作环境，无需先搜索，但不替代精确的 Assertion 或 Business View 当前状态。",
+    "",
+    sections.join("\n\n"),
   ].join("\n");
 }
 
@@ -130,7 +125,7 @@ function maintenancePrompt(input: AmbientHigherMemoryMaintenanceInput, oldMemori
     "这是高层认知而非权威状态：可以保留“似乎”“近期主要”“尚需确认”等适当不确定性，但不得无依据创作环境事实。",
     "旧记忆用于维持连续性；如果本轮不足以形成更有用的新版本，可以不输出该 scope，数据库会保留旧内容。",
     "正文是供后续 AI 直接阅读的简洁自然 Markdown，可以使用标题和列表；不要写生成过程、维护原因、数据库 ID、H#/A# 或来源列表。",
-    "形成结果后必须调用 submitAmbientHigherMemory；不要在普通文本中输出 JSON。提交参数只能包含 memories；每项只能包含 scope、contentMarkdown。",
+    "形成结果后输出符合给定 Schema 的结构化结果。根对象只能包含 memories；每项只能包含 scope、contentMarkdown。",
     JSON.stringify({
       maintenanceInstant: input.submittedAt,
       timezone: input.timezone,
@@ -165,15 +160,11 @@ export async function maintainAmbientHigherMemories(
   );
 
   let callNumber = 0;
-  const result = await generateText({
+  const output = await generateStructuredResult({
     model: getChatModel(),
-    tools: {
-      submitAmbientHigherMemory: structuredSubmissionTool({
-        description: "提交重建后的 identity/narrative/working_set Ambient Higher Memory",
-        schema: ambientMemorySchema,
-      }),
-    },
-    toolChoice: { type: "tool", toolName: "submitAmbientHigherMemory" },
+    schema: ambientMemorySchema,
+    name: "ambient_higher_memory_maintenance",
+    description: "提交重建后的 identity/narrative/working_set Ambient Higher Memory",
     prompt,
     temperature: 0.2,
     maxOutputTokens: 8_000,
@@ -211,18 +202,6 @@ export async function maintainAmbientHigherMemories(
       );
     },
   });
-  const output = readStructuredSubmission({
-    toolCalls: result.toolCalls,
-    toolName: "submitAmbientHigherMemory",
-    schema: ambientMemorySchema,
-  });
-  if (!output) {
-    await trace?.appendSection(
-      "Ambient Higher Memory 处理结果",
-      "结果：未更新。Agent 没有提交结构化维护结果，旧记忆保持不变。",
-    );
-    return 0;
-  }
   await trace?.appendSection(
     "后台 Ambient Higher Memory Agent · Schema 校验后的输出",
     debugCodeBlock(debugJson(output), "json"),

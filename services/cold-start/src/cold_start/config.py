@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Literal, cast
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class ModelSettings:
     max_retries: int = 2
     requests_per_minute: int = 18
     max_in_flight: int = 18
+    thinking_mode: Literal["enabled", "disabled"] = "enabled"
 
     @classmethod
     def from_environment(
@@ -68,6 +70,14 @@ class ModelSettings:
                 "COLD_START_MODEL_MAX_IN_FLIGHT",
                 explicit=None,
                 default=18,
+            ),
+            thinking_mode=cast(
+                Literal["enabled", "disabled"],
+                _environment_choice(
+                    "AI_THINKING_MODE",
+                    choices=("enabled", "disabled"),
+                    default="enabled",
+                ),
             ),
         )
 
@@ -187,3 +197,18 @@ def _environment_int(
         return int(raw)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{name} 必须是整数") from error
+
+
+def _environment_choice(
+    name: str,
+    *,
+    choices: tuple[str, ...],
+    default: str,
+) -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized not in choices:
+        raise ValueError(f"{name} 仅支持：{'、'.join(choices)}")
+    return normalized

@@ -139,6 +139,7 @@ async def test_adapter_requires_and_accumulates_sse_stream(tmp_path) -> None:
     body = json.loads(captured_request.content)
     assert body["model"] == "test-model"
     assert body["stream"] is True
+    assert body["thinking"] == {"type": "enabled"}
     assert "temperature" not in body
     assert any(
         stage == "测试" and "收到首个正文片段" in message for stage, message in progress.events
@@ -193,7 +194,7 @@ async def test_adapter_sends_temperature_only_when_explicitly_requested() -> Non
 
 @pytest.mark.asyncio
 async def test_adapter_continues_trace_sequence_in_existing_directory(tmp_path) -> None:
-    (tmp_path / "085-旧请求.request.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "085.request.json").write_text("{}", encoding="utf-8")
 
     async def handler(request: httpx.Request) -> httpx.Response:
         del request
@@ -218,6 +219,92 @@ async def test_adapter_continues_trace_sequence_in_existing_directory(tmp_path) 
     assert (tmp_path / "086.request.json").is_file()
     trace = json.loads((tmp_path / "086.request.json").read_text(encoding="utf-8"))
     assert trace["label"] == "恢复"
+
+
+@pytest.mark.asyncio
+async def test_adapter_reuses_completed_response_after_process_restart(tmp_path) -> None:
+    calls = 0
+
+    async def first_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        del request
+        calls += 1
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text=(
+                sse_event({"choices": [{"delta": {"reasoning_content": "判断"}}]})
+                + sse_event({"choices": [{"delta": {"content": "已完成"}}]})
+                + sse_event("[DONE]")
+            ),
+        )
+
+    settings = ModelSettings(
+        model="test-model",
+        api_base_url="http://model.test/v1",
+        api_key=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(first_handler)) as client:
+        model = OpenAICompatibleChatModel(
+            settings,
+            client=client,
+            trace_directory=tmp_path,
+        )
+        assert await model.complete(system_prompt="系统", user_prompt="同一工作单元") == "已完成"
+
+    async def must_not_call(request: httpx.Request) -> httpx.Response:
+        del request
+        raise AssertionError("恢复时不应再次调用远端模型")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(must_not_call)) as client:
+        resumed = OpenAICompatibleChatModel(
+            settings,
+            client=client,
+            trace_directory=tmp_path,
+        )
+        assert await resumed.complete(system_prompt="系统", user_prompt="同一工作单元") == "已完成"
+
+    assert calls == 1
+    assert len(list((tmp_path / "response-checkpoints").glob("*.json"))) == 1
+
+
+@pytest.mark.asyncio
+async def test_adapter_does_not_reuse_rejected_model_output(tmp_path) -> None:
+    calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        del request
+        calls += 1
+        content = "invalid" if calls == 1 else '{"valid":true}'
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            text=sse_event({"choices": [{"delta": {"content": content}}]})
+            + sse_event("[DONE]"),
+        )
+
+    settings = ModelSettings(
+        model="test-model",
+        api_base_url="http://model.test/v1",
+        api_key=None,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        model = OpenAICompatibleChatModel(settings, client=client, trace_directory=tmp_path)
+        rejected = await model.complete_turn(
+            messages=[{"role": "user", "content": "JSON"}],
+        )
+        model.reject_turn(rejected)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        resumed = OpenAICompatibleChatModel(settings, client=client, trace_directory=tmp_path)
+        accepted = await resumed.complete_turn(
+            messages=[{"role": "user", "content": "JSON"}],
+        )
+        assert accepted.content == '{"valid":true}'
+        resumed.commit_turn(accepted)
+
+    assert calls == 2
 
 
 @pytest.mark.asyncio
@@ -268,7 +355,10 @@ async def test_adapter_keeps_partial_trace_when_remote_stream_breaks(tmp_path) -
             client=client,
             trace_directory=tmp_path,
         )
-        with pytest.raises(RuntimeError, match="测试流式传输连续失败"):
+        with pytest.raises(
+            RuntimeError,
+            match="测试流式传输连续失败：RemoteProtocolError: 远端在 \\[DONE\\] 前断开",
+        ):
             await model.complete(
                 system_prompt="系统",
                 user_prompt="用户",
@@ -405,7 +495,6 @@ async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages(
     }
     assert request_bodies[0]["thinking"] == {
         "type": "enabled",
-        "clear_thinking": False,
     }
     second_messages = request_bodies[1]["messages"]
     assert isinstance(second_messages, list)
@@ -414,7 +503,6 @@ async def test_adapter_streams_tool_calls_and_accepts_tool_result_messages(
     assert second_messages[-1]["tool_call_id"] == "call_001"
     assert request_bodies[1]["thinking"] == {
         "type": "enabled",
-        "clear_thinking": False,
     }
     tool_trace = json.loads(next(tmp_path.glob("*.tool-calls.json")).read_text())
     assert tool_trace == [

@@ -117,6 +117,7 @@ export const toolPolicies: Readonly<Record<string, ToolPolicy>> = {
   runViewCommand: proposal("business_view_action"),
   inspectObjectIdentity: read("object_action"),
   proposeObjectChange: proposal("object_action"),
+  proposeActorObjectBinding: proposal("object_action"),
   proposeLibraryPlan: proposal("library_action"),
 };
 

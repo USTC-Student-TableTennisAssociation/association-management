@@ -11,25 +11,30 @@ import {
 } from "ai";
 import { z } from "zod";
 
-import { getChatModel } from "@/ai/provider";
+import { getChatModel, withStructuredOutputGuidance } from "@/ai/provider";
 import { getDatabase } from "@/db";
-import { parseEmbeddedModelJson } from "@/library/compilation-processor";
+import { retryableModelOutputFailure } from "@/library/compilation-failure";
+import {
+  parseEmbeddedModelJson,
+  shouldUseTextJsonCleanRetry,
+} from "@/library/compilation-processor";
 import {
   libraryObjectCandidateSchema,
 } from "@/library/compilation-types";
 import { publishLibraryRunsToSharedMemory } from "@/library/shared-memory-publisher";
 
-type IncomingObjectCandidate = {
+export type IncomingObjectCandidate = {
   key: string;
   runId: string;
   sourceName: string;
   label: string;
   reason: string;
+  evidenceStatements?: string[];
   action: "bind_existing" | "new_candidate";
   existingObjectId?: string;
 };
 
-type IncomingSource = {
+export type IncomingSource = {
   runId: string;
   sourceBlobId: string;
   sourceName: string;
@@ -43,6 +48,7 @@ const globalObjectMemberSchema = z.object({
   sourceName: z.string(),
   label: z.string(),
   reason: z.string(),
+  evidenceStatements: z.array(z.string().min(1)).max(16).default([]),
 });
 
 const globalObjectDraftSchema = z.object({
@@ -53,15 +59,26 @@ const globalObjectDraftSchema = z.object({
   members: z.array(globalObjectMemberSchema),
 });
 
+const candidateDispositionSchema = z.object({
+  key: z.string(),
+  runId: z.string().uuid(),
+  sourceName: z.string(),
+  label: z.string(),
+  action: z.enum(["reject", "defer"]),
+  reason: z.string().min(1).max(1_000),
+});
+
 const globalCheckpointSchema = z.object({
-  version: z.literal("library-global-resolution.v3"),
+  version: z.literal("library-global-resolution.v4"),
   inputFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   nextSourceIndex: z.number().int().nonnegative(),
   objects: z.array(globalObjectDraftSchema),
+  dispositions: z.array(candidateDispositionSchema),
 });
 
 type GlobalCheckpoint = z.infer<typeof globalCheckpointSchema>;
 export type GlobalObjectDraft = z.infer<typeof globalObjectDraftSchema>;
+type CandidateDisposition = z.infer<typeof candidateDispositionSchema>;
 
 function refreshedGlobalObject(
   object: GlobalObjectDraft,
@@ -158,11 +175,25 @@ const createDecisionSchema = z.object({
   canonicalLabel: z.string().trim().min(1).max(200),
 });
 
+const rejectDecisionSchema = z.object({
+  action: z.literal("reject"),
+  incomingKeys: z.array(z.string()).min(1),
+  reason: z.string().trim().min(1).max(1_000),
+});
+
+const deferDecisionSchema = z.object({
+  action: z.literal("defer"),
+  incomingKeys: z.array(z.string()).min(1),
+  reason: z.string().trim().min(1).max(1_000),
+});
+
 export const globalObjectResolutionDecisionSchema = z.object({
   groups: z.array(z.discriminatedUnion("action", [
     attachDecisionSchema,
     bindDecisionSchema,
     createDecisionSchema,
+    rejectDecisionSchema,
+    deferDecisionSchema,
   ])).min(1).max(100),
 });
 
@@ -172,6 +203,7 @@ export function failureAfterGlobalResolution(input: {
   runId: string;
   objectCandidates: unknown;
   resolvedMemberKeys: ReadonlySet<string>;
+  disposedMemberKeys?: ReadonlySet<string>;
 }): { failed: boolean; reasons: string[] } {
   const reasons: string[] = [];
   const rawCandidates = Array.isArray(input.objectCandidates) ? input.objectCandidates : [];
@@ -185,7 +217,8 @@ export function failureAfterGlobalResolution(input: {
     }
     if (
       parsed.data.action === "new_candidate" &&
-      !input.resolvedMemberKeys.has(`${input.runId}:assessment:${index}`)
+      !input.resolvedMemberKeys.has(`${input.runId}:assessment:${index}`) &&
+      !input.disposedMemberKeys?.has(`${input.runId}:assessment:${index}`)
     ) {
       unresolvedCandidates += 1;
     }
@@ -199,6 +232,12 @@ type ExistingObject = {
   id: string;
   canonicalName: string;
   surfaceForms: string[];
+  evidenceStatements: string[];
+  evidenceSummary: {
+    linkedAssertionCount: number;
+    coverageAssertionCount: number;
+    sampledStatementCount: number;
+  };
 };
 
 export function normalizeObjectLabel(value: string): string {
@@ -212,6 +251,7 @@ function member(candidate: IncomingObjectCandidate) {
     sourceName: candidate.sourceName,
     label: candidate.label,
     reason: candidate.reason,
+    evidenceStatements: candidate.evidenceStatements ?? [],
   };
 }
 
@@ -311,13 +351,38 @@ export function applyGlobalDecision(
       }
       continue;
     }
+    if (group.action === "reject" || group.action === "defer") continue;
     next.push(newDraft(candidates, group.canonicalLabel));
   }
   return next;
 }
 
+function dispositionsFromDecision(
+  decision: GlobalDecision,
+  incoming: IncomingObjectCandidate[],
+): CandidateDisposition[] {
+  const byKey = new Map(incoming.map((item) => [item.key, item]));
+  return decision.groups.flatMap((group) => {
+    if (group.action !== "reject" && group.action !== "defer") return [];
+    return group.incomingKeys.map((key) => {
+      const candidate = byKey.get(key);
+      if (!candidate) throw new Error(`Global Object 决策引用未知候选：${key}`);
+      return {
+        key,
+        runId: candidate.runId,
+        sourceName: candidate.sourceName,
+        label: candidate.label,
+        action: group.action,
+        reason: group.reason,
+      } satisfies CandidateDisposition;
+    });
+  });
+}
+
 function similarityText(candidate: IncomingObjectCandidate): string {
-  return normalizeObjectLabel(`${candidate.label}${candidate.reason}`);
+  return normalizeObjectLabel(
+    `${candidate.label}${candidate.reason}${(candidate.evidenceStatements ?? []).join(" ")}`,
+  );
 }
 
 function bigrams(value: string): Set<string> {
@@ -373,10 +438,60 @@ function shortlistExisting(
     .map((item) => item.object);
 }
 
+function shortlistPreResolvedDrafts(
+  candidate: IncomingObjectCandidate,
+  objects: GlobalObjectDraft[],
+): GlobalObjectDraft[] {
+  const incomingLabel = normalizeObjectLabel(candidate.label);
+  return objects.map((object) => ({
+    object,
+    score: Math.max(
+      0,
+      ...object.labels.map((label) => overlapScore(
+        incomingLabel,
+        normalizeObjectLabel(label),
+      )),
+    ),
+  })).filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 12)
+    .map((item) => item.object);
+}
+
+function shortlistPreResolvedExisting(
+  candidate: IncomingObjectCandidate,
+  objects: ExistingObject[],
+): ExistingObject[] {
+  const incomingLabel = normalizeObjectLabel(candidate.label);
+  return objects.map((object) => ({
+    object,
+    score: Math.max(
+      overlapScore(incomingLabel, normalizeObjectLabel(object.canonicalName)),
+      ...object.surfaceForms.map((surface) => overlapScore(
+        incomingLabel,
+        normalizeObjectLabel(surface),
+      )),
+    ),
+  })).filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 10)
+    .map((item) => item.object);
+}
+
+export function uncontestedPreResolvedDecision(
+  incoming: IncomingObjectCandidate[],
+): GlobalDecision {
+  return {
+    groups: incoming.map((candidate) => ({
+      action: "create_new" as const,
+      incomingKeys: [candidate.key],
+      canonicalLabel: candidate.label,
+    })),
+  };
+}
+
 function deterministicDecision(
   incoming: IncomingObjectCandidate[],
-  objects: GlobalObjectDraft[],
-  existingObjects: ExistingObject[],
 ): { decision: GlobalDecision; unresolved: IncomingObjectCandidate[] } {
   const groups: GlobalDecision["groups"] = [];
   const unresolved: IncomingObjectCandidate[] = [];
@@ -389,29 +504,8 @@ function deterministicDecision(
       });
       continue;
     }
-    const normalized = normalizeObjectLabel(candidate.label);
-    const matchingDrafts = objects.filter((object) =>
-      object.labels.some((label) => normalizeObjectLabel(label) === normalized)
-    );
-    if (matchingDrafts.length === 1) {
-      groups.push({
-        action: "attach_draft",
-        incomingKeys: [candidate.key],
-        targetDraftObjectId: matchingDrafts[0].draftObjectId,
-      });
-      continue;
-    }
-    const matchingExisting = existingObjects.filter((object) =>
-      normalizeObjectLabel(object.canonicalName) === normalized
-    );
-    if (matchingExisting.length === 1) {
-      groups.push({
-        action: "bind_existing",
-        incomingKeys: [candidate.key],
-        existingObjectId: matchingExisting[0].id,
-      });
-      continue;
-    }
+    // 字面完全一致仍是最强召回信号，但不能证明 identity；同形异义必须交给
+    // 后面的模型步骤结合 Assertion 证据判断，而不是在这里自动并入。
     unresolved.push(candidate);
   }
   return { decision: { groups }, unresolved };
@@ -421,80 +515,189 @@ function structuredTextModel() {
   return wrapLanguageModel({ model: getChatModel(), middleware: extractJsonMiddleware() });
 }
 
+export function globalObjectDraftEvidence(item: GlobalObjectDraft) {
+  const sourceNames = [...new Set(item.members.map((memberItem) => memberItem.sourceName))];
+  const evidenceStatements = [...new Set(item.members.flatMap((memberItem) =>
+    memberItem.evidenceStatements
+  ))].slice(0, 24);
+  return {
+    draftObjectId: item.draftObjectId,
+    canonicalLabel: item.canonicalLabel,
+    labels: item.labels,
+    sourceReasons: item.members.map((memberItem) => memberItem.reason),
+    evidenceStatements,
+    sourceNames,
+    usageEvidence: {
+      scope: "current_compilation_candidates",
+      sourceCount: sourceNames.length,
+      candidateOccurrenceCount: item.members.length,
+      evidenceStatementCount: evidenceStatements.length,
+      interpretationBoundary: "次数只提供语境证据，不是保留、拒绝或 identity 阈值",
+    },
+  };
+}
+
 async function decideWithModel(
   incoming: IncomingObjectCandidate[],
   candidateDrafts: GlobalObjectDraft[],
   candidateExisting: ExistingObject[],
+  options: { objecthoodEstablished?: boolean } = {},
 ): Promise<GlobalDecision> {
   const prompt = [
     "你正在做 Sydaris 基础编译的跨文件 Global Object 身份归并。当前文件等价于一个叶子来源。",
+    ...(options.objecthoodEstablished
+      ? [
+          "当前候选已经通过该深度来源内部的 Global Object Resolution；它们的 Objecthood 与同一来源内的身份边界已经成立。本步骤只判断是否与其他来源或正式 Object 为同一身份，不得重新 reject/defer；无法证明同一身份时 create_new。",
+        ]
+      : []),
     "只判断不同文件中的名称是否指向现实中的同一个稳定对象；主题相关、同属一个活动、斜杠并列或标题相邻都不等于同一对象。",
-    "attach_draft 只能指向给出的草稿候选；bind_existing 只能指向给出的正式 Object 候选；证据不足时 create_new。",
+    "字面完全一致只是强召回信号，不足以证明 identity；必须比较 evidenceStatements。例如‘苹果发布新产品’中的苹果与‘采购苹果两箱’中的苹果可能不是同一 referent。",
+    "attach_draft 只能指向给出的草稿候选；bind_existing 只能指向给出的正式 Object 候选。Objecthood 成立但身份证据不足时 create_new；不是独立稳定 referent 时 reject；词义或 Objecthood 暂时无法判断时 defer。",
+    "reject/defer 只处置 Object 候选，不删除来源 Assertion。不要把仅仅无法证明与候选同一身份的对象 reject 掉。",
+    "usageEvidence 只表示当前编译候选或 Shared Brain 中已经观察到的证据规模。低频对象仍可成立，高频通用词也可能应拒绝或分义；禁止把次数当成自动阈值。",
     "允许把当前文件的多个 incomingKeys 放入同一组，但只有来源理由明确说明它们同指时才这样做。",
     "create_new 的 canonicalLabel 必须逐字采用该组某个 incoming label。不要创建或修改正式 Shared Brain 数据。",
-    `当前文件候选：${JSON.stringify(incoming)}`,
-    `已建立草稿候选：${JSON.stringify(candidateDrafts.map((item) => ({
-      draftObjectId: item.draftObjectId,
-      canonicalLabel: item.canonicalLabel,
-      labels: item.labels,
-      sourceReasons: item.members.map((memberItem) => memberItem.reason),
-      sourceNames: [...new Set(item.members.map((memberItem) => memberItem.sourceName))],
+    `当前文件候选：${JSON.stringify(incoming.map((item) => ({
+      ...item,
+      usageEvidence: {
+        scope: "current_source_candidate",
+        evidenceStatementCount: item.evidenceStatements?.length ?? 0,
+        interpretationBoundary: "单次出现也可能是有效对象",
+      },
     })))}`,
+    `已建立草稿候选：${JSON.stringify(candidateDrafts.map(globalObjectDraftEvidence))}`,
     `正式 Object 候选：${JSON.stringify(candidateExisting)}`,
   ].join("\n");
+  let firstFailure: unknown;
   try {
+    const requestPrompt = withStructuredOutputGuidance({
+      prompt,
+      schema: globalObjectResolutionDecisionSchema,
+      name: "library_global_object_resolution",
+    });
     const result = await generateText({
       model: structuredTextModel(),
-      messages: [{ role: "user", content: prompt }],
+      messages: [{ role: "user", content: requestPrompt }],
       output: Output.object({
         schema: globalObjectResolutionDecisionSchema,
         name: "library_global_object_resolution",
         description: "把当前文件的 Object 候选归并到跨文件草稿或既有 Object",
       }),
       temperature: 0,
-      maxOutputTokens: 5_000,
+      maxRetries: 0,
     });
     return result.output;
   } catch (error) {
     if (NoObjectGeneratedError.isInstance(error)) {
       const recovered = parseEmbeddedModelJson(error.text, globalObjectResolutionDecisionSchema);
       if (recovered) return recovered;
-      throw new Error(`${error.message}；rawResponse=${error.text?.slice(0, 2_000) || "<empty>"}`);
+      firstFailure = new Error(
+        `${error.message}；rawResponse=${error.text?.slice(0, 2_000) || "<empty>"}`,
+        { cause: error },
+      );
+    } else {
+      firstFailure = error;
     }
-    throw error;
+    if (!shouldUseTextJsonCleanRetry(firstFailure)) throw firstFailure;
   }
+  const failureMessage = firstFailure instanceof Error
+    ? firstFailure.message
+    : String(firstFailure);
+  const fallbackPrompt = withStructuredOutputGuidance({
+    prompt: `${prompt}\n\n上一次输出未通过结构校验：${failureMessage.slice(0, 1_000)}\n请只根据原始输入重新生成完整结果，不要续写、修补或解释上一次输出。`,
+    schema: globalObjectResolutionDecisionSchema,
+    name: "library_global_object_resolution",
+    mode: "text_json",
+  });
+  const fallback = await generateText({
+    model: structuredTextModel(),
+    messages: [{ role: "user", content: fallbackPrompt }],
+    temperature: 0,
+    maxRetries: 0,
+  });
+  const recovered = parseEmbeddedModelJson(
+    fallback.text,
+    globalObjectResolutionDecisionSchema,
+  );
+  if (recovered) return recovered;
+  throw retryableModelOutputFailure(new Error(
+    `Global Object 纯文本 JSON clean retry 未通过 Schema；rawResponse=${fallback.text.slice(0, 2_000)}`,
+  ));
 }
 
-async function resolveIncomingSource(
+export async function resolveIncomingSource(
   source: IncomingSource,
   objects: GlobalObjectDraft[],
   existingObjects: ExistingObject[],
-): Promise<GlobalObjectDraft[]> {
-  if (!source.candidates.length) return objects;
-  const deterministic = deterministicDecision(source.candidates, objects, existingObjects);
+): Promise<{ objects: GlobalObjectDraft[]; dispositions: CandidateDisposition[] }> {
+  if (!source.candidates.length) return { objects, dispositions: [] };
+  if (source.preResolved) {
+    let next = objects;
+    const dispositions: CandidateDisposition[] = [];
+    for (const candidate of source.candidates) {
+      const deterministic = deterministicDecision([candidate]);
+      if (deterministic.decision.groups.length) {
+        next = applyGlobalDecision(
+          next,
+          [candidate],
+          deterministic.decision,
+          existingObjects,
+        );
+      }
+      if (!deterministic.unresolved.length) continue;
+
+      const candidateDrafts = shortlistPreResolvedDrafts(candidate, next).filter((draft) =>
+        !draft.members.some((item) => item.runId === source.runId)
+      );
+      const candidateExisting = shortlistPreResolvedExisting(candidate, existingObjects);
+      const decision = candidateDrafts.length || candidateExisting.length
+        ? await decideWithModel(
+            [candidate],
+            candidateDrafts,
+            candidateExisting,
+            { objecthoodEstablished: true },
+          )
+        : uncontestedPreResolvedDecision([candidate]);
+      validateDecision(decision, [candidate], candidateDrafts, candidateExisting);
+      next = applyGlobalDecision(next, [candidate], decision, existingObjects);
+      dispositions.push(...dispositionsFromDecision(decision, [candidate]));
+    }
+    return { objects: next, dispositions };
+  }
+  const deterministic = deterministicDecision(source.candidates);
   let next = objects;
+  const dispositions: CandidateDisposition[] = [];
   if (deterministic.decision.groups.length) {
     next = applyGlobalDecision(next, source.candidates, deterministic.decision, existingObjects);
+    dispositions.push(...dispositionsFromDecision(
+      deterministic.decision,
+      source.candidates,
+    ));
   }
-  if (!deterministic.unresolved.length) return next;
-  for (const candidate of deterministic.unresolved) {
-    const candidateDrafts = shortlistDrafts([candidate], next).filter((draft) =>
-      !source.preResolved || !draft.members.some((item) => item.runId === source.runId)
-    );
-    const candidateExisting = shortlistExisting([candidate], existingObjects);
-    const decision: GlobalDecision = !candidateDrafts.length && !candidateExisting.length
-      ? {
-          groups: [{
-            action: "create_new",
-            incomingKeys: [candidate.key],
-            canonicalLabel: candidate.label,
-          }],
-        }
-      : await decideWithModel([candidate], candidateDrafts, candidateExisting);
-    validateDecision(decision, [candidate], candidateDrafts, candidateExisting);
-    next = applyGlobalDecision(next, [candidate], decision, existingObjects);
-  }
-  return next;
+  if (!deterministic.unresolved.length) return { objects: next, dispositions };
+  const candidateDrafts = shortlistDrafts(deterministic.unresolved, next);
+  const candidateExisting = shortlistExisting(deterministic.unresolved, existingObjects);
+  // 首次出现且没有召回候选并不等于 Objecthood 已成立。把同一来源的待决项一次性
+  // 交给语义 Resolver，既允许 reject/defer，也避免退化成逐候选模型调用。
+  const decision = await decideWithModel(
+    deterministic.unresolved,
+    candidateDrafts,
+    candidateExisting,
+  );
+  validateDecision(
+    decision,
+    deterministic.unresolved,
+    candidateDrafts,
+    candidateExisting,
+  );
+  next = applyGlobalDecision(
+    next,
+    deterministic.unresolved,
+    decision,
+    existingObjects,
+  );
+  dispositions.push(...dispositionsFromDecision(decision, deterministic.unresolved));
+  return { objects: next, dispositions };
 }
 
 function globalArtifactRoot(): string {
@@ -531,12 +734,43 @@ async function deepCandidates(input: {
       canonical_name: z.string().min(1),
     })),
   }).parse(JSON.parse(await readFile(/* turbopackIgnore: true */ artifactPath, "utf8")));
+  const assertionPath = path.join(
+    /* turbopackIgnore: true */ path.dirname(artifactPath),
+    "global-assertions.json",
+  );
+  const assertionArtifact = z.object({
+    assertions: z.array(z.object({
+      global_statement_template_markdown: z.string().min(1),
+      reference_atoms: z.array(z.object({ global_object_id: z.string().uuid() })),
+      linked_global_object_ids: z.array(z.string().uuid()),
+    })),
+  }).parse(JSON.parse(await readFile(
+    /* turbopackIgnore: true */ assertionPath,
+    "utf8",
+  )));
+  const canonicalById = new Map(root.global_objects.map((object) => [
+    object.global_object_id,
+    object.canonical_name,
+  ]));
+  const renderedAssertions = assertionArtifact.assertions.map((assertion) => ({
+    statement: assertion.global_statement_template_markdown.replace(
+      /\{\{object:([^{}]+)\}\}/g,
+      (_, objectId: string) => canonicalById.get(objectId.trim()) ?? objectId.trim(),
+    ),
+    objectIds: new Set([
+      ...assertion.reference_atoms.map((atom) => atom.global_object_id),
+      ...assertion.linked_global_object_ids,
+    ]),
+  }));
   return root.global_objects.map((object, index) => ({
     key: `${input.runId}:deep:${index}`,
     runId: input.runId,
     sourceName: input.sourceName,
     label: object.canonical_name,
     reason: "深度冷启动产生的 Global Object",
+    evidenceStatements: [...new Set(renderedAssertions.flatMap((assertion) =>
+      assertion.objectIds.has(object.global_object_id) ? [assertion.statement] : []
+    ))].slice(0, 16),
     action: "new_candidate" as const,
   }));
 }
@@ -580,6 +814,7 @@ async function loadIncomingSources(jobId: string): Promise<IncomingSource[]> {
         sourceName: run.libraryNode.name,
         label: parsed.data.label,
         reason: parsed.data.reason,
+        evidenceStatements: parsed.data.evidenceStatements,
         action: parsed.data.action,
         ...(parsed.data.action === "bind_existing"
           ? { existingObjectId: parsed.data.existingObjectId }
@@ -655,6 +890,7 @@ async function activeObjectsBeforeSelectedSources(
 async function promoteSuccessfulLibraryResults(
   jobId: string,
   resolvedObjects: GlobalObjectDraft[],
+  dispositions: CandidateDisposition[],
 ): Promise<GlobalObjectDraft[]> {
   const database = getDatabase();
   const [state, runs, job] = await Promise.all([
@@ -685,6 +921,7 @@ async function promoteSuccessfulLibraryResults(
   const sharedMemory = await publishLibraryRunsToSharedMemory({
     jobId,
     resolvedObjects,
+    disposedMemberKeys: new Set(dispositions.map((item) => item.key)),
   });
   const activeObjects = parsedGlobalObjects(state?.globalObjects);
   const activeMemberRunIds = [...new Set(activeObjects.flatMap((object) =>
@@ -720,7 +957,10 @@ async function promoteSuccessfulLibraryResults(
       item.members.map((memberItem) => memberItem.runId)
     )).size,
     memberCount: currentObjects.reduce((total, item) => total + item.members.length, 0),
+    rejectedCandidateCount: dispositions.filter((item) => item.action === "reject").length,
+    deferredCandidateCount: dispositions.filter((item) => item.action === "defer").length,
     objects: currentObjects,
+    dispositions,
     sharedMemory,
   };
   const supersededRuns = promotedBlobIds.size
@@ -760,7 +1000,9 @@ async function promoteSuccessfulLibraryResults(
       data: {
         globalCheckpoint: {},
         globalResult: currentResult,
-        globalStatusMessage: `已发布到 Shared Brain：${sharedMemory.assertionCount} 条 Assertion、${sharedMemory.objectCount} 个 Object`,
+        globalStatusMessage: sharedMemory.embeddingStatus === "queued"
+          ? `已发布到 Shared Brain：${sharedMemory.assertionCount} 条 Assertion、${sharedMemory.objectCount} 个 Object；向量索引在后台补齐`
+          : `已发布到 Shared Brain：${sharedMemory.assertionCount} 条 Assertion、${sharedMemory.objectCount} 个 Object`,
       },
     });
     for (const oldJobId of supersededJobIds) {
@@ -779,6 +1021,12 @@ async function loadExistingObjects(): Promise<ExistingObject[]> {
     select: {
       id: true,
       canonicalName: true,
+      _count: {
+        select: {
+          assertionLinks: true,
+          assertionCoverage: true,
+        },
+      },
       surfaceMemberships: {
         select: {
           surfaceFormOrdinal: true,
@@ -786,30 +1034,62 @@ async function loadExistingObjects(): Promise<ExistingObject[]> {
         },
       },
       chatMentions: { select: { surfaceForm: true } },
+      assertionLinks: {
+        take: 12,
+        orderBy: { assertionId: "asc" },
+        select: {
+          assertion: { select: { globalStatementTemplateMarkdown: true } },
+        },
+      },
+      assertionCoverage: {
+        take: 12,
+        orderBy: { assertionId: "asc" },
+        select: {
+          assertion: { select: { globalStatementTemplateMarkdown: true } },
+        },
+      },
     },
     orderBy: { globalObjectKey: "asc" },
   });
-  return objects.map((object) => ({
-    id: object.id,
-    canonicalName: object.canonicalName,
-    surfaceForms: [...new Set([
-      object.canonicalName,
-      ...object.surfaceMemberships.map((membership) =>
-        membership.objectFragment.surfaceForms[membership.surfaceFormOrdinal]
-      ).filter((value): value is string => Boolean(value)),
-      ...object.chatMentions.map((mention) => mention.surfaceForm),
-    ])],
-  }));
+  return objects.map((object) => {
+    const evidenceStatements = [...new Set([
+      ...object.assertionLinks.map((link) =>
+        link.assertion.globalStatementTemplateMarkdown
+      ),
+      ...object.assertionCoverage.map((coverage) =>
+        coverage.assertion.globalStatementTemplateMarkdown
+      ),
+    ])];
+    return {
+      id: object.id,
+      canonicalName: object.canonicalName,
+      surfaceForms: [...new Set([
+        object.canonicalName,
+        ...object.surfaceMemberships.map((membership) =>
+          membership.objectFragment.surfaceForms[membership.surfaceFormOrdinal]
+        ).filter((value): value is string => Boolean(value)),
+        ...object.chatMentions.map((mention) => mention.surfaceForm),
+      ])],
+      evidenceStatements,
+      evidenceSummary: {
+        linkedAssertionCount: object._count.assertionLinks,
+        coverageAssertionCount: object._count.assertionCoverage,
+        sampledStatementCount: evidenceStatements.length,
+      },
+    };
+  });
 }
 
 async function reconcileCompilationOutcomes(
   jobId: string,
   objects: GlobalObjectDraft[],
+  dispositions: CandidateDisposition[],
 ): Promise<void> {
   const database = getDatabase();
   const resolvedMemberKeys = new Set(
     objects.flatMap((object) => object.members.map((item) => item.key)),
   );
+  const disposedMemberKeys = new Set(dispositions.map((item) => item.key));
   const runs = await database.librarySourceProcessingRun.findMany({
     where: { jobId, status: "ready", assessment: { isNot: null } },
     select: {
@@ -830,6 +1110,7 @@ async function reconcileCompilationOutcomes(
         runId: run.id,
         objectCandidates: run.assessment.objectCandidates,
         resolvedMemberKeys,
+        disposedMemberKeys,
       });
       await transaction.librarySourceProcessingRun.update({
         where: { id: run.id },
@@ -868,11 +1149,12 @@ export async function processLibraryGlobalResolution(jobId: string): Promise<boo
   const parsedCheckpoint = globalCheckpointSchema.safeParse(job.globalCheckpoint);
   let checkpoint: GlobalCheckpoint = parsedCheckpoint.success
     ? parsedCheckpoint.data
-    : {
-        version: "library-global-resolution.v3",
+      : {
+        version: "library-global-resolution.v4",
         inputFingerprint: fingerprint,
         nextSourceIndex: 0,
         objects: startingObjects,
+        dispositions: [],
       };
   if (checkpoint.inputFingerprint !== fingerprint) {
     throw new Error("基础编译文件集合已变化，不能复用原 Global Object checkpoint");
@@ -904,8 +1186,17 @@ export async function processLibraryGlobalResolution(jobId: string): Promise<boo
         globalStatusMessage: `解析 ${index + 1}/${sources.length}：${source.sourceName}`,
       },
     });
-    const objects = await resolveIncomingSource(source, checkpoint.objects, existingObjects);
-    checkpoint = { ...checkpoint, nextSourceIndex: index + 1, objects };
+    const resolved = await resolveIncomingSource(
+      source,
+      checkpoint.objects,
+      existingObjects,
+    );
+    checkpoint = {
+      ...checkpoint,
+      nextSourceIndex: index + 1,
+      objects: resolved.objects,
+      dispositions: [...checkpoint.dispositions, ...resolved.dispositions],
+    };
     await database.libraryCompilationJob.update({
       where: { id: jobId },
       data: {
@@ -924,7 +1215,14 @@ export async function processLibraryGlobalResolution(jobId: string): Promise<boo
     newDraftObjectCount: checkpoint.objects.length - boundExistingCount,
     sourceCount: sources.length,
     memberCount: checkpoint.objects.reduce((total, item) => total + item.members.length, 0),
+    rejectedCandidateCount: checkpoint.dispositions.filter((item) =>
+      item.action === "reject"
+    ).length,
+    deferredCandidateCount: checkpoint.dispositions.filter((item) =>
+      item.action === "defer"
+    ).length,
     objects: checkpoint.objects,
+    dispositions: checkpoint.dispositions,
   };
   await database.libraryCompilationJob.update({
     where: { id: jobId },
@@ -937,7 +1235,15 @@ export async function processLibraryGlobalResolution(jobId: string): Promise<boo
       globalResult: result,
     },
   });
-  await reconcileCompilationOutcomes(jobId, checkpoint.objects);
-  await promoteSuccessfulLibraryResults(jobId, checkpoint.objects);
+  await reconcileCompilationOutcomes(
+    jobId,
+    checkpoint.objects,
+    checkpoint.dispositions,
+  );
+  await promoteSuccessfulLibraryResults(
+    jobId,
+    checkpoint.objects,
+    checkpoint.dispositions,
+  );
   return true;
 }

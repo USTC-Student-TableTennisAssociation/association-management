@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -25,10 +26,16 @@ from cold_start.global_resolution.artifacts import (
     store_registry,
     write_working_registry,
 )
-from cold_start.global_resolution.finalization import build_global_assertions_artifact
+from cold_start.global_resolution.finalization import (
+    build_global_assertions_artifact,
+    resolve_ambiguous_literal_senses,
+)
 from cold_start.global_resolution.models import (
     ActiveGlobalObject,
     AssertionEvidence,
+    FragmentDisposition,
+    FragmentIdentityDecision,
+    ObjectAdmissionDecision,
     ReferenceAtom,
     RegionIntegrationPlan,
     RegionResolutionOperation,
@@ -46,7 +53,10 @@ from cold_start.global_resolution.models import (
     surface_atom_id,
     validate_region_integration_plan,
 )
-from cold_start.global_resolution.prompts import GLOBAL_IDENTITY_SYSTEM_PROMPT
+from cold_start.global_resolution.prompts import (
+    GLOBAL_IDENTITY_SYSTEM_PROMPT,
+    fragment_identity_system_prompt,
+)
 from cold_start.global_resolution.retrieval import (
     GlobalObjectCandidateRetriever,
     lexical_match_kinds,
@@ -54,8 +64,11 @@ from cold_start.global_resolution.retrieval import (
 from cold_start.global_resolution.runtime import (
     GlobalObjectResolverRunner,
     apply_region_plan,
+    candidate_prompt_payload,
+    candidate_summary_prompt_payload,
+    source_fragment_usage_payload,
 )
-from cold_start.llm.base import ModelTurn
+from cold_start.llm.base import ModelTurn, ToolCall
 
 
 def assertion(
@@ -114,12 +127,14 @@ def fragment(
     fragment_id: str,
     values: list[str],
     *,
+    identity_mode_hint: str = "named_entity",
     references: list[ReferenceAtom] | None = None,
     assertions: list[AssertionEvidence] | None = None,
 ) -> SourceFragmentDossier:
     return SourceFragmentDossier(
         source_node_id=source_node_id,
         source_fragment_id=fragment_id,
+        identity_mode_hint=identity_mode_hint,
         surface_atoms=[
             surface(source_node_id, fragment_id, ordinal, value)
             for ordinal, value in enumerate(values)
@@ -188,7 +203,8 @@ def dataset(
     snapshot = cast(
         FullSourceSemanticSnapshot,
         SimpleNamespace(
-            schema_version="source-semantics-full.v9",
+            schema_version="source-semantics-full.v10",
+            policy_version="source-semantics-policy.v5",
             source=SimpleNamespace(sha256="a" * 64),
             source_node_ids=[item.source_node_id for item in regions],
         ),
@@ -225,14 +241,57 @@ async def test_fragment_candidates_are_recalled_without_auto_identity() -> None:
 
 
 def test_person_identity_prompt_requires_direct_evidence() -> None:
-    assert "都只能用于召回候选，不能单独证明是同一人" in GLOBAL_IDENTITY_SYSTEM_PROMPT
-    assert "仍依赖“可能”“很可能”“符合背景”等合理性推测，必须 create" in (
-        GLOBAL_IDENTITY_SYSTEM_PROMPT
+    person_prompt = fragment_identity_system_prompt("named_person")
+    role_prompt = fragment_identity_system_prompt("role_type")
+
+    assert "attach 需要明确名称映射" in person_prompt
+    assert "不要求人物身份凭据" in role_prompt
+    assert "明确名称映射" not in role_prompt
+    assert "identity_mode_hint" in GLOBAL_IDENTITY_SYSTEM_PROMPT
+    assert "该提示本身不证明它是类别" in fragment_identity_system_prompt("entity_type")
+    assert "上游无法确定身份模式" in fragment_identity_system_prompt("undetermined")
+
+
+def test_fragment_identity_decision_requires_objecthood_to_match_action() -> None:
+    accepted = FragmentIdentityDecision(
+        fragment_key="fragment:region-0001:fragment-1",
+        objecthood="accepted",
+        action="create",
+        canonical_name="远航计划",
+        reason="具有跨命题身份",
     )
-    assert "脚注明确写明“林岚，2025—2026 年度项目主管”时，可以与“林岚” attach" in (
-        GLOBAL_IDENTITY_SYSTEM_PROMPT
+    assert accepted.objecthood == "accepted"
+    with pytest.raises(ValueError, match="objecthood=rejected"):
+        FragmentIdentityDecision(
+            fragment_key="fragment:region-0001:fragment-1",
+            objecthood="accepted",
+            action="reject",
+            reason="只是属性",
+        )
+
+
+def test_source_usage_evidence_is_complete_but_not_a_decision_threshold() -> None:
+    candidate = fragment("region-0001", "fragment-1", ["远航计划"])
+    first = region("region-0001", [candidate]).model_copy(
+        update={"context_markdown": "远航计划已启动。"}
     )
-    assert "仅有\n“陈晨”和“陈晨老师”" in GLOBAL_IDENTITY_SYSTEM_PROMPT
+    second = region("region-0002", []).model_copy(
+        update={"context_markdown": "复盘记录显示，远航计划完成了第一阶段。"}
+    )
+
+    evidence = source_fragment_usage_payload(
+        dataset([first, second]),
+        candidate,
+        current_source_node_id=first.source_node_id,
+    )
+
+    assert evidence["scope"] == "current_source_all_regions"
+    assert evidence["coverage"] == "complete"
+    assert evidence["exact_occurrences"] == [
+        {"surface_form": "远航计划", "occurrence_count": 2, "region_count": 2}
+    ]
+    assert evidence["representative_contexts"][0]["source_node_id"] == "region-0002"
+    assert "不等于" in evidence["interpretation_boundary"]
 
 
 def test_one_region_plan_can_create_and_attach_together() -> None:
@@ -533,6 +592,55 @@ def test_region_plan_must_partition_all_incoming_atoms() -> None:
         )
 
 
+def test_region_plan_can_reject_fragment_without_deleting_assertion() -> None:
+    evidence = assertion(
+        "region-0001",
+        "claim-1",
+        statement="{{fragment:fragment-1}}是本材料的宽泛主题。",
+    )
+    source_reference = reference("region-0001", "claim-1", "fragment-1")
+    candidate = fragment(
+        "region-0001",
+        "fragment-1",
+        ["乒乓球"],
+        references=[source_reference],
+        assertions=[evidence],
+    )
+    incoming = region("region-0001", [candidate], assertions=[evidence])
+    source_dataset = dataset([incoming], [evidence])
+    plan = RegionIntegrationPlan(
+        dispositions=[
+            FragmentDisposition(
+                action="reject",
+                fragment_keys=[candidate.fragment_key],
+                reason="只是宽泛主题，不形成独立 referent",
+            )
+        ]
+    )
+    state = registry(["region-0001"])
+    validated = validate_region_integration_plan(
+        plan,
+        incoming=incoming,
+        registry=state,
+        candidates_by_fragment={candidate.fragment_key: []},
+    )
+
+    next_state = apply_region_plan(
+        plan=validated,
+        state=state,
+        dataset=source_dataset,
+        sequence=0,
+    )
+    artifact = build_global_assertions_artifact(source_dataset, next_state)
+
+    assert next_state.objects == []
+    assert next_state.rejected_fragment_keys == [candidate.fragment_key]
+    assert artifact.assertions[0].global_statement_template_markdown == (
+        "乒乓球是本材料的宽泛主题。"
+    )
+    assert artifact.assertions[0].reference_atoms == []
+
+
 def test_local_loader_preserves_repeated_reference_ordinals(tmp_path: Path) -> None:
     run_directory = tmp_path / "run"
     compilation_directory = run_directory / "source-semantic-compilations" / "full"
@@ -557,6 +665,7 @@ def test_local_loader_preserves_repeated_reference_ordinals(tmp_path: Path) -> N
         block_count=1,
     )
     source = SourceSemanticSnapshot(
+        policy_version="source-semantics-policy.v5",
         created_at=datetime.now(UTC),
         source=metadata,
         region_tree_schema_version="region-tree.v5",
@@ -584,11 +693,13 @@ def test_local_loader_preserves_repeated_reference_ordinals(tmp_path: Path) -> N
                 fragment_id="fragment-1",
                 source_region_id="region-0001",
                 surface_forms=["甲协会"],
+                identity_mode_hint="named_entity",
             )
         ],
         model_calls=1,
     )
     snapshot = FullSourceSemanticSnapshot(
+        policy_version="source-semantics-policy.v5",
         created_at=datetime.now(UTC),
         source=metadata,
         source_time_text=None,
@@ -627,6 +738,15 @@ def test_local_loader_preserves_repeated_reference_ordinals(tmp_path: Path) -> N
     assert partial.source_node_ids == ("region-0001", "region-0002")
     assert [item.source_node_id for item in partial.regions] == ["region-0001"]
 
+    legacy = json.loads(
+        (compilation_directory / "source-semantics-full.json").read_text(encoding="utf-8")
+    )
+    legacy.pop("policy_version")
+    legacy_path = compilation_directory / "legacy-source-semantics-full.json"
+    legacy_path.write_text(json.dumps(legacy), encoding="utf-8")
+    with pytest.raises(ValueError, match="缺失的编译策略版本"):
+        load_source_compilation(legacy_path)
+
 
 def test_working_registry_round_trip_uses_local_current_state(tmp_path: Path) -> None:
     incoming_fragment = fragment("region-0001", "fragment-1", ["甲协会"])
@@ -647,10 +767,18 @@ def test_working_registry_round_trip_uses_local_current_state(tmp_path: Path) ->
     paths = _paths(tmp_path)
 
     write_working_registry(paths, source_dataset, state)
+    working_json = json.loads(paths.working_json.read_text(encoding="utf-8"))
+    assert working_json["schema_version"] == "global-resolution-working.v6"
+    assert working_json["resolution_policy_version"] == "global-resolution-policy.v2"
     rebuilt = load_working_registry(paths, source_dataset)
 
     assert store_registry(rebuilt) == store_registry(state)
     assert rebuilt.next_source_region_ordinal == 1
+
+    working_json["resolution_policy_version"] = "global-resolution-policy.previous"
+    paths.working_json.write_text(json.dumps(working_json), encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_working_registry(paths, source_dataset)
 
 
 @pytest.mark.asyncio
@@ -884,7 +1012,119 @@ def test_global_assertion_literal_matching_is_longest_and_skips_ambiguous_surfac
 
 
 @pytest.mark.asyncio
-async def test_runner_calls_model_once_for_whole_region_and_skips_empty_region(
+async def test_ambiguous_literal_sense_is_routed_in_one_batch_and_checkpointed(
+    tmp_path: Path,
+) -> None:
+    mention = assertion(
+        "region-0001",
+        "claim-1",
+        statement="每桌发放乒乓球2个。",
+        supporting_blocks=[
+            SourceBlockEvidence(
+                source_block_id="p0001-b0001",
+                markdown="器材清单：每张球桌发放乒乓球2个。",
+            )
+        ],
+    )
+    incoming = region("region-0001", [], assertions=[mention])
+    source_dataset = dataset([incoming], [mention], directory=tmp_path)
+    sport_evidence = assertion(
+        "region-sport",
+        "claim-1",
+        statement="协会致力于推动乒乓球运动发展。",
+    )
+    equipment_evidence = assertion(
+        "region-equipment",
+        "claim-1",
+        statement="训练需要采购乒乓球器材。",
+    )
+    state = registry(
+        ["region-0001"],
+        cursor=1,
+        objects=[
+            global_object(
+                "global-sport",
+                "global-000001-01",
+                "乒乓球运动",
+                [surface("region-sport", "fragment-1", 0, "乒乓球")],
+                assertions=[sport_evidence],
+            ),
+            global_object(
+                "global-equipment",
+                "global-000001-02",
+                "乒乓球器材",
+                [surface("region-equipment", "fragment-1", 0, "乒乓球")],
+                assertions=[equipment_evidence],
+            ),
+        ],
+    )
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete_turn(self, **kwargs: object) -> ModelTurn:
+            self.calls += 1
+            messages = cast(list[dict[str, str]], kwargs["messages"])
+            payload = json.loads(messages[1]["content"].split("\n", 1)[1])
+            return ModelTurn(
+                content=json.dumps(
+                    {
+                        "assignments": [
+                            {
+                                "occurrence_id": item["occurrence_id"],
+                                "global_object_id": "global-equipment",
+                            }
+                            for item in payload["occurrences"]
+                        ]
+                    }
+                )
+            )
+
+    model = FakeModel()
+    routes = await resolve_ambiguous_literal_senses(
+        model=model,
+        dataset=source_dataset,
+        state=state,
+        directory=tmp_path,
+    )
+    artifact = build_global_assertions_artifact(
+        source_dataset,
+        state,
+        literal_sense_routes=routes,
+    )
+
+    assert model.calls == 1
+    assert artifact.assertions[0].global_statement_template_markdown == (
+        "每桌发放{{object:global-equipment}}2个。"
+    )
+    assert (tmp_path / "literal-sense-routing.json").is_file()
+    checkpoint = json.loads(
+        (tmp_path / "literal-sense-routing.json").read_text(encoding="utf-8")
+    )
+    assert checkpoint["schema_version"] == "literal-sense-routing.v2"
+    assert checkpoint["finalization_policy_version"] == "global-finalization-policy.v1"
+    assert checkpoint["source_semantics_policy_version"] == "source-semantics-policy.v5"
+    assert artifact.schema_version == "global-assertions.v5"
+    assert artifact.global_resolution_schema_version == "global-resolution.v6"
+    assert artifact.global_resolution_policy_version == "global-resolution-policy.v2"
+
+    class NoCallModel:
+        async def complete_turn(self, **kwargs: object) -> ModelTurn:
+            del kwargs
+            raise AssertionError("相同 Source/Registry 应复用词义分流 checkpoint")
+
+    reused = await resolve_ambiguous_literal_senses(
+        model=NoCallModel(),
+        dataset=source_dataset,
+        state=state,
+        directory=tmp_path,
+    )
+    assert reused == routes
+
+
+@pytest.mark.asyncio
+async def test_runner_decides_fragments_in_parallel_and_skips_empty_region(
     tmp_path: Path,
 ) -> None:
     first = fragment("region-0001", "fragment-1", ["甲"])
@@ -899,10 +1139,154 @@ async def test_runner_calls_model_once_for_whole_region_and_skips_empty_region(
     class FakeModel:
         def __init__(self) -> None:
             self.calls = 0
+            self.active = 0
+            self.peak = 0
 
         async def complete_turn(self, **kwargs: object) -> ModelTurn:
-            del kwargs
             self.calls += 1
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            await asyncio.sleep(0)
+            label = cast(str, kwargs["request_label"])
+            selected = first if label.endswith("fragment-1") else second
+            self.active -= 1
+            decision = FragmentIdentityDecision(
+                fragment_key=selected.fragment_key,
+                objecthood="accepted",
+                action="create",
+                canonical_name=selected.surface_atoms[0].surface_form,
+                reason="形成独立身份",
+            )
+            return ModelTurn(content=decision.model_dump_json())
+
+    model = FakeModel()
+    final_state = await GlobalObjectResolverRunner(
+        model=model,
+        dataset=source_dataset,
+        paths=paths,
+        state=state,
+        retriever=GlobalObjectCandidateRetriever(embedder=None),
+        enable_admission_review=False,
+    ).run_all()
+
+    assert model.calls == 2
+    assert model.peak == 2
+    assert final_state.next_source_region_ordinal == 2
+    assert {item.canonical_name for item in final_state.objects} == {"甲", "乙"}
+    assert paths.artifact_json.is_file()
+    assert (paths.directory / "global-assertions.json").is_file()
+
+
+@pytest.mark.asyncio
+async def test_admission_review_demotes_low_evidence_property_without_losing_assertion(
+    tmp_path: Path,
+) -> None:
+    claim = assertion(
+        "region-0001",
+        "claim-1",
+        statement="成员的{{fragment:fragment-1}}有所下降。",
+        supporting_blocks=[
+            SourceBlockEvidence(
+                source_block_id="block-1",
+                markdown="成员的投入程度有所下降。",
+            )
+        ],
+    )
+    candidate = fragment(
+        "region-0001",
+        "fragment-1",
+        ["投入程度"],
+        identity_mode_hint="undetermined",
+        references=[reference("region-0001", "claim-1", "fragment-1")],
+        assertions=[claim],
+    )
+    source_region = region("region-0001", [candidate], assertions=[claim])
+    source_dataset = dataset([source_region], assertions=[claim], directory=tmp_path)
+    paths = _paths(tmp_path)
+    state = initial_registry(source_dataset)
+    write_working_registry(paths, source_dataset, state)
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.labels: list[str] = []
+
+        async def complete_turn(self, **kwargs: object) -> ModelTurn:
+            label = cast(str, kwargs["request_label"])
+            self.labels.append(label)
+            if label.startswith("全局对象"):
+                decision = FragmentIdentityDecision(
+                    fragment_key=candidate.fragment_key,
+                    objecthood="accepted",
+                    action="create",
+                    canonical_name="投入程度",
+                    reason="上游误把属性判断为候选 Object",
+                )
+            else:
+                user_prompt = cast(list[dict[str, str]], kwargs["messages"])[1]["content"]
+                assert "single_source_region" in user_prompt
+                decision = ObjectAdmissionDecision(
+                    global_object_id=json.loads(
+                        user_prompt.split("输入：\n", 1)[1].split("\n\n输出必须", 1)[0]
+                    )["global_object_id"],
+                    action="demote",
+                    reason="当前证据仅把它作为成员属性使用",
+                )
+            return ModelTurn(content=decision.model_dump_json())
+
+    model = FakeModel()
+    final_state = await GlobalObjectResolverRunner(
+        model=cast(Any, model),
+        dataset=source_dataset,
+        paths=paths,
+        state=state,
+        retriever=GlobalObjectCandidateRetriever(embedder=None),
+    ).run_all()
+
+    assert len(final_state.objects) == 0
+    assert final_state.rejected_fragment_keys == [candidate.fragment_key]
+    assert final_state.admission_records[0].action == "demote"
+    assert any(label.startswith("对象准入") for label in model.labels)
+    artifact = json.loads((paths.directory / "global-assertions.json").read_text())
+    assert artifact["assertions"][0]["global_statement_template_markdown"] == (
+        "成员的投入程度有所下降。"
+    )
+
+
+@pytest.mark.asyncio
+async def test_runner_jointly_resolves_only_coupled_fragments(tmp_path: Path) -> None:
+    first = fragment("region-0001", "fragment-1", ["一个核心"])
+    second = fragment("region-0001", "fragment-2", ["赛事与活动运营"])
+    incoming = region("region-0001", [first, second])
+    source_dataset = dataset([incoming], directory=tmp_path)
+    paths = _paths(tmp_path)
+    state = initial_registry(source_dataset)
+    write_working_registry(paths, source_dataset, state)
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.labels: list[str] = []
+
+        async def complete_turn(self, **kwargs: object) -> ModelTurn:
+            label = cast(str, kwargs["request_label"])
+            self.labels.append(label)
+            if label.endswith("fragment-1"):
+                decision = FragmentIdentityDecision(
+                    fragment_key=first.fragment_key,
+                    objecthood="uncertain",
+                    action="joint",
+                    joint_fragment_keys=[second.fragment_key],
+                    reason="来源明确把两个名称映射为同一模块",
+                )
+                return ModelTurn(content=decision.model_dump_json())
+            if label.endswith("fragment-2"):
+                decision = FragmentIdentityDecision(
+                    fragment_key=second.fragment_key,
+                    objecthood="uncertain",
+                    action="joint",
+                    joint_fragment_keys=[first.fragment_key],
+                    reason="需要与同区名称联合确定身份",
+                )
+                return ModelTurn(content=decision.model_dump_json())
             plan = RegionIntegrationPlan(
                 operations=[
                     RegionResolutionOperation(
@@ -911,7 +1295,7 @@ async def test_runner_calls_model_once_for_whole_region_and_skips_empty_region(
                             ResolutionGroup(
                                 target=ResolutionTarget(
                                     kind="new",
-                                    canonical_name="甲",
+                                    canonical_name="赛事与活动运营",
                                 ),
                                 surface_atom_ids=[
                                     first.surface_atoms[0].atom_id,
@@ -926,18 +1310,229 @@ async def test_runner_calls_model_once_for_whole_region_and_skips_empty_region(
 
     model = FakeModel()
     final_state = await GlobalObjectResolverRunner(
-        model=model,
+        model=cast(Any, model),
         dataset=source_dataset,
         paths=paths,
         state=state,
         retriever=GlobalObjectCandidateRetriever(embedder=None),
+        enable_admission_review=False,
     ).run_all()
 
-    assert model.calls == 1
-    assert final_state.next_source_region_ordinal == 2
+    assert len(model.labels) == 3
+    assert model.labels[-1].endswith("joint")
     assert len(final_state.objects) == 1
-    assert paths.artifact_json.is_file()
-    assert (paths.directory / "global-assertions.json").is_file()
+    assert final_state.objects[0].canonical_name == "赛事与活动运营"
+
+
+@pytest.mark.asyncio
+async def test_fragment_attaches_to_same_target_are_coalesced(tmp_path: Path) -> None:
+    prior_fragment = fragment("region-0001", "fragment-1", ["甲协会"])
+    prior = region("region-0001", [prior_fragment])
+    first = fragment("region-0002", "fragment-1", ["甲协会"])
+    second = fragment("region-0002", "fragment-2", ["甲协会"])
+    incoming = region("region-0002", [first, second])
+    existing = global_object(
+        "global-existing",
+        "global-000001-01",
+        "甲协会",
+        prior_fragment.surface_atoms,
+    )
+    source_dataset = dataset([prior, incoming], directory=tmp_path)
+    paths = _paths(tmp_path)
+    state = registry(
+        ["region-0001", "region-0002"],
+        cursor=1,
+        objects=[existing],
+    )
+    write_working_registry(paths, source_dataset, state)
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete_turn(self, **kwargs: object) -> ModelTurn:
+            self.calls += 1
+            label = cast(str, kwargs["request_label"])
+            selected = first if label.endswith("fragment-1") else second
+            decision = FragmentIdentityDecision(
+                fragment_key=selected.fragment_key,
+                objecthood="accepted",
+                action="attach",
+                target_global_object_id=existing.global_object_id,
+                reason="存在明确的同名身份",
+            )
+            return ModelTurn(content=decision.model_dump_json())
+
+    model = FakeModel()
+    final_state = await GlobalObjectResolverRunner(
+        model=cast(Any, model),
+        dataset=source_dataset,
+        paths=paths,
+        state=state,
+        retriever=GlobalObjectCandidateRetriever(embedder=None),
+        enable_admission_review=False,
+    ).run_all()
+
+    assert model.calls == 2
+    assert len(final_state.objects) == 1
+    assert len(final_state.objects[0].surface_atoms) == 3
+
+
+def test_candidate_summary_omits_atom_transaction_payload() -> None:
+    claim = assertion(
+        "region-0001",
+        "claim-1",
+        statement="{{fragment:fragment-1}}需要依据来源证据判断身份。",
+        supporting_blocks=[
+            SourceBlockEvidence(source_block_id="block-1", markdown="一段来源原文")
+        ],
+    )
+    source = fragment(
+        "region-0001",
+        "fragment-1",
+        ["候选对象"],
+        references=[reference("region-0001", "claim-1", "fragment-1")],
+        assertions=[claim],
+    )
+    candidate = global_object(
+        "global-existing",
+        "global-000001-01",
+        "候选对象",
+        source.surface_atoms,
+        references=source.reference_atoms,
+        assertions=[claim],
+    )
+
+    payload = candidate_summary_prompt_payload(candidate)
+
+    assert "surface_atoms" not in payload
+    assert "reference_atoms" not in payload
+    assert "detailed_assertions" not in payload
+    assert payload["aliases"] == ["候选对象"]
+    assert payload["evidence_summary"] == {
+        "source_region_count": 1,
+        "surface_atom_count": 1,
+        "reference_atom_count": 1,
+    }
+    assert len(json.dumps(payload, ensure_ascii=False)) < len(
+        json.dumps(candidate_prompt_payload(candidate), ensure_ascii=False)
+    )
+    lightweight = candidate_summary_prompt_payload(
+        candidate,
+        include_representative_assertions=False,
+    )
+    assert lightweight["representative_assertions"] == []
+
+
+@pytest.mark.asyncio
+async def test_runner_allows_one_bounded_source_usage_tool_round(tmp_path: Path) -> None:
+    candidate = fragment("region-0001", "fragment-1", ["远航计划"])
+    populated = region("region-0001", [candidate]).model_copy(
+        update={"context_markdown": "远航计划已启动。"}
+    )
+    supporting = region("region-0002", []).model_copy(
+        update={"context_markdown": "复盘记录显示，远航计划完成了第一阶段。"}
+    )
+    source_dataset = dataset([populated, supporting], directory=tmp_path)
+    paths = _paths(tmp_path)
+    state = initial_registry(source_dataset)
+    write_working_registry(paths, source_dataset, state)
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def complete_turn(self, **kwargs: object) -> ModelTurn:
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return ModelTurn(
+                    content="",
+                    tool_calls=(
+                        ToolCall(
+                            id="call-usage",
+                            name="inspect_source_fragment_usage",
+                            arguments=json.dumps({"fragment_key": candidate.fragment_key}),
+                        ),
+                    ),
+                )
+            messages = cast(list[dict[str, object]], kwargs["messages"])
+            tool_result = json.loads(cast(str, messages[-1]["content"]))
+            assert tool_result["exact_occurrences"][0]["region_count"] == 2
+            assert kwargs["tools"] == ()
+            decision = FragmentIdentityDecision(
+                fragment_key=candidate.fragment_key,
+                objecthood="accepted",
+                action="create",
+                canonical_name="远航计划",
+                reason="跨区域持续指向同一计划",
+            )
+            return ModelTurn(content=decision.model_dump_json())
+
+    model = FakeModel()
+    final_state = await GlobalObjectResolverRunner(
+        model=cast(Any, model),
+        dataset=source_dataset,
+        paths=paths,
+        state=state,
+        retriever=GlobalObjectCandidateRetriever(embedder=None),
+        enable_admission_review=False,
+    ).run_all()
+
+    assert len(model.calls) == 2
+    assert model.calls[0]["tools"]
+    assert len(final_state.objects) == 1
+
+
+@pytest.mark.asyncio
+async def test_joint_plan_accepts_unclosed_json_fence_without_retry(
+    tmp_path: Path,
+) -> None:
+    incoming_fragment = fragment("region-0001", "fragment-1", ["远航计划"])
+    incoming = region("region-0001", [incoming_fragment])
+    source_dataset = dataset([incoming], directory=tmp_path)
+    paths = _paths(tmp_path)
+    state = initial_registry(source_dataset)
+    write_working_registry(paths, source_dataset, state)
+    expected = RegionIntegrationPlan(
+        operations=[
+            RegionResolutionOperation(
+                action="create",
+                groups=[
+                    ResolutionGroup(
+                        target=ResolutionTarget(kind="new", canonical_name="远航计划"),
+                        surface_atom_ids=[incoming_fragment.surface_atoms[0].atom_id],
+                    )
+                ],
+            )
+        ]
+    )
+
+    class FakeModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete_turn(self, **kwargs: object) -> ModelTurn:
+            self.calls += 1
+            return ModelTurn(content="```json\n" + expected.model_dump_json())
+
+    model = FakeModel()
+    runner = GlobalObjectResolverRunner(
+        model=cast(Any, model),
+        dataset=source_dataset,
+        paths=paths,
+        state=state,
+        retriever=GlobalObjectCandidateRetriever(embedder=None),
+    )
+
+    actual = await runner._decide_region(
+        incoming=incoming,
+        candidates_by_fragment={incoming_fragment.fragment_key: []},
+        registry=state,
+        request_label="测试联合裁决",
+    )
+
+    assert actual == expected
+    assert model.calls == 1
 
 
 @pytest.mark.asyncio
@@ -995,16 +1590,34 @@ async def test_attach_shape_retry_preserves_identity_and_only_repairs_protocol(
             return ModelTurn(content=plan.model_dump_json())
 
     model = FakeModel()
-    final_state = await GlobalObjectResolverRunner(
+    runner = GlobalObjectResolverRunner(
         model=model,
         dataset=source_dataset,
         paths=paths,
         state=state,
         retriever=GlobalObjectCandidateRetriever(embedder=None),
-    ).run_all()
+    )
+    candidates = {incoming_fragment.fragment_key: [existing]}
+    plan = await runner._decide_region(
+        incoming=incoming,
+        candidates_by_fragment=candidates,
+        registry=state,
+        request_label="测试联合裁决",
+    )
+    final_state = apply_region_plan(
+        plan=validate_region_integration_plan(
+            plan,
+            incoming=incoming,
+            registry=state,
+            candidates_by_fragment=candidates,
+        ),
+        state=state,
+        dataset=source_dataset,
+        sequence=1,
+    )
 
     assert len(model.calls) == 2
-    assert "source_global_object_ids 必须是 []" in model.calls[0][0]["content"]
+    assert "结构细节服从输出 JSON Schema" in model.calls[0][0]["content"]
     retry_messages = model.calls[1]
     assert [item["role"] for item in retry_messages] == [
         "system",
@@ -1077,16 +1690,37 @@ async def test_batch_create_retry_splits_groups_without_rejudging_identity(
             return ModelTurn(content=plan.model_dump_json())
 
     model = FakeModel()
-    final_state = await GlobalObjectResolverRunner(
+    runner = GlobalObjectResolverRunner(
         model=model,
         dataset=source_dataset,
         paths=paths,
         state=state,
         retriever=GlobalObjectCandidateRetriever(embedder=None),
-    ).run_all()
+    )
+    candidates: dict[str, list[ActiveGlobalObject]] = {
+        first.fragment_key: [],
+        second.fragment_key: [],
+    }
+    plan = await runner._decide_region(
+        incoming=incoming,
+        candidates_by_fragment=candidates,
+        registry=state,
+        request_label="测试联合裁决",
+    )
+    final_state = apply_region_plan(
+        plan=validate_region_integration_plan(
+            plan,
+            incoming=incoming,
+            registry=state,
+            candidates_by_fragment=candidates,
+        ),
+        state=state,
+        dataset=source_dataset,
+        sequence=0,
+    )
 
     assert len(model.calls) == 2
-    assert "只有 split operation 可以包含多个 groups" in model.calls[0][0]["content"]
+    assert "结构细节服从输出 JSON Schema" in model.calls[0][0]["content"]
     retry_messages = model.calls[1]
     assert [item["role"] for item in retry_messages] == [
         "system",
@@ -1156,13 +1790,34 @@ async def test_invalid_json_retry_reuses_draft_and_rechecks_single_group_rule(
             )
 
     model = FakeModel()
-    final_state = await GlobalObjectResolverRunner(
+    runner = GlobalObjectResolverRunner(
         model=model,
         dataset=source_dataset,
         paths=paths,
         state=state,
         retriever=GlobalObjectCandidateRetriever(embedder=None),
-    ).run_all()
+    )
+    candidates: dict[str, list[ActiveGlobalObject]] = {
+        first.fragment_key: [],
+        second.fragment_key: [],
+    }
+    plan = await runner._decide_region(
+        incoming=incoming,
+        candidates_by_fragment=candidates,
+        registry=state,
+        request_label="测试联合裁决",
+    )
+    final_state = apply_region_plan(
+        plan=validate_region_integration_plan(
+            plan,
+            incoming=incoming,
+            registry=state,
+            candidates_by_fragment=candidates,
+        ),
+        state=state,
+        dataset=source_dataset,
+        sequence=0,
+    )
 
     assert len(model.calls) == 2
     retry_messages = model.calls[1]

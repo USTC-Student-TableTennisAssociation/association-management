@@ -57,6 +57,12 @@ enum MemoryChatAssertionReceiptStatus {
   failed
 }
 
+enum MemoryAssertionIndexJobStatus {
+  queued
+  running
+  ready
+}
+
 enum ChatMessageRole {
   USER
   ASSISTANT
@@ -455,27 +461,35 @@ model MemoryChatAssertionCapture {
 /// Chat → Assertion 的操作回执；供后续主对话读取真实处理状态，不属于组织事实或 Evidence。
 /// Capture 只在成功发布时存在，而回执也会保留 queued/running/skipped/failed 结果。
 model MemoryChatAssertionReceipt {
-  id                    String                           @id @default(uuid()) @db.Uuid
-  actorId               String                           @map("actor_id") @db.Uuid
-  clientMessageId       String                           @map("client_message_id") @db.Text
-  execution             String                           @db.Text
-  queueReason           String                           @map("queue_reason") @db.Text
-  status                MemoryChatAssertionReceiptStatus @default(queued)
-  submittedAt           DateTime                         @map("submitted_at") @db.Timestamptz(3)
-  conversationId        String?                          @map("conversation_id") @db.Uuid
-  timezone              String?                          @db.Text
-  semanticContext       Json?                            @map("semantic_context") @db.JsonB
-  retrieval             Json?                            @db.JsonB
-  startedAt             DateTime?                        @map("started_at") @db.Timestamptz(3)
-  completedAt           DateTime?                        @map("completed_at") @db.Timestamptz(3)
-  publishedAssertions   Int                              @default(0) @map("published_assertions")
-  publishedAssertionIds String[]                         @default([]) @map("published_assertion_ids")
-  affectedObjectIds     String[]                         @default([]) @map("affected_object_ids")
-  affectedObjects       Json                             @default("[]") @map("affected_objects") @db.JsonB
-  outcomeSummary        String?                          @map("outcome_summary") @db.Text
-  errorMessage          String?                          @map("error_message") @db.Text
-  createdAt             DateTime                         @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt             DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  id                           String                           @id @default(uuid()) @db.Uuid
+  actorId                      String                           @map("actor_id") @db.Uuid
+  clientMessageId              String                           @map("client_message_id") @db.Text
+  execution                    String                           @db.Text
+  queueReason                  String                           @map("queue_reason") @db.Text
+  status                       MemoryChatAssertionReceiptStatus @default(queued)
+  submittedAt                  DateTime                         @map("submitted_at") @db.Timestamptz(3)
+  conversationId               String?                          @map("conversation_id") @db.Uuid
+  timezone                     String?                          @db.Text
+  semanticContext              Json?                            @map("semantic_context") @db.JsonB
+  retrieval                    Json?                            @db.JsonB
+  startedAt                    DateTime?                        @map("started_at") @db.Timestamptz(3)
+  completedAt                  DateTime?                        @map("completed_at") @db.Timestamptz(3)
+  publishedAssertions          Int                              @default(0) @map("published_assertions")
+  publishedAssertionIds        String[]                         @default([]) @map("published_assertion_ids")
+  affectedObjectIds            String[]                         @default([]) @map("affected_object_ids")
+  affectedObjects              Json                             @default("[]") @map("affected_objects") @db.JsonB
+  outcomeSummary               String?                          @map("outcome_summary") @db.Text
+  errorMessage                 String?                          @map("error_message") @db.Text
+  sharedHigherMemoryStatus     String?                          @map("shared_higher_memory_status") @db.Text
+  sharedHigherMemoryTargets    Json                             @default("[]") @map("shared_higher_memory_targets") @db.JsonB
+  sharedHigherMemoryMaintained Int                              @default(0) @map("shared_higher_memory_maintained")
+  sharedHigherMemoryError      String?                          @map("shared_higher_memory_error") @db.Text
+  actorHigherMemoryStatus      String?                          @map("actor_higher_memory_status") @db.Text
+  actorHigherMemoryScopes      String[]                         @default([]) @map("actor_higher_memory_scopes")
+  actorHigherMemoryMaintained  Int                              @default(0) @map("actor_higher_memory_maintained")
+  actorHigherMemoryError       String?                          @map("actor_higher_memory_error") @db.Text
+  createdAt                    DateTime                         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                    DateTime                         @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   actor        MemoryActor       @relation(fields: [actorId], references: [id], onDelete: Restrict)
   conversation ChatConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
@@ -827,6 +841,27 @@ model MemoryAssertionEmbeddingIndex {
   indexedAt             DateTime @default(now()) @map("indexed_at")
 
   @@map("memory_assertion_embedding_indexes")
+}
+
+/// Shared Brain Assertion 向量索引是可重建派生数据；该单例任务保证发布、重启和临时服务故障后最终补齐。
+model MemoryAssertionIndexJob {
+  id                      String                        @id @default("shared") @db.Text
+  status                  MemoryAssertionIndexJobStatus @default(queued)
+  targetRevision          String                        @map("target_revision") @db.Text
+  indexedRevision         String?                       @map("indexed_revision") @db.Text
+  targetAssertionCount    Int                           @default(0) @map("target_assertion_count")
+  completedAssertionCount Int                           @default(0) @map("completed_assertion_count")
+  attemptCount            Int                           @default(0) @map("attempt_count")
+  errorMessage            String?                       @map("error_message") @db.Text
+  nextAttemptAt           DateTime?                     @map("next_attempt_at") @db.Timestamptz(3)
+  startedAt               DateTime?                     @map("started_at") @db.Timestamptz(3)
+  heartbeatAt             DateTime?                     @map("heartbeat_at") @db.Timestamptz(3)
+  completedAt             DateTime?                     @map("completed_at") @db.Timestamptz(3)
+  createdAt               DateTime                      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime                      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@index([status, nextAttemptAt])
+  @@map("memory_assertion_index_jobs")
 }
 
 /// Search 派生的 Assertion BGE-M3 向量；可在基础记忆重新导入后完整重建。

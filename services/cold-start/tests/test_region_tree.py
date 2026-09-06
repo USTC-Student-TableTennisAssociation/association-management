@@ -13,6 +13,7 @@ from cold_start.llm.base import ModelTurn, ThinkingMode, ToolCall
 from cold_start.region_tree.models import (
     KeepDecision,
     ParentPartitionError,
+    RegionTreeWorkingCheckpoint,
     SourceIssue,
     SplitDecision,
     StopDecision,
@@ -102,6 +103,29 @@ class OneNodeFailureModel(ToolModel):
         raise RuntimeError("模拟单节点接口故障")
 
 
+class ResumeFailedNodeModel(ToolModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.requested_nodes: list[str] = []
+
+    async def complete_turn(
+        self,
+        *,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[Mapping[str, Any]] = (),
+        tool_choice: object | None = None,
+        temperature: float = 0.0,
+        request_label: str = "模型",
+        thinking: ThinkingMode | None = None,
+    ) -> ModelTurn:
+        del tools, tool_choice, temperature, request_label, thinking
+        prompt = str(messages[1]["content"])
+        if "节点 region-0003" not in prompt:
+            raise AssertionError("恢复不应重新判断已经成功的区域")
+        self.requested_nodes.append("region-0003")
+        return _stop("恢复后完成其他协会工作判断。")
+
+
 class ReasoningOnlyThenRepairModel(ToolModel):
     def __init__(self) -> None:
         super().__init__()
@@ -118,9 +142,12 @@ class ReasoningOnlyThenRepairModel(ToolModel):
         thinking: ThinkingMode | None = None,
     ) -> ModelTurn:
         del tool_choice, temperature, request_label
-        if thinking == "disabled":
-            assert not tools
-            assert any(message["role"] == "tool" for message in messages)
+        if (
+            thinking == "enabled"
+            and not tools
+            and messages[-1]["role"] == "user"
+            and any(message["role"] == "tool" for message in messages)
+        ):
             self.repaired = True
             return _stop("修复后给出正式判断。")
         prompt = str(messages[1]["content"])
@@ -279,7 +306,47 @@ async def test_one_technical_failure_keeps_parent_and_successful_sibling() -> No
 
 
 @pytest.mark.asyncio
-async def test_reasoning_only_turn_uses_non_thinking_json_repair() -> None:
+async def test_resume_only_retries_failed_nodes_and_keeps_successful_siblings() -> None:
+    checkpoints: list[RegionTreeWorkingCheckpoint] = []
+    initial = RegionRuntime(
+        model=OneNodeFailureModel(),
+        blocks=blocks(),
+        context="协会内部手册。",
+        settings=ExplorationSettings(),
+        embedder=FakeEmbedder(),
+        checkpoint=lambda tree, groups: checkpoints.append(
+            tree.working_checkpoint(groups)
+        ),
+    )
+    failed = await initial.run(
+        title="测试手册",
+        root_decision=split_plan(),
+        root_model_calls=1,
+    )
+    assert failed.status == "needs_review"
+    assert checkpoints[-1].pending_groups == []
+
+    model = ResumeFailedNodeModel()
+    resumed = RegionRuntime(
+        model=model,
+        blocks=blocks(),
+        context="协会内部手册。",
+        settings=ExplorationSettings(),
+        embedder=FakeEmbedder(),
+    )
+    snapshot = await resumed.resume(checkpoints[-1])
+
+    nodes = {node.node_id: node for node in snapshot.nodes}
+    assert snapshot.status == "frozen"
+    assert model.requested_nodes == ["region-0003"]
+    assert nodes["region-0002"].status == "leaf"
+    assert nodes["region-0003"].status == "leaf"
+    assert snapshot.issues == []
+    assert snapshot.model_calls == 4
+
+
+@pytest.mark.asyncio
+async def test_reasoning_only_turn_keeps_thinking_enabled_during_json_repair() -> None:
     model = ReasoningOnlyThenRepairModel()
     runtime = RegionRuntime(
         model=model,
@@ -683,13 +750,12 @@ def test_all_tree_prompts_share_local_compilation_stop_condition() -> None:
     tree_prompt = "".join(REGION_TREE_SYSTEM_PROMPT.split())
     repair_prompt = "".join(STRUCTURE_REPAIR_SYSTEM_PROMPT.split())
 
-    assert "所有未被孩子覆盖的块自动成为当前节点直接拥有的原文" in tree_prompt
-    assert "一次局部子图编译所需的最小连续原文区域" in tree_prompt
-    assert "一张叶子后续可以生成多张记忆卡片及其连线" in tree_prompt
-    assert "多个独立活动、多个职责对象不同的角色" in tree_prompt
-    assert "表头、字段说明与依赖它们解释的表体" in tree_prompt
-    assert "同一对象的标题与依赖该标题才能确定主体" in tree_prompt
-    assert "完整且有实质内容的章节或小节" in tree_prompt
-    assert "单个block内混有别节文字时，不能返回parent_partition_error" in tree_prompt
-    assert "一次局部子图编译所需的最小连续原文区域" in repair_prompt
-    assert "必须返回keep，并把异常写入source_issues" in repair_prompt
+    assert "未覆盖blocks由当前节点保留" in tree_prompt
+    assert "最小连续原文区域" in tree_prompt
+    assert "不表达知识、Object类型或内容价值" in tree_prompt
+    assert "表头与表体" in tree_prompt
+    assert "规则与条件/例外" in tree_prompt
+    assert "同一实践的情境/做法/结果" in tree_prompt
+    assert "格式边界本身不决定切分" in tree_prompt
+    assert "最小连续原文区域" in repair_prompt
+    assert "归属正确时返回keep" in repair_prompt
