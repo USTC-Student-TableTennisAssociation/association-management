@@ -16,11 +16,15 @@ export async function POST(
   context: { params: Promise<{ proposalId: string }> },
 ) {
   try {
-    if (!await currentAuthUser()) return unauthorizedResponse();
+    const user = await currentAuthUser();
+    if (!user) return unauthorizedResponse();
     const { proposalId } = await context.params;
     const decision = decisionSchema.parse(await request.json());
     return Response.json(
-      await decideObjectChangeProposal(proposalId, decision.decision),
+      await decideObjectChangeProposal(proposalId, decision.decision, {
+        userId: user.userId,
+        role: user.role,
+      }),
     );
   } catch (error) {
     if (error instanceof z.ZodError) {

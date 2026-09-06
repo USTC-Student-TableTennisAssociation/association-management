@@ -4,17 +4,30 @@ import { Prisma, type PrismaClient } from "@/generated/prisma/client";
 import { getDatabase } from "@/db";
 import { transactionAdvisoryLockQuery } from "@/db-advisory-lock";
 import {
+  type ActorObjectBindingPayload,
   type ObjectChange,
   type ObjectChangePayload,
   type ObjectChangeProposalPresentation,
   type ObjectIdentityInspection,
+  actorObjectBindingPayloadSchema,
   objectChangePayloadSchema,
+  persistedObjectChangePayloadSchema,
 } from "@/memory/object-management-types";
 
 type DatabaseClient = PrismaClient | Prisma.TransactionClient;
 
 type ValidatedObjectChange = {
   inspections: Map<string, ObjectIdentityInspection>;
+};
+
+type ValidatedActorObjectBinding = {
+  user: {
+    id: string;
+    actorObjectId: string | null;
+    actor: { displayName: string };
+  };
+  target: ObjectIdentityInspection;
+  source?: ObjectIdentityInspection;
 };
 
 export class ObjectManagementValidationError extends Error {
@@ -405,6 +418,90 @@ function presentationChanges(
   });
 }
 
+async function validateActorObjectBinding(
+  database: DatabaseClient,
+  payload: ActorObjectBindingPayload,
+  options: { rejectSourceViewDependencies: boolean },
+): Promise<ValidatedActorObjectBinding> {
+  const user = await database.authUser.findUnique({
+    where: { id: payload.authUserId },
+    select: {
+      id: true,
+      actorObjectId: true,
+      actor: { select: { displayName: true } },
+    },
+  });
+  if (!user) throw new ObjectManagementValidationError("身份提案对应的登录账号不存在。");
+  if (user.actorObjectId !== payload.expectedActorObjectId) {
+    throw new ObjectManagementValidationError(
+      "账号的 Actor Object 绑定已经变化；请根据当前状态重新提出身份关联。",
+    );
+  }
+  if (user.actorObjectId === payload.targetObjectId) {
+    throw new ObjectManagementValidationError("当前账号已经关联这个 Actor Object。");
+  }
+
+  const occupiedBy = await database.authUser.findUnique({
+    where: { actorObjectId: payload.targetObjectId },
+    select: { id: true },
+  });
+  if (occupiedBy && occupiedBy.id !== user.id) {
+    throw new ObjectManagementValidationError("目标 Actor Object 已关联其他登录账号。");
+  }
+
+  const target = await inspectObjectIdentity(payload.targetObjectId, database);
+  const source = user.actorObjectId
+    ? await inspectObjectIdentity(user.actorObjectId, database)
+    : undefined;
+  if (options.rejectSourceViewDependencies && source?.dependencies.relatedViewCards.length) {
+    const cards = source.dependencies.relatedViewCards;
+    throw new ObjectManagementValidationError(
+      `当前账号原身份锚点关联 ${cards.length} 张正式 Business View Card；` +
+        "这些 Card 必须先明确迁移，不能在身份关联时静默改写：" +
+        cards.map((card) => `${card.viewKey}/${card.cardTypeKey}/${card.id}`).join(", "),
+    );
+  }
+  return { user, target, ...(source ? { source } : {}) };
+}
+
+function presentActorObjectBinding(
+  proposal: {
+    id: string;
+    status: string;
+    createdAt: Date;
+    failureReason: string | null;
+  },
+  payload: ActorObjectBindingPayload,
+  validated: ValidatedActorObjectBinding,
+): ObjectChangeProposalPresentation {
+  const sourceCards = validated.source?.dependencies.relatedViewCards ?? [];
+  const targetCards = validated.target.dependencies.relatedViewCards;
+  return {
+    id: proposal.id,
+    status: proposal.status as ObjectChangeProposalPresentation["status"],
+    reason: payload.reason,
+    createdAt: proposal.createdAt.toISOString(),
+    ...(proposal.failureReason ? { failureReason: proposal.failureReason } : {}),
+    invalidatesHigherMemory: Boolean(validated.source),
+    changes: [{
+      type: "BIND_ACTOR_OBJECT",
+      title: `确认“${validated.user.actor.displayName}”对应“${validated.target.object.canonicalName}”`,
+      details: [
+        `用户确认原话：${payload.confirmationQuote}`,
+        validated.source
+          ? `批准后会把账号原身份锚点“${validated.source.object.canonicalName}”合并到目标 Object。`
+          : "批准后会把当前未绑定账号关联到目标 Object。",
+        targetCards.length
+          ? `目标 Object 已关联 ${targetCards.length} 张正式 View Card；这些 Card 保持指向目标 Object。`
+          : "目标 Object 当前没有正式 View Card。",
+        sourceCards.length
+          ? `原身份锚点关联 ${sourceCards.length} 张正式 View Card，批准时会阻止静默迁移。`
+          : "原身份锚点没有需要迁移的正式 View Card。",
+      ],
+    }],
+  };
+}
+
 async function presentProposal(
   proposal: {
     id: string;
@@ -416,7 +513,13 @@ async function presentProposal(
   },
   validated?: ValidatedObjectChange,
 ): Promise<ObjectChangeProposalPresentation> {
-  const payload = objectChangePayloadSchema.parse(proposal.payload);
+  const payload = persistedObjectChangePayloadSchema.parse(proposal.payload);
+  if ("kind" in payload) {
+    const state = await validateActorObjectBinding(getDatabase(), payload, {
+      rejectSourceViewDependencies: false,
+    });
+    return presentActorObjectBinding(proposal, payload, state);
+  }
   const state = validated ?? await validateObjectChange(
     getDatabase(),
     payload,
@@ -431,6 +534,38 @@ async function presentProposal(
     invalidatesHigherMemory: hasStructuralChange(payload),
     changes: presentationChanges(payload, state),
   };
+}
+
+export async function createActorObjectBindingProposal(input: {
+  authUserId: string;
+  targetObjectId: string;
+  confirmationQuote: string;
+  reason: string;
+}): Promise<ObjectChangeProposalPresentation> {
+  const database = getDatabase();
+  const current = await database.authUser.findUnique({
+    where: { id: input.authUserId },
+    select: { actorObjectId: true },
+  });
+  if (!current) throw new ObjectManagementValidationError("当前登录账号不存在。");
+  const payload = actorObjectBindingPayloadSchema.parse({
+    kind: "actor_object_binding",
+    reason: input.reason,
+    confirmationQuote: input.confirmationQuote,
+    authUserId: input.authUserId,
+    expectedActorObjectId: current.actorObjectId,
+    targetObjectId: input.targetObjectId,
+  });
+  const validated = await validateActorObjectBinding(database, payload, {
+    rejectSourceViewDependencies: false,
+  });
+  const proposal = await database.memoryObjectChangeProposal.create({
+    data: {
+      reason: payload.reason,
+      payload: payload as Prisma.InputJsonValue,
+    },
+  });
+  return presentActorObjectBinding(proposal, payload, validated);
 }
 
 export async function createObjectChangeProposal(input: {
@@ -505,6 +640,21 @@ async function mergeObjects(
   change: Extract<ObjectChange, { type: "MERGE_OBJECTS" }>,
 ): Promise<void> {
   const sourceIds = change.mergedObjectIds;
+  const linkedUsers = await transaction.authUser.findMany({
+    where: { actorObjectId: { in: [change.survivorObjectId, ...sourceIds] } },
+    select: { id: true, actorObjectId: true },
+  });
+  if (linkedUsers.length > 1) {
+    throw new ObjectManagementValidationError(
+      "这些 Object 分别锚定了不同登录账号，不能通过普通 Object 合并把两个 Actor 身份合为一人。",
+    );
+  }
+  if (linkedUsers[0] && linkedUsers[0].actorObjectId !== change.survivorObjectId) {
+    await transaction.authUser.update({
+      where: { id: linkedUsers[0].id },
+      data: { actorObjectId: change.survivorObjectId },
+    });
+  }
   await transaction.memoryObjectHigherMemory.deleteMany({
     where: { globalObjectId: { in: [change.survivorObjectId, ...sourceIds] } },
   });
@@ -723,9 +873,108 @@ async function splitObject(
   }
 }
 
+async function decideActorObjectBindingProposal(input: {
+  database: PrismaClient;
+  proposal: {
+    id: string;
+    status: string;
+    reason: string;
+    payload: Prisma.JsonValue;
+    createdAt: Date;
+    failureReason: string | null;
+  };
+  payload: ActorObjectBindingPayload;
+  decision: "approve" | "reject";
+  actingUser?: { userId: string; role: "ADMIN" | "MEMBER" };
+}): Promise<{ proposal: ObjectChangeProposalPresentation }> {
+  if (!input.actingUser) {
+    throw new ObjectManagementValidationError("身份关联提案必须由已认证用户处理。");
+  }
+  if (
+    input.actingUser.userId !== input.payload.authUserId &&
+    input.actingUser.role !== "ADMIN"
+  ) {
+    throw new ObjectManagementValidationError("只能由账号本人或管理员处理身份关联提案。");
+  }
+
+  const previewState = await validateActorObjectBinding(input.database, input.payload, {
+    rejectSourceViewDependencies: false,
+  });
+  const preview = presentActorObjectBinding(input.proposal, input.payload, previewState);
+  if (input.decision === "reject") {
+    await input.database.memoryObjectChangeProposal.update({
+      where: { id: input.proposal.id },
+      data: { status: "rejected", decidedAt: new Date() },
+    });
+    return { proposal: { ...preview, status: "rejected" } };
+  }
+
+  try {
+    await input.database.$transaction(async (transaction) => {
+      await transaction.$queryRaw(transactionAdvisoryLockQuery(
+        `actor-object-binding:user:${input.payload.authUserId}`,
+      ));
+      for (const objectId of [
+        input.payload.expectedActorObjectId,
+        input.payload.targetObjectId,
+      ].filter((value): value is string => Boolean(value)).sort()) {
+        await transaction.$queryRaw(transactionAdvisoryLockQuery(`object-management:${objectId}`));
+      }
+      const current = await transaction.memoryObjectChangeProposal.findUnique({
+        where: { id: input.proposal.id },
+      });
+      if (!current || current.status !== "pending") {
+        throw new ObjectManagementValidationError("Proposal 已被其他请求处理");
+      }
+      const validated = await validateActorObjectBinding(transaction, input.payload, {
+        rejectSourceViewDependencies: true,
+      });
+      await transaction.authUser.update({
+        where: { id: input.payload.authUserId },
+        data: { actorObjectId: input.payload.targetObjectId },
+      });
+      if (validated.source) {
+        await mergeObjects(transaction, {
+          type: "MERGE_OBJECTS",
+          survivorObjectId: input.payload.targetObjectId,
+          mergedObjectIds: [validated.source.object.id],
+        });
+      }
+      await transaction.memoryObjectChangeProposal.update({
+        where: { id: input.proposal.id },
+        data: { status: "applied", decidedAt: new Date(), appliedAt: new Date() },
+      });
+    }, { maxWait: 30_000, timeout: 180_000 });
+  } catch (error) {
+    const failureReason = errorMessage(error);
+    const failed = await input.database.memoryObjectChangeProposal.updateMany({
+      where: { id: input.proposal.id, status: "pending" },
+      data: { status: "failed", decidedAt: new Date(), failureReason },
+    });
+    if (failed.count === 0) {
+      const current = await input.database.memoryObjectChangeProposal.findUnique({
+        where: { id: input.proposal.id },
+        select: { status: true, failureReason: true },
+      });
+      if (current) {
+        return {
+          proposal: {
+            ...preview,
+            status: current.status,
+            ...(current.failureReason ? { failureReason: current.failureReason } : {}),
+          },
+        };
+      }
+    }
+    return { proposal: { ...preview, status: "failed", failureReason } };
+  }
+  return { proposal: { ...preview, status: "applied" } };
+}
+
 export async function decideObjectChangeProposal(
   proposalId: string,
   decision: "approve" | "reject",
+  actingUser?: { userId: string; role: "ADMIN" | "MEMBER" },
 ): Promise<{ proposal: ObjectChangeProposalPresentation }> {
   const database = getDatabase();
   const proposal = await database.memoryObjectChangeProposal.findUnique({ where: { id: proposalId } });
@@ -733,7 +982,17 @@ export async function decideObjectChangeProposal(
   if (proposal.status !== "pending") {
     throw new ObjectManagementValidationError(`Proposal 已经是 ${proposal.status} 状态`);
   }
-  const payload = objectChangePayloadSchema.parse(proposal.payload);
+  const persistedPayload = persistedObjectChangePayloadSchema.parse(proposal.payload);
+  if ("kind" in persistedPayload) {
+    return decideActorObjectBindingProposal({
+      database,
+      proposal,
+      payload: persistedPayload,
+      decision,
+      actingUser,
+    });
+  }
+  const payload = persistedPayload;
 
   if (decision === "reject") {
     await database.memoryObjectChangeProposal.update({

@@ -67,6 +67,47 @@ describe("capability gates", () => {
     expect(capabilityGatewayToolNames).toContain("locateObjectViews");
   });
 
+  it("opens Object actions without requiring an unrelated View read", async () => {
+    const state = createOpenedCapabilities();
+    const tools = createCapabilityGatewayTools(state, {
+      viewKeySchema: z.string(),
+      locateObjectViews: vi.fn(),
+      listViewCards: vi.fn(),
+      readViewState: vi.fn(),
+      findArtifacts: vi.fn(),
+      describeBusinessViewActions: vi.fn(),
+    });
+    const execute = tools.openActions.execute as unknown as (input: {
+      area: "object";
+      reason: string;
+    }) => Promise<unknown>;
+
+    await expect(execute({ area: "object", reason: "核对人物身份" }))
+      .resolves.toMatchObject({ opened: "actions", area: "object" });
+    expect(state.viewStateOpened).toBe(false);
+    expect(detailedToolNames(state)).toContain("proposeActorObjectBinding");
+  });
+
+  it("still requires the concrete current View before opening Business View actions", async () => {
+    const state = createOpenedCapabilities();
+    const tools = createCapabilityGatewayTools(state, {
+      viewKeySchema: z.string(),
+      locateObjectViews: vi.fn(),
+      listViewCards: vi.fn(),
+      readViewState: vi.fn(),
+      findArtifacts: vi.fn(),
+      describeBusinessViewActions: vi.fn(),
+    });
+    const execute = tools.openActions.execute as unknown as (input: {
+      area: "business_view";
+      reason: string;
+    }) => Promise<unknown>;
+
+    await expect(execute({ area: "business_view", reason: "修改正式状态" }))
+      .resolves.toMatchObject({ opened: false, area: "business_view" });
+    expect(state.actionAreas.size).toBe(0);
+  });
+
   it("browses a View without unlocking targeted state or Actions", async () => {
     const state = createOpenedCapabilities();
     const listViewCards = vi.fn().mockResolvedValue({ cards: [] });

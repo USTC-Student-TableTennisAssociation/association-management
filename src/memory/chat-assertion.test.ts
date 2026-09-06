@@ -17,9 +17,16 @@ vi.mock("ai", async (importOriginal) => {
 vi.mock("@/ai/provider", () => ({ getChatModel: vi.fn() }));
 vi.mock("@/db", () => ({ getDatabase: vi.fn() }));
 vi.mock("@/memory/embedding-client", () => ({ embedMemoryQueries: vi.fn() }));
-vi.mock("@/memory/explore-toolset", () => ({
-  createMemoryExploreToolset: vi.fn(() => ({})),
-}));
+vi.mock("@/memory/explore-toolset", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@/memory/explore-toolset")>();
+  return {
+    ...original,
+    createMemoryExploreToolset: vi.fn(() => ({
+      runSearch: vi.fn(),
+      runFollow: vi.fn(),
+    })),
+  };
+});
 vi.mock("@/memory/object-management-service", () => ({
   inspectObjectIdentity: vi.fn(),
 }));
@@ -166,6 +173,13 @@ function mockTrace() {
 
 function extractionResult(output: unknown) {
   return {
+    output: {
+      action: "submit",
+      extraction: {
+        surfaceCorrections: [],
+        ...(output as Record<string, unknown>),
+      },
+    },
     toolCalls: [{
       toolName: "submitChatAssertionExtraction",
       input: output,
@@ -197,13 +211,11 @@ describe("Chat Assertion capture agent", () => {
       resultTokenBudget: 32_000,
     }));
     expect(generateText).toHaveBeenCalledWith(expect.objectContaining({
-      tools: expect.objectContaining({
-        inspectObjectIdentity: expect.any(Object),
-        submitChatAssertionExtraction: expect.any(Object),
-      }),
-      toolChoice: "required",
       prompt: expect.stringContaining("完整模型输入"),
+      output: expect.any(Object),
     }));
+    expect(vi.mocked(generateText).mock.calls[0][0]).not.toHaveProperty("tools");
+    expect(vi.mocked(generateText).mock.calls[0][0]).not.toHaveProperty("toolChoice");
     expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain("initialRetrieval");
     expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain("采用最小规范化");
     expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain(
@@ -231,15 +243,9 @@ describe("Chat Assertion capture agent", () => {
       "当前确认句和包含完整事实的历史 user 原话",
     );
 
-    const prepareStep = vi.mocked(generateText).mock.calls[0][0].prepareStep!;
-    expect(prepareStep({ stepNumber: 0 } as never)).toEqual({});
-    expect(prepareStep({ stepNumber: 1 } as never)).toEqual({
-      activeTools: ["submitChatAssertionExtraction"],
-      toolChoice: {
-        type: "tool",
-        toolName: "submitChatAssertionExtraction",
-      },
-    });
+    expect(vi.mocked(generateText).mock.calls[0][0].prompt).toContain(
+      "Runtime 执行该读取后会要求最终提交",
+    );
   });
 
   it("injects the authenticated actor Object so self-reference does not require a literal name", async () => {
@@ -745,13 +751,14 @@ describe("Chat Assertion capture agent", () => {
     const captureInput = input();
     captureInput.semanticContext.conversation[2].text =
       "对象甲已经建立。";
-    vi.mocked(generateText).mockImplementation(async (options) => {
-      const inspectTool = (options.tools as unknown as {
-        inspectObjectIdentity: {
-          execute: (input: { objectId: string }) => Promise<unknown>;
-        };
-      }).inspectObjectIdentity;
-      await inspectTool.execute({ objectId });
+    let modelCall = 0;
+    vi.mocked(generateText).mockImplementation(async () => {
+      modelCall += 1;
+      if (modelCall === 1) {
+        return {
+          output: { action: "inspect_object_identity", objectId },
+        } as never;
+      }
       return extractionResult({
           objects: [{
             ref: presidentRef,

@@ -11,6 +11,7 @@ import {
   completeChatAssertionReceipt,
   failChatAssertionReceipt,
   loadChatAssertionReceiptInput,
+  recordHigherMemoryReceipt,
   recoverPendingChatAssertionReceipts,
   type ChatAssertionReceiptClaim,
   type ChatAssertionReceiptKey,
@@ -29,6 +30,7 @@ import {
 } from "@/memory/actor-higher-memory";
 
 export type ChatMemoryMaintenanceInput = {
+  maintenanceReceipt?: ChatAssertionReceiptKey;
   assertionReceipt?: ChatAssertionReceiptKey;
   completedAssertion?: {
     input: ChatAssertionCaptureInput;
@@ -149,6 +151,22 @@ export function createChatMemoryMaintenanceScheduler(
         return;
       }
       try {
+        if (input.maintenanceReceipt && input.higherMemory) {
+          await recordHigherMemoryReceipt({
+            key: input.maintenanceReceipt,
+            channel: "shared",
+            status: "queued",
+            targets: input.higherMemory.queueDecision.targets,
+          });
+        }
+        if (input.maintenanceReceipt && input.actorHigherMemory) {
+          await recordHigherMemoryReceipt({
+            key: input.maintenanceReceipt,
+            channel: "actor",
+            status: "queued",
+            targets: input.actorHigherMemory.queueDecision.scopes,
+          });
+        }
         await trace?.appendSection(
           "后台对话记忆线路开始",
           [
@@ -251,6 +269,14 @@ export function createChatMemoryMaintenanceScheduler(
 
         if (higherMemoryInput) {
           try {
+            if (input.maintenanceReceipt) {
+              await recordHigherMemoryReceipt({
+                key: input.maintenanceReceipt,
+                channel: "shared",
+                status: "running",
+                targets: higherMemoryInput.queueDecision.targets,
+              });
+            }
             await trace?.appendSection(
               "后台 Higher Memory 开始",
               `Assertion 阶段已经完整结束，本轮新发布 ${captureResult.publishedAssertions} 条 Assertion。现在开始维护 Higher Memory。`,
@@ -263,19 +289,57 @@ export function createChatMemoryMaintenanceScheduler(
               clientMessageId: higherMemoryInput.clientMessageId,
               ...maintained,
             }));
+            if (input.maintenanceReceipt) {
+              const maintainedCount = maintained.objectMemories + maintained.ambientMemories;
+              await recordHigherMemoryReceipt({
+                key: input.maintenanceReceipt,
+                channel: "shared",
+                status: maintainedCount > 0 ? "completed" : "skipped",
+                targets: higherMemoryInput.queueDecision.targets,
+                maintained: maintainedCount,
+              });
+            }
           } catch (error) {
             console.error("[chat.higher-memory]", error);
             await trace?.appendError("后台 Higher Memory 失败", error);
+            if (input.maintenanceReceipt) {
+              await recordHigherMemoryReceipt({
+                key: input.maintenanceReceipt,
+                channel: "shared",
+                status: "failed",
+                targets: higherMemoryInput.queueDecision.targets,
+                error,
+              }).catch((receiptError) =>
+                console.error("[chat.higher-memory.receipt]", receiptError)
+              );
+            }
           }
         } else {
           await trace?.appendSection(
             "后台 Higher Memory 跳过",
             "Knowledge Consolidator 没有选择需要维护的 Object、identity、narrative 或 working_set。",
           );
+          if (input.maintenanceReceipt) {
+            await recordHigherMemoryReceipt({
+              key: input.maintenanceReceipt,
+              channel: "shared",
+              status: "skipped",
+              targets: [],
+              maintained: 0,
+            });
+          }
         }
 
         if (input.actorHigherMemory) {
           try {
+            if (input.maintenanceReceipt) {
+              await recordHigherMemoryReceipt({
+                key: input.maintenanceReceipt,
+                channel: "actor",
+                status: "running",
+                targets: input.actorHigherMemory.queueDecision.scopes,
+              });
+            }
             const maintained = await maintainActorHigherMemories(
               input.actorHigherMemory,
               trace,
@@ -285,15 +349,44 @@ export function createChatMemoryMaintenanceScheduler(
               clientMessageId: input.actorHigherMemory.clientMessageId,
               maintained,
             }));
+            if (input.maintenanceReceipt) {
+              await recordHigherMemoryReceipt({
+                key: input.maintenanceReceipt,
+                channel: "actor",
+                status: maintained > 0 ? "completed" : "skipped",
+                targets: input.actorHigherMemory.queueDecision.scopes,
+                maintained,
+              });
+            }
           } catch (error) {
             console.error("[chat.actor-higher-memory]", error);
             await trace?.appendError("后台 Actor Higher Memory 失败", error);
+            if (input.maintenanceReceipt) {
+              await recordHigherMemoryReceipt({
+                key: input.maintenanceReceipt,
+                channel: "actor",
+                status: "failed",
+                targets: input.actorHigherMemory.queueDecision.scopes,
+                error,
+              }).catch((receiptError) =>
+                console.error("[chat.actor-higher-memory.receipt]", receiptError)
+              );
+            }
           }
         } else {
           await trace?.appendSection(
             "Actor Higher Memory 跳过",
             "本轮没有新的持久私人协作上下文，也没有精确偏好变更需要综合。",
           );
+          if (input.maintenanceReceipt) {
+            await recordHigherMemoryReceipt({
+              key: input.maintenanceReceipt,
+              channel: "actor",
+              status: "skipped",
+              targets: [],
+              maintained: 0,
+            });
+          }
         }
 
       } finally {

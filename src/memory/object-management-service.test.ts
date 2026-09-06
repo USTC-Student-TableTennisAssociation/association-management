@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getDatabase } from "@/db";
 import {
+  createActorObjectBindingProposal,
   createObjectChangeProposal,
   decideObjectChangeProposal,
   inspectObjectIdentity,
@@ -147,6 +148,53 @@ describe("Object management service", () => {
       changes: [{ title: "移除“负责人”的 Object 名称归属" }],
     });
     expect(database.memoryObjectChangeProposal.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates an authenticated Actor Object binding proposal without using same-name inference", async () => {
+    const targetObjectId = "00000000-0000-4000-8000-000000000080";
+    const authUserId = "00000000-0000-4000-8000-000000000081";
+    const target = { ...objectRow(), id: targetObjectId, canonicalName: "魏汉东" };
+    const database = mockDatabase();
+    database.memoryGlobalObject.findUnique.mockResolvedValue(target);
+    Object.assign(database, {
+      authUser: {
+        findUnique: vi.fn().mockImplementation(({ where }) => {
+          if (where.id === authUserId) {
+            return Promise.resolve({
+              id: authUserId,
+              actorObjectId: null,
+              actor: { displayName: "魏汉东" },
+            });
+          }
+          return Promise.resolve(null);
+        }),
+      },
+    });
+
+    const proposal = await createActorObjectBindingProposal({
+      authUserId,
+      targetObjectId,
+      confirmationQuote: "我确实是知识库里的魏汉东",
+      reason: "用户明确确认本人身份并要求关联。",
+    });
+
+    expect(proposal).toMatchObject({
+      status: "pending",
+      changes: [{
+        type: "BIND_ACTOR_OBJECT",
+        title: "确认“魏汉东”对应“魏汉东”",
+      }],
+    });
+    expect(database.memoryObjectChangeProposal.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        payload: expect.objectContaining({
+          kind: "actor_object_binding",
+          authUserId,
+          expectedActorObjectId: null,
+          targetObjectId,
+        }),
+      }),
+    });
   });
 
   it("refuses to manage an Object that was not inspected in the current turn", async () => {

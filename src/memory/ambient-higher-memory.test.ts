@@ -75,18 +75,13 @@ beforeEach(() => {
     __transaction: transaction,
   };
   aiState.generateText.mockResolvedValue({
-    toolCalls: [{
-      toolName: "submitAmbientHigherMemory",
-      input: {
-        memories: [{
+    output: { memories: [{
           scope: "identity",
           contentMarkdown: "## 当前环境\n\nSydaris 正在逐步理解这个团队、长期工作方式及自身能承担的协作职责；目前主要根据真实对话延续共同工作，仍应通过后续互动和实际业务读取继续修正这种理解，不能预设环境类型或成员身份。",
         }, {
           scope: "working_set",
           contentMarkdown: "## 近期焦点\n\n近期主要在准备一场比赛，场地是当前重点；具体申请和确认状态可能继续变化，下一轮协作时应先了解最新进展，再根据仍未解决的风险决定是否需要协助准备材料、联系相关方或调整安排。",
-        }],
-      },
-    }],
+        }] },
   });
 });
 
@@ -110,25 +105,23 @@ describe("ambient Higher Memory", () => {
     expect(context).toContain("Shared Working Set");
     expect(context).toContain("无需先搜索");
     expect(context).toContain("Business View");
-    expect(context).toContain("Object–Assertion 图");
+    expect(context).toContain("不替代精确的 Assertion");
   });
 
-  it("always explains the architecture and explicit empty Ambient state", () => {
+  it("renders an explicit compact empty Ambient state", () => {
     const context = buildAmbientHigherMemoryContext([]);
-    expect(context).toContain("本轮没有加载到 identity、narrative 或 working_set");
-    expect(context).toContain("不代表 Higher Memory 架构不存在");
-    expect(context).toContain("Object Higher Memory");
+    expect(context).toBe(
+      "## Ambient Higher Memory\n状态：本轮未加载任何共享环境高层记忆。",
+    );
   });
 
   it("uses the real dialogue context without requiring another search and upserts both scopes", async () => {
     await expect(maintainAmbientHigherMemories(input())).resolves.toBe(2);
 
     const call = aiState.generateText.mock.calls[0][0];
-    expect(call.tools).toHaveProperty("submitAmbientHigherMemory");
-    expect(call.toolChoice).toEqual({
-      type: "tool",
-      toolName: "submitAmbientHigherMemory",
-    });
+    expect(call.output).toBeDefined();
+    expect(call.tools).toBeUndefined();
+    expect(call.toolChoice).toBeUndefined();
     expect(call.prompt).toContain("我们最近正在准备一场比赛");
     expect(call.prompt).toContain("不得直接把未验证的用户陈述或 Assistant 最终回答当作事实");
     expect(call.prompt).toContain("严禁写入检索是否命中");
@@ -152,12 +145,7 @@ describe("ambient Higher Memory", () => {
   });
 
   it("keeps old memories when the agent has no useful replacement", async () => {
-    aiState.generateText.mockResolvedValue({
-      toolCalls: [{
-        toolName: "submitAmbientHigherMemory",
-        input: { memories: [] },
-      }],
-    });
+    aiState.generateText.mockResolvedValue({ output: { memories: [] } });
 
     await expect(maintainAmbientHigherMemories(input())).resolves.toBe(0);
 
@@ -167,15 +155,10 @@ describe("ambient Higher Memory", () => {
 
   it("does not persist an agent output containing retrieval diagnostics", async () => {
     aiState.generateText.mockResolvedValue({
-      toolCalls: [{
-        toolName: "submitAmbientHigherMemory",
-        input: {
-          memories: [{
+      output: { memories: [{
             scope: "working_set",
             contentMarkdown: "## 近期焦点\n\n主模型缺少 searchMemory 工具，因此当前检索路径没有覆盖 Shared Brain，后续需要继续修复系统能力；这只是本轮模型对工具调用过程的判断，不是团队近期工作的真实业务状态，也不应进入下一轮自动上下文。",
-          }],
-        },
-      }],
+          }] },
     });
 
     await expect(maintainAmbientHigherMemories(input())).resolves.toBe(0);

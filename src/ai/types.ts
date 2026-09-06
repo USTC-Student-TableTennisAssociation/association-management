@@ -33,5 +33,8 @@ export type ClubChatMessage = UIMessage<
     objectChangeProposal: ObjectChangeProposalPresentation;
     libraryProposal: LibraryPlanPresentation;
     streamStatus: ChatStreamStatus;
+    answerLifecycle: {
+      phase: "answer_complete";
+    };
   }
 >;
