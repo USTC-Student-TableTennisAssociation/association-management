@@ -9,7 +9,7 @@ import { resolveStorageKey } from "@/library/object-store";
 
 export type DeepCompilationParallelUnit = {
   id: string;
-  kind: "source" | "global_object";
+  kind: "source" | "global_object" | "object_admission";
   statusMessage: string;
 };
 
@@ -17,14 +17,18 @@ export function deepParallelUnitEventFromProgress(line: string): {
   completed: boolean;
   unit: DeepCompilationParallelUnit;
 } | undefined {
-  const event = line.match(/^\[\+\s*[\d.]+s\]\s+\[(来源语义|全局对象)·([^\]]+)\]\s+(.+)$/u);
+  const event = line.match(/^\[\+\s*[\d.]+s\]\s+\[(来源语义|全局对象|对象准入)·([^\]]+)\]\s+(.+)$/u);
   if (!event) return undefined;
   const [, rawKind, id, statusMessage] = event;
   return {
     completed: /^完成：/u.test(statusMessage),
     unit: {
       id,
-      kind: rawKind === "来源语义" ? "source" : "global_object",
+      kind: rawKind === "来源语义"
+        ? "source"
+        : rawKind === "全局对象"
+          ? "global_object"
+          : "object_admission",
       statusMessage: statusMessage.slice(0, 240),
     },
   };
@@ -37,7 +41,6 @@ export type DeepCompilationCheckpoint = {
   sourceCompilation?: string;
   globalResolution?: string;
   globalAssertions?: string;
-  parallelUnits?: DeepCompilationParallelUnit[];
 };
 
 export function checkpointOwnedByRun(
@@ -71,6 +74,14 @@ export type DeepCompilationResult = {
 
 const explorationSchema = z.object({
   source: z.object({ sha256: z.string().regex(/^[a-f0-9]{64}$/) }),
+  region_tree: z.object({
+    status: z.enum(["frozen", "needs_review"]),
+    issues: z.array(z.string()),
+    nodes: z.array(z.object({
+      node_id: z.string(),
+      status: z.enum(["pending", "branch", "leaf", "failed", "needs_review"]),
+    })),
+  }),
 });
 
 const resolutionSchema = z.object({
@@ -245,25 +256,62 @@ async function ensureExploration(
   input: DeepWorkerInput,
   checkpoint: DeepCompilationCheckpoint,
 ): Promise<DeepCompilationCheckpoint> {
-  if (checkpoint.explorationRun && await isFile(path.join(checkpoint.explorationRun, "global-exploration.json"))) {
-    return checkpoint;
+  const existingArtifact = checkpoint.explorationRun
+    ? path.join(checkpoint.explorationRun, "global-exploration.json")
+    : undefined;
+  if (existingArtifact && await isFile(existingArtifact)) {
+    const existing = explorationSchema.parse(JSON.parse(await readFile(
+      /* turbopackIgnore: true */ existingArtifact,
+      "utf8",
+    )));
+    if (existing.source.sha256 !== input.sha256) {
+      throw new Error("深度冷启动 explore checkpoint SHA-256 与资料库 Blob 不一致");
+    }
+    if (existing.region_tree.status === "frozen") return checkpoint;
   }
+  const resumable = Boolean(
+    checkpoint.explorationRun &&
+    await isDirectory(checkpoint.explorationRun) &&
+    await isFile(path.join(checkpoint.explorationRun, "parsed-document.md")) &&
+    await isFile(path.join(checkpoint.explorationRun, "parsed-pages.json")) &&
+    await isFile(path.join(checkpoint.explorationRun, "parsed-blocks.json")),
+  );
   // Always derive the canonical short path. This replaces checkpoints from
   // older runs that still point at web-sources/<64-character-sha>.pdf.
   const sourcePath = await ensureSourceCopy(input);
-  const prepared = { ...checkpoint, sourcePath };
+  // An unfinished exploration invalidates every downstream directory. Keep only
+  // the source and exploration identity until a frozen tree has been produced.
+  const prepared: DeepCompilationCheckpoint = {
+    ownerRunId: checkpoint.ownerRunId,
+    sourcePath,
+    ...(resumable && checkpoint.explorationRun
+      ? { explorationRun: checkpoint.explorationRun }
+      : {}),
+  };
   await input.onCheckpoint(prepared);
   const runRoot = webRunRoot(input.runId);
   await mkdir(runRoot, { recursive: true });
-  await input.onProgress({ progressCurrent: 1, statusMessage: "深度冷启动：MinerU 解析与全局区域勘探" });
-  let explorationRun: string | undefined;
+  await input.onProgress({
+    progressCurrent: 1,
+    statusMessage: resumable
+      ? "深度冷启动：从勘探 checkpoint 恢复"
+      : "深度冷启动：MinerU 解析与全局区域勘探",
+  });
+  let explorationRun = resumable ? checkpoint.explorationRun : undefined;
   const forwardProgress = progressForwarder(1, input.onProgress);
   await runColdStartCommand({
     command: "explore",
-    args: ["--source", sourcePath, "--output", runRoot],
+    args: [
+      "--source",
+      sourcePath,
+      "--output",
+      runRoot,
+      ...(resumable && explorationRun ? ["--resume", explorationRun] : []),
+    ],
     onLine: async (line) => {
       forwardProgress(line);
-      const reported = artifactDirectoryFromProgress(line, "已创建运行目录 ");
+      const reported = artifactDirectoryFromProgress(line, "已创建运行目录 ")
+        ?? artifactDirectoryFromProgress(line, "继续运行目录 ");
       if (!reported) return;
       explorationRun = assertArtifactWithin(reported, runRoot, "全局勘探");
       await input.onCheckpoint({ ...prepared, explorationRun });
@@ -276,6 +324,15 @@ async function ensureExploration(
   )));
   if (exploration.source.sha256 !== input.sha256) {
     throw new Error("深度冷启动 explore 产物 SHA-256 与资料库 Blob 不一致");
+  }
+  if (exploration.region_tree.status !== "frozen") {
+    const failed = exploration.region_tree.nodes
+      .filter((node) => node.status === "failed")
+      .map((node) => node.node_id);
+    throw new Error(
+      `区域树未冻结${failed.length ? `；失败节点 ${failed.join("、")}` : ""}` +
+      `${exploration.region_tree.issues.length ? `；${exploration.region_tree.issues.slice(-4).join("；")}` : ""}`,
+    );
   }
   const next = { ...prepared, explorationRun };
   await input.onCheckpoint(next);

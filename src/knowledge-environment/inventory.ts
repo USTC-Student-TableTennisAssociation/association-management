@@ -32,10 +32,14 @@ export type SharedBrainInventory = InventoryBoundary & {
     ambient: number;
   };
   vectorIndex: {
-    status: "missing" | "ready" | "stale";
+    status: "missing" | "queued" | "running" | "ready" | "stale";
     indexedAssertions: number;
     totalAssertions: number;
     indexedAt: string | null;
+    targetAssertions: number;
+    completedAssertions: number;
+    attemptCount: number;
+    lastError: string | null;
   };
   objectExamples?: string[];
   note: string;
@@ -155,6 +159,7 @@ function sharedBrainProvider(
         objectHigherMemories,
         ambientHigherMemories,
         vectorIndex,
+        vectorIndexJob,
         objectExamples,
       ] = await Promise.all([
         database.memoryGlobalObject.count(),
@@ -168,6 +173,16 @@ function sharedBrainProvider(
           where: { id: "shared" },
           select: { indexedAssertionCount: true, indexedAt: true },
         }),
+        database.memoryAssertionIndexJob.findUnique({
+          where: { id: "shared" },
+          select: {
+            status: true,
+            targetAssertionCount: true,
+            completedAssertionCount: true,
+            attemptCount: true,
+            errorMessage: true,
+          },
+        }),
         context.includeExamples
           ? database.memoryGlobalObject.findMany({
               orderBy: { canonicalName: "asc" },
@@ -180,11 +195,15 @@ function sharedBrainProvider(
       const reference = assertionGroups.find((row) => row.kind === "reference")?._count._all ?? 0;
       const totalAssertions = grounded + reference;
       const indexedAssertions = vectorIndex?.indexedAssertionCount ?? 0;
-      const vectorStatus = !vectorIndex
-        ? "missing" as const
-        : indexedAssertions === totalAssertions
-          ? "ready" as const
-          : "stale" as const;
+      const vectorStatus = vectorIndex && indexedAssertions === totalAssertions
+        ? "ready" as const
+        : vectorIndexJob?.status === "queued"
+          ? "queued" as const
+          : vectorIndexJob?.status === "running"
+            ? "running" as const
+            : vectorIndex
+              ? "stale" as const
+              : "missing" as const;
       return {
         coverage: "complete",
         measurement: "exact",
@@ -199,12 +218,16 @@ function sharedBrainProvider(
           indexedAssertions,
           totalAssertions,
           indexedAt: vectorIndex?.indexedAt.toISOString() ?? null,
+          targetAssertions: vectorIndexJob?.targetAssertionCount ?? totalAssertions,
+          completedAssertions: vectorIndexJob?.completedAssertionCount ?? indexedAssertions,
+          attemptCount: vectorIndexJob?.attemptCount ?? 0,
+          lastError: vectorIndexJob?.errorMessage ?? null,
         },
         ...(context.includeExamples
           ? { objectExamples: objectExamples.map((object) => object.canonicalName) }
           : {}),
         note:
-          "objects 包含账号绑定等仅有身份、尚无 Assertion 的 Object；不要把 Object 数量解释为事实条数。",
+          "objects 包含账号绑定等仅有身份、尚无 Assertion 的 Object；不要把 Object 数量解释为事实条数。Higher Memory 数量为 0 只证明当前没有已持久化内容，不能据此猜测未创建的原因。",
       };
     },
   };

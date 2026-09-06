@@ -20,6 +20,7 @@ describe("createKnowledgeEnvironmentTool", () => {
       memoryObjectHigherMemory: { count: vi.fn().mockResolvedValue(0) },
       memoryAmbientHigherMemory: { count: vi.fn().mockResolvedValue(0) },
       memoryAssertionEmbeddingIndex: { findUnique: vi.fn().mockResolvedValue(null) },
+      memoryAssertionIndexJob: { findUnique: vi.fn().mockResolvedValue(null) },
     } as unknown as PrismaClient;
     const registry = { listViews: vi.fn().mockReturnValue([]) } as unknown as Pick<
       ExtensionRegistry,

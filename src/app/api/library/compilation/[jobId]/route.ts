@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   getLibraryCompilationOverview,
+  prepareLibraryCompilationGlobalRetry,
   prepareLibraryCompilationRecovery,
   prepareLibraryCompilationResume,
   prepareLibraryCompilationRetry,
@@ -14,7 +15,7 @@ import { libraryErrorResponse } from "@/library/http";
 export const runtime = "nodejs";
 
 const actionSchema = z.object({
-  action: z.enum(["pause", "resume", "retry_failed", "recover_stale"]),
+  action: z.enum(["pause", "resume", "retry_failed", "retry_global", "recover_stale"]),
 });
 
 export async function PATCH(
@@ -31,6 +32,9 @@ export async function PATCH(
       startLibraryCompilationInBackground(jobId);
     } else if (action === "recover_stale") {
       await prepareLibraryCompilationRecovery(jobId);
+      startLibraryCompilationInBackground(jobId);
+    } else if (action === "retry_global") {
+      await prepareLibraryCompilationGlobalRetry(jobId);
       startLibraryCompilationInBackground(jobId);
     } else {
       await prepareLibraryCompilationRetry(jobId);

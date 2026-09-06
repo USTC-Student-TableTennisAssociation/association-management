@@ -30,6 +30,7 @@ export const libraryAssertionCandidateSchema = z.object({
 const libraryObjectCandidateBaseSchema = z.object({
   label: z.string().trim().min(1).max(200),
   reason: z.string().trim().min(1).max(1_000),
+  evidenceStatements: z.array(z.string().trim().min(1).max(1_000)).max(16).default([]),
 });
 
 export const libraryObjectCandidateSchema = z.discriminatedUnion("action", [
@@ -183,7 +184,7 @@ export type LibraryCompilationRunView = {
 
 export type LibraryCompilationParallelUnit = {
   id: string;
-  kind: "source" | "global_object";
+  kind: "source" | "global_object" | "object_admission";
   statusMessage: string;
 };
 

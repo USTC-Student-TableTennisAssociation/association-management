@@ -4,10 +4,13 @@ import {
   applyGlobalDecision,
   canPromoteLibraryRun,
   failureAfterGlobalResolution,
+  globalObjectDraftEvidence,
   globalObjectResolutionDecisionSchema,
   mergeGlobalObjectDrafts,
   normalizeObjectLabel,
   onlyGlobalObjectRuns,
+  resolveIncomingSource,
+  uncontestedPreResolvedDecision,
   withoutGlobalObjectRuns,
 } from "@/library/global-object-resolver";
 
@@ -18,6 +21,37 @@ const RUN_C = "10000000-0000-4000-8000-000000000003";
 describe("library global object resolver", () => {
   it("normalizes harmless spacing and separators", () => {
     expect(normalizeObjectLabel("Notion 知识库")).toBe(normalizeObjectLabel("Notion-知识库"));
+  });
+
+  it("summarizes cross-source evidence without turning frequency into a threshold", () => {
+    const evidence = globalObjectDraftEvidence({
+      draftObjectId: "20000000-0000-4000-8000-000000000009",
+      canonicalLabel: "远航计划",
+      labels: ["远航计划", "Project Voyager"],
+      members: [{
+        key: `${RUN_A}:0`,
+        runId: RUN_A,
+        sourceName: "规划.md",
+        label: "远航计划",
+        reason: "来源中的项目名称",
+        evidenceStatements: ["远航计划已启动。"],
+      }, {
+        key: `${RUN_B}:0`,
+        runId: RUN_B,
+        sourceName: "复盘.md",
+        label: "Project Voyager",
+        reason: "来源明确给出的英文名称",
+        evidenceStatements: ["Project Voyager 已完成第一阶段。"],
+      }],
+    });
+
+    expect(evidence.usageEvidence).toMatchObject({
+      scope: "current_compilation_candidates",
+      sourceCount: 2,
+      candidateOccurrenceCount: 2,
+      evidenceStatementCount: 2,
+    });
+    expect(evidence.usageEvidence.interpretationBoundary).toContain("不是");
   });
 
   it("creates a draft and attaches a later file candidate", () => {
@@ -58,6 +92,67 @@ describe("library global object resolver", () => {
     expect(attached[0].members).toHaveLength(2);
   });
 
+  it("keeps uncontested pre-resolved Objects separate without another model decision", () => {
+    const incoming = [{
+      key: `${RUN_A}:deep:0`,
+      runId: RUN_A,
+      sourceName: "手册.pdf",
+      label: "积分赛",
+      reason: "深度冷启动产生的 Global Object",
+      action: "new_candidate" as const,
+    }, {
+      key: `${RUN_A}:deep:1`,
+      runId: RUN_A,
+      sourceName: "手册.pdf",
+      label: "弃权判罚",
+      reason: "深度冷启动产生的 Global Object",
+      action: "new_candidate" as const,
+    }];
+
+    const decision = uncontestedPreResolvedDecision(incoming);
+    expect(decision.groups).toEqual([{
+      action: "create_new",
+      incomingKeys: [`${RUN_A}:deep:0`],
+      canonicalLabel: "积分赛",
+    }, {
+      action: "create_new",
+      incomingKeys: [`${RUN_A}:deep:1`],
+      canonicalLabel: "弃权判罚",
+    }]);
+    expect(applyGlobalDecision([], incoming, decision, [])).toHaveLength(2);
+  });
+
+  it("promotes an uncontested pre-resolved source without calling the model path", async () => {
+    const resolved = await resolveIncomingSource({
+      runId: RUN_A,
+      sourceBlobId: "30000000-0000-4000-8000-000000000001",
+      sourceName: "手册.pdf",
+      preResolved: true,
+      candidates: [{
+        key: `${RUN_A}:deep:0`,
+        runId: RUN_A,
+        sourceName: "手册.pdf",
+        label: "积分赛",
+        reason: "深度冷启动产生的 Global Object",
+        action: "new_candidate",
+      }, {
+        key: `${RUN_A}:deep:1`,
+        runId: RUN_A,
+        sourceName: "手册.pdf",
+        label: "弃权判罚",
+        reason: "深度冷启动产生的 Global Object",
+        action: "new_candidate",
+      }],
+    }, [], []);
+
+    expect(resolved.dispositions).toEqual([]);
+    expect(resolved.objects.map((item) => item.canonicalLabel)).toEqual([
+      "积分赛",
+      "弃权判罚",
+    ]);
+    expect(resolved.objects.every((item) => item.members.length === 1)).toBe(true);
+  });
+
   it("replaces one source contribution and removes Object drafts left without support", () => {
     const orphanObjectId = "20000000-0000-4000-8000-000000000001";
     const sharedObjectId = "20000000-0000-4000-8000-000000000002";
@@ -72,6 +167,7 @@ describe("library global object resolver", () => {
         sourceName: "旧通知.docx",
         label: "旧比赛",
         reason: "旧版 Assertion 支撑",
+        evidenceStatements: [],
       }],
     }, {
       draftObjectId: sharedObjectId,
@@ -83,12 +179,14 @@ describe("library global object resolver", () => {
         sourceName: "旧通知.docx",
         label: "乒协",
         reason: "旧版 Assertion 支撑",
+        evidenceStatements: [],
       }, {
         key: `${RUN_B}:assessment:0`,
         runId: RUN_B,
         sourceName: "章程.docx",
         label: "中国科大乒协",
         reason: "章程 Assertion 支撑",
+        evidenceStatements: [],
       }],
     }];
     const afterRemoval = withoutGlobalObjectRuns(active, new Set([RUN_A]));
@@ -106,6 +204,7 @@ describe("library global object resolver", () => {
         sourceName: "新通知.docx",
         label: "新比赛",
         reason: "新版 Assertion 支撑",
+        evidenceStatements: [],
       }],
     }];
     const replacementOnly = onlyGlobalObjectRuns(resolved, new Set([RUN_C]));
@@ -136,6 +235,20 @@ describe("library global object resolver", () => {
         incomingKeys: ["candidate-1"],
       }],
     }).success).toBe(false);
+  });
+
+  it("accepts explicit reject and defer dispositions", () => {
+    expect(globalObjectResolutionDecisionSchema.parse({
+      groups: [{
+        action: "reject",
+        incomingKeys: ["candidate-topic"],
+        reason: "只是文档主题词，不形成独立 referent",
+      }, {
+        action: "defer",
+        incomingKeys: ["candidate-ambiguous"],
+        reason: "当前证据不足以判断词义",
+      }],
+    }).groups.map((group) => group.action)).toEqual(["reject", "defer"]);
   });
 
   it("succeeds when every new candidate was resolved globally", () => {
@@ -174,5 +287,20 @@ describe("library global object resolver", () => {
     });
     expect(unresolved.failed).toBe(true);
     expect(unresolved.reasons).toContain("1 个新 Object 候选尚未完成全局归并");
+  });
+
+  it("treats rejected or deferred candidates as explicitly handled", () => {
+    const result = failureAfterGlobalResolution({
+      runId: RUN_A,
+      objectCandidates: [{
+        action: "new_candidate",
+        label: "通用主题词",
+        reason: "可能只是主题词",
+      }],
+      resolvedMemberKeys: new Set(),
+      disposedMemberKeys: new Set([`${RUN_A}:assessment:0`]),
+    });
+
+    expect(result).toEqual({ failed: false, reasons: [] });
   });
 });

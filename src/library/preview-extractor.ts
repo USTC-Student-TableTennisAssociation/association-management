@@ -5,10 +5,59 @@ import { promisify } from "node:util";
 import sharp from "sharp";
 
 import { getDatabase } from "@/db";
+import {
+  mineruApiConcurrency,
+  mineruApiRequestsPerMinute,
+} from "@/library/compilation-concurrency";
 import { readStoredFile, resolveStorageKey } from "@/library/object-store";
+import { InFlightGate, RequestStartScheduler } from "@/library/request-limiter";
 
 const execFileAsync = promisify(execFile);
 const MAX_PREVIEW_CHARS = 30_000;
+
+type MinerUApiLimiter = {
+  gate: InFlightGate;
+  scheduler: RequestStartScheduler;
+};
+
+const mineruRuntime = globalThis as typeof globalThis & {
+  libraryMineruApiLimiters?: Map<string, MinerUApiLimiter>;
+};
+
+function usesMinerUApi(): boolean {
+  const provider = process.env.COLD_START_MINERU_PROVIDER?.trim().toLowerCase() || "auto";
+  return provider === "api" || (
+    provider === "auto" && Boolean(process.env.MINERU_API_BASE_URL?.trim())
+  );
+}
+
+function mineruApiLimiter(): MinerUApiLimiter {
+  const concurrency = mineruApiConcurrency();
+  const requestsPerMinute = mineruApiRequestsPerMinute();
+  const key = `${concurrency}:${requestsPerMinute}`;
+  mineruRuntime.libraryMineruApiLimiters ??= new Map();
+  let limiter = mineruRuntime.libraryMineruApiLimiters.get(key);
+  if (!limiter) {
+    limiter = {
+      gate: new InFlightGate(concurrency),
+      scheduler: new RequestStartScheduler(requestsPerMinute),
+    };
+    mineruRuntime.libraryMineruApiLimiters.set(key, limiter);
+  }
+  return limiter;
+}
+
+async function withMinerUApiLimits<T>(operation: () => Promise<T>): Promise<T> {
+  if (!usesMinerUApi()) return operation();
+  const limiter = mineruApiLimiter();
+  const release = await limiter.gate.acquire();
+  try {
+    await limiter.scheduler.waitForStart();
+    return await operation();
+  } finally {
+    release();
+  }
+}
 
 export type LibraryPreview = {
   parser: string;
@@ -95,7 +144,7 @@ async function extractMinerUPreview(input: {
     input.sha256,
   );
   try {
-    await execFileAsync("uv", [
+    await withMinerUApiLimits(() => execFileAsync("uv", [
       "run",
       "--project",
       path.join(/* turbopackIgnore: true */ process.cwd(), "services/cold-start"),
@@ -112,7 +161,7 @@ async function extractMinerUPreview(input: {
       env: process.env,
       encoding: "utf8",
       maxBuffer: 16 * 1024 * 1024,
-    });
+    }));
     const [text, rawMetadata] = await Promise.all([
       readFile(path.join(/* turbopackIgnore: true */ cacheDirectory, "parsed-document.md"), "utf8"),
       readFile(path.join(/* turbopackIgnore: true */ cacheDirectory, "parsing-metadata.json"), "utf8"),
@@ -124,11 +173,7 @@ async function extractMinerUPreview(input: {
       sourceKind: "text_excerpt",
     };
   } catch (error) {
-    return {
-      parser: "mineru-unavailable",
-      sourceKind: "text_excerpt",
-      warning: `MinerU 解析失败：${commandErrorMessage(error)}`,
-    };
+    throw new Error(`MinerU 解析失败：${commandErrorMessage(error)}`, { cause: error });
   }
 }
 
