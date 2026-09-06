@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -269,6 +271,7 @@ class OpenAICompatibleChatModel:
         self.trace_directory = trace_directory
         self.show_model_stream = show_model_stream
         self.sequence = _last_trace_sequence(trace_directory)
+        self.pending_checkpoints: dict[int, tuple[Mapping[str, object], bool]] = {}
 
     async def complete(
         self,
@@ -287,7 +290,9 @@ class OpenAICompatibleChatModel:
             request_label=request_label,
         )
         if turn.tool_calls or not turn.content:
+            self.reject_turn(turn)
             raise ModelProtocolError(f"{request_label}没有返回正式正文")
+        self.commit_turn(turn)
         return turn.content
 
     async def complete_turn(
@@ -309,11 +314,12 @@ class OpenAICompatibleChatModel:
             payload["temperature"] = temperature
         if tools:
             payload.update(tools=list(tools), tool_choice=tool_choice or "auto")
-        if thinking:
-            payload["thinking"] = {
-                "type": thinking,
-                **({"clear_thinking": False} if thinking == "enabled" else {}),
-            }
+        payload["thinking"] = {"type": thinking or self.settings.thinking_mode}
+        cached = self._load_cached_turn(payload)
+        if cached is not None:
+            self.pending_checkpoints[id(cached)] = (payload, True)
+            self.progress.report(request_label, "已从模型请求 checkpoint 恢复，不重新调用接口")
+            return cached
         headers = {"Accept": "text/event-stream", "Content-Type": "application/json"}
         if self.settings.api_key:
             headers["Authorization"] = f"Bearer {self.settings.api_key}"
@@ -328,7 +334,7 @@ class OpenAICompatibleChatModel:
                 await self.rate_limiter.acquire(request_label)
                 await self.concurrency_limiter.acquire(request_label)
                 try:
-                    return await self._stream(
+                    result = await self._stream(
                         endpoint,
                         headers,
                         payload,
@@ -336,22 +342,27 @@ class OpenAICompatibleChatModel:
                         label=request_label,
                         attempt=attempt,
                     )
+                    self.pending_checkpoints[id(result)] = (payload, False)
+                    return result
                 finally:
                     self.concurrency_limiter.release()
             except Exception as error:
                 if not _retryable(error) or attempt == self.settings.max_retries:
                     if _retryable(error):
-                        raise RuntimeError(f"{request_label}流式传输连续失败") from error
+                        raise RuntimeError(
+                            f"{request_label}流式传输连续失败：{_error_detail(error)}"
+                        ) from error
                     raise
                 last_error = error
                 delay = 2 ** (attempt - 1)
                 self.progress.report(
                     request_label,
-                    f"流式请求失败（{_error_label(error)}），{delay} 秒后重试 "
+                    f"流式请求失败（{_error_detail(error)}），{delay} 秒后重试 "
                     f"{attempt + 1}/{self.settings.max_retries}",
                 )
                 await asyncio.sleep(delay)
-        raise RuntimeError(f"{request_label}流式传输连续失败") from last_error
+        detail = _error_detail(last_error) if last_error is not None else "未知传输错误"
+        raise RuntimeError(f"{request_label}流式传输连续失败：{detail}") from last_error
 
     async def aclose(self) -> None:
         if self.owns_client:
@@ -557,15 +568,110 @@ class OpenAICompatibleChatModel:
             encoding="utf-8",
         )
 
+    def _cache_path(self, payload: Mapping[str, object]) -> Path | None:
+        if self.trace_directory is None:
+            return None
+        identity = json.dumps(
+            {
+                "endpoint": _endpoint(self.settings.api_base_url),
+                "payload": payload,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return self.trace_directory / "response-checkpoints" / (
+            hashlib.sha256(identity).hexdigest() + ".json"
+        )
+
+    def _load_cached_turn(self, payload: Mapping[str, object]) -> ModelTurn | None:
+        path = self._cache_path(payload)
+        if path is None or not path.is_file():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(raw, Mapping)
+                or raw.get("schema_version") != "model-response-checkpoint.v2"
+            ):
+                return None
+            calls = tuple(
+                ToolCall(
+                    id=str(item["id"]),
+                    name=str(item["name"]),
+                    arguments=str(item["arguments"]),
+                )
+                for item in raw.get("tool_calls", [])
+            )
+            turn = ModelTurn(
+                content=str(raw.get("content", "")),
+                reasoning_content=str(raw.get("reasoning_content", "")),
+                tool_calls=calls,
+            )
+            return turn if turn.content or turn.reasoning_content or turn.tool_calls else None
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+    def _save_cached_turn(
+        self,
+        payload: Mapping[str, object],
+        turn: ModelTurn,
+    ) -> None:
+        path = self._cache_path(payload)
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "schema_version": "model-response-checkpoint.v2",
+                    "content": turn.content,
+                    "reasoning_content": turn.reasoning_content,
+                    "tool_calls": [
+                        {
+                            "id": call.id,
+                            "name": call.name,
+                            "arguments": call.arguments,
+                        }
+                        for call in turn.tool_calls
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
+    def commit_turn(self, turn: ModelTurn) -> None:
+        pending = self.pending_checkpoints.pop(id(turn), None)
+        if pending is None:
+            return
+        payload, already_cached = pending
+        if not already_cached:
+            self._save_cached_turn(payload, turn)
+
+    def reject_turn(self, turn: ModelTurn) -> None:
+        pending = self.pending_checkpoints.pop(id(turn), None)
+        if pending is None:
+            return
+        payload, already_cached = pending
+        if not already_cached:
+            return
+        path = self._cache_path(payload)
+        if path is not None:
+            path.unlink(missing_ok=True)
+
 
 def _last_trace_sequence(directory: Path | None) -> int:
     if directory is None or not directory.is_dir():
         return 0
     values = []
     for path in directory.glob("*.request.json"):
-        prefix = path.name.partition("-")[0]
-        if prefix.isdigit():
-            values.append(int(prefix))
+        match = re.match(r"^(\d+)(?:-|\.)", path.name)
+        if match:
+            values.append(int(match.group(1)))
     return max(values, default=0)
 
 
@@ -622,3 +728,11 @@ def _error_label(error: Exception) -> str:
     if isinstance(error, httpx.HTTPStatusError):
         return f"HTTP {error.response.status_code}"
     return type(error).__name__
+
+
+def _error_detail(error: Exception) -> str:
+    label = _error_label(error)
+    message = " ".join(str(error).split())
+    if not message or message == label:
+        return label
+    return f"{label}: {message[:240]}"

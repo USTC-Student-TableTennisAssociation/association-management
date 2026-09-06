@@ -72,3 +72,15 @@ class ChatModel(Protocol):
         request_label: str = "模型",
         thinking: ThinkingMode | None = None,
     ) -> ModelTurn: ...
+
+
+def commit_model_turn(model: object, turn: ModelTurn) -> None:
+    callback = getattr(model, "commit_turn", None)
+    if callable(callback):
+        callback(turn)
+
+
+def reject_model_turn(model: object, turn: ModelTurn) -> None:
+    callback = getattr(model, "reject_turn", None)
+    if callable(callback):
+        callback(turn)
