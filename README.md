@@ -101,6 +101,7 @@ cp .env.example .env
 AI_API_KEY=
 AI_API_BASE_URL=https://api.openai.com/v1
 AI_MODEL=
+AI_STRUCTURED_OUTPUT_MODE=json_object
 ```
 
 使用学校 MinerU 文件解析接口时，再配置：
@@ -117,6 +118,15 @@ MINERU_API_BASE_URL=https://api.llm.ustc.edu.cn/v1
 可以显式切回本地 MinerU CLI。API 和本地结果都会归一化为同一个 `ParsedDocument`
 并进入相同的 SHA-256 解析缓存和后续认知编译流程。学校 API 使用服务端默认解析引擎；
 `COLD_START_MINERU_BACKEND` 等质量参数只用于本地 CLI，不会发送给学校接口。
+
+`AI_STRUCTURED_OUTPUT_MODE` 描述当前 Chat Completions Provider 的真实能力：通用及
+DeepSeek 接口使用 `json_object`；只有接口明确支持 JSON Schema 时才设为 `json_schema`；
+完全不接受 `response_format` 的兼容服务可使用 `text_json`，输出仍会经过本地 Schema
+校验。Sydaris 默认在普通聊天、工具调用和结构化编译中都显式发送
+`thinking: { type: "enabled" }`，不再依赖不同兼容网关各自的默认值；只有确认某个接口
+不支持 thinking 时，才用 `AI_THINKING_MODE=disabled` 统一关闭。MinerU API 另由
+`MINERU_API_REQUESTS_PER_MINUTE`（默认 18）和
+`MINERU_API_MAX_IN_FLIGHT`（默认 4）限速，避免文件 worker 并发直接冲击远端额度。
 
 `.env.example` 还包含数据库、模型限速、视觉模型、Library、Shared Brain 与调试选项。
 
@@ -139,6 +149,17 @@ pnpm memory:serve-embeddings
 ```
 
 首次运行可能下载模型。也可以通过 `COLD_START_EMBEDDING_MODEL` 使用本地模型路径。
+
+Shared Brain 发布完成后会为当前 Assertion corpus 创建持久化索引任务；任务在后台生成向量，临时失败会退避重试，Sydaris 重启或检索发现缺口时也会自动恢复。模型文件存在不等于 HTTP 服务已经运行，因此生产运行时应让上述服务与 Sydaris 一起常驻。
+
+已有 Assertion 但尚无索引时，可以在 embedding 服务健康后手动立即补建：
+
+```bash
+curl http://127.0.0.1:8765/health
+pnpm memory:index-assertions
+```
+
+手动生成的完整索引会在 Sydaris 下次启动或读取时被任务协调器识别为 `ready`，不会重复计算。
 
 轻量界面预览可以设置 `MEMORY_RETRIEVER_MODE=disabled`；完整认知体验使用默认的 `object-assertion` 模式。
 
@@ -168,6 +189,10 @@ pnpm state:load -- before-import --yes
 保存或加载前应结束正在提交的聊天与文件写入。命令默认拒绝存在 `queued` / `running` 资料编译任务时操作；确实只想保存当前已经持久化的最佳努力状态时，可以对 `state:save` 添加 `--allow-active`，但加载前仍应先暂停旧 worker。文件复制在 macOS/APFS 上优先使用 copy-on-write clone，其他文件系统会退回普通复制。
 
 完整的使用流程、命令速查、环境准备和故障排查见 [`STATE_MANAGEMENT.md`](STATE_MANAGEMENT.md)。
+
+长时间解析需要与前台交互测试并行时，可用独立数据库、独立 Library/cold-start 目录和
+`.env.parsing` 启动后台实例；学校 API 与主实例的 DeepSeek API 不会互相覆盖。参见
+[`INSTANCE_MANAGEMENT.md`](INSTANCE_MANAGEMENT.md)。
 
 ## 用 Plugin 扩展 Sydaris
 
