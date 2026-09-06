@@ -11,6 +11,8 @@ from cold_start.global_resolution.artifacts import (
 from cold_start.global_resolution.finalization import (
     build_global_assertions_artifact,
     finalize_existing_global_resolution,
+    load_literal_sense_routes,
+    resolve_ambiguous_literal_senses,
     write_global_assertions_artifact,
 )
 from cold_start.global_resolution.retrieval import GlobalObjectCandidateRetriever
@@ -23,9 +25,11 @@ __all__ = [
     "create_global_resolution_paths",
     "finalize_existing_global_resolution",
     "initial_registry",
+    "load_literal_sense_routes",
     "load_source_compilation",
     "load_working_registry",
     "open_global_resolution_paths",
+    "resolve_ambiguous_literal_senses",
     "write_global_assertions_artifact",
     "write_working_registry",
 ]

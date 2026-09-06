@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+from cold_start.document.evidence_links import attach_document_evidence
 from cold_start.document.mineru_provider import (
     LocalMinerUProvider,
     MinerUExecution,
@@ -185,7 +186,7 @@ class MinerUDocumentLoader:
                 f"{actual_execution.backend}-{self.effort}"
             ),
             pages=pages,
-            blocks=tuple(blocks),
+            blocks=attach_document_evidence(tuple(blocks)),
             markdown=markdown,
         )
 

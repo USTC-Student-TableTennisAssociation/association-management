@@ -129,3 +129,19 @@ class RegionTreeSnapshot(StrictModel):
     issues: list[str] = Field(default_factory=list)
     model_calls: int = 0
     tool_calls: int = 0
+
+
+class RegionTreeWorkingCheckpoint(StrictModel):
+    """可恢复的区域树执行状态，不把未冻结快照冒充最终产物。"""
+
+    schema_version: Literal["region-tree-working.v1"] = "region-tree-working.v1"
+    root_node_id: str
+    nodes: list[RegionNode]
+    pending_groups: list[tuple[str, tuple[str, ...]]] = Field(default_factory=list)
+    structure_check: StructureCheckReport = Field(
+        default_factory=StructureCheckReport
+    )
+    source_issues: list[SourceIssue] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
+    model_calls: int = 0
+    tool_calls: int = 0

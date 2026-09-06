@@ -244,10 +244,14 @@ class ApiMinerUProvider:
         if not response.is_success:
             detail = response.text.replace("\n", " ").strip()[:2_000]
             self._write_log(log_path, endpoint, status=response.status_code, error=detail)
-            raise RuntimeError(
-                f"MinerU API 返回 HTTP {response.status_code}：{detail or '无错误正文'}；"
-                f"完整日志：{log_path}"
-            )
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as error:
+                raise RuntimeError(
+                    f"MinerU API 返回 HTTP {response.status_code}：{detail or '无错误正文'}；"
+                    f"完整日志：{log_path}"
+                ) from error
+            raise AssertionError("非成功响应必须由 httpx.raise_for_status 抛出")
         try:
             payload = response.json()
         except ValueError as error:

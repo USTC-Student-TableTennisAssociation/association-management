@@ -15,7 +15,7 @@ from pydantic import ValidationError
 
 from cold_start.config import ExplorationSettings
 from cold_start.document.models import ParsedBlock
-from cold_start.llm.base import ChatModel
+from cold_start.llm.base import ChatModel, commit_model_turn, reject_model_turn
 from cold_start.progress import NullProgressReporter, ProgressReporter
 from cold_start.region_tree.models import (
     KeepDecision,
@@ -25,6 +25,7 @@ from cold_start.region_tree.models import (
     RegionDecisionOutput,
     RegionNode,
     RegionTreeSnapshot,
+    RegionTreeWorkingCheckpoint,
     RepairDecision,
     RepairDecisionOutput,
     SourceIssue,
@@ -213,6 +214,126 @@ class RegionTree:
         )
         self.root_node_id = root.node_id
         return self.apply(root.node_id, decision)
+
+    def working_checkpoint(
+        self,
+        groups: list[WorkGroup],
+    ) -> RegionTreeWorkingCheckpoint:
+        return RegionTreeWorkingCheckpoint(
+            root_node_id=self.root_node_id,
+            nodes=sorted(self.nodes.values(), key=lambda node: node.node_id),
+            pending_groups=groups,
+            structure_check=self.structure_check,
+            source_issues=self.source_issues.copy(),
+            issues=self.issues.copy(),
+            model_calls=self.model_calls,
+            tool_calls=self.tool_calls,
+        )
+
+    def restore(
+        self,
+        checkpoint: RegionTreeWorkingCheckpoint,
+    ) -> list[WorkGroup]:
+        """Restore a tree and return only work that never reached a decision."""
+
+        nodes = {node.node_id: node for node in checkpoint.nodes}
+        if len(nodes) != len(checkpoint.nodes):
+            raise ValueError("区域树 checkpoint 包含重复节点")
+        root = nodes.get(checkpoint.root_node_id)
+        if root is None or root.parent_id is not None:
+            raise ValueError("区域树 checkpoint 根节点无效")
+
+        visited: set[str] = set()
+
+        def visit(node_id: str) -> None:
+            if node_id in visited:
+                raise ValueError("区域树 checkpoint 包含环或重复孩子")
+            visited.add(node_id)
+            node = nodes[node_id]
+            left = self.index.position(node.start_block_id)
+            right = self.index.position(node.end_block_id)
+            if right < left:
+                raise ValueError(f"{node_id} 的原文范围倒置")
+            for segment in node.owned_segments:
+                segment_left = self.index.position(segment.start_block_id)
+                segment_right = self.index.position(segment.end_block_id)
+                if segment_left < left or segment_right > right or segment_right < segment_left:
+                    raise ValueError(f"{node_id} 的自有原文越出节点范围")
+            for child_id in node.child_ids:
+                child = nodes.get(child_id)
+                if child is None or child.parent_id != node_id:
+                    raise ValueError(f"{node_id} 的孩子关系无效")
+                visit(child_id)
+
+        visit(root.node_id)
+        if visited != set(nodes):
+            raise ValueError("区域树 checkpoint 包含无法从根节点到达的节点")
+
+        retry_ids = {
+            node.node_id
+            for node in nodes.values()
+            if node.status in {"pending", "failed"}
+        }
+        for node_id in retry_ids:
+            node = nodes[node_id]
+            if node.parent_id is None:
+                raise ValueError("根节点未形成有效判断，不能从区域树 checkpoint 局部恢复")
+            nodes[node_id] = node.model_copy(update={"status": "pending"})
+
+        self.nodes = nodes
+        self.root_node_id = checkpoint.root_node_id
+        self.source_issues = checkpoint.source_issues.copy()
+        self.structure_check = checkpoint.structure_check
+        self.model_calls = checkpoint.model_calls
+        self.tool_calls = checkpoint.tool_calls
+        self.issues = [
+            issue
+            for issue in checkpoint.issues
+            if not any(issue.startswith(f"{node_id} ") for node_id in retry_ids)
+        ]
+        if retry_ids:
+            self.structure_check = StructureCheckReport()
+
+        numeric_ids: list[int] = []
+        for node_id in nodes:
+            match = re.fullmatch(r"region-(\d{4,})", node_id)
+            if match is None:
+                raise ValueError(f"区域树 checkpoint 节点编号无效：{node_id}")
+            numeric_ids.append(int(match.group(1)))
+        self.next_id = max(numeric_ids, default=0) + 1
+
+        groups: list[WorkGroup] = []
+        scheduled: set[str] = set()
+        for parent_id, sibling_ids in checkpoint.pending_groups:
+            parent = nodes.get(parent_id)
+            if parent is None:
+                raise ValueError(f"区域树 checkpoint 调度父节点不存在：{parent_id}")
+            pending = tuple(
+                node_id
+                for node_id in sibling_ids
+                if node_id in retry_ids and node_id not in scheduled
+            )
+            if any(node_id not in parent.child_ids for node_id in pending):
+                raise ValueError(f"{parent_id} 的 checkpoint 调度包含非孩子节点")
+            if pending:
+                groups.append((parent_id, pending))
+                scheduled.update(pending)
+
+        remaining = sorted(
+            retry_ids - scheduled,
+            key=lambda node_id: self.index.position(nodes[node_id].start_block_id),
+        )
+        by_parent: dict[str, list[str]] = {}
+        for node_id in remaining:
+            parent_id = nodes[node_id].parent_id
+            if parent_id is None:
+                raise ValueError("区域树 checkpoint 无法调度无父节点的未完成区域")
+            by_parent.setdefault(parent_id, []).append(node_id)
+        groups.extend(
+            (parent_id, tuple(node_ids))
+            for parent_id, node_ids in by_parent.items()
+        )
+        return groups
 
     def apply(
         self,
@@ -690,6 +811,23 @@ class RegionRuntime:
         await self._process_groups(groups)
         return self.tree.snapshot()
 
+    async def resume(
+        self,
+        checkpoint: RegionTreeWorkingCheckpoint,
+    ) -> RegionTreeSnapshot:
+        groups = self.tree.restore(checkpoint)
+        retry_count = sum(len(siblings) for _, siblings in groups)
+        self.progress.report(
+            "区域树",
+            (
+                f"从 checkpoint 恢复 {len(self.tree.nodes)} 个节点；"
+                f"只重新判断 {retry_count} 个未完成区域"
+            ),
+        )
+        self._save(groups)
+        await self._process_groups(groups)
+        return self.tree.snapshot()
+
     async def calibrate_structure(self) -> None:
         if self.tree.snapshot().status != "frozen":
             return
@@ -1120,6 +1258,7 @@ async def _ask(
                         "content": result[:6000],
                     }
                 )
+            commit_model_turn(model, turn)
 
         try:
             if not turn.content:
@@ -1127,6 +1266,7 @@ async def _ask(
             decision = parser(turn.content)
             validator(decision)
         except (ValidationError, ValueError, json.JSONDecodeError) as error:
+            reject_model_turn(model, turn)
             model_calls += 1
             repair = await model.complete_turn(
                 messages=[
@@ -1141,12 +1281,19 @@ async def _ask(
                     },
                 ],
                 request_label=f"{label}·修复",
-                thinking="disabled",
+                thinking="enabled",
             )
-            if not repair.content:
-                raise ValueError("修复请求仍未返回正式正文") from error
-            decision = parser(repair.content)
-            validator(decision)
+            try:
+                if not repair.content:
+                    raise ValueError("修复请求仍未返回正式正文") from error
+                decision = parser(repair.content)
+                validator(decision)
+            except Exception:
+                reject_model_turn(model, repair)
+                raise
+            commit_model_turn(model, repair)
+        else:
+            commit_model_turn(model, turn)
         progress.report(label, f"完成判断：{describe(decision)}")
         return DecisionResult(decision, model_calls, tool_calls)
     except Exception as error:

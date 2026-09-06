@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -6,6 +7,8 @@ from cold_start.document.blocks import build_document_blocks
 from cold_start.document.models import ParsedDocument, ParsedPage
 from cold_start.global_exploration.artifacts import (
     create_exploration_run_directory,
+    load_exploration_working_checkpoint,
+    load_parsing_artifacts,
     write_exploration_artifacts,
     write_parsing_artifacts,
 )
@@ -54,6 +57,7 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
         decision_reason="完整手册无需继续分区。",
     )
     snapshot = GlobalExplorationSnapshot(
+        policy_version="global-exploration-policy.v1",
         created_at=datetime(2026, 7, 25, tzinfo=UTC),
         source=SourceMetadata(
             path=str(document.source_path),
@@ -105,16 +109,17 @@ def test_artifact_writer_keeps_context_tree_and_source(tmp_path: Path) -> None:
 
 def test_parsing_artifacts_are_available_before_exploration(tmp_path: Path) -> None:
     pages = (ParsedPage(page_number=1, markdown="# 首页\n\n正文"),)
+    source = tmp_path / "handbook.pdf"
+    source.write_bytes(b"pdf")
     document = ParsedDocument(
-        source_path=tmp_path / "handbook.pdf",
+        source_path=source,
         title="手册",
-        file_sha256="e" * 64,
+        file_sha256=hashlib.sha256(b"pdf").hexdigest(),
         parser_name="test",
         pages=pages,
         blocks=build_document_blocks(pages),
         markdown="# 首页\n\n正文",
     )
-    document.source_path.write_bytes(b"pdf")
     directory = create_exploration_run_directory(
         output_root=tmp_path,
         source_path=document.source_path,
@@ -127,4 +132,82 @@ def test_parsing_artifacts_are_available_before_exploration(tmp_path: Path) -> N
 
     assert paths.parsed_document_markdown.read_text() == document.markdown
     assert paths.parsed_blocks_json.exists()
+    assert paths.parsing_metadata_json.exists()
     assert not paths.snapshot_json.exists()
+
+    restored = load_parsing_artifacts(
+        run_directory=directory,
+        source_path=source,
+    )
+    assert restored == document
+
+
+def test_legacy_region_tree_checkpoint_uses_final_snapshot_context(
+    tmp_path: Path,
+) -> None:
+    pages = (ParsedPage(page_number=1, markdown="# 首页\n\n正文"),)
+    blocks = build_document_blocks(pages)
+    source = tmp_path / "handbook.pdf"
+    source.write_bytes(b"pdf")
+    source_sha256 = hashlib.sha256(b"pdf").hexdigest()
+    failed_root = RegionNode(
+        node_id="region-0001",
+        parent_id=None,
+        depth=0,
+        label="手册",
+        introduction="测试手册。",
+        start_block_id=blocks[0].block_id,
+        end_block_id=blocks[-1].block_id,
+        source_pages=[1],
+        status="failed",
+    )
+    snapshot = GlobalExplorationSnapshot(
+        policy_version="global-exploration-policy.v1",
+        created_at=datetime(2026, 9, 5, tzinfo=UTC),
+        source=SourceMetadata(
+            path=str(source),
+            title="手册",
+            sha256=source_sha256,
+            parser="test",
+            page_count=1,
+            block_count=len(blocks),
+        ),
+        document_context_markdown="已经生成的文档上下文。",
+        context_model_calls=3,
+        region_tree=RegionTreeSnapshot(
+            status="needs_review",
+            root_node_id=failed_root.node_id,
+            nodes=[failed_root],
+            leaf_node_ids=[],
+            content_node_ids=[],
+            structural_context_node_ids=[],
+            issues=["region-0001 技术失败：ConnectError"],
+        ),
+    )
+    run_directory = tmp_path / "run"
+    run_directory.mkdir()
+    (run_directory / "region-tree-working.json").write_text(
+        json.dumps(
+            {
+                "root_node_id": failed_root.node_id,
+                "nodes": [failed_root.model_dump()],
+                "pending_groups": [],
+                "issues": snapshot.region_tree.issues,
+                "source_issues": [],
+                "model_calls": 10,
+                "tool_calls": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restored = load_exploration_working_checkpoint(
+        run_directory=run_directory,
+        source_sha256=source_sha256,
+        fallback_snapshot=snapshot,
+    )
+
+    assert restored is not None
+    assert restored.document_context_markdown == "已经生成的文档上下文。"
+    assert restored.context_model_calls == 3
+    assert restored.region_tree.nodes[0].status == "failed"

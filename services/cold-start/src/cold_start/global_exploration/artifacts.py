@@ -8,9 +8,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cold_start.document.models import ParsedBlock, ParsedDocument
-from cold_start.global_exploration.models import GlobalExplorationSnapshot
-from cold_start.region_tree.models import RegionNode
+from cold_start.document.evidence_links import attach_document_evidence
+from cold_start.document.models import ParsedBlock, ParsedDocument, ParsedPage
+from cold_start.global_exploration.models import (
+    GlobalExplorationSnapshot,
+    GlobalExplorationWorkingCheckpoint,
+)
+from cold_start.region_tree.models import RegionNode, RegionTreeWorkingCheckpoint
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,7 @@ class ArtifactPaths:
     parsed_document_markdown: Path
     parsed_pages_json: Path
     parsed_blocks_json: Path
+    parsing_metadata_json: Path
     mineru_raw_directory: Path
     mineru_log: Path
 
@@ -54,6 +59,7 @@ def _artifact_paths(run_directory: Path) -> ArtifactPaths:
         parsed_document_markdown=run_directory / "parsed-document.md",
         parsed_pages_json=run_directory / "parsed-pages.json",
         parsed_blocks_json=run_directory / "parsed-blocks.json",
+        parsing_metadata_json=run_directory / "parsing-metadata.json",
         mineru_raw_directory=run_directory / "mineru-raw",
         mineru_log=run_directory / "mineru.log",
     )
@@ -82,7 +88,66 @@ def write_parsing_artifacts(
         ),
         encoding="utf-8",
     )
+    paths.parsing_metadata_json.write_text(
+        json.dumps(
+            {
+                "schema_version": "parsed-document-checkpoint.v1",
+                "source_sha256": document.file_sha256,
+                "title": document.title,
+                "parser_name": document.parser_name,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return paths
+
+
+def load_parsing_artifacts(
+    *,
+    run_directory: Path,
+    source_path: Path,
+) -> ParsedDocument:
+    """Restore the paid-independent parsing stage before resuming model work."""
+
+    directory = run_directory.expanduser().resolve()
+    source = source_path.expanduser().resolve()
+    paths = _artifact_paths(directory)
+    required = (
+        paths.parsed_document_markdown,
+        paths.parsed_pages_json,
+        paths.parsed_blocks_json,
+    )
+    if not all(path.is_file() for path in required):
+        raise ValueError(f"勘探运行目录缺少可恢复的文档解析 checkpoint：{directory}")
+
+    source_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+    metadata: dict[str, object] = {}
+    if paths.parsing_metadata_json.is_file():
+        raw_metadata = json.loads(paths.parsing_metadata_json.read_text(encoding="utf-8"))
+        if not isinstance(raw_metadata, dict):
+            raise ValueError("文档解析 checkpoint metadata 不是 JSON 对象")
+        metadata = raw_metadata
+        stored_sha256 = metadata.get("source_sha256")
+        if stored_sha256 != source_sha256:
+            raise ValueError("文档解析 checkpoint 与当前来源 SHA-256 不一致")
+
+    raw_pages = json.loads(paths.parsed_pages_json.read_text(encoding="utf-8"))
+    raw_blocks = json.loads(paths.parsed_blocks_json.read_text(encoding="utf-8"))
+    if not isinstance(raw_pages, list) or not isinstance(raw_blocks, list):
+        raise ValueError("文档解析 checkpoint 的 pages 或 blocks 格式无效")
+    return ParsedDocument(
+        source_path=source,
+        title=str(metadata.get("title") or source.stem),
+        file_sha256=source_sha256,
+        parser_name=str(metadata.get("parser_name") or "restored-parse-checkpoint"),
+        pages=tuple(ParsedPage.model_validate(item) for item in raw_pages),
+        blocks=attach_document_evidence(
+            tuple(ParsedBlock.model_validate(item) for item in raw_blocks)
+        ),
+        markdown=paths.parsed_document_markdown.read_text(encoding="utf-8"),
+    )
 
 
 def write_exploration_artifacts(
@@ -133,10 +198,58 @@ def load_exploration_inputs(
         paths.snapshot_json.read_text(encoding="utf-8")
     )
     raw_blocks = json.loads(paths.parsed_blocks_json.read_text(encoding="utf-8"))
-    blocks = tuple(ParsedBlock.model_validate(item) for item in raw_blocks)
+    blocks = attach_document_evidence(
+        tuple(ParsedBlock.model_validate(item) for item in raw_blocks)
+    )
     if len(blocks) != exploration.source.block_count:
         raise ValueError("parsed-blocks.json 与全局勘探快照的块数量不一致")
     return exploration, blocks
+
+
+def load_exploration_snapshot(
+    run_directory: Path,
+) -> GlobalExplorationSnapshot | None:
+    path = _artifact_paths(run_directory.expanduser().resolve()).snapshot_json
+    if not path.is_file():
+        return None
+    return GlobalExplorationSnapshot.model_validate_json(
+        path.read_text(encoding="utf-8")
+    )
+
+
+def load_exploration_working_checkpoint(
+    *,
+    run_directory: Path,
+    source_sha256: str,
+    fallback_snapshot: GlobalExplorationSnapshot | None = None,
+) -> GlobalExplorationWorkingCheckpoint | None:
+    """Load the versioned checkpoint and normalize the legacy flat payload."""
+
+    path = run_directory.expanduser().resolve() / "region-tree-working.json"
+    if not path.is_file():
+        return None
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("区域树 working checkpoint 不是 JSON 对象")
+    if raw.get("schema_version") == "global-exploration-working.v1":
+        checkpoint = GlobalExplorationWorkingCheckpoint.model_validate(raw)
+    else:
+        if fallback_snapshot is None:
+            return None
+        legacy = dict(raw)
+        legacy.setdefault("schema_version", "region-tree-working.v1")
+        legacy.setdefault("structure_check", {})
+        checkpoint = GlobalExplorationWorkingCheckpoint(
+            source_sha256=source_sha256,
+            document_context_markdown=(
+                fallback_snapshot.document_context_markdown
+            ),
+            context_model_calls=fallback_snapshot.context_model_calls,
+            region_tree=RegionTreeWorkingCheckpoint.model_validate(legacy),
+        )
+    if checkpoint.source_sha256 != source_sha256:
+        raise ValueError("区域树 working checkpoint 与当前来源 SHA-256 不一致")
+    return checkpoint
 
 
 def _report(snapshot: GlobalExplorationSnapshot) -> str:
