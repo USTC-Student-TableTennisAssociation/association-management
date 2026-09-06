@@ -115,6 +115,7 @@ function runtimeFixture(
         Promise.resolve({
           id: "reaction-1",
           ...data,
+          evidenceStatus: data.evidenceStatus ?? "not_checked",
           message: null,
           reason: null,
           attentionErrorMessage: null,

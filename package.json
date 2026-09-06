@@ -41,7 +41,9 @@
     "plugins:pack:example": "pnpm --filter @sydaris/example-plugin pack",
     "plugins:pack:activity": "pnpm --filter @sydaris/activity-operations-plugin pack",
     "plugins:pack:society": "pnpm --filter @sydaris/society-information-plugin pack",
-    "plugins:pack:competition": "pnpm --filter @sydaris/competition-records-plugin pack"
+    "plugins:pack:competition": "pnpm --filter @sydaris/competition-records-plugin pack",
+    "plugins:release:check": "node scripts/release-plugins.mjs check",
+    "plugins:release:next": "node scripts/release-plugins.mjs publish"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "^3.0.25",

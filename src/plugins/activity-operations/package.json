@@ -27,6 +27,19 @@
     "build": "tsc -p tsconfig.package.json && node scripts/copy-assets.mjs",
     "prepack": "pnpm build"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/USTC-Student-TableTennisAssociation/association-management.git",
+    "directory": "src/plugins/activity-operations"
+  },
+  "bugs": {
+    "url": "https://github.com/USTC-Student-TableTennisAssociation/association-management/issues"
+  },
+  "homepage": "https://github.com/USTC-Student-TableTennisAssociation/association-management/tree/main/src/plugins/activity-operations#readme",
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  },
   "peerDependencies": {
     "@sydaris/plugin-sdk": ">=0.1.0-alpha.8 <0.2.0-0",
     "react": "^19.0.0",

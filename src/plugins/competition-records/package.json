@@ -31,6 +31,19 @@
     "build": "tsc -p tsconfig.package.json && node scripts/copy-assets.mjs",
     "prepack": "pnpm build"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/USTC-Student-TableTennisAssociation/association-management.git",
+    "directory": "src/plugins/competition-records"
+  },
+  "bugs": {
+    "url": "https://github.com/USTC-Student-TableTennisAssociation/association-management/issues"
+  },
+  "homepage": "https://github.com/USTC-Student-TableTennisAssociation/association-management/tree/main/src/plugins/competition-records#readme",
+  "publishConfig": {
+    "access": "public",
+    "tag": "next"
+  },
   "dependencies": {
     "pg": "^8.22.0"
   },

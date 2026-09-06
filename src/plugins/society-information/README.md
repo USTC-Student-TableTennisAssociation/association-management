@@ -7,8 +7,6 @@ Invariants 和沉浸式 React 专属 UI。
 缺口整理和待审批变更。Presentation 只通过 `onInvokeAI` 发送简短用户意图和
 结构化 Skill 输入，不再内嵌工作流提示词。
 
-当前使用无 scope 的开发包名，正式发布前需要确认 npm 名称是否可用，或改为组织 scope。
-
 ```bash
 pnpm build
 pnpm pack
@@ -18,5 +16,11 @@ pnpm pack
 Sydaris Plugin CLI 安装：
 
 ```bash
-pnpm sydaris:plugin install ./sydaris-society-information-plugin-1.11.0.tgz
+pnpm sydaris:plugin install ./sydaris-society-information-plugin-1.11.1.tgz
+```
+
+npm 预发布版本使用 `next` 标签安装：
+
+```bash
+pnpm add @sydaris/society-information-plugin@next
 ```

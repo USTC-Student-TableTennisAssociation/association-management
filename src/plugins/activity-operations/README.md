@@ -39,5 +39,11 @@ pnpm pack
 Sydaris Plugin CLI 安装：
 
 ```bash
-pnpm sydaris:plugin install ./sydaris-activity-operations-plugin-1.3.0.tgz
+pnpm sydaris:plugin install ./sydaris-activity-operations-plugin-1.3.3.tgz
+```
+
+npm 预发布版本使用 `next` 标签安装：
+
+```bash
+pnpm add @sydaris/activity-operations-plugin@next
 ```

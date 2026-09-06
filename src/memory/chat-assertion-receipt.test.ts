@@ -325,7 +325,7 @@ describe("Chat Assertion processing receipts", () => {
 
     expect(instruction).toContain("状态：已发布");
     expect(instruction).toContain("关联 Object：雷岳鑫");
-    expect(instruction).toContain("不是业务事实或检索证据");
+    expect(instruction).toContain("不是业务事实、人物认知或检索证据");
     expect(instruction).toContain("published/completed 表示成功");
     expect(instruction).toContain("共享 Higher Memory：failed");
     expect(instruction).toContain("Actor Higher Memory：skipped");
