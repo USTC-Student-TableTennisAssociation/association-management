@@ -379,20 +379,25 @@ export function ActivityOperationsWorkspace({ viewKey, refreshRevision = 0, focu
       input: { operation: "design", phase: "discuss" },
     },
   });
-  const planTaskMap = () => onInvokeAI({
-    actionId: activity ? "activity.plan-task-map" : "activity.create-task-map",
-    message: activity
-      ? `帮我检查并完善“${text(activity, "name") ?? "当前活动"}”的任务版图。`
-      : "帮我规划第一次真实活动，先确认必要信息和任务结构。",
-    skill: {
-      id: "sydaris.activity-operations.plan-task-map",
-      input: {
-        operation: activity ? "review" : "create",
-        phase: "discuss",
-        ...(activity ? { activityId: activity.id } : {}),
+  const planTaskMap = () => {
+    if (!activity) {
+      designPlaybook();
+      return;
+    }
+    onInvokeAI({
+      actionId: "activity.plan-task-map",
+      message: `帮我检查并完善“${text(activity, "name") ?? "当前活动"}”的任务版图。`,
+      skill: {
+        id: "sydaris.activity-operations.plan-task-map",
+        input: {
+          operation: "review",
+          phase: "discuss",
+          workflowBasis: "existing_activity",
+          activityId: activity.id,
+        },
       },
-    },
-  });
+    });
+  };
   const askAbout = (card: ViewCardState) => {
     const name = text(card, "name") ?? card.cardTypeKey;
     if (mode === "method") {
@@ -419,6 +424,7 @@ export function ActivityOperationsWorkspace({ viewKey, refreshRevision = 0, focu
         input: {
           operation: "review",
           phase: "discuss",
+          workflowBasis: "existing_activity",
           ...(activity ? { activityId: activity.id } : {}),
           workItemId: card.id,
         },
@@ -434,7 +440,7 @@ export function ActivityOperationsWorkspace({ viewKey, refreshRevision = 0, focu
     <header className={styles.topbar}><div className={styles.brand}><span><Icon name="layers" /></span><div><b>Activity View</b><small>方法与执行</small></div></div><nav className={styles.modeSwitch} aria-label="活动运营模式"><button type="button" data-active={mode === "method"} onClick={() => switchMode("method")}><Icon name="book" />组织方法</button><button type="button" data-active={mode === "map"} onClick={() => switchMode("map")}><Icon name="map" />任务版图</button></nav><div className={styles.topActions}>{notice ? <span role="status" data-error={notice.startsWith("未能")}><Icon name={notice.startsWith("未能") ? "warning" : "check"} />{notice}</span> : null}<button type="button" onClick={() => refresh()} aria-label="刷新"><Icon name="refresh" /></button><button type="button" onClick={onOpenInspector}>高级</button></div></header>
     <div className={styles.studio}>
       <aside className={styles.library}><header><p>{mode === "method" ? "方法库" : "活动"}</p><button type="button" onClick={() => setEditor(mode === "method" ? { kind: "playbook" } : { kind: "activity" })} aria-label={mode === "method" ? "新建方法" : "新建活动"}><Icon name="plus" /></button></header><div>{mode === "method" ? model.playbooks.map((item) => <button type="button" key={item.card.id} data-active={item.card.id === playbook?.card.id} onClick={() => { setSelectedPlaybookId(item.card.id); setSelectedCardId(undefined); }}><span data-tone={statusTone(item.card)}><Icon name="book" /></span><span><b>{text(item.card, "name") ?? "未命名方法"}</b><small>{item.nodes.length} 步 · {playbookStatusLabels[text(item.card, "status") ?? "DRAFT"]}</small></span></button>) : model.activities.map((item) => <button type="button" key={item.id} data-active={item.id === activity?.id} onClick={() => { setSelectedActivityId(item.id); setSelectedCardId(undefined); }}><span data-tone={statusTone(item)}><Icon name="map" /></span><span><b>{text(item, "name") ?? "未命名活动"}</b><small>{activityStatusLabels[text(item, "status") ?? "PLANNING"]}</small></span></button>)}</div><footer><button type="button" onClick={mode === "method" ? designPlaybook : planTaskMap}><Icon name="spark" />让 Sydaris 协助设计</button></footer></aside>
-      <section className={styles.mainStage} aria-label={mode === "method" ? "组织方法画布" : "任务版图画布"}>{mode === "method" ? playbook ? <><section className={styles.stageHeader}><div><p>{playbookStatusLabels[text(playbook.card, "status") ?? "DRAFT"]} · {playbook.nodes.length} 个步骤</p><h1>{text(playbook.card, "name")}</h1><span>{text(playbook.card, "applicable_scenario") ?? "尚未说明适用场景"}</span></div><div><button type="button" onClick={() => setEditor({ kind: "edge", playbookId: playbook.card.id, fromNodeId: selectedCardId })}><Icon name="link" />连接步骤</button><button type="button" onClick={() => setEditor({ kind: "node", playbookId: playbook.card.id })}><Icon name="plus" />添加步骤</button><button type="button" className={styles.primary} disabled={!activity || saving} onClick={async () => { if (!activity) return; setSaving(true); try { await run("activity.apply_playbook", { activityId: activity.id, playbookId: playbook.card.id }, `已套用到“${text(activity, "name")}”`); setMode("map"); setSelectedCardId(undefined); } catch (cause) { setNotice(`未能套用：${cause instanceof Error ? cause.message : String(cause)}`); } finally { setSaving(false); } }}><Icon name="arrow" />套用到{activity ? `“${text(activity, "name")}”` : "活动"}</button></div></section><MethodCanvas playbook={playbook} selectedId={selectedCardId} onSelect={setSelectedCardId} /></> : <EmptyState mode="method" onCreate={() => setEditor({ kind: "playbook" })} onInvokeAI={designPlaybook} /> : activity ? <><section className={styles.stageHeader}><div><p>{activityStatusLabels[text(activity, "status") ?? "PLANNING"]} · {model.workPackages.length} 个工作包</p><h1>{text(activity, "name")}</h1><span>{model.metrics.total ? `${model.metrics.completed}/${model.metrics.total} 已完成 · ${model.metrics.blocked} 受阻 · ${model.metrics.overdue} 逾期` : "从组织方法套用，或直接建立工作包"}</span></div><div><button type="button" onClick={() => setEditor({ kind: "dependency", activityId: activity.id, targetType: "WORK_PACKAGE", targetId: selectedCardId })}><Icon name="link" />工作包依赖</button><button type="button" className={styles.primary} onClick={() => setEditor({ kind: "workPackage", activityId: activity.id })}><Icon name="plus" />添加工作包</button></div></section>{model.workPackages.length ? <TaskCanvas workPackages={model.workPackages} selectedId={selectedCardId} onSelect={setSelectedCardId} /> : <div className={styles.mapEmpty}><Icon name="map" /><h2>版图还是空的</h2><p>从组织方法套用会自动生成工作包、任务和前置关系；也可以手动开始。</p><div><button type="button" onClick={() => switchMode("method")}><Icon name="book" />选择组织方法</button><button type="button" onClick={() => setEditor({ kind: "workPackage", activityId: activity.id })}><Icon name="plus" />手动添加</button></div></div>}</> : <EmptyState mode="map" onCreate={() => setEditor({ kind: "activity" })} onInvokeAI={planTaskMap} />}</section>
+      <section className={styles.mainStage} aria-label={mode === "method" ? "组织方法画布" : "任务版图画布"}>{mode === "method" ? playbook ? <><section className={styles.stageHeader}><div><p>{playbookStatusLabels[text(playbook.card, "status") ?? "DRAFT"]} · {playbook.nodes.length} 个步骤</p><h1>{text(playbook.card, "name")}</h1><span>{text(playbook.card, "applicable_scenario") ?? "尚未说明适用场景"}</span></div><div><button type="button" onClick={() => setEditor({ kind: "edge", playbookId: playbook.card.id, fromNodeId: selectedCardId })}><Icon name="link" />连接步骤</button><button type="button" onClick={() => setEditor({ kind: "node", playbookId: playbook.card.id })}><Icon name="plus" />添加步骤</button><button type="button" className={styles.primary} disabled={!activity || saving} onClick={async () => { if (!activity) return; setSaving(true); try { await run("activity.apply_playbook", { activityId: activity.id, playbookId: playbook.card.id }, `已套用到“${text(activity, "name")}”`); setMode("map"); setSelectedCardId(undefined); } catch (cause) { setNotice(`未能套用：${cause instanceof Error ? cause.message : String(cause)}`); } finally { setSaving(false); } }}><Icon name="arrow" />套用到{activity ? `“${text(activity, "name")}”` : "活动"}</button></div></section><MethodCanvas playbook={playbook} selectedId={selectedCardId} onSelect={setSelectedCardId} /></> : <EmptyState mode="method" onCreate={() => setEditor({ kind: "playbook" })} onInvokeAI={designPlaybook} /> : activity ? <><section className={styles.stageHeader}><div><p>{activityStatusLabels[text(activity, "status") ?? "PLANNING"]} · {model.workPackages.length} 个工作包</p><h1>{text(activity, "name")}</h1><span>{model.metrics.total ? `${model.metrics.completed}/${model.metrics.total} 已完成 · ${model.metrics.blocked} 受阻 · ${model.metrics.overdue} 逾期` : "从组织方法套用，或直接建立工作包"}</span></div><div><button type="button" onClick={() => setEditor({ kind: "dependency", activityId: activity.id, targetType: "WORK_PACKAGE", targetId: selectedCardId })}><Icon name="link" />工作包依赖</button><button type="button" className={styles.primary} onClick={() => setEditor({ kind: "workPackage", activityId: activity.id })}><Icon name="plus" />添加工作包</button></div></section>{model.workPackages.length ? <TaskCanvas workPackages={model.workPackages} selectedId={selectedCardId} onSelect={setSelectedCardId} /> : <div className={styles.mapEmpty}><Icon name="map" /><h2>版图还是空的</h2><p>从组织方法套用会自动生成工作包、任务和前置关系；也可以手动开始。</p><div><button type="button" onClick={() => switchMode("method")}><Icon name="book" />选择组织方法</button><button type="button" onClick={() => setEditor({ kind: "workPackage", activityId: activity.id })}><Icon name="plus" />手动添加</button></div></div>}</> : <EmptyState mode="map" onCreate={() => setEditor({ kind: "activity" })} onInvokeAI={designPlaybook} />}</section>
       <CardInspector model={model} mode={mode} selectedId={selectedCardId} objectNames={objectNames} saving={saving} onEdit={setEditor} onAddTask={(workPackageId) => activity && setEditor({ kind: "task", activityId: activity.id, workPackageId })} onAddDependency={(targetType, targetId) => activity && setEditor({ kind: "dependency", activityId: activity.id, targetType, targetId })} onRemoveDependency={removeDependency} onSetNested={async (nodeId, nestedId) => { if (!playbook) return; setSaving(true); try { await run("activity.set_nested_playbook", { playbookId: playbook.card.id, nodeId, nestedPlaybookId: nestedId }, nestedId ? "嵌套方法已设置" : "嵌套方法已移除"); } catch (cause) { setNotice(`未能设置：${cause instanceof Error ? cause.message : String(cause)}`); } finally { setSaving(false); } }} onRemoveEdge={async (edge) => { if (!playbook) return; setSaving(true); try { await run("activity.set_guide_edge", { playbookId: playbook.card.id, fromNodeId: edge.from, toNodeId: edge.to, branch: edge.branch, connected: false }, "流程关系已移除"); } catch (cause) { setNotice(`未能移除：${cause instanceof Error ? cause.message : String(cause)}`); } finally { setSaving(false); } }} onInvokeAI={askAbout} />
     </div>
     {editor ? <FormSheet key={`${editor.kind}:${"card" in editor ? editor.card?.id ?? "new" : "new"}`} target={editor} model={model} saving={saving} error={formError} onClose={() => { if (!saving) { setEditor(undefined); setFormError(undefined); } }} onSave={saveEditor} /> : null}

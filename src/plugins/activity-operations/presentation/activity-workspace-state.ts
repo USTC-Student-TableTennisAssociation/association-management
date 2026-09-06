@@ -211,11 +211,11 @@ export type ActivityReactionTone = "checking" | "attention" | "inform" | "failed
 
 export function reactionTone(reaction: ViewReaction | undefined): ActivityReactionTone | undefined {
   if (!reaction) return undefined;
-  if (reaction.attention.status === "queued" || reaction.attention.status === "running" || reaction.knowledge.status === "queued" || reaction.knowledge.status === "running") return "checking";
-  if (reaction.attention.status === "failed" || reaction.knowledge.status === "failed") return "failed";
+  if (reaction.attention.status === "queued" || reaction.attention.status === "running") return "checking";
+  if (reaction.attention.status === "failed") return "failed";
   if (reaction.attention.status === "needs_confirmation") return "attention";
   if (reaction.attention.status === "inform") return "inform";
-  if (reaction.attention.status === "silent" || reaction.knowledge.status === "completed") return "verified";
+  if (reaction.attention.status === "silent" && reaction.attention.evidenceStatus === "consistent") return "verified";
   return undefined;
 }
 
@@ -228,6 +228,7 @@ function reactionPriority(reaction: ViewReaction): number {
 export function reactionsByCard(reactions: readonly ViewReaction[]): ReadonlyMap<string, ViewReaction> {
   const byCard = new Map<string, ViewReaction>();
   for (const reaction of reactions) {
+    if (!reactionTone(reaction)) continue;
     for (const target of reaction.targets) {
       const current = byCard.get(target.cardId);
       if (!current || reactionPriority(reaction) > reactionPriority(current)) byCard.set(target.cardId, reaction);

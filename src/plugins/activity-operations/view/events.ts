@@ -84,6 +84,15 @@ export const activityOperationsEvents: readonly DomainEventDefinition[] = [
     payloadSchema: zodContractSchema(cardEventSchema),
   },
   {
+    key: "activity.playbook_graph_created",
+    version: "1",
+    payloadSchema: zodContractSchema(cardEventSchema.extend({
+      createdNodes: z.number().int().min(2),
+      createdWorkPackageDefinitions: z.number().int().min(0),
+      createdTaskDefinitions: z.number().int().min(0),
+    })),
+  },
+  {
     key: "activity.playbook_updated",
     version: "1",
     payloadSchema: zodContractSchema(changedCardEventSchema),

@@ -278,7 +278,7 @@ describe("activity organization methods", () => {
     const activityId = await initializeRuntime(transaction);
     const playbookResult = await execute(transaction, "activity.create_playbook", {
       name: "标准校园活动",
-      status: "READY",
+      status: "DRAFT",
       lanes: "统筹,现场",
     });
     const playbookId = (playbookResult.summary as { cardId: string }).cardId;
@@ -301,12 +301,31 @@ describe("activity organization methods", () => {
     });
     const firstNodeId = (firstResult.summary as { cardId: string }).cardId;
     const secondNodeId = (secondResult.summary as { cardId: string }).cardId;
+    const endResult = await execute(transaction, "activity.add_guide_node", {
+      playbookId,
+      name: "活动方案可执行",
+      nodeType: "END",
+      lane: "统筹",
+      row: 2,
+    });
+    const endNodeId = (endResult.summary as { cardId: string }).cardId;
     await execute(transaction, "activity.set_guide_edge", {
       playbookId,
       fromNodeId: firstNodeId,
       toNodeId: secondNodeId,
       branch: "NEXT",
       connected: true,
+    });
+    await execute(transaction, "activity.set_guide_edge", {
+      playbookId,
+      fromNodeId: secondNodeId,
+      toNodeId: endNodeId,
+      branch: "NEXT",
+      connected: true,
+    });
+    await execute(transaction, "activity.update_playbook", {
+      playbookId,
+      status: "READY",
     });
 
     const applied = await execute(transaction, "activity.apply_playbook", { activityId, playbookId });
@@ -322,6 +341,160 @@ describe("activity organization methods", () => {
     const secondApply = await execute(transaction, "activity.apply_playbook", { activityId, playbookId });
     expect(secondApply.summary).toMatchObject({ createdWorkPackages: 0, createdTasks: 0 });
     expect(transaction.cards.get(activityId)?.slots.work_packages).toHaveLength(2);
+  });
+
+  it("creates a complete reusable method graph atomically from local references", async () => {
+    const transaction = new MemoryTransaction();
+    const created = await execute(transaction, "activity.create_playbook_graph", {
+      name: "大型活动标准方法",
+      description: "组织一次跨团队大型活动的通用方法。",
+      applicableScenario: "参与者多、周期长且需要正式审批的活动。",
+      overview: "先明确边界，再判断是否需要额外审批，最后形成可执行方案。",
+      lanes: ["统筹", "执行"],
+      status: "READY",
+      startNodeKeys: ["scope"],
+      nodes: [{
+        key: "scope",
+        name: "明确活动边界",
+        nodeType: "ACTION",
+        lane: "统筹",
+        guide: "确认目标、范围、约束与关键协作者。",
+        requiredInformation: "活动目标与现有约束。",
+        expectedOutcome: "形成经核对的活动边界说明。",
+        workPackage: {
+          description: "形成活动边界和初始约束。",
+          tasks: [{
+            key: "collect",
+            name: "收集约束",
+            deliverable: "约束清单完成",
+          }, {
+            key: "confirm",
+            name: "确认边界",
+            deliverable: "活动边界获得确认",
+            dependsOnTaskKeys: ["collect"],
+          }],
+        },
+      }, {
+        key: "approval_check",
+        name: "是否需要额外审批",
+        nodeType: "DECISION",
+        lane: "统筹",
+        guide: "根据范围和风险判断审批要求。",
+      }, {
+        key: "approval",
+        name: "完成额外审批",
+        nodeType: "ACTION",
+        lane: "执行",
+        guide: "按要求提交材料并跟进结果。",
+        expectedOutcome: "所需审批已经取得并可核验。",
+        workPackage: {
+          description: "取得活动所需的额外批准。",
+          tasks: [{
+            key: "submit",
+            name: "提交审批材料",
+            deliverable: "审批结果可查",
+          }],
+        },
+      }, {
+        key: "ready",
+        name: "活动方案可执行",
+        nodeType: "END",
+        lane: "统筹",
+        expectedOutcome: "方法所需的前置工作已经完成。",
+      }],
+      edges: [
+        { fromNodeKey: "scope", toNodeKey: "approval_check", branch: "NEXT" },
+        { fromNodeKey: "approval_check", toNodeKey: "approval", branch: "YES" },
+        { fromNodeKey: "approval_check", toNodeKey: "ready", branch: "NO" },
+        { fromNodeKey: "approval", toNodeKey: "ready", branch: "NEXT" },
+      ],
+    });
+
+    expect(created.summary).toMatchObject({
+      createdNodes: 4,
+      createdWorkPackageDefinitions: 2,
+      createdTaskDefinitions: 3,
+    });
+    const playbookId = (created.summary as { cardId: string }).cardId;
+    const playbook = transaction.cards.get(playbookId)!;
+    expect(playbook.dimensions).toMatchObject({
+      name: "大型活动标准方法",
+      status: "READY",
+      lanes: "统筹\n执行",
+    });
+    expect(playbook.slots.nodes).toHaveLength(4);
+    expect(playbook.slots.start_nodes).toHaveLength(1);
+    expect([...transaction.cards.values()].filter(({ cardTypeKey }) =>
+      cardTypeKey === "TaskDefinitionCard"
+    )).toHaveLength(3);
+  });
+
+  it("expands a compact playbook blueprint into an atomic method graph", async () => {
+    const transaction = new MemoryTransaction();
+    const created = await execute(transaction, "activity.create_playbook_from_blueprint", {
+      name: "大型活动方法",
+      purpose: "把跨团队活动组织成可复用工作流。",
+      appliesWhen: "活动需要正式审批和多人协作。",
+      lanes: ["统筹", "执行"],
+      startNodeKeys: ["scope"],
+      nodes: [{
+        key: "scope",
+        name: "明确边界",
+        nodeType: "ACTION",
+        lane: "统筹",
+        instruction: "确认目标、范围与约束。",
+        doneWhen: "边界获得确认。",
+        taskTemplates: [{
+          name: "收集约束",
+          deliverable: "约束清单",
+        }, {
+          name: "确认边界",
+          deliverable: "边界说明",
+          afterTaskIndexes: [0],
+        }],
+      }, {
+        key: "ready",
+        name: "可以执行",
+        nodeType: "END",
+        lane: "执行",
+      }],
+      edges: [{ fromNodeKey: "scope", toNodeKey: "ready", branch: "NEXT" }],
+    });
+
+    expect(created.summary).toMatchObject({
+      createdNodes: 2,
+      createdWorkPackageDefinitions: 1,
+      createdTaskDefinitions: 2,
+    });
+    const tasks = [...transaction.cards.values()].filter(({ cardTypeKey }) =>
+      cardTypeKey === "TaskDefinitionCard"
+    );
+    expect(tasks).toHaveLength(2);
+    expect(tasks[1].slots.dependencies).toEqual([tasks[0].id]);
+  });
+
+  it("rejects a method graph with an incomplete decision before execution", () => {
+    const definition = command("activity.create_playbook_graph");
+    expect(() => definition.inputSchema.parse({
+      name: "不完整方法",
+      description: "用于验证输入约束。",
+      applicableScenario: "测试",
+      overview: "测试",
+      lanes: ["统筹"],
+      startNodeKeys: ["decision"],
+      nodes: [{
+        key: "decision",
+        name: "是否继续",
+        nodeType: "DECISION",
+        lane: "统筹",
+      }, {
+        key: "end",
+        name: "结束",
+        nodeType: "END",
+        lane: "统筹",
+      }],
+      edges: [{ fromNodeKey: "decision", toNodeKey: "end", branch: "YES" }],
+    })).toThrow(/YES 和 NO/);
   });
 
   it("rejects cyclic task-map dependencies", async () => {
